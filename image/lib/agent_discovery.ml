@@ -8,20 +8,13 @@
     /agent (no suffix) remains the private HTML agent portal.
 *)
 
-let header_ci (headers : (string * string) list) (name : string) : string option =
-  let lower = String.lowercase_ascii name in
-  List.find_map
-    (fun (k, v) ->
-      if String.lowercase_ascii k = lower then Some v else None)
-    headers
-
 (** Prefer reverse-proxy headers, then Host. Never invent a password. *)
 let base_url_of_headers (headers : (string * string) list) : string option =
   let host =
-    match header_ci headers "x-forwarded-host" with
+    match Http_kit.header_ci headers "x-forwarded-host" with
     | Some h -> Some (String.trim h)
     | None ->
-        match header_ci headers "host" with
+        match Http_kit.header_ci headers "host" with
         | Some h -> Some (String.trim h)
         | None -> None
   in
@@ -29,7 +22,7 @@ let base_url_of_headers (headers : (string * string) list) : string option =
   | None | Some "" -> None
   | Some host ->
       let proto =
-        match header_ci headers "x-forwarded-proto" with
+        match Http_kit.header_ci headers "x-forwarded-proto" with
         | Some p when String.trim p <> "" -> String.lowercase_ascii (String.trim p)
         | _ ->
             (* Default https for public hosts; plain http for loopback. *)

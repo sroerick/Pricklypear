@@ -42,14 +42,6 @@ let read_body_limited (reqd : Httpun.Reqd.t) ~(max_bytes : int)
   sched ();
   Eio.Promise.await promise
 
-let header_ci (headers : (string * string) list) (name : string)
-  : string option =
-  let lower = String.lowercase_ascii name in
-  List.find_map
-    (fun (k, v) ->
-      if String.lowercase_ascii k = lower then Some v else None)
-    headers
-
 let require_authed_user (session : Session.t) : (string * bool, unit) result =
   let uname = Session.username session in
   if uname = "" || uname = "anonymous" then Error ()
@@ -199,7 +191,7 @@ let api_media_post (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
       let req = Httpun.Reqd.request reqd in
       let headers = header_list req in
       let ct_hdr =
-        Option.map String.trim (header_ci headers "content-type")
+        Option.map String.trim (Http_kit.header_ci headers "content-type")
       in
       let cap = request_body_cap ~kind:`Media ct_hdr in
       let body_res = read_body_limited reqd ~max_bytes:cap in
@@ -208,7 +200,7 @@ let api_media_post (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
            too_large reqd ~max_bytes:cap;
            ()
        | Ok body ->
-           let filename_hdr = header_ci headers "x-filename" in
+           let filename_hdr = Http_kit.header_ci headers "x-filename" in
            (match
               parse_upload_body ~content_type:ct_hdr ~filename_hdr body
             with
@@ -384,7 +376,7 @@ let media_get (session : Session.t) (reqd : Httpun.Reqd.t) ~(id : string)
                @ Http_core.security_headers ())
            in
            let req_headers = header_list (Httpun.Reqd.request reqd) in
-           let range_hdr = header_ci req_headers "range" in
+           let range_hdr = Http_kit.header_ci req_headers "range" in
            (match parse_range ~total range_hdr with
             | `Unsatisfiable ->
                 let headers =
@@ -581,7 +573,7 @@ let media_upload_post (session : Session.t) (reqd : Httpun.Reqd.t)
       let cap =
         request_body_cap ~kind:`Media
           (Option.map String.trim
-             (header_ci (header_list (Httpun.Reqd.request reqd)) "content-type"))
+             (Http_kit.header_ci (header_list (Httpun.Reqd.request reqd)) "content-type"))
       in
       let body_res = read_body_limited reqd ~max_bytes:cap in
       (match body_res with
@@ -595,7 +587,7 @@ let media_upload_post (session : Session.t) (reqd : Httpun.Reqd.t)
            let req = Httpun.Reqd.request reqd in
            let headers = header_list req in
            let ct_hdr =
-             Option.map String.trim (header_ci headers "content-type")
+             Option.map String.trim (Http_kit.header_ci headers "content-type")
            in
            (match
               parse_upload_body ~content_type:ct_hdr ~filename_hdr:None body
