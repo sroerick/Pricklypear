@@ -198,17 +198,6 @@ let analyze_self ~(fn_name : string) (e : expr) : recursion_info =
   in
   { is_recursive; tail_recursive; self_sites; callees }
 
-(** Path predicates: [is_tail path] / [is_self path] for HTML decoration. *)
-let site_index (info : recursion_info) : (int list, site) Hashtbl.t =
-  let h = Hashtbl.create 8 in
-  List.iter (fun s -> Hashtbl.replace h s.path s) info.self_sites;
-  h
-
-(** [is_self_path info path] is [true] if [path] is a self-call site in
-    [info]. *)
-let is_self_path (info : recursion_info) (path : int list) : bool =
-  List.exists (fun s -> s.path = path) info.self_sites
-
 (** [is_tail_self_path info path] is [true] if [path] is a self-call site
     in tail position. *)
 let is_tail_self_path (info : recursion_info) (path : int list) : bool =
