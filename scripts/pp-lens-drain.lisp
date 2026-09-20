@@ -15,7 +15,7 @@
 ;;;;     deletion is its own pp-local call.
 ;;;;
 ;;;; Cron example (paired with the */15 pp-local sync):
-;;;;   */10 * * * * /usr/local/bin/sbcl --script /home/al/pp-lens/drain.lisp
+;;;;   */10 * * * * /usr/local/bin/sbcl --script /home/al/pp-inbox/scripts/pp-lens-drain.lisp
 ;;;;          >> /home/al/pp-lens/drain-cron.log 2>&1
 ;;;;
 ;;;; A deleted tombstone file is consumed; a failed delete leaves its
