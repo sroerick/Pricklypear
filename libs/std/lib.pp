@@ -215,17 +215,19 @@
 
 ;; O(1) membership for the render hot path (mirrors libs/html, 2026-09-19
 ;; obituary: the recursive list walk cost ~233k steps per glochid shell
-;; render; the dict is built ONCE at load). dict-get on the tag→tag dict
-;; yields the tag or ().
+;; render). DELAYED like the libs/html twin — the fold binds without
+;; evaluating (the seed-sources no-define-time gate), first (force) per
+;; session memoizes, so the hot path still pays the fold ONCE.
 (define html/block-lookup
-  (list/foldl
-    (lambda (acc name) (dict-set acc name name))
-    "{}"
-    html/block-tags))
+  (delay
+    (list/foldl
+      (lambda (acc name) (dict-set acc name name))
+      "{}"
+      html/block-tags)))
 
 (define html/block-tag?
   (lambda (name)
-    (dict-get html/block-lookup (as-str name)))
+    (dict-get (force html/block-lookup) (as-str name)))
   "True when name is in the block-level tag set (exact lowercase match).")
 
 (define html/tag-core
