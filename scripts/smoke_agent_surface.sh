@@ -162,11 +162,13 @@ echo "$RELOAD" | grep -q 'fs-pane'                            ; check "workspace
 CLOSE=$(curl -sS -m 5 -X POST "$URL/filmstrip/close" -d "id=$PANE_ID")
 echo "$CLOSE" | grep -q 'state="shelved"\|fs-pane.*shelved'        ; check "close answers OOB shelve (record survives, v2 default close)" $?
 echo "$CLOSE" | grep -q 'fs-tree-windows-root'                 ; check "close answers windows-tree rows OOB (v4)" $?
+PAGE2=$(curl -sS -m 30 "$URL/")
+echo "$PAGE2" | grep -q 'id="fs-axis" class="fs-sh-axis col"' ; check "axis sentinel pins col on the shell (sidebar-only, BORGE-1789879934)" $?
+echo "$PAGE2" | grep -q 'id="fs-axis-btn"'                       ; [ $? -ne 0 ] ; check "no axis toggle button on the railtabs row (retired)" $?
+echo "$PAGE2" | grep -q 'fs-sh-axis row'                       ; [ $? -ne 0 ] ; check "shell never renders the row axis" $?
 ORIENT=$(curl -sS -m 5 -X POST "$URL/filmstrip/orient")
-echo "$ORIENT" | grep -q 'id="fs-axis" class="fs-sh-axis col"' ; check "orient toggles persisted axis (OOB sentinel col)" $?
-echo "$ORIENT" | grep -q 'hx-swap-oob="outerHTML:#fs-axis-btn"' ; check "orient OOB-swaps the toggle button" $?
-grep -q '"axis":"col"' "$WS"                                  ; check "axis persisted to the workspace row" $?
-curl -sS -m 5 -X POST "$URL/filmstrip/orient" >/dev/null      ; check "orient toggles back (row default)" $?
+echo "$ORIENT" | grep -q 'fs-sh-axis\|fs-axis-btn\|route/dispatch: col' ; [ $? -ne 0 ] ; check "POST /filmstrip/orient can no longer flip the axis (retired route)" $?
+grep -q '"axis":"col"' "$WS"                                  ; check "axis persisted col to the workspace row" $?
 rm -f "$WS"
 
 if [ "$fails" = 0 ]; then echo "PASS agent surface smoke"; exit 0

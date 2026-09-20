@@ -170,7 +170,25 @@ let apply_value_raw (t : t) (fn : Ast.value) (args : Ast.value list)
     ^ List.fold_left (fun acc a -> acc ^ " " ^ a) "" arg_syms
     ^ ")"
   in
-  Eval.eval_string_direct ~prims:t.prims t.env ~budget:(Eval.make_budget ()) src
+  let budget = Eval.make_budget () in
+  let r =
+    try Ok (Eval.eval_string_direct ~prims:t.prims t.env ~budget src)
+    with e -> Error e
+  in
+  if Sys.getenv_opt "PP_PROFILE_RENDER" <> None then begin
+    let tops =
+      let l = Hashtbl.fold (fun k v acc -> (v, k) :: acc) budget.Budget.fn_step_counts [] in
+      List.sort (fun a b -> compare b a) l
+      |> List.filteri (fun i _ -> i < 15)
+      |> List.map (fun (v, k) -> Printf.sprintf "%s=%d" (String.map (fun c -> if c = '(' then '_' else c) k) v)
+      |> String.concat " "
+    in
+    Printf.eprintf "[profile] left=%d steps top: %s\n%!"
+      (max 0 (budget.Budget.limit - budget.Budget.steps)) tops
+  end;
+  match r with
+  | Ok v -> v
+  | Error e -> raise e
 
 (** Apply a Nopales function value to host-side value args. Establishes
     the rim via [run_in_rim] — for callers OUTSIDE an active eval (loop

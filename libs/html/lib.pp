@@ -174,11 +174,23 @@
         n
         (html/block-member? n (cdr tags))))))
 
+;; O(1) membership for the render hot path (2026-09-19 obituary: the
+;; recursive list walk cost ~233k interpreter steps per glochid shell
+;; render — 58% of the whole render, blowing the 400k request budget).
+;; html/block-lookup is built ONCE at load time; dict-get on it returns
+;; the tag or () — same exact-lowercase-match semantics, same truthy
+;; value, and the walk stays for anything that calls block-member? raw.
+(define html/block-lookup
+  (list/foldl
+    (lambda (acc name) (dict-set acc name name))
+    "{}"
+    html/block-tags))
+
 (define html/block-tag?
   (lambda
     (name)
     "True when name is in the block-level tag set (exact lowercase match)."
-    (html/block-member? (as-str name) html/block-tags)))
+    (dict-get html/block-lookup (as-str name))))
 
 (define html/tag-core
   (lambda
