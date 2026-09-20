@@ -196,11 +196,6 @@ let aggregates () : agg list =
     samples;
   List.sort (fun a b -> compare b.max_ms a.max_ms) !out
 
-(** Drop all samples (used by tests / future clear affordance). *)
-let clear () : unit =
-  Hashtbl.clear samples;
-  total_count := 0
-
 (** Return the X-Timing-Ms header (as a [name,value] pair) if a route
     was measured for this request, consuming it so a later response in
     the same request does not double-report. Empty when none. *)
