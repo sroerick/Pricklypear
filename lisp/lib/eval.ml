@@ -29,6 +29,7 @@ let current_steps = Budget.current_steps
 let note_db_hit = Budget.note_db_hit
 let note_db_ms = Budget.note_db_ms
 let note_prim_db = Budget.note_prim_db
+let note_fn_call = Budget.note_fn_call
 let tick = Budget.tick
 
 (** A primitive for pure tests / name registration: sync function.
@@ -334,7 +335,9 @@ let rec eval_step
                 let arg_vals = List.map (eval ~budget ~prims env) args in
                 let step = apply_step ~budget ~prims f arg_vals in
                 (match f, step with
-                 | VLambda _, Cont _ -> budget.current_fn <- Some name
+                 | VLambda _, Cont _ ->
+                     budget.current_fn <- Some name;
+                     note_fn_call name
                  | VPrim _, Done _ ->
                      budget.prim_calls <- budget.prim_calls + 1
                  | _ -> ());

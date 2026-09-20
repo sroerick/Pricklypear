@@ -176,15 +176,34 @@ let apply_value_raw (t : t) (fn : Ast.value) (args : Ast.value list)
     with e -> Error e
   in
   if Sys.getenv_opt "PP_PROFILE_RENDER" <> None then begin
-    let tops =
-      let l = Hashtbl.fold (fun k v acc -> (v, k) :: acc) budget.Budget.fn_step_counts [] in
-      List.sort (fun a b -> compare b a) l
+    let merged =
+      Hashtbl.fold (fun k steps acc ->
+          let c =
+            try Hashtbl.find budget.Budget.fn_call_counts k with Not_found -> 0
+          in
+          (steps, c, k) :: acc)
+        budget.Budget.fn_step_counts []
+    in
+    let clean = String.map (fun c -> if c = '(' then '_' else c) in
+    let hot =
+      List.sort (fun (s1, _, _) (s2, _, _) -> compare s2 s1) merged
       |> List.filteri (fun i _ -> i < 15)
-      |> List.map (fun (v, k) -> Printf.sprintf "%s=%d" (String.map (fun c -> if c = '(' then '_' else c) k) v)
+      |> List.map (fun (s, c, k) ->
+             Printf.sprintf "%s=%d/%d(%.1f)" (clean k) s c
+               (if c > 0 then float_of_int s /. float_of_int c else 0.))
       |> String.concat " "
     in
-    Printf.eprintf "[profile] left=%d steps top: %s\n%!"
-      (max 0 (budget.Budget.limit - budget.Budget.steps)) tops
+    let frequent =
+      List.sort (fun (_, c1, _) (_, c2, _) -> compare c2 c1) merged
+      |> List.filteri (fun i _ -> i < 15)
+      |> List.map (fun (s, c, k) ->
+             Printf.sprintf "%s=%d/%d(%.1f)" (clean k) s c
+               (if c > 0 then float_of_int s /. float_of_int c else 0.))
+      |> String.concat " "
+    in
+    Printf.eprintf "[profile] left=%d/prim=%d top-self: %s\n[profile] hot-freq: %s\n%!"
+      (max 0 (budget.Budget.limit - budget.Budget.steps))
+      budget.Budget.prim_calls hot frequent
   end;
   match r with
   | Ok v -> v

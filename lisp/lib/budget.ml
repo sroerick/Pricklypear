@@ -17,6 +17,13 @@ type budget = {
   mutable db_hits : int;
   mutable db_ms : float;
   fn_step_counts : (string, int) Hashtbl.t;
+  (* application COUNT per fn — the self-steps table's companion. The
+     step table shows WHERE steps go; this shows HOW MANY invocations
+     paid for them, so cheap-but-hot fns (call-count bugs like the
+     html/block-member? walk) stand out against heavy-body fns with the
+     same self-step total. One Hashtbl update per VLambda application
+     (eval.ml), NOT per step. *)
+  fn_call_counts : (string, int) Hashtbl.t;
   (* image.db-panel: per DB-prim breakdown — prim name → (calls, db ms).
      Filled at the register_crud choke point (note_prim_db); read by
      Timing.measure through the fiber-keyed slot so /timing can show
@@ -45,6 +52,7 @@ let make_budget ?(limit = default_limit) () : budget =
     db_hits = 0;
     db_ms = 0.;
     fn_step_counts = Hashtbl.create 16;
+    fn_call_counts = Hashtbl.create 16;
     prim_db = Hashtbl.create 8;
   }
 
@@ -169,6 +177,15 @@ let note_prim_db (name : string) (ms : float) : unit =
   | Some b ->
     let calls, tot = try Hashtbl.find b.prim_db name with Not_found -> (0, 0.) in
     Hashtbl.replace b.prim_db name (calls + 1, tot +. ms)
+  | None -> ()
+
+(** One VLambda application of [name] (eval.ml; NOT per step). No-op
+    outside an eval like the other note_* entry points. *)
+let note_fn_call (name : string) : unit =
+  match current () with
+  | Some b ->
+    let n = try Hashtbl.find b.fn_call_counts name with Not_found -> 0 in
+    Hashtbl.replace b.fn_call_counts name (n + 1)
   | None -> ()
 
 (** Advance [b]'s step count (tracking per-function counts) and raise
