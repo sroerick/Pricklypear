@@ -140,14 +140,28 @@ let () =
   Random.self_init ();
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-  let cfg : Http_transport.cfg =
-    {
-      base_url =
-        Option.value !image ~default:(Envcfg.getenv "PP_URL" ~default:"http://127.0.0.1:18080");
-      user = Option.value !user ~default:(Envcfg.getenv "PP_USER" ~default:"admin");
-      password = Option.value !pass ~default:(Envcfg.getenv "PP_PASS" ~default:"admin");
-    }
-  in
+    let cfg : Http_transport.cfg =
+      (* PP_TOKEN: the delegated identity has no Basic password, so a
+         configured token rides as Bearer. An explicit --pass or PP_PASS
+         still wins, so local dev keeps admin:admin. *)
+      let pass_given =
+        match !pass with
+        | Some _ -> true
+        | None -> Envcfg.getenv "PP_PASS" ~default:"" <> ""
+      in
+      let token =
+        let t = Envcfg.getenv "PP_TOKEN" ~default:"" in
+        if (not pass_given) && String.trim t <> "" then Some (String.trim t)
+        else None
+      in
+      {
+        base_url =
+          Option.value !image ~default:(Envcfg.getenv "PP_URL" ~default:"http://127.0.0.1:18080");
+        user = Option.value !user ~default:(Envcfg.getenv "PP_USER" ~default:"admin");
+        password = Option.value !pass ~default:(Envcfg.getenv "PP_PASS" ~default:"admin");
+        token;
+      }
+    in
   let transport = Http_transport.transport ~env ~sw ~cfg in
   (* Hybrid placement: Local evaluates under the proxy rim; Remote
      (prim-dense / transactional) is POSTed to /api/eval wholesale. *)

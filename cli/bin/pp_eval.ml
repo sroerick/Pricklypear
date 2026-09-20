@@ -99,8 +99,10 @@ let main url user password password_file timeout as_json interactive_flag
   let password =
     Pp_client.resolve_password ~password ~password_file
   in
-  if password = "" then begin
-    prerr_endline "pp-eval: set PP_PASS or PP_PASS_FILE or --password";
+  let token = Pp_client.getenv_default "PP_TOKEN" "" in
+  if password = "" && String.trim token = "" then begin
+    prerr_endline
+      "pp-eval: set PP_PASS or PP_PASS_FILE or --password (or PP_TOKEN)";
     2
   end else if interactive_flag then
     interactive ~url ~user ~password ~timeout ~as_json
