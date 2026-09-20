@@ -452,8 +452,10 @@ let register ~(hooks : hooks) (t : t) (tbl : Primitives.t) : unit =
      body of the lambda see the in-transaction pgx conn via
      Store.current_conn. Lands it29, option A from BORGE-1783438027.
 
-     Returns the lambda body's result. Nested transactions raise a clean
-     Interp_error (see with_dynamic_transaction). *)
+     Returns the lambda body's result. Nested transactions RIDE the
+     outer transaction: with_dynamic_transaction joins an active tx
+     instead of raising (i-job-tx-wedge), so the inner body commits
+     (or rolls back) with the outer. *)
   (* Apply a VLambda under the effect rim (H1.7). *)
   let apply_lambda_auto (lam : Pricklypear_lisp.Ast.value) : Pricklypear_lisp.Ast.value =
     let budget = Pricklypear_lisp.Eval.make_budget () in
