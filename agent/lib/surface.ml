@@ -69,7 +69,7 @@ let surface_source = {pp|
     ".fs-shell:has(#fs-axis.col) .fs-content{order:0;flex:1 1 auto;min-height:0;min-width:0}"
     "#fs-surface{display:contents}"
     "#fs-rail{display:contents}"
-    ".fs-shell:has(#fs-axis.col) #fs-rail{order:-1;display:flex;flex-direction:column;flex:0 0 20rem;max-width:20rem;min-width:0;min-height:0;overflow-y:auto;overflow-x:hidden;gap:.25rem;padding:.25rem .25rem .25rem 0}"
+    ".fs-shell:has(#fs-axis.col) #fs-rail{order:-3;display:flex;flex-direction:column;flex:0 0 20rem;max-width:20rem;min-width:0;min-height:0;overflow-y:auto;overflow-x:hidden;gap:.25rem;padding:.25rem .25rem .25rem 0}"
     ;; row axis: the rail furniture is a bottom band — rail panes dock
     ;; there as horizontal boxes (bodies live; dock semantics in both
     ;; axes).
