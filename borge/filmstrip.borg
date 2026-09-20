@@ -309,6 +309,92 @@
    (status implemented)
   )
 
+  (subsection lookbook
+   (doc "LOOKBOOK — the UI-element inspector (operator ask, 2026-09:
+       Storybook was too complex, Lookbook too foreign; 'our smalltalk
+       ui can shine here'). A reusABLE ui prim and an inspectABLE ui
+       prim are the same def read through a new face — no component
+       framework, no registry files, no compiled stories. THREE
+       OPERATOR DECISIONS, all recorded: (1) glochid (agent host) first,
+       habitat face rides the same lib later; (2) EXAMPLES ARE THE
+       DECLARATION — a def becomes an inspectable ui element by
+       defining a sibling `<name>/examples` def whose answer is a LIST
+       of param dicts (variants); no source-sniffing for 'def whose
+       body returns html' — self-declared or invisible; (3) do-it (edit
+       the def from the inspector) is PASS TWO — v1 is browse / render /
+       tweak only. PORTABILITY IS THE LOAD-BEARING RULE (operator:
+       'the html/htmx pipeline should happen SUBSEQUENT to the prim
+       declaration, so the primitives render locally or on mobile
+       later'): a lookbook ui prim DECLares, it never renders.
+       `(name params)` -> a UI VALUE — pure JSON-able declared state:
+       tag/attrs/kids (kids a JSON string of strings and nested
+       ui-value dicts, the same discipline as rail-tree kids);
+       hx-* verbs may ride attrs as DATA because that is the element's
+       declared behavior — the html projection emits them verbatim, a
+       foreign projection maps or badges known verbs. The fragment in
+       the pane is PROJECTION 1, built by ONE shared lib renderer over
+       the declared value; PROJECTION 2 ships in v1 as an indented
+       plain-text walkthrough of the same value — the portability claim
+       is falsifiable from day one, not an aspiration. pads/render-scene
+       (terminal) and the native tier are subsequent projections over
+       the SAME declaration, never a second authoring surface
+       (filmstrip scene + html are the precedent: two lowerings of one
+       row). COMPOSITION: an element def is an ordinary def calling the
+       element prims it needs and embedding their ui-values as kids —
+       reuse is a def call, inspection recurses naturally. THE FACE:
+       a `ui` rail-tree root (packages -> elements -> variants, the ONE
+       tree renderer, lazy levels like every tree) whose element labels
+       open a /lookbook pane: name + docstring on top, the DECLARED
+       value of the selected variant (the Smalltalk self, as
+       inspectable data), the html PROJECTION live on stage, and a
+       params form derived from the def's formals (source via the def
+       row) POSTing a pane-local re-render of the stage only (I5
+       discipline, zero JS). Inventory is read from the live env (the
+       same seam that serves /bindings), never scraped from files.
+       v1 home: libs/lookbook (value constructors + both projections +
+       the face + seed elements); glochid boots it like any lib.
+       Budget: elements and variants stay small — the boot shell stacks
+       this next to the other trees.")
+   (verify
+    (smoke "an <name>/examples def makes the element appear in the ui rail root with its variants as rows; deleting the examples def removes it (examples ARE the declaration)")
+    (smoke "a lookbook pane shows one variant's declared ui-value, its html projection rendered live on stage, and its source folded — all in one pane, zero JS")
+    (smoke "editing a param and POSTing re-renders ONLY the stage fragment inside the pane (pane-local target, I5; the shell never re-renders around it)")
+    (smoke "PROJECTIONS: the same declared ui-value renders through the html projection AND the text projection in v1 — two renderers, one value, no second authoring path")
+    (smoke "an element def that calls render-html or strings its own markup is a spec violation (declare, never render — the inspection of another projection would then fork)")
+    (smoke "do-it NOT in v1: the pane has no edit/save word yet — pass two adds define-back-on-branch with its own stanza")
+    (smoke "probe_shell_sem.mjs batch D: seed element visible in the ui root, variant opens the pane, variant params re-render the stage, both projections answer")
+   )
+   (* agent note (|2026-09-20 MAKE (lookbook v1, glochid) DONE: libs/
+   lookbook/lib.pp (pure: ui/elm + ui/text constructors, lookbook/html
+   PROJECTION 1, lookbook/text PROJECTION 2, seed elements ui/button +
+   ui/badge + ui/card with cards — the card is an ordinary def
+   (#name/examples), lb/obj is the flat-kvs dict builder since the
+   pure catalog has only dict-set). The glochid face (surface.ml):
+   lookbook/eval OCaml prim = the eval seam (one direct
+   eval_string_direct with a fresh budget, NO lock-take — callers
+   already run inside a route eval; errors surface as {"t":"err"}
+   cards, never 500s); routes /lookbook + /lookbook/run; ui rail root
+   via glochid/ui-tree over lookbook/elements (HOST SEAM,
+   filmstrip/apps pattern); lb/stage-id flattens the element name (/ ->
+   -) because url-enc keeps "/" and an href-target id must be a
+   selector-clean CSS word; variant tabs + param form are pane-local
+   (I5), params form targets ONLY the stage div. Boots via
+   llm/embed_rules.dune.inc (headerless embed — no pp-sync strip
+   needed). DIALECT: (define (f x) body "doc") RETURNS the docstring —
+   the face writes ;; comments; the lib writes the
+   (define name (lambda ...) "doc") filmstrip form. JSON round trip is
+   NATIVE (prims_json value_to_json keeps VStr-JSON structured through
+   json-emit/json-parse), so kids/attrs/variants nest without double
+   encoding. Gates: agent_test.ml lookbook test (24 tests green —
+   declaration purity, both projections, live pane, stage-only POST,
+   ui root, no-card fail-soft); probe_shell_sem.mjs batch D (D0-D6,
+   whole probe ALL GREEN — the v4+ dichotomy count moved to 4 trees /
+   10 tabs for the new root); borge drift clean. Version bumps in
+   session memory + dune rebuild may apply on boot after the embed
+   rule changes.|) *)
+   (status implemented)
+  )
+
   (subsection roadmap-tiers
    (doc "Where filmstrip points once the web product runs: (1) pads
        migration makes the shell a pad tree — the same workspace value

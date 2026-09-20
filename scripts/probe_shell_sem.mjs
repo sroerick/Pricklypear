@@ -244,7 +244,7 @@ ok(s0.focusedRect && s0.focusedRect.q && !s0.focusedShelved && (s0.focusedRegion
 ok(s0.pinnedCount > 0 || s0.focusedRegion === "main", "I1 backward-compat: with zero pinned panes the focused pane is the main lift", `pinned=${s0.pinnedCount} region=${s0.focusedRegion}`);
 await checkI8("on load", false);
 ok(s0.shelvedCount === 1 && s0.shelfDir, "windows tree: shelf subtree present with the shelved pane counted", `shelved=${s0.shelvedCount} shelfDir=${s0.shelfDir}`);
-ok(s0.liveCount === 1 && s0.trees === 3 && s0.railtabs === 8, "v4+: three tree boxes + three rail mode words + five start-menu entries (dichotomy — launchbar folded into the rail)", `trees=${s0.trees} tabs=${s0.railtabs} live=${s0.liveCount}`);
+ok(s0.liveCount === 1 && s0.trees === 4 && s0.railtabs === 10, "v4+ lookbook: FOUR tree boxes (windows/code/prims/ui) + tabs + SIX start-menu entries (dichotomy — launchbar folded into the rail)", `trees=${s0.trees} tabs=${s0.railtabs} live=${s0.liveCount}`);
 ok(s0.bareAnchors === 0, "I5 zero shell-escaping anchors in pane bodies", `bare=${s0.bareAnchors}`);
 ok((await ev(`[...document.querySelectorAll('#fs-shell [style]')].length`)) === 0, "T6 zero inline styles in the shell at rest (classes only, before any htmx settling)");
 const __styleEls = await ev("[...document.querySelectorAll('#fs-shell [style]')].map(function(e){return e.tagName}).join(',')");
@@ -642,6 +642,50 @@ v4_batch_c: {
   ok(ghostRows === 0, "T7 no stray visible action rows outside a collapsed fold", `visibleActionRows=${ghostRows}`);
   const paneHead = await ev(`[...document.querySelectorAll('.fs-pane header button')].map(b=>({v:b.getAttribute('data-verb'),t:(b.getAttribute('title')||'').length,g:(b.textContent||'').trim()}))`);
   ok(paneHead.length > 0 && paneHead.every((b) => b.v && b.t > 0), "T7 the lifted pane head renders the same glyph + data-verb + tooltip contract", JSON.stringify(paneHead.slice(0, 3)));
+}
+
+// ---- BATCH D (lookbook): declared ui elements are INSPECTABLE — the
+// ui root inventories the <name>/examples cards, a label opens the
+// /lookbook pane, the stage renders a LIVE variant call with BOTH
+// projections over the same value, a param POST re-renders ONLY the
+// stage, and a missing card degrades to a message (declaration is
+// self-declared, never sniffed). --
+lookbook_batch_d: {
+  await send("Page.navigate", { url: base + "/" });
+  ok(await waitShell(), "D0 shell appeared for the lookbook batch");
+  await sleep(500);
+  // D0 the rail carries a ui tab next to windows/code/prims
+  ok(await ev(`[...document.querySelectorAll('.fs-railtab')].map(b=>b.textContent.trim()).includes('ui')`), "D0 the rail tabs include the ui root");
+  ok((await ev(`document.querySelectorAll('.fs-cbox[data-rmode="ui"]').length`)) === 1, "D0 exactly one ui tree box in the rail");
+  // D1 flip the rail mode to ui (same sentinel :has as every flip)
+  await ev(`htmx.ajax('POST','/filmstrip/railmode',{values:{root:'ui'},target:'#fs-sink',swap:'innerHTML'})`);
+  await sleep(700);
+  ok(String(await ev(`document.querySelector('#fs-railmode').className`)).includes('rm-ui'), "D1 rail mode flipped to ui (sentinel :has, zero JS)");
+  // D2 the ui root lists the three seed elements, level-0, no fetch
+  const uiRows = await ev(`[...document.querySelectorAll('#fs-tree-ui li.fs-tr-item')].map(li=>li.querySelector('.fs-tr-open').textContent.trim())`);
+  ok(uiRows.length === 3 && uiRows.includes("ui/button") && uiRows.includes("ui/badge") && uiRows.includes("ui/card"), "D2 ui root lists the declared elements (examples ARE the declaration)", JSON.stringify(uiRows));
+  // D3 the label open-or-focuses /lookbook (acme Get) — a real shell pane
+  await ev(`(() => { const li=[...document.querySelectorAll('#fs-tree-ui li.fs-tr-item')].find(x=>x.querySelector('.fs-tr-open').textContent.trim()==='ui/button'); li.querySelector('.fs-tr-open').click(); return 'clicked' })()`);
+  await sleep(1100);
+  const stage1 = await ev(`!!document.querySelector('.fs-pane .lb-stage [data-lb-projection="html"] .lb-btn-primary')`);
+  ok(stage1, "D3 the pane stage renders the live variant via the html projection", String(stage1));
+  ok(await ev(`!!document.querySelector('.fs-pane .lb-folds') || !!document.querySelector('.fs-pane details.lb-fold')`), "D3 the declared value + text projection + source are folded beside the stage");
+  ok(await ev(`[...document.querySelectorAll('.fs-pane .lb-fold')].length >= 3`), "D3 three folds: declared value / text projection / source");
+  // D4 variant tab flips the SAME pane to the danger variant (pane-local)
+  await ev(`(() => { const b=[...document.querySelectorAll('.fs-pane .lb-vtab')][1]; if(!b) return 'no vtab'; b.click(); return 'v1 clicked' })()`);
+  await sleep(1100);
+  ok(await ev(`!!document.querySelector('.fs-pane .lb-stage .lb-btn-danger')`), "D4 variant 1 re-renders the pane with the danger preset (pane-local POST)");
+  // D5 a param tweak re-renders ONLY the stage (the pane body survives:
+  // the h2 + form are still there, and the stage still shows the value)
+  const beforeBody = await ev(`document.querySelector('.fs-pane .fs-body').children.length`);
+  await ev(`htmx.ajax('POST','/lookbook/run',{values:{name:'ui/button',v:'1',p_label:'Ship',p_kind:'danger'},target:'#lb-stage-ui-button',swap:'outerHTML'})`);
+  await sleep(1100);
+  ok(await ev(`document.querySelector('.fs-pane .lb-stage').textContent.includes('Ship')`), "D5 the params form re-renders the stage with the new values");
+  ok((await ev(`document.querySelector('.fs-pane .fs-body').children.length`)) === beforeBody, "D5 the pane body around the stage never swapped (stage-only, I5)");
+  // D6 a missing card degrades to the declaration message (never an error)
+  await ev(`htmx.ajax('POST','/filmstrip/open',{values:{route:'/lookbook?name=ui/nonesuch'},target:'#fs-sink',swap:'innerHTML'})`);
+  await sleep(1100);
+  ok(await ev(`[...document.querySelectorAll('.fs-pane.fs-body, .fs-pane > .fs-body')].some(b=>b.textContent.includes('no examples card for ui/nonesuch'))`), "D6 a cardless element answers the no-card declaration message (fail-soft)");
 }
 
 console.log(fails === 0 ? "\nSEMANTIC PROBE: ALL GREEN" : `\nSEMANTIC PROBE: ${fails} FAILING`);
