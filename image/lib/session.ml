@@ -626,8 +626,7 @@ let rec eval_one (t : t) (input : string) : Pricklypear_lisp.Ast.value =
     (* Pre-eval intercept: (define name <body>) is the only AST-level
        special case left, because the name argument is a Var that must
        not be evaluated. Everything else (fork/merge/route/checkout)
-       dispatches through Eval.apply via the prim_table.
-       H1: [eval_string_auto] honors PP_EVAL_CONTROL=lwt|eff (default lwt). *)
+       dispatches through Eval.apply via the prim_table. *)
     (* package-surface: (package NAME (export ...)) is a directive, not a value. *)
     (match expr with
      | Pricklypear_lisp.Ast.App
@@ -1378,7 +1377,7 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
            | Error e -> Pricklypear_lisp.Ast.VStr e));
   (* Register CRUD primitives (get/create/update/delete/list) over
      the shared data_rows table. Same pattern as control prims:
-     they capture (!t) and return their real DB result via Lwt. *)
+     they capture (!t) and return their real DB result under the Eio rim. *)
   register_crud_prims !t prim_table;
   (* Network primitives (tcp-connect, stream-read/write/close) —
      single-image.net-prims. *)
