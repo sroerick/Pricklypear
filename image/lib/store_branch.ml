@@ -964,12 +964,6 @@ let list_routes (t : Store_db.t) : (string * string * string) list =
                           in
                           Some (r, h, vis)
                       | _ -> None)
-                 | [ route_c; handler_c ] ->
-                     (* Pre-migration fallback *)
-                     (match Pgx.Value.to_string route_c,
-                             Pgx.Value.to_string handler_c with
-                      | Some r, Some h -> Some (r, h, "private")
-                      | _ -> None)
                  | _ -> None)
                rows)
     with exn -> Store_db.reraise ~op:"list_routes" exn)
