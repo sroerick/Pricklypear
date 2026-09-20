@@ -880,11 +880,6 @@ let timing_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
    FIXED — no user input reaches these queries; this is a Postgres
    WINDOW, not a query console. *)
 
-(* ---- db panel (image.db-panel) -------------------------------------
-   Global Postgres statistics for the operator. Admin-only. All SQL is
-   FIXED — no user input reaches these queries; this is a Postgres
-   WINDOW, not a query console. *)
-
 (* Pgx value readers: null-safe, for the fixed-shape panel queries.
    (Pgx.row is a LIST of values in this pgx.) *)
 let cell_s (row : Pgx.row) (i : int) : string =
