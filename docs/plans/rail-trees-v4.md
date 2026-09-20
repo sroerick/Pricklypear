@@ -118,3 +118,22 @@ route (fs leaves could never open from tree labels); vals are raw
 now. code/rows + code/link deleted (obituary in borge/agent.borg
 filmstrip-shell, amendment note in borge/filmstrip.borg
 rail-trees-v4). Full battery green: runtest, smoke, probe 115 OK.
+
+## Postscript (2026-09-20, default-open desks + the move verb)
+
+Operator note drove an amendment (stanza note in
+borge/filmstrip.borg): node dicts MAY carry `expand` -- "true" renders
+the dir's <details> already open; it RIDES kids (a parsed-open details
+never fires its toggle-once pull). tree-lazy preserves eager kids on
+expand-marked nodes (head + mutation OOB render them; budget stays
+host policy); tree-collapse answers a NEW tree-closed projection so
+collapse-all still folds everything. glochid's windows tree pre-walks
+desk/0..2 kids + the expand seed (shelf stays lazy). Cross-stanza
+window-controlbox addition: POST /filmstrip/move-to (`id` + optional
+`d`; no `d` = the pane-head ⇢ glyph -- cycle the filmstrip/desk-count
+ring) re-desks a pane record with close-heal focus discipline; tree
+rows carry explicit to0/to1/to2 words (current desk skipped, rail
+panes none/refused). Gates: agent_test rail-trees extended + new
+move-to-desktop case; probe_shell_sem.mjs batch M (168 OK -- and the
+I3 driver now rides the page's htmx, since an eager desk never
+refetches its level); runtest + smoke green; borge drift none.

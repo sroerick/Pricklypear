@@ -642,6 +642,45 @@ let test_rail_trees ~rt () =
     (has "fs-tr-root" box);
   Alcotest.(check bool) "tree box: dir rows lazy via toggle once" true
     (has "hx-trigger=\"toggle once\"" box);
+  (* DEFAULT-OPEN desktops (rail-trees-v4 expand seed): the desk dirs
+     render <details open> WITH their pre-walked kid rows; the shelf
+     dir stays lazy -- inside an empty workspace the only remaining
+     toggle-once pull in the box is the shelf's. *)
+  Alcotest.(check bool) "tree box: desk dirs render already-open with eager kids" true
+    (has "open=\"open\"" box && has "data-node=\"desk/0\"" box);
+  (* inside an empty workspace the ONLY toggle-once pull in the box is
+     the shelf's: everything before it (all three desk dirs) is eager *)
+  Alcotest.(check bool) "tree box: desk dirs carry no lazy pull (expand rides kids)" true
+    (let shelf_i =
+       (try Str.search_forward (Str.regexp_string "data-node=\"shelf\"") box 0
+        with Not_found -> Alcotest.fail "no shelf row in the box")
+     in
+     (try
+        ignore
+          (Str.search_forward (Str.regexp_string "hx-trigger")
+             (String.sub box 0 shelf_i) 0);
+        false
+      with Not_found -> true));
+  (* desk node dicts declare the seed + eager kids (empty desks -> []) *)
+  Alcotest.check pp_value_testable "windows tree: desk dirs carry expand + kids"
+    (Ast.VStr "true []")
+    (Runtime.eval_string ~rt
+      {|(string-append
+          (as-str (dict-get (car (glochid/windows-tree "")) "expand"))
+          " "
+          (as-str (dict-get (car (glochid/windows-tree "")) "kids")))|});
+  (* collapse-all answers the FULLY-CLOSED render: expand seeds cleared *)
+  (match
+     Runtime.dispatch_route ~rt ~handler:"filmstrip/tree-collapse"
+       ~method_:"POST" ~path:"/filmstrip/tree/collapse"
+       ~params:[ ("root", "windows") ] ~headers:[ ("hx-request", "true") ]
+       ~body:""
+   with
+   | Ast.VStr s ->
+       Alcotest.(check bool) "collapse-all: renders the closed tree" true
+         (if has "fs-tree-windows-root" s then not (has "open=\"open\"" s)
+          else Alcotest.fail ("collapse resp: " ^ String.escaped (String.sub s 0 (min 400 (String.length s)))));
+   | other -> Alcotest.fail ("collapse: " ^ Reader.pp_value other));
   Alcotest.(check bool) "tree box: level fragment URL is hxoas (tree?root)" true
     (has "/filmstrip/tree?root=windows&amp;node=" box);
   Alcotest.(check bool) "tree box: collapse-all word POSTs (a mutation, not a fetch)" true
@@ -708,6 +747,103 @@ let test_rail_trees ~rt () =
     (not (has "hx-trigger=\"toggle once\"" eager_row));
   Alcotest.(check bool) "eager dir: kid rows ride the spliced-ul classes" true
     (has "fs-tr-kids" eager_row)
+
+(** cross-desktop move (window-controlbox-v2 desktop int + the move
+    verb): POST /filmstrip/move-to with an explicit d RE-DESKS a pane
+    record (persisted in the ws row), the windows tree rows follow on
+    the next OOB; a FOCUSED pane leaving the current desktop heals
+    focus onto a strip-visible pane (a hidden pane never holds the
+    ring); rail panes refuse (dock semantics); no d = cycle. Uses a
+    temp ws file like the keys test. *)
+let test_move_to_desk ~rt () =
+  Surface.load ~rt;
+  let has needle s =
+    (try ignore (Str.search_forward (Str.regexp_string needle) s 0); true
+     with Not_found -> false)
+  in
+  Runtime.add_prim rt "bind/packages" (fun _ -> Ast.VStr {|[]|});
+  Runtime.add_prim rt "bind/list" (fun _ -> Ast.VStr {|[]|});
+  Runtime.add_prim rt "bind/get" (fun _ -> Ast.VStr {|{}|});
+  let ws = Filename.temp_file "glochid-move" ".json" in
+  ignore
+    (Runtime.eval_string ~rt
+       (Printf.sprintf {|(define glochid/ws-file "%s")|} ws));
+  Fun.protect
+  begin
+    fun () ->
+      let open_ route =
+        ignore
+          (Runtime.dispatch_route ~rt ~handler:"filmstrip/open"
+             ~method_:"POST" ~path:"/filmstrip/open"
+             ~params:[ ("route", route) ] ~headers:[] ~body:"")
+      in
+      let desk route =
+        match
+          Runtime.eval_string ~rt
+            (Printf.sprintf
+               {|(filmstrip/pane-desk
+                   (filmstrip/pane-at (nth (filmstrip/row) 1)
+                     (filmstrip/find-route-index (nth (filmstrip/row) 1)
+                       "%s")))|}
+               route)
+        with
+        | Ast.VInt d -> Int64.to_int d
+        | Ast.VStr d -> int_of_string d
+        | other -> Alcotest.fail ("desk: " ^ Reader.pp_value other)
+      in
+      open_ "/chat";   (* stamps the CURRENT desktop (0) *)
+      Alcotest.(check int) "fresh pane rides desktop 0" 0 (desk "/chat");
+      let id =
+        match
+          Runtime.eval_string ~rt
+            {|(filmstrip/pane-id
+                (filmstrip/pane-at (nth (filmstrip/row) 1) 0))|}
+        with
+        | Ast.VStr id -> String.escaped id
+        | other -> Alcotest.fail ("id: " ^ Reader.pp_value other)
+      in
+      (match
+         Runtime.dispatch_route ~rt ~handler:"filmstrip/move-to"
+           ~method_:"POST" ~path:"/filmstrip/move-to"
+           ~params:[ ("id", id); ("d", "1") ]
+           ~headers:[ ("hx-request", "true") ] ~body:""
+       with
+       | Ast.VStr s ->
+           Alcotest.(check bool) "move-to: answers the strip + tree OOBs" true
+             (has "fs-content" s && has "fs-tree-windows-root" s);
+           Alcotest.(check bool) "move-to: status line names the desk" true
+             (has "moved to desktop 1" s)
+       | other -> Alcotest.fail ("move-to: " ^ Reader.pp_value other));
+      Alcotest.(check int) "move-to: pane record re-desked (persisted)" 1
+        (desk "/chat");
+      (* pane-head move glyph posts the same route *)
+      (match
+         Runtime.eval_string ~rt
+           {|(render-html (filmstrip/pane-head
+               (filmstrip/pane-at (nth (filmstrip/row) 1) 0)))|}
+       with
+       | Ast.VStr head ->
+           Alcotest.(check bool) "pane-head: move glyph POSTs move-to" true
+             (has "data-verb=\"move\"" head && has "/filmstrip/move-to" head)
+       | other -> Alcotest.fail ("pane-head: " ^ Reader.pp_value other));
+      (* heatmap: the tree row of the moved pane now carries only the
+         to-words for OTHER desktops (to0 + to2, not to1) *)
+      (match
+         Runtime.eval_string ~rt
+           {|(render-html (filmstrip/tree-level "windows"
+               (glochid/windows-tree "desk/1")))|}
+       with
+       | Ast.VStr rows ->
+           Alcotest.(check bool) "tree row: move words skip the current desk" true
+             (has "data-verb=\"to0\"" rows && has "data-verb=\"to2\"" rows
+              && not (has "data-verb=\"to1\"" rows))
+       | other -> Alcotest.fail ("tree rows: " ^ Reader.pp_value other))
+  end
+    ~finally:(fun () ->
+        (try Sys.remove ws with Sys_error _ -> ());
+        ignore
+          (Runtime.eval_string ~rt
+             {|(define glochid/ws-file ".agent/workspace.json")|}))
 
 (** A consumed turn's captured parts replay through hyper/stream: simulate
     the multipart emitter's captured part list, then hyper/stream over a
@@ -1342,6 +1478,8 @@ let () =
             (test_surfaces_bindings_browser ~rt)
         ; Alcotest.test_case "rail-trees" `Quick
             (test_rail_trees ~rt)
+        ; Alcotest.test_case "move-to-desktop" `Quick
+            (test_move_to_desk ~rt)
         ; Alcotest.test_case "lookbook" `Quick
             (test_lookbook ~rt)
         ; Alcotest.test_case "habitat-panes" `Quick
