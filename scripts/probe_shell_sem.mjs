@@ -244,17 +244,17 @@ ok(s0.focusedRect && s0.focusedRect.q && !s0.focusedShelved && (s0.focusedRegion
 ok(s0.pinnedCount > 0 || s0.focusedRegion === "main", "I1 backward-compat: with zero pinned panes the focused pane is the main lift", `pinned=${s0.pinnedCount} region=${s0.focusedRegion}`);
 await checkI8("on load", false);
 ok(s0.shelvedCount === 1 && s0.shelfDir, "windows tree: shelf subtree present with the shelved pane counted", `shelved=${s0.shelvedCount} shelfDir=${s0.shelfDir}`);
-ok(s0.liveCount === 1 && s0.trees === 3 && s0.railtabs === 3, "v4: three tree boxes + three rail mode tabs (dichotomy — axis word retired, BORGE-1789879934)", `trees=${s0.trees} tabs=${s0.railtabs} live=${s0.liveCount}`);
+ok(s0.liveCount === 1 && s0.trees === 3 && s0.railtabs === 8, "v4+: three tree boxes + three rail mode words + five start-menu entries (dichotomy — launchbar folded into the rail)", `trees=${s0.trees} tabs=${s0.railtabs} live=${s0.liveCount}`);
 ok(s0.bareAnchors === 0, "I5 zero shell-escaping anchors in pane bodies", `bare=${s0.bareAnchors}`);
 ok((await ev(`[...document.querySelectorAll('#fs-shell [style]')].length`)) === 0, "T6 zero inline styles in the shell at rest (classes only, before any htmx settling)");
 const __styleEls = await ev("[...document.querySelectorAll('#fs-shell [style]')].map(function(e){return e.tagName}).join(',')");
 console.log("     DEBUG style els:", __styleEls);
 
 // ---- I2 + focus discipline: click the shelved app's cascade name ----
-const clicked = await ev(`(()=>{window.__sem='pre'; const b=[...document.querySelectorAll('#fs-cascade .fs-entry')].find(e=>e.textContent.trim()==='settings'); b.click(); return 'clicked'})()`);
+const clicked = await ev(`(()=>{window.__sem='pre'; const b=[...document.querySelectorAll('#fs-start .fs-start-entry')].find(e=>e.textContent.trim()==='settings'); b.click(); return 'clicked'})()`);
 await sleep(900);
 const s1 = await ev(SNAPSHOT);
-ok(clicked === "clicked", "cascade click dispatched (settings, shelved)");
+ok(clicked === "clicked", "start-menu entry dispatched (settings, shelved)");
 ok(s1.focusedRect && s1.focusedRect.q && !s1.focusedShelved, "I2 focused pane visible+live after unshelving click", JSON.stringify(s1.focusedRect));
 ok((await ev(`window.__sem==='pre'`)), "I2 same-window (no navigation)");
 ok(s1.shelvedCount === 0, "I2 shelved count zero after the unshelve click", `shelved=${s1.shelvedCount}`);
@@ -294,7 +294,8 @@ ok((await ev(`!document.querySelector('.fs-pane[data-pane="p1"]').classList.cont
 const boot = await httpGet(base + "/");
 ok(!/id="fs-launch"/.test(boot.body), "D no launcher in the shell");
 ok(!/fs-deskbox/.test(boot.body), "D no desktop controlbox in the shell");
-ok((await ev(`[...document.querySelectorAll('#fs-cascade .fs-entry')].every(e=>JSON.parse(e.getAttribute('hx-vals')).t.startsWith('/'))`)), "D cascade column 0 entries are all route leaves");
+ok((await ev(`[...document.querySelectorAll('#fs-start .fs-start-entry')].every(e=>JSON.parse(e.getAttribute('hx-vals')).route.startsWith('/'))`)), "D start-menu entries are all route leaves");
+ok((await ev(`!document.querySelector('#fs-cascade')`)), "D the launchbar/cascade column is retired (start menu lives on the rail)");
 ok((await ev(`!document.querySelector('#fs-railtabs #fs-axis-btn')`)), "D the axis toggle is retired (sidebar-only shell, BORGE-1789879934)");
 ok(/id="fs-railtabs"/.test(boot.body) && !/fs-pane .fs-title.*settings.*pin/.test(boot.body.split('#fs-content')[1] || ""), "D no pane-tag strip inventory in the rail (tree is the pane inventory)");
 
@@ -381,7 +382,7 @@ after_reload_tag: {
   ok(await waitShell(), "shell appeared after load");
   await sleep(500);
   ok(!(await ev(`document.querySelector('.fs-pane[data-pane="p2"]').classList.contains('focused')`)), "cascade setup: p2 ring is live-DOM state, gone after reload");
-  console.log(await ev(`(()=>{const b=[...document.querySelectorAll('#fs-cascade .fs-entry')].find(e=>e.textContent.trim()==='settings'); b.click(); return 'clicked'})()`));
+  console.log(await ev(`(()=>{const b=[...document.querySelectorAll('#fs-start .fs-start-entry')].find(e=>e.textContent.trim()==='settings'); b.click(); return 'clicked'})()`));
   await sleep(900);
   const s7 = await ev(SNAPSHOT);
   ok((await ev(`document.querySelector('.fs-pane[data-pane="p2"]').classList.contains('focused')`)), "open-or-focus of a pinned route highlights the rail pane in place");

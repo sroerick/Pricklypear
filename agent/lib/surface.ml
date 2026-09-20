@@ -130,6 +130,17 @@ let surface_source = {pp|
     ;; #fs-railmode sentinel -- the SAME hiding trick desktops use, so a
     ;; mode flip never re-renders (expansion state is DOM).
     ".fs-railtabs{display:flex;gap:.3rem;align-items:center;border:1px solid var(--border);background:var(--panel);padding:.3rem .35rem}"
+    ;; start menu: zero-JS <details> fold in the railtabs row (B: the
+    ;; cascade/launchbar column's replacement). Closed = one word; open =
+    ;; an absolutely-positioned menu floating OVER the tree below —
+    ;; position:fixed pane discipline doesn't apply to menus (pads/layers-
+    ;; modality: genuinely transient), and no JS is involved.
+    ".fs-start{position:relative;flex:0 0 auto}"
+    ".fs-start-word{cursor:pointer;list-style:none;font-weight:700}"
+    ".fs-start-word::-webkit-details-marker{display:none}"
+    ".fs-start-menu{position:absolute;left:0;top:100%;z-index:30;display:flex;flex-direction:column;min-width:10rem;background:var(--panel);border:1px solid var(--border);box-shadow:0 4px 14px rgba(0,0,0,.5);padding:.25rem}"
+    ".fs-start-entry{width:100%;text-align:left;padding:.3rem .5rem;white-space:nowrap}"
+    ".fs-start-entry:hover{background:var(--sel-bg)}"
     ".fs-railtab.fs-btn{background:none;border:1px solid transparent;color:#7aa2f7}"
     ".fs-shell:has(#fs-railmode.rm-windows) .fs-rmode:not([data-rmode=\"windows\"]){display:none}"
     ".fs-shell:has(#fs-railmode.rm-code) .fs-rmode:not([data-rmode=\"code\"]){display:none}"
@@ -1183,6 +1194,52 @@ POST /filmstrip/railmode flips the #fs-railmode sentinel -- the SAME
 :has hiding desktops use, so mode flips keep every tree's expansion
 DOM alive.")
 
+(define glochid/start-menu
+  (lambda ()
+    (html/tag
+      "details"
+      (html/attrs
+        (list
+          (html/attr "id" "fs-start")
+          (html/attr "class" "fs-start")))
+      (html/join
+        (list
+          (html/tag
+            "summary"
+            (html/attrs
+              (list
+                (html/attr "class" "fs-btn fs-start-word")
+                (html/attr "title" "start: open one of the agent surfaces")
+                (html/attr "aria-label" "start menu")))
+            (html/text "start"))
+          (html/tag
+            "div"
+            (html/attrs
+              (list (html/attr "class" "fs-start-menu")))
+            (html/join
+              (list/map
+                (lambda (app)
+                  (let
+                    ((label (car app))
+                      (route (car (cdr app))))
+                    (html/tag
+                      "button"
+                      (html/attrs
+                        (list
+                          (html/attr "class" "fs-btn fs-start-entry")
+                          (html/attr "title" (string-append "open " label))
+                          (html/attr "hx-post" "/filmstrip/open")
+                          (html/attr "hx-vals"
+                            (string-append "{\"route\":\"" route "\"}"))
+                          (html/attr "hx-target" "#fs-sink")
+                          (html/attr "hx-swap" "innerHTML")))
+                      (html/text label))))
+                (glochid/apps))))))))
+  "The start menu lives on the rail (B: replaces the cascade/launchbar
+column, 2026-09-20 operator decision). A zero-JS <details> fold; the
+cascade column is gone from glochid's shell; /filmstrip/cascade stays
+routed for the lib contract, filmstrip/apps stays HOST SEAM 2.")
+
 (define glochid/railtabs-html
   (lambda ()
     (html/tag
@@ -1194,6 +1251,7 @@ DOM alive.")
           (html/attr "data-cbox" "railtabs")))
       (html/join
         (append
+          (list (glochid/start-menu))
           (list (html/span (html/attr "class" "fs-title") (html/text "rail")))
           (glochid/railtabs)
           (list (glochid/keys-hint))))))
@@ -1621,7 +1679,6 @@ bodies preserved). The pin/move responses land here.")
               (html/attr "id" "fs-shell")))
           (html/join
             (list
-              (filmstrip/cascade-html cascade)
               (glochid/content-area panes focus)
               (glochid/railmode-sentinel (glochid/railmode) #f)
               (filmstrip/key-sentinels)
