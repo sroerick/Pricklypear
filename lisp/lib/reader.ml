@@ -102,9 +102,6 @@ let skip_ws_and_comments (st : state) : unit =
   in
   loop ()
 
-(** True for ASCII digit characters. *)
-let is_digit c = c >= '0' && c <= '9'
-
 (** Numeric value of an ASCII digit. *)
 let digit_val c = Char.code c - Char.code '0'
 
