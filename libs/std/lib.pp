@@ -213,9 +213,19 @@
             (html/block-member? n (cdr tags)))))
   "Internal: the first block tag equal to n, else ().")
 
+;; O(1) membership for the render hot path (mirrors libs/html, 2026-09-19
+;; obituary: the recursive list walk cost ~233k steps per glochid shell
+;; render; the dict is built ONCE at load). dict-get on the tag→tag dict
+;; yields the tag or ().
+(define html/block-lookup
+  (list/foldl
+    (lambda (acc name) (dict-set acc name name))
+    "{}"
+    html/block-tags))
+
 (define html/block-tag?
   (lambda (name)
-    (html/block-member? (as-str name) html/block-tags))
+    (dict-get html/block-lookup (as-str name)))
   "True when name is in the block-level tag set (exact lowercase match).")
 
 (define html/tag-core
