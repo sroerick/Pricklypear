@@ -151,7 +151,7 @@ let surface_source = {pp|
     .lb-vtab{cursor:pointer}
     .lb-vtab.fs-sel{outline:1px solid var(--sel-accent)}"
     ;; v4 rail trees: mode tabs controlbox + one :has pair per root id
-    ;; (windows / code / prims) shows only the active tree box off the
+    ;; (windows / code / prims / ui) shows only the active tree box off the
     ;; #fs-railmode sentinel -- the SAME hiding trick desktops use, so a
     ;; mode flip never re-renders (expansion state is DOM).
     ".fs-railtabs{display:flex;gap:.3rem;align-items:center;border:1px solid var(--border);background:var(--panel);padding:.3rem .35rem}"
@@ -170,6 +170,7 @@ let surface_source = {pp|
     ".fs-shell:has(#fs-railmode.rm-windows) .fs-rmode:not([data-rmode=\"windows\"]){display:none}"
     ".fs-shell:has(#fs-railmode.rm-code) .fs-rmode:not([data-rmode=\"code\"]){display:none}"
     ".fs-shell:has(#fs-railmode.rm-prims) .fs-rmode:not([data-rmode=\"prims\"]){display:none}"
+    ".fs-shell:has(#fs-railmode.rm-ui) .fs-rmode:not([data-rmode=\"ui\"]){display:none}"
     ;; /code file arm: CodeMirror boots into .pp-cm-host (replaces the
     ;; tagged <pre>; theme rides the shell dark palette).
     ".pp-cm-host .CodeMirror{height:80vh;font-size:13px;line-height:1.4;background:#12141c;color:#c0caf5}"
@@ -396,7 +397,11 @@ app-link/button twins (POST /filmstrip/new, open-or-focus /sessions)."
 
 ;; ---- chat fragment templates (called per-part by the OCaml stream) ----
 ;; Each returns a raw-HTML fragment the multipart emitter writes as one
-;; part with per-part HX-Target/HX-Swap. Redefine live to restyle.
+;; part with per-part HX-Target/HX-Swap. Redefine live to restyle. The
+;; bubble/trace bodies are DECLARED ELEMENTS (ui/bubble, ui/tool-line in
+;; the glochid layer) projected through lookbook/html -- the stream
+;; contract (raw HTML out) is unchanged; the markup site is the one
+;; projection.
 (define (chat/user-bubble text)
   (render-html (string-append "<div class=\"bubble user\">" (html-escape text) "</div>")))
 
@@ -442,10 +447,7 @@ app-link/button twins (POST /filmstrip/new, open-or-focus /sessions)."
       (html-escape name) "</summary><div id=\"" id "\"></div></details>")))
 
 (define (chat/tool-line label text)
-  (render-html
-    (string-append
-      "<div class=\"trace\">" (html-escape label) " "
-      (html-escape text) "</div>")))
+  (render-html (lookbook/html (ui/tool-line label text))))
 
 (define (chat/tool-done name)
   (render-html (string-append "tool: " (html-escape name) " &#10003;")))
@@ -696,6 +698,154 @@ let glochid_source = {pp|
               (dict-set json (car kvs) (car (cdr kvs)))
               (cdr (cdr kvs))))))
   "Apply flat key/value pairs from kvs onto json via dict-set.")
+
+;; ---- 1a0. GLOCHID UI PRIMS AS DECLARED ELEMENTS (libs/lookbook;
+;; borge/filmstrip.borg lookbook stanza, first batch) ----
+;; OBITUARY: the rail tabs, start-menu entries, chat bubbles and tool
+;; trace lines used to be markup strings hand-built INLINE in their
+;; consumers (html/tag in glochid/railtabs + glochid/start-menu,
+;; string-append in the chat/* templates). They are now DECLARED UI
+;; VALUES (ui/elm) here, and each consumer projects the value through
+;; lookbook/html -- the libs/lookbook discipline: declare, never
+;; render; one markup site (the projection). The lookbook pane then
+;; inventories + stages them like any other element: examples ARE the
+;; declaration (<name>/examples cards below). The OCaml stream contract
+;; is untouched: chat//templates still answer raw-HTML strings -- the
+;; projection call sits INSIDE the template.
+
+;; capture the lib seeds BEFORE redefining the inventory seam, so lib
+;; additions keep showing without this list restating them.
+(define lb/seed-elements (lookbook/elements))
+
+(define ui/railtab
+  (lambda (label)
+    (ui/elm
+      "button"
+      (list
+        "class" "fs-btn fs-railtab"
+        "title" (string-append "show the " label " tree")
+        "hx-post" "/filmstrip/railmode"
+        "hx-vals" (string-append "{\"root\":\"" label "\"}")
+        "hx-target" "#fs-sink"
+        "hx-swap" "innerHTML")
+      (list (ui/text label))))
+  "One rail mode tab: POSTs /filmstrip/railmode with this root (the
+sentinel :has flip -- expansion DOM stays alive). Declared behavior
+data: the hx-* verbs ride attrs verbatim through the projection.")
+
+(define ui/start-entry
+  (lambda (label route)
+    (ui/elm
+      "button"
+      (list
+        "class" "fs-btn fs-start-entry"
+        "title" (string-append "open " label)
+        "hx-post" "/filmstrip/open"
+        "hx-vals" (string-append "{\"route\":\"" route "\"}")
+        "hx-target" "#fs-sink"
+        "hx-swap" "innerHTML")
+      (list (ui/text label))))
+  "One start-menu entry: opens `route` as a pane via /filmstrip/open.")
+
+(define ui/bubble
+  (lambda (kind text id)
+    (ui/elm
+      "div"
+      (if (string-eq id "")
+          (list "class" (string-append "bubble " kind))
+          (list "class" (string-append "bubble " kind) "id" (as-str id)))
+      (list (ui/text text))))
+  "One chat bubble of `kind` (user / llm / repl); `id` pins the swap
+target for streamed turns -- empty id renders without one. The
+streamed LLM bubble opens EMPTY: deltas swap innerHTML into #id.")
+
+(define ui/tool-line
+  (lambda (label text)
+    (ui/elm
+      "div"
+      (list "class" "trace")
+      (list (ui/text label) (ui/text " ") (ui/text text))))
+  "One tool trace line inside a tool-call fold: label + text, both
+escaped through the projection (never trust the model's strings).")
+
+;; ---- examples cards: the declaration (doc + formals + variants +
+;; source; the card shape mirrors bind/get's doc+source row). The file
+;; field names the GLOCHID layer, not a lib: these are host elements. ----
+
+(define ui/railtab/examples
+  (lambda ()
+    (lb/obj
+      (list
+        "name" "ui/railtab"
+        "doc" "One rail mode tab (glochid shell chrome): flips the railmode sentinel."
+        "file" "agent/lib/surface.ml (glochid layer)"
+        "formals" (json-emit (list "label"))
+        "variants" (json-emit
+                     (list
+                       (lb/obj (list "label" "windows"))
+                       (lb/obj (list "label" "ui"))))
+        "source"
+        "(ui/railtab label) ->\n  (ui/elm \"button\" (list \"class\" \"fs-btn fs-railtab\"\n          \"hx-post\" \"/filmstrip/railmode\"\n          \"hx-vals\" (string-append \"{\\\"root\\\":\\\"\" label \"\\\"}\")\n          ...)\n    (list (ui/text label)))")))
+  "The ui/railtab card.")
+
+(define ui/start-entry/examples
+  (lambda ()
+    (lb/obj
+      (list
+        "name" "ui/start-entry"
+        "doc" "One start-menu entry (glochid shell chrome): opens route as a pane."
+        "file" "agent/lib/surface.ml (glochid layer)"
+        "formals" (json-emit (list "label" "route"))
+        "variants" (json-emit
+                     (list
+                       (lb/obj (list "label" "chat" "route" "/"))
+                       (lb/obj (list "label" "sessions" "route" "/sessions"))))
+        "source"
+        "(ui/start-entry label route) ->\n  (ui/elm \"button\" (list \"class\" \"fs-btn fs-start-entry\"\n          \"hx-post\" \"/filmstrip/open\"\n          \"hx-vals\" (string-append \"{\\\"route\\\":\\\"\" route \"\\\"}\")\n          ...)\n    (list (ui/text label)))")))
+  "The ui/start-entry card.")
+
+(define ui/bubble/examples
+  (lambda ()
+    (lb/obj
+      (list
+        "name" "ui/bubble"
+        "doc" "One chat bubble (id pins the streamed swap target; empty id = static)."
+        "file" "agent/lib/surface.ml (glochid layer)"
+        "formals" (json-emit (list "kind" "text" "id"))
+        "variants" (json-emit
+                     (list
+                       (lb/obj (list "kind" "user" "text" "hello shell" "id" ""))
+                       (lb/obj (list "kind" "llm" "text" "" "id" "t-3"))))
+        "source"
+        "(ui/bubble kind text id) ->\n  (ui/elm \"div\"\n    (if (string-eq id \"\")\n        (list \"class\" (string-append \"bubble \" kind))\n        (list \"class\" ... \"id\" id))\n    (list (ui/text text)))")))
+  "The ui/bubble card -- the conditional-attr pattern: the def computes
+attrs (declaration), never markup.")
+
+(define ui/tool-line/examples
+  (lambda ()
+    (lb/obj
+      (list
+        "name" "ui/tool-line"
+        "doc" "One tool trace line (label + text, both escaped)."
+        "file" "agent/lib/surface.ml (glochid layer)"
+        "formals" (json-emit (list "label" "text"))
+        "variants" (json-emit
+                     (list
+                       (lb/obj (list "label" "tool:" "text" "fs/ls docs"))))
+        "source"
+        "(ui/tool-line label text) ->\n  (ui/elm \"div\" (list \"class\" \"trace\")\n    (list (ui/text label) (ui/text \" \") (ui/text text)))")))
+  "The ui/tool-line card.")
+
+;; ---- inventory seam (HOST SEAM: libs/lookbook seeds + the glochid
+;; elements above; redefining is exactly the seam's intended use) ----
+(define lookbook/elements
+  (lambda ()
+    (append
+      lb/seed-elements
+      (list "ui/railtab" "ui/start-entry" "ui/bubble" "ui/tool-line")))
+  "Glochid's lookbook inventory: the lib seed elements + glochid's own
+shell chrome. Every entry answers a <name>/examples card; the ui rail
+root + /lookbook face read this one def.")
 
 ;; ---- 1. WORKSPACE BACKING: .agent/workspace.json ----
 (define glochid/ws-file ".agent/workspace.json")
@@ -1354,24 +1504,15 @@ from source sniffing.")
   (lambda ()
     (list/map
       (lambda (r)
-        (let ((id (as-str (car r))))
-          (html/tag
-            "button"
-            (html/attrs
-              (list
-                (html/attr "class" "fs-btn fs-railtab")
-                (html/attr "title" (string-append "show the " id " tree"))
-                (html/attr "hx-post" "/filmstrip/railmode")
-                (html/attr "hx-vals" (string-append "{\"root\":\"" id "\"}"))
-                (html/attr "hx-target" "#fs-sink")
-                (html/attr "hx-swap" "innerHTML")))
-            (html/text id))))
+        (lookbook/html (ui/railtab (as-str (car r)))))
       (filmstrip/tree-roots)))
   "The rail mode tabs: one word per tree root (mode names are CONTENT
 labels, not verbs -- they stay words, like the cascade's app names).
-POST /filmstrip/railmode flips the #fs-railmode sentinel -- the SAME
-:has hiding desktops use, so mode flips keep every tree's expansion
-DOM alive.")
+DECLARED ELEMENTS: each tab is a ui/railtab value projected through
+lookbook/html -- no inline markup here anymore. POST
+/filmstrip/railmode flips the #fs-railmode sentinel -- the SAME :has
+hiding desktops use, so mode flips keep every tree's expansion DOM
+alive.")
 
 (define glochid/start-menu
   (lambda ()
@@ -1398,21 +1539,8 @@ DOM alive.")
             (html/join
               (list/map
                 (lambda (app)
-                  (let
-                    ((label (car app))
-                      (route (car (cdr app))))
-                    (html/tag
-                      "button"
-                      (html/attrs
-                        (list
-                          (html/attr "class" "fs-btn fs-start-entry")
-                          (html/attr "title" (string-append "open " label))
-                          (html/attr "hx-post" "/filmstrip/open")
-                          (html/attr "hx-vals"
-                            (string-append "{\"route\":\"" route "\"}"))
-                          (html/attr "hx-target" "#fs-sink")
-                          (html/attr "hx-swap" "innerHTML")))
-                      (html/text label))))
+                  (lookbook/html
+                    (ui/start-entry (car app) (car (cdr app)))))
                 (glochid/apps))))))))
   "The start menu lives on the rail (B: replaces the cascade/launchbar
 column, 2026-09-20 operator decision). A zero-JS <details> fold; the
