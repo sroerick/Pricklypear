@@ -51,14 +51,14 @@ check() { # name, condition(0/1)
 # dune build + runtest run measured >5s once; the /chat POST below
 # keeps its tight timing — THAT one asserts the streaming contract).
 DOC=$(curl -sS -m 30 "$URL/")
-echo "${DOC}" | grep -q 'id="fs-cascade"'                     ; check "shell has cascade strip" $?
+echo "${DOC}" | grep -q 'id="fs-start"'                       ; check "shell has the start menu on the rail" $?
 echo "${DOC}" | grep -q 'id="fs-content"'                     ; check "shell has content strip" $?
 echo "${DOC}" | grep -q 'id="fs-sink"'                        ; check "shell has OOB sink" $?
 echo "${DOC}" | grep -q 'id="fs-railtabs"'                    ; check "shell has rail tabs (trees)" $?
 ! echo "${DOC}" | grep -q 'id="fs-launch"'                   ; check "no launcher in the shell" $?
 ! echo "${DOC}" | grep -q 'fs-deskbox'                        ; check "no desktop controlbox in the shell" $?
 echo "${DOC}" | grep -q '/assets/htmx.min.js'                 ; check "shell loads htmx" $?
-echo "${DOC}" | grep -q 'fs-entry'                            ; check "cascade lists the agent surfaces" $?
+echo "${DOC}" | grep -q 'fs-start-entry'                      ; check "start menu lists the agent surfaces" $?
 PAGE=$(curl -sS -m 30 "$URL/chat")
 echo "$PAGE" | grep -q 'hx-post="/chat"'                      ; check "chat page has hx-post /chat form" $?
 echo "$PAGE" | grep -q '/assets/hx-multipart.js'              ; check "chat page loads hx-multipart asset" $?

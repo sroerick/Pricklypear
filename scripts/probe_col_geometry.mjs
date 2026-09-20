@@ -29,7 +29,12 @@ const bytes = (evv) => Buffer.isBuffer(evv.data) ? evv.data.toString() : String(
 
 let agent, chrome;
 fs.mkdirSync(path.join(AGENT_DIR, ".agent"), { recursive: true });
-fs.copyFileSync(path.join(".agent", "workspace.json"), path.join(AGENT_DIR, ".agent", "workspace.json"));
+try { fs.copyFileSync(path.join(".agent", "workspace.json"), path.join(AGENT_DIR, ".agent", "workspace.json")); } catch (_) {
+  fs.writeFileSync(path.join(AGENT_DIR, ".agent", "workspace.json"),
+    JSON.stringify({ axis: "col", desktop: 0, focus: "content:0", cascade: [], content: [
+      { width: "full", route: "/chat", id: "p1", desktop: 0, state: "live" },
+    ]}));
+}
 
 agent = spawn(AGENT, ["--serve", "--port", "0"], { stdio: ["ignore", "pipe", "pipe"], cwd: AGENT_DIR });
 agent.stderr.on("data", () => {});
