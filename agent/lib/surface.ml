@@ -34,26 +34,46 @@ let surface_source = {pp|
 ;; glochid/base-css live to restyle everything.
 (define glochid/base-css
   (string-append
-    ":root{color-scheme:dark;--border:#2a2e3a;--panel:#1b1f2a;--ink:#d8dee9;--muted:#6b7080;--chrome:#12141c;--sel-bg:#2a2e3a;--sel-accent:#7aa2f7}"
+    ;; THE PALETTE IS THE THEME: every token resolves from the active
+    ;; omarchy theme's colors.toml (defaults = the pre-theme palette;
+    ;; filmstrip/css consumes these SAME custom props).
+    ":root{color-scheme:"
+    (if (string-eq (glochid/tg "mode" "dark") "light") "light" "dark")
+    ";--border:" (glochid/tg "selection" "#2a2e3a")
+    ";--panel:" (glochid/tg "lighter_background" "#1b1f2a")
+    ";--ink:" (glochid/tg "foreground" "#d8dee9")
+    ";--muted:" (glochid/tg "muted" "#6b7080")
+    ";--chrome:" (glochid/tg "dark_background" "#12141c")
+    ";--sel-bg:" (glochid/tg "selection" "#2a2e3a")
+    ";--sel-accent:" (glochid/tg "accent" "#7aa2f7")
+    ";--pp-bg:" (glochid/tg "darker_background" "#0f1117")
+    ";--pp-repl:" (glochid/tg "magenta" "#bb9af7")
+    ";--pp-ok:" (glochid/tg "green" "#2f9e44")
+    ";--pp-warn:"
+    (glochid/tg "orange" (glochid/tg "yellow" "#e8590c"))
+    ";--pp-danger:" (glochid/tg "bright_red" "#c92a2a")
+    ";--pp-btn:" (glochid/tg "blue" "#2a6fdb")
+    ";--pp-btn-hi:" (glochid/tg "accent" "#3b5bdb")
+    "}"
     "html,body{height:100%}"
-    "body{background:#0f1117;color:#d8dee9;font-family:ui-monospace,Menlo,monospace;margin:0;padding:1rem;box-sizing:border-box}"
-    "a{color:#7aa2f7;text-decoration:none}a:hover{text-decoration:underline}"
-    ".muted{color:#6b7080}"
+    "body{background:var(--pp-bg);color:var(--ink);font-family:ui-monospace,Menlo,monospace;margin:0;padding:1rem;box-sizing:border-box}"
+    "a{color:var(--sel-accent);text-decoration:none}a:hover{text-decoration:underline}"
+    ".muted{color:var(--muted)}"
     "h1{margin:.25rem 0 .75rem 0;font-size:1.1rem}"
-    "table{border-collapse:collapse;width:100%;max-width:60rem}td,th{padding:.35rem .6rem;border-bottom:1px solid #222;text-align:left;white-space:nowrap}"
+    "table{border-collapse:collapse;width:100%;max-width:60rem}td,th{padding:.35rem .6rem;border-bottom:1px solid var(--border);text-align:left;white-space:nowrap}"
     ;; sessions table: FIXED layout so the three width presets always
     ;; fit the pane — long first-prompt/model cells ellipsize instead of
     ;; forcing the pane body (and the strip) to scroll horizontally.
     "table.sess{table-layout:fixed}table.sess td,table.sess th{overflow:hidden;text-overflow:ellipsis}"
     "table.sess th:nth-child(1){width:10.5rem}table.sess th:nth-child(3){width:3rem}table.sess th:nth-child(5){width:6.5rem}"
-    "pre{background:#12141c;padding:1rem;border-radius:6px;overflow:auto}"
-    "input{background:#1b1f2a;color:#d8dee9;border:1px solid #333;border-radius:6px;padding:.5rem}"
-    "select{background:#1b1f2a;color:#d8dee9;border:1px solid #333;border-radius:4px}"
-    "label{color:#8a8f9e}"
-    ".card{background:#1b1f2a;border:1px solid #2a2e3a;border-radius:6px;padding:1rem;max-width:38rem}"
+    "pre{background:var(--chrome);padding:1rem;border-radius:6px;overflow:auto}"
+    "input{background:var(--panel);color:var(--ink);border:1px solid var(--border);border-radius:6px;padding:.5rem}"
+    "select{background:var(--panel);color:var(--ink);border:1px solid var(--border);border-radius:4px}"
+    "label{color:var(--muted)}"
+    ".card{background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:1rem;max-width:38rem}"
     ".card p{margin:.5rem 0}"
     ".card input,.card select{width:100%;padding:.5rem;margin-top:.25rem}"
-    "button{background:#2a6fdb;color:#fff;border:0;border-radius:6px;padding:.5rem 1rem;cursor:pointer}"
+    "button{background:var(--pp-btn);color:#fff;border:0;border-radius:6px;padding:.5rem 1rem;cursor:pointer}"
     ".fs-shell{height:calc(100vh - 2rem)}"
     ".fs-sh-axis{display:none}"
     ;; v5 col axis is a ROW, not a collapsed rail: cascade app menu
@@ -83,28 +103,28 @@ let surface_source = {pp|
     ;; chatpage sizes against the VIEWPORT (calc(100vh - 6rem)); that
     ;; always overflows a pane box. In rail mode fit it to the pane.
     ".fs-shell:has(#fs-axis.col) .chatpage{height:100%}"
-    ".bubble{background:#1b1f2a;border-radius:6px;padding:.5rem .75rem;margin:.5rem 0;white-space:pre-wrap}"
-    ".bubble.user{color:#9ece6a}"
-    ".bubble.llm{color:#c0caf5}.bubble.repl{color:#bb9af7}"
-    ".trace{color:#6b7080;font-size:.85em;white-space:pre-wrap}"
-    ".think{color:#6b7080;font-size:.9em;margin:.4rem 0}"
+    ".bubble{background:var(--panel);border-radius:6px;padding:.5rem .75rem;margin:.5rem 0;white-space:pre-wrap}"
+    ".bubble.user{color:var(--pp-ok)}"
+    ".bubble.llm{color:var(--ink)}.bubble.repl{color:var(--pp-repl)}"
+    ".trace{color:var(--muted);font-size:.85em;white-space:pre-wrap}"
+    ".think{color:var(--muted);font-size:.9em;margin:.4rem 0}"
     ".think summary{cursor:pointer}"
     ".think>div{white-space:pre-wrap}"
-    ".reason{color:#8a8f9e;font-style:italic}"
+    ".reason{color:var(--muted);font-style:italic}"
     ".think .tk,.think .tool{margin:.25rem 0 .25rem .25rem}"
-    ".think .tk>summary,.think .tool>summary{color:#8a8f9e}"
-    ".think .tk>div,.think .tool>div{margin-left:.9rem;padding-left:.5rem;border-left:1px solid #2a2e3a}"
+    ".think .tk>summary,.think .tool>summary{color:var(--muted)}"
+    ".think .tk>div,.think .tool>div{margin-left:.9rem;padding-left:.5rem;border-left:1px solid var(--border)}"
     ".think:not(:has(.reason,.trace)){display:none}"
     ".chatpage{display:flex;flex-direction:column;height:calc(100vh - 6rem)}"
-    ".chatpage #log{flex:1;min-height:0;overflow-y:auto;border:1px solid #333;border-radius:6px;padding:.75rem;margin-bottom:.75rem}"
+    ".chatpage #log{flex:1;min-height:0;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:.75rem;margin-bottom:.75rem}"
     ".chatpage form{display:flex;gap:.5rem;flex-shrink:0}"
     ".chatpage #msg{flex:1}"
     ".chatpage form button{flex-shrink:0}"
-    "*{scrollbar-width:thin;scrollbar-color:#2a2e3a transparent}"
+    "*{scrollbar-width:thin;scrollbar-color:var(--sel-bg) transparent}"
     "::-webkit-scrollbar{width:10px;height:10px}"
     "::-webkit-scrollbar-track{background:transparent}"
-    "::-webkit-scrollbar-thumb{background:#2a2e3a;border-radius:6px}"
-    "::-webkit-scrollbar-thumb:hover{background:#4a4f5c}"
+    "::-webkit-scrollbar-thumb{background:var(--sel-bg);border-radius:6px}"
+    "::-webkit-scrollbar-thumb:hover{background:var(--muted)}"
     "::-webkit-scrollbar-corner{background:transparent}"
     ;; v2 desktops: the #ws-desk sentinel carries the current desktop to
     ;; CSS — one :has pair per desktop (0..9) hides panes of the others
@@ -122,7 +142,7 @@ let surface_source = {pp|
     ;; v2 app-links: a button styled as a bare link (chat/sessions/settings
     ;; nav in pane chrome; the anchor version navigated the whole window
     ;; out of the shell with a full GET). Overrides the generic button look.
-    ".fs-applink{background:none;border:0;color:#7aa2f7;padding:0;margin:0;font:inherit;cursor:pointer;text-decoration:none}"
+    ".fs-applink{background:none;border:0;color:var(--sel-accent);padding:0;margin:0;font:inherit;cursor:pointer;text-decoration:none}"
     ".fs-applink:hover{text-decoration:underline}"
     ".fs-modelsel{font-size:.6em;padding:.1rem .3rem}"
     ;; lookbook seed elements (libs/lookbook): the elements declare
@@ -130,11 +150,11 @@ let surface_source = {pp|
     ;; as every host variation -- the habitat pass-two will theme its
     ;; own). Kinds ride the class suffix from the variant param.
     ".lb-btn{font:inherit;padding:.25rem .7rem;border:1px solid var(--border);border-radius:4px;background:var(--panel);color:inherit;cursor:pointer}"
-    ".lb-btn-primary{background:#3b5bdb;border-color:#3b5bdb;color:#fff}"
-    ".lb-btn-danger{background:#c92a2a;border-color:#c92a2a;color:#fff}"
-    ".lb-badge{display:inline-block;font-size:.72em;padding:.05rem .45rem;border-radius:999px;border:1px solid var(--border);color:var(--muted,#9aa3b2)}"
-    ".lb-badge-ok{color:#2f9e44;border-color:#2f9e44}"
-    ".lb-badge-warn{color:#e8590c;border-color:#e8590c}"
+    ".lb-btn-primary{background:var(--pp-btn-hi);border-color:var(--pp-btn-hi);color:#fff}"
+    ".lb-btn-danger{background:var(--pp-danger);border-color:var(--pp-danger);color:#fff}"
+    ".lb-badge{display:inline-block;font-size:.72em;padding:.05rem .45rem;border-radius:999px;border:1px solid var(--border);color:var(--muted)}"
+    ".lb-badge-ok{color:var(--pp-ok);border-color:var(--pp-ok)}"
+    ".lb-badge-warn{color:var(--pp-warn);border-color:var(--pp-warn)}"
     ".lb-card{border:1px solid var(--border);border-radius:6px;padding:.75rem;background:var(--panel)}"
     ".lb-card h3{margin:0 0 .5rem;display:flex;gap:.5rem;align-items:center}"
     ".lb-card p{margin:.25rem 0 0}"
@@ -150,6 +170,14 @@ let surface_source = {pp|
     ".lb-vtabs{display:flex;gap:.3rem;flex-wrap:wrap;margin:.4rem 0}
     .lb-vtab{cursor:pointer}
     .lb-vtab.fs-sel{outline:1px solid var(--sel-accent)}"
+    ;; theme swatches: the lookbook face of the PALETTE ITSELF
+    ;; (ui/swatch + ui/palette -- the ui rail root renders the theme).
+    ".lb-swatch{display:inline-flex;align-items:center;gap:.4rem;padding:.15rem .55rem;border:1px solid var(--border);border-radius:4px;font-size:.85em}"
+    ".lb-swatch b{width:.95em;height:.95em;display:inline-block;border-radius:3px;border:1px solid var(--border)}"
+    ".lb-palette{display:flex;gap:.35rem;flex-wrap:wrap}"
+    ".lb-palette .lb-swatch{border:none;padding-left:0}"
+    ".lb-palette .lb-swatch b{width:1.6em;height:1.6em}"
+    ".lb-palette .lb-swatch span{color:var(--muted)}"
     ;; v4 rail trees: mode tabs controlbox + one :has pair per root id
     ;; (windows / code / prims / ui) shows only the active tree box off the
     ;; #fs-railmode sentinel -- the SAME hiding trick desktops use, so a
@@ -166,17 +194,17 @@ let surface_source = {pp|
     ".fs-start-menu{position:absolute;left:0;top:100%;z-index:30;display:flex;flex-direction:column;min-width:10rem;background:var(--panel);border:1px solid var(--border);box-shadow:0 4px 14px rgba(0,0,0,.5);padding:.25rem}"
     ".fs-start-entry{width:100%;text-align:left;padding:.3rem .5rem;white-space:nowrap}"
     ".fs-start-entry:hover{background:var(--sel-bg)}"
-    ".fs-railtab.fs-btn{background:none;border:1px solid transparent;color:#7aa2f7}"
+    ".fs-railtab.fs-btn{background:none;border:1px solid transparent;color:var(--sel-accent)}"
     ".fs-shell:has(#fs-railmode.rm-windows) .fs-rmode:not([data-rmode=\"windows\"]){display:none}"
     ".fs-shell:has(#fs-railmode.rm-code) .fs-rmode:not([data-rmode=\"code\"]){display:none}"
     ".fs-shell:has(#fs-railmode.rm-prims) .fs-rmode:not([data-rmode=\"prims\"]){display:none}"
     ".fs-shell:has(#fs-railmode.rm-ui) .fs-rmode:not([data-rmode=\"ui\"]){display:none}"
     ;; /code file arm: CodeMirror boots into .pp-cm-host (replaces the
     ;; tagged <pre>; theme rides the shell dark palette).
-    ".pp-cm-host .CodeMirror{height:80vh;font-size:13px;line-height:1.4;background:#12141c;color:#c0caf5}"
-    ".pp-cm-host .CodeMirror-gutters{background:#12141c;border-right:1px solid #2a2e3a}"
-    ".pp-cm-host .CodeMirror-linenumber{color:#4a4f5c}"
-    ".pp-cm-host .CodeMirror-cursor{border-left:1px solid #7aa2f7}"
+    ".pp-cm-host .CodeMirror{height:80vh;font-size:13px;line-height:1.4;background:var(--chrome);color:var(--ink)}"
+    ".pp-cm-host .CodeMirror-gutters{background:var(--chrome);border-right:1px solid var(--border)}"
+    ".pp-cm-host .CodeMirror-linenumber{color:var(--muted)}"
+    ".pp-cm-host .CodeMirror-cursor{border-left:1px solid var(--sel-accent)}"
     ;; editor chrome: save row (button + status) the boot script injects
     ;; above each CM host
     ".pp-cm-bar{display:flex;gap:.6rem;align-items:center;margin:.35rem 0}"
@@ -689,6 +717,23 @@ let glochid_source = {pp|
               (cdr (cdr kvs))))))
   "Apply flat key/value pairs from kvs onto json via dict-set.")
 
+;; ---- 1a. THE DESKTOP PALETTE (omarchy theme; HOST SEAM 3) ----
+;; The shell was hardcoded to one dark palette; now every token in
+;; base-css resolves from the ACTIVE omarchy theme via the omarchy/
+;; theme host prim (the stable-keyed colors.toml -- see the OCaml
+;; comment). The resolve is LOAD-TIME: (glochid/tg k default) answers
+;; the toml value or the pre-theme fallback, and no omarchy on a box
+;; means exactly the old colors. `omarchy theme set X` + a session
+;; reload (HUP) re-resolves everything.
+
+(define glochid/theme-raw (omarchy/theme))
+
+(define glochid/tg
+  (lambda (k d)
+    (let ((v (dict-get glochid/theme-raw k)))
+      (if (null? v) d (as-str v))))
+  "One palette token: toml value or the pre-theme default (fail-soft).")
+
 ;; ---- 1a0. GLOCHID UI PRIMS AS DECLARED ELEMENTS (libs/lookbook;
 ;; borge/filmstrip.borg lookbook stanza, first batch) ----
 ;; OBITUARY: the rail tabs, start-menu entries, chat bubbles and tool
@@ -805,6 +850,38 @@ completion marks the summary via innerHTML on #<id>-sum.")
       (list (ui/text (string-append "[turn error: " text "]")))))
   "One turn error line: trace-styled bracketed message, escaped
 through the projection like everything else.")
+
+(define ui/swatch
+  (lambda (label color)
+    (ui/elm "span"
+      (list "class" "lb-swatch" "title" label)
+      (list
+        (ui/elm "b" (list "style" (string-append "background:" color))
+          (list))
+        (ui/text (string-append label " " color)))))
+  "One palette swatch chip: a colored dot + the token name. The
+lookbook face of the DESKTOP THEME itself -- the ui rail root's
+palette row element (ui/palette composes one chip per token).")
+
+(define ui/palette
+  (lambda ()
+    (ui/elm "div" (list "class" "lb-palette")
+      (list
+        (ui/swatch "sel-accent" (glochid/tg "accent" "#7aa2f7"))
+        (ui/swatch "bg" (glochid/tg "darker_background" "#0f1117"))
+        (ui/swatch "panel" (glochid/tg "lighter_background" "#1b1f2a"))
+        (ui/swatch "border" (glochid/tg "selection" "#2a2e3a"))
+        (ui/swatch "ink" (glochid/tg "foreground" "#d8dee9"))
+        (ui/swatch "muted" (glochid/tg "muted" "#6b7080"))
+        (ui/swatch "ok" (glochid/tg "green" "#2f9e44"))
+        (ui/swatch "warn"
+          (glochid/tg "orange" (glochid/tg "yellow" "#e8590c")))
+        (ui/swatch "danger" (glochid/tg "bright_red" "#c92a2a")))))
+  "The ACTIVE THEME rendered as UI PRIMS: one ui/swatch per palette
+token, each value resolved live from the active omarchy theme's
+colors.toml (load-time resolve; HUP re-resolves after omarchy theme
+set). Staged via the usual live variant call -- what you see in the
+lookbook IS the theme the shell is wearing.")
 
 ;; ---- examples cards: the declaration (doc + formals + variants +
 ;; source; the card shape mirrors bind/get's doc+source row). The file
@@ -935,6 +1012,37 @@ plain calls, the nesting visible in BOTH projections.")
         "(ui/turn-error text) ->\n  (ui/elm \"div\" (list \"class\" \"trace\")\n    (list (ui/text (string-append \"[turn error: \" text \"]\"))))")))
   "The ui/turn-error card.")
 
+(define ui/swatch/examples
+  (lambda ()
+    (lb/obj
+      (list
+        "name" "ui/swatch"
+        "doc" "One palette swatch chip (dot + token name) -- the theme's lookbook row."
+        "file" "agent/lib/surface.ml (glochid layer)"
+        "formals" (json-emit (list "label" "color"))
+        "variants" (json-emit
+                     (list
+                       (lb/obj (list "label" "ink" "color" (glochid/tg "foreground" "#d8dee9")))
+                       (lb/obj (list "label" "accent" "color" (glochid/tg "accent" "#7aa2f7")))))
+        "source"
+        "(ui/swatch label color) ->\n  (ui/elm \"span\" (list \"class\" \"lb-swatch\" \"title\" label)\n    (list (ui/elm \"b\" (list \"style\" (string-append \"background:\" color)) (list))\n          (ui/text label)))")))
+  "The ui/swatch card.")
+
+(define ui/palette/examples
+  (lambda ()
+    (lb/obj
+      (list
+        "name" "ui/palette"
+        "doc"
+        "The active omarchy theme as UI prims: one ui/swatch per palette token (resolved at load; HUP re-resolves after omarchy theme set)."
+        "file" "agent/lib/surface.ml (glochid layer)"
+        "formals" (json-emit (list))
+        "variants" (json-emit (list))
+        "source"
+        "(ui/palette) ->\n  (ui/elm \"div\" (list \"class\" \"lb-palette\")\n    (list (ui/swatch \"sel-accent\" (glochid/tg \"accent\" ...))\n          (ui/swatch \"bg\" ...) ...))")))
+  "The ui/palette card -- the composition seed for pickers: zero
+formals, tokens resolved through glochid/tg.")
+
 ;; ---- inventory seam (HOST SEAM: libs/lookbook seeds + the glochid
 ;; elements above; redefining is exactly the seam's intended use) ----
 (define lookbook/elements
@@ -943,7 +1051,8 @@ plain calls, the nesting visible in BOTH projections.")
       lb/seed-elements
       (list
         "ui/railtab" "ui/start-entry" "ui/bubble" "ui/tool-line"
-        "ui/turn-open" "ui/think-open" "ui/tool-open" "ui/turn-error")))
+        "ui/turn-open" "ui/think-open" "ui/tool-open" "ui/turn-error"
+        "ui/swatch" "ui/palette")))
   "Glochid's lookbook inventory: the lib seed elements + glochid's own
 shell chrome. Every entry answers a <name>/examples card; the ui rail
 root + /lookbook face read this one def.")
@@ -2439,6 +2548,61 @@ let register_config_default_prims ~(rt : Runtime.t) : unit =
     as Host_seam.apply_value_raw; the eval mutex serializes whole
     requests) — and eval errors surface as an {"t":"err"} card the
     Nopales face renders, never a 500. A budget caps runaway seeds. *)
+(* (omarchy/theme) — the host desktop-palette seam: the ACTIVE omarchy
+   theme's canonical colors (~/.local/state/omarchy/current/theme/
+   colors.toml, where `omarchy theme set` materializes the applied
+   theme). Keys are STABLE across every omarchy theme (mode, accent,
+   selection, muted, the background/foreground ladder, the color set
+   and bright_ variants), so consumers theme from the key names,
+   never from one theme's hexes. A quoted-string TOML-only line
+   parse; FAIL-SOFT: a
+   missing/unreadable file answers {} and the Nopales resolve falls
+   back to the pre-theme hardcoded palette. Re-read on every call —
+   HUP reload re-resolves the sheet, so `omarchy theme set X` + HUP
+   rethemes glochid without a restart. *)
+let omarchy_parse_colors_toml (s : string) : (string * string) list =
+  s
+  |> String.split_on_char '\n'
+  |> List.filter_map (fun line ->
+          let line = String.trim line in
+          if
+            line = ""
+            || (String.length line > 0 && String.unsafe_get line 0 = '#')
+          then None
+          else
+            match String.index_opt line '=' with
+            | None -> None
+            | Some i ->
+                let k = String.trim (String.sub line 0 i) in
+                let v0 =
+                  String.trim
+                    (String.sub line (i + 1) (String.length line - i - 1))
+                in
+                let n = String.length v0 in
+                let v =
+                  if n >= 2 && v0.[0] = '"' && v0.[n - 1] = '"' then
+                    String.sub v0 1 (n - 2)
+                  else v0
+                in
+                if k = "" || v = "" then None else Some (k, v))
+
+let register_theme_prims ~(rt : Runtime.t) : unit =
+  Runtime.add_prim rt "omarchy/theme" (fun _ ->
+      let home = Option.value (Sys.getenv_opt "HOME") ~default:"." in
+      let path =
+        Filename.concat home ".local/state/omarchy/current/theme/colors.toml"
+      in
+      (try
+         let ic = open_in_bin path in
+         let s = really_input_string ic (in_channel_length ic) in
+         close_in ic;
+         Ast.VStr
+           (Yojson.Safe.to_string
+              (`Assoc
+                (List.map (fun (k, v) -> (k, `String v))
+                   (omarchy_parse_colors_toml s))))
+       with _ -> Ast.VStr "{}"))
+
 let register_lookbook_prims ~(rt : Runtime.t) : unit =
   Runtime.add_prim rt "lookbook/eval" (fun args ->
       match args with
@@ -2459,6 +2623,7 @@ let register_lookbook_prims ~(rt : Runtime.t) : unit =
 
 let load ~(rt : Runtime.t) : unit =
   register_config_default_prims ~rt;
+  register_theme_prims ~rt;
   register_lookbook_prims ~rt;
   (* Boot order (glochid_source header): libs, then the glochid layer
      (whose ws/browse/shell redefinitions must win over the filmstrip
