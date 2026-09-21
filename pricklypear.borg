@@ -53,6 +53,7 @@
  (untracked "scripts/pp_outline.py" "pp-outline tooling for structural editing")
  (untracked "scripts/build-release-openbsd.ksh" "OpenBSD release build infra (archive/deploy/openbsd-prod-branch-deploy.md)")
  (untracked "scripts/ship-to-vultr.ksh" "OpenBSD deploy/ship infra")
+ (untracked "scripts/repl.sh" "line-protocol REPL client for the optional PP_REPL_PORT listener (product-experience smokes; added 2026-09-20 — cited by chapter but previously never existed)")
  (untracked "scripts/post-receive-prod-hook.ksh" "OpenBSD post-receive prod hook")
  (untracked "scripts/openbsd/run-image.ksh" "OpenBSD run-image rc.d wrapper")
  (untracked "scripts/openbsd/pricklypear.env.example" "OpenBSD env example")
