@@ -16,6 +16,8 @@
 #   scripts/pp-local.sh sync-loop              # background rounds every 30s
 #   scripts/pp-local.sh serve                  # local HTML surface (chat+eval)
 #   scripts/pp-local.sh agent-context          # board digest from the lens (borge/agent.borg boot verb)
+#   scripts/pp-local.sh memory-put TITLE --memory-content-file F [--tags a,b] [--id MID]  # stage-1 memory write (sync pushes it)
+#   scripts/pp-local.sh memory-delete agent-memory <node-address>                          # remove + tombstone (drain deletes wire-side)
 #
 # Model (what is local vs wire):
 #   - defs + (get …)/(tree/get …) reads: LENS FIRST, server on miss
@@ -89,6 +91,8 @@ case "${1:-}" in
   sync-loop)  shift; exec $PP_REMOTE_BIN --lens "$LENS" --sync-loop "$@" ;;
   serve)      shift; exec $PP_REMOTE_BIN --lens "$LENS" --sync-loop --serve "$@" ;;
     agent-context) shift; exec $PP_REMOTE_BIN --lens "$LENS" --agent-context "$@" </dev/null ;;
+    memory-put)    shift; exec $PP_REMOTE_BIN --lens "$LENS" --memory-put "$@" ;;
+    memory-delete) shift; t="$1"; shift; exec $PP_REMOTE_BIN --lens "$LENS" --memory-type "$t" --memory-delete "$@" </dev/null ;;
   help|-h|--help)
     sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'
     exit 0 ;;
