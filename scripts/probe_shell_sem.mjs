@@ -691,7 +691,7 @@ lookbook_batch_d: {
   ok(String(await ev(`document.querySelector('#fs-railmode').className`)).includes('rm-ui'), "D1 rail mode flipped to ui (sentinel :has, zero JS)");
   // D2 the ui root lists the three seed elements, level-0, no fetch
   const uiRows = await ev(`[...document.querySelectorAll('#fs-tree-ui li.fs-tr-item')].map(li=>li.querySelector('.fs-tr-open').textContent.trim())`);
-  ok(uiRows.length === 3 && uiRows.includes("ui/button") && uiRows.includes("ui/badge") && uiRows.includes("ui/card"), "D2 ui root lists the declared elements (examples ARE the declaration)", JSON.stringify(uiRows));
+  ok(uiRows.includes("ui/button") && uiRows.includes("ui/badge") && uiRows.includes("ui/card") && uiRows.every(r=>r.startsWith("ui/")), "D2 ui root lists the declared elements (examples ARE the declaration; host may add more)", JSON.stringify(uiRows));
   // D3 the label open-or-focuses /lookbook (acme Get) — a real shell pane
   await ev(`(() => { const li=[...document.querySelectorAll('#fs-tree-ui li.fs-tr-item')].find(x=>x.querySelector('.fs-tr-open').textContent.trim()==='ui/button'); li.querySelector('.fs-tr-open').click(); return 'clicked' })()`);
   await sleep(1100);

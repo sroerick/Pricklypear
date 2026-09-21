@@ -2687,6 +2687,15 @@ passes through verbatim as %xx -- never throw inside a renderer).")
                   (list
                     (html/attr "class" "fs-btn fs-applink fs-tr-open")
                     (html/attr "title" (string-append "open-or-focus " label))
+                    ;; EXPLICIT click — htmx triggers inherit: without a
+                    ;; declared trigger this button (and every verb
+                    ;; button) inherits "toggle once" from any ancestor
+                    ;; lazy <details hx-trigger="toggle once"> (the
+                    ;; shelf), and a button never fires toggle => dead
+                    ;; rows. The compat ext turns implicitInheritance ON
+                    ;; (htmx-2-compat.min.js), so declared triggers are
+                    ;; mandatory on all tree buttons.
+                    (html/attr "hx-trigger" "click")
                     (html/attr "hx-post" "/filmstrip/open")
                     (html/attr "hx-vals"
                       ;; RAW route, not url-enc'd: vals ride the POST
@@ -2728,6 +2737,10 @@ passes through verbatim as %xx -- never throw inside a renderer).")
                   (html/attr "title" (verb-text v))
                   (html/attr "aria-label" (as-str (car v)))
                   (html/attr "data-verb" (as-str (car v)))
+                  ;; EXPLICIT click — see the tree-label button note:
+                  ;; inherited "toggle once" from a lazy ancestor kills
+                  ;; the verb (the shelf subtree bug).
+                  (html/attr "hx-trigger" "click")
                   (html/attr "hx-post" (as-str (car (cdr v))))
                   (html/attr "hx-vals" (as-str (car (cdr (cdr v)))))
                   (html/attr "hx-target" "#fs-sink")
@@ -2768,7 +2781,17 @@ passes through verbatim as %xx -- never throw inside a renderer).")
                       "&node=" (filmstrip/url-enc path)))
                   (html/attr "hx-trigger" "toggle once")
                   (html/attr "hx-target" "find .fs-tr-kids")
-                  (html/attr "hx-swap" "innerHTML")))))
+                  (html/attr "hx-swap" "innerHTML")
+                  ;; BARRIER — the lazy pull's attrs must stay on THIS
+                  ;; node only. htmx's implicit inheritance (forced ON
+                  ;; by htmx-2-compat.min.js) otherwise hands hx-get AND
+                  ;; hx-trigger down to every descendant button of the
+                  ;; pulled level: a leaf verb then fires the DETAILS'
+                  ;; pull request instead of its own POST (a button
+                  ;; never fires "toggle", so the shelf subtree's
+                  ;; restore/destroy/open rows were dead). Nested lazy
+                  ;; dirs keep their own barrier per node.
+                  (html/attr "hx-disinherit" "hx-get hx-trigger")))))
         (row-els
           (list
             (html/span (html/attr "class" "fs-tr-fold") (html/text "▸"))
