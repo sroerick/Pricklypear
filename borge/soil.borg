@@ -48,7 +48,7 @@
   (subsection binding-path
    (doc "Bindings: talex5/ocaml-wayland generates clients from protocol
        XML and is Eio/direct-style — aligned with the runtime effects
-       transition (docs/runtime-effects-transition.md), so soil lands
+       transition (archive/plans/runtime-effects-transition.md), so soil lands
        ON the eio floor rather than beside it. Two eval topologies,
        decision deferred to make: (a) THIN shim — host talks /api/eval
        over loopback; nothing new in the image; latency paid per

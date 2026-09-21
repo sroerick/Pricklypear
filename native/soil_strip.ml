@@ -1,5 +1,5 @@
 (* soil-strip — soil M-B window policy client (plan:
-   docs/plans/soil-m-b.md; spec: borge/soil.borg river-split).
+   archive/plans/soil-m-b.md; spec: borge/soil.borg river-split).
 
    Attaches to a (nested) river 0.4 compositor as its window manager:
    every mapped window becomes a filmstrip pane — a row record carrying

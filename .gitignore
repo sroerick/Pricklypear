@@ -61,8 +61,6 @@ public-artifacts/
 # habitat Lisp vault dumps (pp-sync snapshot --out backups/…)
 backups/
 
-# local-only ops notes (not shipped / not public)
-docs/openbsd-prod-branch-deploy.md
 
 # local-first lens working copy (device-owned; the repo stays the vault)
 lens/
@@ -79,3 +77,6 @@ package-lock.json
 
 # glochid local state: persistent session transcripts (never commit the store)
 .agent/
+
+# built release artifact (built to PP_PUBLIC_DIR at promote; never tracked)
+docs/pricklypear-book.pdf

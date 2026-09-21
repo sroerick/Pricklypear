@@ -1,5 +1,5 @@
 (project cs-interpreters
- (doc "Course: interpreters and code as data — build a Lisp, then fork, diff, and merge programs as trees (CS 201 + CS 202 of docs/cs-curriculum.md)")
+ (doc "Course: interpreters and code as data — build a Lisp, then fork, diff, and merge programs as trees (CS 201 + CS 202 of archive/proposals/cs-curriculum.md)")
  (status implemented)
  (* agent note (|2026-08-31 authored per borge/habitat-book.borg
      course-documents: a course is a COMPOSITION — this root selects

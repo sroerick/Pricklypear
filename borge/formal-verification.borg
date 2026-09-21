@@ -1,14 +1,14 @@
 (project pricklypear-formal-verification
  (doc "Book chapter: formal verification of the OCaml outer shell.")
  (status partial)
- (* agent note (|2026-08-02 status reconcile: correctly still planned — design in docs/formal-verification-plan.md; no QCheck/proof islands shipped as product gate yet.|) *)
+ (* agent note (|2026-08-02 status reconcile: correctly still planned — design in archive/plans/formal-verification-plan.md; no QCheck/proof islands shipped as product gate yet.|) *)
   (* agent note (|2026-09: FIRST ISLAND SHIPPED — image/lib/branch_algebra.ml is the branch semantics as a pure, executable spec (override resolution, pin hygiene, the status decision table, merge-application set) and image/test/branch_algebra_test.ml property-tests it with QCheck (8 properties, 300-800 cases each): naive-reference equality for resolve, soundness (resolved body comes from the walked chain), cycle termination, pin-hygiene truth table, classify re-derivation + partition equations, merge-never-applies-diverged (the 2026-09 merge decision), and lifecycle transitions. store.ml's classify_status DELEGATES to Branch_algebra.classify — one decision table shared by store and tests. Scope note: this verifies the ALGEBRA, not the SQL — plpgsql triggers (009/017/019/020 mirrors + gen bumps), the GUC recursion guard, and pgx isolation defaults are explicitly OUTSIDE the verified fragment; they are guarded by the DB-backed suites (branch_status_test, tree_version_shadow_test cross-writer hash test) instead. Tooling: qcheck 0.91 + qcheck-core.runner installed on the poohstack switch (new switch-level dep, image/test/dune).|) *)
   (convention ocaml-dune)
  (section formal-verification
    (doc "Machine-checked stability for the pure OCaml core; the Nopales garden may stay janky.
           Formal verification proceeds via property-based testing (QCheck) and proof tools.
           The detailed plan (islands, tooling, passes, success criteria) lives in
-          docs/formal-verification-plan.md. First island (branch algebra) shipped 2026-09;
+          archive/plans/formal-verification-plan.md. First island (branch algebra) shipped 2026-09;
           see the agent note above.")
    (status partial)
    (implements image/lib/branch_algebra.ml image/test/branch_algebra_test.ml)

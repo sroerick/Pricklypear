@@ -3,7 +3,7 @@
 ## soil-strip — the river window-manager client (soil M-B)
 
 `soil_strip.exe` attaches to a **river 0.4.x** compositor as its window
-manager (`borge/soil.borg` river-split; plan `docs/plans/soil-m-b.md`):
+manager (`borge/soil.borg` river-split; plan `archive/plans/soil-m-b.md`):
 every mapped window becomes a filmstrip pane (a row record with a `view`
 key), each manage sequence lays view-carrying panes out as the niri strip
 (same 2/3/6 weights as the scene), the focused pane's REAL window gets
@@ -33,7 +33,7 @@ are a manual test (D6) — same code path as the browser focus leg.
 ## soil-hello — the kiosk shim (pads hello dual-render spike, V2 + M-A)
 
 `soil-hello` is the OCaml native shim for the pads spike
-(`docs/plans/pads-hello-dualrender.md`, W5; spec: `borge/soil.borg`
+(`archive/plans/pads-hello-dualrender.md`, W5; spec: `borge/soil.borg`
 native-rendering). It renders a scene-dialect-v0 document (output of
 Nopales `pads/render-scene`) to a real Wayland toplevel: owned two-pass
 layout (D1), software raster (rect fill + bitmap font, D4), `wl_shm`
@@ -41,7 +41,7 @@ ARGB32 buffer, xdg-shell toplevel on the running compositor. Full-surface
 repaint per commit (dumb v1). No Nopales eval on any frame path; no input
 beyond window-close (D5).
 
-Soil M-A (filmstrip kiosk, `docs/plans/soil-m-a.md`): the shim renders the
+Soil M-A (filmstrip kiosk, `archive/plans/soil-m-a.md`): the shim renders the
 habitat shell from the live workspace —
 `./_build/default/native/soil_hello.exe --eval "(filmstrip/scene)"` (needs
 the dev image + `PP_USER`/`PP_PASS`). Display-hint attrs honored: `sel`

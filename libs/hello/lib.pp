@@ -1,5 +1,5 @@
 ;; package hello -- pads hello dual-render spike (plan:
-;; docs/plans/pads-hello-dualrender.md). One card, two renders:
+;; archive/plans/pads-hello-dualrender.md). One card, two renders:
 ;; hello/page is the legacy string-pipeline ORACLE (libs/html);
 ;; hello/view is the SAME card as a pad tree (libs/pads); V1 is proven
 ;; when pads/render-html over hello/view is byte-identical with

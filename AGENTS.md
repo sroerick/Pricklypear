@@ -243,7 +243,7 @@ Postgres still holds bytes, but the **logical store is ONE TREE**
   over Eio.Net). The Lwt rim, the `PP_IO` flag, and the `Lwt_eio` bridge
   were deleted at eio-floor Phase 5 (2026-09-15): there is no rollback
   flag, rollback is git revert. See `borge/single-image.borg` § runtime
-  and `docs/eio-floor-checklist.md` / `docs/runtime-effects-transition.md`.
+  and `archive/plans/eio-floor-checklist.md` / `archive/plans/runtime-effects-transition.md`.
 - Single unix binary (`image/`) — not a Solo5 unikernel in v1. Solo5 remains
   an optional later hardening axis (`spikes/mirage_solo5/`), not the product path.
 - Auth is in-process (`image/lib/auth_*.ml`). Password hashes are argon2id as of
@@ -361,7 +361,7 @@ auth is **in-process** in the image.
   `spikes/mirage_solo5/`, not the product path)
 - Eval core is direct-style (`lisp/` Lwt-free; `Control.Prim_call` +
   rim). Image domain still has monadic coloring at the prim ABI until the
-  Eio-floor decolor pass (`docs/eio-floor-checklist.md` Phase 3). Default
+  Eio-floor decolor pass (`archive/plans/eio-floor-checklist.md` Phase 3). Default
   process rim is Eio; Phase 5 (2026-09-15) deleted the Lwt rim and the
   `PP_IO` flag.
 - No `(load-library "pkg")` in Nopales route handlers (spec/rb dec-2,

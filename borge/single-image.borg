@@ -141,7 +141,7 @@
 
       This subsection is the book authority for layers B and C.
       The phase plan and runbook live in
-      docs/runtime-effects-transition.md (H0 audit -> H1
+      archive/plans/runtime-effects-transition.md (H0 audit -> H1
       direct-style core -> H2 Io port -> H3 backend swap);
       that doc is the runbook, this is the law.
 
@@ -301,7 +301,7 @@
         3. swap the `current' symlink
         4. rcctl restart pricklypear
 
-      (Full hook/runbook detail: docs/openbsd-prod-branch-deploy.md.)
+      (Full hook/runbook detail: archive/deploy/openbsd-prod-branch-deploy.md.)
 
       Changing a primitive: edit image/lib, push, the promote
       step rebuilds and restarts. Changing an app: define or
