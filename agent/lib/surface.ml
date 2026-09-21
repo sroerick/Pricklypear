@@ -1100,20 +1100,33 @@ retired, see the obituary above.")
 
 (define filmstrip/save-all
   (lambda (cascade panes focus)
-    (filmstrip/ws-save
-      (dict-set*
-        "{}"
-        (list
-          "cascade"
-          (json-emit (list/map (lambda (c) c) cascade))
-          "content"
-          (filmstrip/panes-emit panes)
-          "focus"
-          (string-append "content:" (as-str focus))
-          "axis"
-          (glochid/axis)
-          "desktop"
-          (as-str (glochid/deskt))))))
+    (let*
+      ;; CARRY-FORWARD (was a live bug): save-all rebuilt the dict from
+      ;; "{}" WITHOUT railmode/boxrows, so every pane mutation silently
+      ;; reset the rail mode to the windows default and would have wiped
+      ;; the visited-box MRU. Both ride ws-fields through the write
+      ;; (read-modify-write, same discipline as every field above).
+      ((ws (filmstrip/ws-fields))
+        (rm (dict-get ws "railmode"))
+        (br (dict-get ws "boxrows")))
+      (filmstrip/ws-save
+        (dict-set*
+          "{}"
+          (list
+            "cascade"
+            (json-emit (list/map (lambda (c) c) cascade))
+            "content"
+            (filmstrip/panes-emit panes)
+            "focus"
+            (string-append "content:" (as-str focus))
+            "axis"
+            (glochid/axis)
+            "desktop"
+            (as-str (glochid/deskt))
+            "railmode"
+            (if (null? rm) "" (as-str rm))
+            "boxrows"
+            (if (null? br) "" (as-str br)))))))
   "Write all workspace fields (cascade/content/focus + axis + desktop)
 in one row upsert (glochid: the lib's save-all would drop the shell
 fields). save-all REBUILDS the dict — every field added to the ws row
@@ -1908,19 +1921,112 @@ the title tooltip (hover affordance), zero JS.")
 
 (define glochid/railmode-set
   (lambda ()
-    (let
-      ((root (as-str (request-param "root"))))
+    (let*
+      ((root (as-str (request-param "root")))
+        (rows (glochid/boxrows))
+        (fresh? (not (glochid/boxrows-has root rows)))
+        (target (filmstrip/tree-find-root (filmstrip/tree-roots) root)))
       (seq
         (filmstrip/ws-save
-          (dict-set* (filmstrip/ws-fields) (list "railmode" root)))
+          (dict-set* (filmstrip/ws-fields)
+            (list "railmode" root
+                  "boxrows" (json-emit (glochid/boxrows-keep root rows)))))
         (render-html
           (html/join
             (list
               (filmstrip/oob-msg "")
-              (glochid/railmode-sentinel root #t)))))))
-  "POST /filmstrip/railmode: root param -> persist + OOB the sentinel
-(class rm-<root>; CSS shows only that tree); no tree re-render --
-expansion state is DOM.")
+              (glochid/railmode-sentinel root #t)
+              ;; lazy-first-reveal (BORGE-1789950734): a FIRST-visit flip
+              ;; OOBs the level rows into the freshly-revealed box; a
+              ;; revisit sends no rows -- its expansion DOM stays alive.
+              (if (and fresh? (not (null? target)))
+                  (filmstrip/tree-oob target)
+                  "")))))))
+  "POST /filmstrip/railmode: root param -> persist mode + MRU boxrows;
+OOB the sentinel (class rm-<root>; CSS shows only that tree); and a
+FIRST-visit flip OOBs the level-0 rows into the newly-revealed box
+(lazy-first-reveal) -- a revisit re-renders rows only in the stub-less
+case, so expansion state is DOM between flips, as v4 promised.")
+
+(define glochid/boxrows
+  (lambda ()
+    (let ((v (dict-get (filmstrip/ws-fields) "boxrows")))
+      (if
+        (if (null? v) #t (string-eq (as-str v) ""))
+        (list)
+        (json-parse (as-str v)))))
+  "Visited-rail-box MRU: JSON array of root ids, newest first (ws field
+boxrows; absent/empty = none visited this session lineage — save-all
+carries the field as \"\" when unset, so the empty string answers the
+empty set, never a parse error). Bounded by glochid/boxrows-keep so a
+doc render materializes at most the active box + the last visited
+one.")
+
+(define glochid/boxrows-has
+  (lambda (root rows)
+    (if (null? rows) #f
+        (if (string-eq (as-str (car rows)) root) #t
+            (glochid/boxrows-has root (cdr rows)))))
+  "Membership probe for the MRU set (string-eq, order-irrelevant).")
+
+(define glochid/boxrows-keep
+  (lambda (root rows)
+    (cons root
+      (if (null? rows) (list)
+          (cons (as-str (car rows))
+            (if (null? (cdr rows)) (list) (list))))))
+  "MRU-2 projection: the flipped-to root in front + the previous first
+entry. Returns a LIST (the caller rides json-emit for storage) — two
+slots bound the doc render's eager-box cost no matter how many roots
+the operator visits.")
+
+(define glochid/tree-stub
+  (lambda (root)
+    (let*
+      ((id (as-str (car root)))
+        (title (as-str (car (cdr root)))))
+      (html/tag
+        "div"
+        (html/attrs
+          (list
+            (html/attr "id" (string-append "fs-tree-" id))
+            (html/attr "class" "fs-cbox fs-rmode")
+            (html/attr "data-rmode" id)))
+        (html/join
+          (list
+            (html/span (html/attr "class" "fs-title") (html/text title))
+            (html/tag
+              "ul"
+              (html/attrs
+                (list
+                  (html/attr "id" (string-append "fs-tree-" id "-root"))
+                  (html/attr "class" "fs-tr-kids fs-tr-root")))
+              ""))))))
+  "Lazy-first-reveal stub (BORGE-1789950734): the rail box chrome with
+an EMPTY level-0 UL -- no rows materialized while the box is hidden
+(the code arm's eager depth-1 kids ~115k steps stopped riding every
+doc render). No collapse-all word by design: nothing to fold yet. The
+UL id is the mutation OOB seam, so a first-visit flip fills it in
+place.")
+
+(define glochid/tree-boxes
+  (lambda ()
+    (let*
+      ((active (glochid/railmode))
+        (visited (glochid/boxrows)))
+      (list/map
+        (lambda (r)
+          (let ((id (as-str (car r))))
+            (if
+              (if (string-eq id active) #t
+                  (glochid/boxrows-has id visited))
+              (filmstrip/tree-box r)
+              (glochid/tree-stub r))))
+        (filmstrip/tree-roots))))
+  "Lazy-first-reveal (BORGE-1789950734): only the ACTIVE railmode's box
+(+ the MRU-2 recently visited ones) materializes rows on a doc render;
+the remaining hidden boxes answer empty chrome. The sentinel :has
+hiding is unchanged -- the mode flip OOB fills stubs in place.")
 
 (define glochid/railmode-sentinel
   (lambda (m ?oob)
@@ -1937,12 +2043,6 @@ expansion state is DOM.")
       ""))
   "Inert rail-mode sentinel (like the axis/desk ones); CSS
 :has(#fs-railmode.rm-<id>) hides every other tree box.")
-
-(define glochid/tree-boxes
-  (lambda ()
-    (list/map filmstrip/tree-box (filmstrip/tree-roots)))
-  "All host tree boxes (shell render: each in its own .fs-rmode cbox;
-the sentinel :has shows exactly one).")
 
 (define filmstrip/shelf-oob
   (lambda () "")
