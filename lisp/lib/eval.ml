@@ -337,7 +337,10 @@ let rec eval_step
                 (match f, step with
                  | VLambda _, Cont _ ->
                      budget.current_fn <- Some name;
-                     note_fn_call name
+                     note_fn_call name;
+                     (* debug call tree: bracket the span flat
+                        [current_fn] attributes to this fn *)
+                     Budget.dbg_enter budget name
                  | VPrim _, Done _ ->
                      budget.prim_calls <- budget.prim_calls + 1
                  | _ -> ());
