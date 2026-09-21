@@ -168,11 +168,11 @@ let about_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
         HTML.h2 [] [txt "How to access"];
         HTML.ul [] [
           HTML.li [] [txt "Start stack: scripts/dev.sh start"];
-          HTML.li [] [txt "Text login/REPL: scripts/repl.sh  (SSH public key line protocol on :17822)"];
+          HTML.li [] [txt "Text REPL: scripts/repl.sh  (line-protocol REPL; enable via PP_REPL_PORT — 17878 on the dev stack)"];
           HTML.li [] [txt "This browser UI: usually http://127.0.0.1:18080/ after an image boots"];
           HTML.li [] [txt "Browser: /  Workspace home · /about · /bindings Functions · /pages Pages · /types Data · /repl · /edit/<name>"];
           HTML.li [] [txt "Auth admin API: http://127.0.0.1:17879  (create users, tokens)"];
-          HTML.li [] [txt "Full docs: docs/concepts-and-horizon.md in the repo"];
+          HTML.li [] [txt "Full docs: the borge book (borge/*.borg inlined at pricklypear.borg) + /book in this UI"];
         ];
       ];
       HTML.div [HTML.class_ "card"] [
