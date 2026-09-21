@@ -176,6 +176,18 @@ let apply_value_raw (t : t) (fn : Ast.value) (args : Ast.value list)
     with e -> Error e
   in
   if Sys.getenv_opt "PP_PROFILE_RENDER" <> None then begin
+    (* PP_PROFILE_TREE=1 additionally dumps the debug call tree
+       (budget.dbg_dump). CAVEAT: brackets ride the flat current_fn
+       attribution, which is approximate across thunk-force boundaries
+       — per-name totals and leaf rows are exact; a node that absorbed
+       later spans shows incl ≈ its root's. Read it as
+       concentration-by-segment, not as exact nesting. *)
+    (match Sys.getenv_opt "PP_PROFILE_TREE" with
+     | Some _ ->
+         Printf.eprintf
+           "[call-tree] %s\n%!"
+           (Budget.dbg_dump budget)
+     | None -> ());
     let merged =
       Hashtbl.fold (fun k steps acc ->
           let c =
