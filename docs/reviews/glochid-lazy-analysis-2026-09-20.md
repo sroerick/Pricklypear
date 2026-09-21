@@ -71,28 +71,37 @@ shell render, never memoized against the pane record.
 7. **the ui rail root**: inventories 13 names via `lookbook/elements`
    (one def), rows are cheap leaves.
 
-### Eager misses (ranked by measured cost)
+### Eager misses (ranked by measured cost) — ✅ items 1-2 SHIPPED 2026-09-20
 
 1. **HIDDEN RAIL BOXES rendered on every shell doc** (~135k, 36%+).
    All four `.fs-rmode` boxes are materialized at root (code includes
    its eager kids) while `:has(#fs-railmode.rm-*)` displays one.
-   → **BORGE-1789950734**: lazy-first-reveal amendment (render only the
-   active box; hidden boxes pull on first reveal via the railmode-set
-   OOB swing). Spec-level: rail-trees-v4 stanza change.
+   → **SHIPPED (BORGE-1789950734)**: `glochid/tree-boxes` renders rows
+   only for the active railmode + MRU-2 `boxrows` (ws field); hidden
+   boxes answer `glochid/tree-stub` (chrome + empty UL); the flip
+   route OOBs the level rows on FIRST visit only — revisits keep
+   expansion DOM. Measured after: cold shell **~165k steps (was ~370k)**.
 2. **code box eager depth-1 kids** (~115k of the doc render by itself).
-   The v4 eager-mode amendment wants "already-open" display for DESK
-   directories, not for the whole filesystem arm; scoping eager kids to
-   the windows tree (or a per-root eager-policy field on the root def)
-   is the cheap cut. Could fold into 1789950734.
+   Now paid ONCE on first reveal of the code box (the flip OOB runs
+   inside a dedicated 400k budget), never per doc render. The MRU cap
+   means a cold boot re-renders at most the active + last box.
 3. **per-pane verb reassembly** (glochid layer, ~5-10% of render with
    4+ panes; grows linearly): the pane node dicts are rebuilt and
    re-serialized every render. A glochid-layer memo keyed on the pane
    record (workspace fields are only written through `filmstrip/save-all`
-   mutations) would be safe and local.
+   mutations) would be safe and local. *Open — deferred: after items
+   1-2 landed the shell sits at ~165k/400k; revisit if pane counts grow.*
 4. **row dict JSON round trip** (~10%): tree rows are JSON dict STRINGS
    (`json-emit` at build, re-parse at render) — the shared-node
    CONTRACT (rail-trees-v4, bind twins); a direct-dict path is a spec
    conversation, filed as a companion note on 1789950734.
+
+### Carry-forward bug found while shipping item 1
+
+`filmstrip/save-all` rebuilt the ws dict WITHOUT `railmode` (and would
+have wiped `boxrows`): every pane mutation silently reset the rail mode
+to the windows default. Both fields now read-modify-write through
+save-all — the docstring's own carry rule, previously unenforced.
 
 ### Verdict on "are we maximizing lazy eval"
 
