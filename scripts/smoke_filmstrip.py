@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Smoke: filmstrip v1 habitat shell (docs/plans/filmstrip-v1.md).
+"""Smoke: filmstrip v1 habitat shell (archive/plans/filmstrip-v1.md).
 
 Proves the two-strip shell against a running dev image:
 

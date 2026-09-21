@@ -79,13 +79,14 @@ history only.)
 | `cli/` | OCaml laptop clients: `pp-eval`, `pp-sync` (no Python) |
 | `agent/` | **glochid** — local-first agent harness: Nopales-native coding agent; Nopales htmx fragments + multipart/mixed streamed turns ([`borge/agent.borg`](borge/agent.borg)) |
 | `scripts/` | `dev.sh`, `pp-eval.sh` wrappers, `verify_habitat.sh` (on-image `libs/verify`), seed ETL |
-| `docs/` | Book PDF, ops notes, [`runtime-effects-transition.md`](docs/runtime-effects-transition.md) (OCaml 5 / effects path), [`agent-ui-harness.md`](docs/agent-ui-harness.md) (agent FE verify research) |
+| `docs/` | **Living docs only**: [`one-tree.md`](docs/one-tree.md) (storage overview), [`notes-ui-contract.md`](docs/notes-ui-contract.md), [`agent-ui-harness.md`](docs/agent-ui-harness.md) (agent FE verify research) |
+| `archive/` | Executed handoffs / superseded plans / UI reviews / retired probes — receipts, not spec ([`archive/README.md`](archive/README.md)) |
 | `borge/` | Design chapters |
 
 ## Stack
 
 - OCaml 5.4.x on the **`poohstack`** opam switch
-- Lwt + `httpaf-lwt-unix` + `pgx_lwt` (today; effects/direct-style transition: `docs/runtime-effects-transition.md`)
+- Lwt + `httpaf-lwt-unix` + `pgx_lwt` (today; effects/direct-style transition: `archive/plans/runtime-effects-transition.md`)
 - `pure-html` / `HTML.Hx.*` for type-safe markup
 - Guest capability effects: `lisp/lib/effect.ml` (separate from host I/O runtime)
 

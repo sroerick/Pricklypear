@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Smoke: soil M-B — river window policy (docs/plans/soil-m-b.md).
+"""Smoke: soil M-B — river window policy (archive/plans/soil-m-b.md).
 
 Proves the shim drives the workspace row both directions under a real
 (nested) river compositor:

@@ -3,7 +3,7 @@
     Orthogonal to guest capability effects in [effect.ml].
     Nopales users never see [perform], Lwt, or these constructors.
 
-    See docs/runtime-effects-transition.md Appendix D.
+    See archive/plans/runtime-effects-transition.md Appendix D.
 
     H1.7: this module is Lwt-free. The image rim provides
     [Control_rim.run] to service [Prim_call] with Lwt prim tables. *)

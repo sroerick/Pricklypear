@@ -3,7 +3,7 @@
     Domain code depends on this module type, not on [pgx] directly.
     APIs are direct-style (plain ['a]). [Io_db.Db] is the name domain
     code calls; it delegates to [Store_db] (the single Eio backend).
-    See docs/runtime-effects-transition.md. *)
+    See archive/plans/runtime-effects-transition.md. *)
 
 module type DB = sig
   (** Opaque connection handle. *)

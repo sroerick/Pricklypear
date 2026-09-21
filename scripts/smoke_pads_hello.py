@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Smoke: pads hello dual-render spike (docs/plans/pads-hello-dualrender.md).
+"""Smoke: pads hello dual-render spike (archive/plans/pads-hello-dualrender.md).
 
 Proves V1 (byte-identity, legacy vs pads) against a running dev image:
 

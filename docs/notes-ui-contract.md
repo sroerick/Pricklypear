@@ -48,7 +48,7 @@ libs before asserting.
 
 ## Broken-control inventory
 
-Filled by `scripts/inventory_notes_ui.py` (and human notes). See
+Filled by `archive/scripts/inventory_notes_ui.py` (and human notes). See
 `docs/notes-ui-inventory.md` (generated/updated by inventory run).
 
 ## Agent rules

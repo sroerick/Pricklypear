@@ -52,7 +52,7 @@
             rows/list-bindings/describe/deftype keep their
             signatures. The prim/effect seam — the core
             performs I/O via Control.perform_prim (OCaml 5
-            effects; see runtime-effects-transition) and the
+            effects; see archive/plans/runtime-effects-transition.md) and the
             rim handler answers through the Io.DB port — was
             built for exactly this swap. Nopales code and
             route handlers never see the difference. Lwt
@@ -64,7 +64,7 @@
             Postgres-RESIDENT structure, not a new database.
           - additive-only migrations still govern whatever
             physical tables the tree store itself uses.
-          - The effects direction (runtime-effects-transition):
+          - The effects direction (archive/plans/runtime-effects-transition.md):
             one-tree changes WHAT the rim reads/writes, not HOW
             the core talks to the rim. Core stays direct-style
             via Control.perform_prim; any Lwt still present is

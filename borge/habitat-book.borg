@@ -9,7 +9,7 @@
      /book/course/cs-interpreters + the compose-never-copy smoke; all
      five top-level smokes now hold.|) *)
  (* agent note (|2026-08-29 authored from the cs-curriculum design session
-     (docs/cs-curriculum.md). Probe of `borge book print .` on the
+     (archive/proposals/cs-curriculum.md). Probe of `borge book print .` on the
      post-pivot tree: chapters land p788+ in readdir order, inline not
      honored, libs/*.pp + migrations/*.sql absent. This chapter specced
      before any implementation; borge repo workstream described in
@@ -36,7 +36,7 @@
         WHY
 
         The borge book is the spec AND the intended CS textbook
-        (docs/cs-curriculum.md). The paper pipeline renders files, not
+        (archive/proposals/cs-curriculum.md). The paper pipeline renders files, not
         the literate tree: post-pivot chapters print on p788+ in
         readdir order, the Nopales product layer and SQL never appear,
         and clone history changes your book's TOC. Meanwhile the

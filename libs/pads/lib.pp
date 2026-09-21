@@ -1,5 +1,5 @@
 ;; package pads -- platform-agnostic UI tree (spec: borge/pads.borg; plan:
-;; docs/plans/pads-hello-dualrender.md). Pure Nopales — zero changes under
+;; archive/plans/pads-hello-dualrender.md). Pure Nopales — zero changes under
 ;; image/, lisp/, pure/ (decision D3).
 ;; Sync: scripts/pp_sync.py pull|push
 ;;

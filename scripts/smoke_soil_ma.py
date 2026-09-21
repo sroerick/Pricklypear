@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Smoke: soil M-A — filmstrip kiosk scene (docs/plans/soil-m-a.md).
+"""Smoke: soil M-A — filmstrip kiosk scene (archive/plans/soil-m-a.md).
 
 Proves the filmstrip shell lowers to scene-dialect v0 and renders on a
 real Wayland toplevel:

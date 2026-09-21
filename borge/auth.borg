@@ -661,7 +661,7 @@
   (subsection user-ssh-repl
    (doc "Per-user SSH public keys open an identity-bound Nopales REPL")
    (status partial)
-   (* agent note (|2026-08-02 confirm partial: ssh_key credentials + verify_ssh_key + /settings/ssh UI shipped; full sshd/awa REPL attach still bridge/docs (docs/ssh-repl-bridge.md), not closed product door.|) *)
+   (* agent note (|2026-08-02 confirm partial: ssh_key credentials + verify_ssh_key + /settings/ssh UI shipped; full sshd/awa REPL attach still bridge/docs (archive/deploy/ssh-repl-bridge.md), not closed product door.|) *)
    (implements image/lib/auth_store.ml image/lib/repl_endpoint.ml)
    (verify
     (build "dune build image")
@@ -742,7 +742,7 @@
              (periodic script or AuthorizedKeysCommand)
            - ForceCommand runs pp_repl_bridge that speaks to
              image REPL with fixed identity from key mapping
-           - Document in openbsd-prod-branch-deploy.md
+           - Document in archive/deploy/openbsd-prod-branch-deploy.md
            - Acceptable if awa-in-image slips; product stories
              still require verify_ssh_key + key management UI.
 

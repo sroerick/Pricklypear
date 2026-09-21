@@ -1,5 +1,5 @@
 (* soil-hello -- pads hello dual-render spike, V2 (plan:
-   docs/plans/pads-hello-dualrender.md W5; spec: borge/soil.borg
+   archive/plans/pads-hello-dualrender.md W5; spec: borge/soil.borg
    native-rendering).
 
    Takes a scene-dialect-v0 JSON document (pads/render-scene output)
