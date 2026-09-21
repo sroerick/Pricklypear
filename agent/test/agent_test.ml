@@ -1024,15 +1024,27 @@ let test_turn_replay_nested_blocks ~rt () =
   ignore (Runtime.eval_string ~rt
     {|(define npg (soup/parse "<div id=log></div>"))|});
   Env.define rt.seam.env "nparts" parts;
-  Alcotest.check pp_value_testable "nested blocks replay into zone"
-    (Ast.VStr
-       ("<div id=\"t1-think\">"
-        ^ "<details class=\"tk\"><summary>thinking</summary><div id=\"t1-tk-1\"><span class=\"reason\">rea</span></div></details>"
-        ^ "<details class=\"tool\"><summary id=\"t1-tool-1-sum\">tool: bash ✓</summary><div id=\"t1-tool-1\"><div class=\"trace\">in ls -la</div><div class=\"trace\">out file.ml</div></div></details>"
-        ^ "<details class=\"tk\"><summary>thinking</summary><div id=\"t1-tk-2\"><span class=\"reason\">more</span></div></details>"
-        ^ "</div>"))
-    (Runtime.eval_string ~rt
-       {|(soup/serialize (soup/select-one (hyper/stream npg nparts) "#t1-think"))|});
+  (* The templates are declared elements projected through lookbook/html;
+     the html projection adds block-boundary newlines around div tags
+     (html/tag-emit). Cosmetically inert — so the replay compares with
+     all newlines stripped. *)
+  let squash s = String.concat "" (String.split_on_char '\n' s) in
+  let expected =
+    String.concat ""
+      ("<div id=\"t1-think\">"
+      :: ("<details class=\"tk\"><summary>thinking</summary><div id=\"t1-tk-1\"><span class=\"reason\">rea</span></div></details>"
+          :: ("<details class=\"tool\"><summary id=\"t1-tool-1-sum\">tool: bash ✓</summary><div id=\"t1-tool-1\"><div class=\"trace\">in ls -la</div><div class=\"trace\">out file.ml</div></div></details>"
+              :: ("<details class=\"tk\"><summary>thinking</summary><div id=\"t1-tk-2\"><span class=\"reason\">more</span></div></details>"
+                  :: [ "</div>" ]))))
+  in
+  (match
+     Runtime.eval_string ~rt
+       {|(soup/serialize (soup/select-one (hyper/stream npg nparts) "#t1-think"))|}
+   with
+   | Ast.VStr s ->
+       Alcotest.(check bool) "nested blocks replay into zone (modulo block newlines)"
+         true (String.equal (squash expected) (squash s))
+   | other -> Alcotest.fail ("turn-replay: " ^ Reader.pp_value other));
   Alcotest.check pp_value_testable "reply bubble got tokens"
     (Ast.VStr "<div class=\"bubble llm\" id=\"t1\"><span>answer</span></div>")
     (Runtime.eval_string ~rt
@@ -1153,7 +1165,7 @@ let test_lookbook ~rt () =
            {|(list/map (lambda (n) (lb/get n "open")) (glochid/ui-tree ""))|}
    with
    | Ast.VList opens ->
-       Alcotest.(check int) "ui root: three seed elements" 3
+       Alcotest.(check int) "ui root: lib seeds + glochid host elements" 13
          (List.length opens);
        Alcotest.(check bool) "ui rows open-or-focus the /lookbook pane" true
          (List.exists
