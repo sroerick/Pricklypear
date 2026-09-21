@@ -102,6 +102,13 @@ let () =
   let mock_script = ref None in
   let agent_context_flag = ref false in
   let board_list = ref None in
+  let memory_put = ref None in
+  let memory_content_file = ref None in
+  let memory_tags = ref [] in
+  let memory_scope = ref "workspace" in
+  let memory_id = ref None in
+  let memory_type = ref "agent-memory" in
+  let memory_delete = ref None in
   let anon _ = () in
   let speclist =
     Arg.align
@@ -128,11 +135,18 @@ let () =
         ("--mock-script", Arg.String (fun s -> mock_script := Some s), "FILE canned provider replies (test/demo of /chat)");
         ("--agent-context", Arg.Unit (fun () -> agent_context_flag := true), "print the issue-board digest from the local lens and exit (borge/agent.borg boot verb)");
         ("--board-list", Arg.String (fun s -> board_list := Some s), "UUID todo-list id for --agent-context (default: PP inbox)");
+          ("--memory-put", Arg.String (fun s -> memory_put := Some s), "TITLE write an agent-memory node into the lens (offline; sync pushes it)");
+          ("--memory-content-file", Arg.String (fun s -> memory_content_file := Some s), "FILE memory body content ('-' = stdin)");
+          ("--memory-tags", Arg.String (fun s -> memory_tags := List.filter (fun t -> t <> "") (List.map String.trim (String.split_on_char ',' s))), "A,B,C comma-separated tags");
+          ("--memory-scope", Arg.String (fun s -> memory_scope := s), "workspace|global (default workspace)");
+          ("--memory-id", Arg.String (fun s -> memory_id := Some s), "MID stable memory id (default: fresh uuid; re-put updates in place)");
+          ("--memory-type", Arg.String (fun s -> memory_type := s), "agent-memory|agent-agenda for --memory-delete (default agent-memory)");
+          ("--memory-delete", Arg.String (fun s -> memory_delete := Some s), "ADDRESS node address (dashed or dashless) to delete; removes the lens node and enqueues a tombstone");
       ]
   in
     Arg.parse speclist anon
     "pp-remote [--image URL] [--user U --pass P] [-e EXPR]\n\
-       \                  [--lens DIR] [--lens-pull NAME] ... [--sync] [--sync-loop] [--serve [--open]] [--agent-context]\n\
+       \                  [--lens DIR] [--lens-pull NAME] ... [--sync] [--sync-loop] [--serve [--open]] [--agent-context] [--memory-put TITLE] [--memory-delete ADDR]\n\
      \                  [--model NAME] [--base-url URL] [--mock-script FILE]";
   Envcfg.load_dotenv ();
   (* TLS (tls-eio) needs a seeded RNG before any HTTPS proxy call;
@@ -363,6 +377,68 @@ let () =
           | None ->
               prerr_endline "agent-context: no board cards in the lens";
               exit 1)
+   end);
+
+  (* ---- --memory-put / --memory-delete: the borge/agent.borg stage-1
+     memory verbs (card 1ce0929f, spec sboot (e)): memory writes go
+     through the client into the one tree, offline-safe - unstamped lens
+     nodes + the tombstone queue (the drain turns those into wire
+     deletes). Pure lens operations, no transport calls. ---- *)
+  (if !memory_put <> None && !memory_delete <> None then
+     (prerr_endline "--memory-put and --memory-delete are mutually exclusive";
+      exit 2)
+   else ());
+  (if !memory_put <> None || !memory_delete <> None then begin
+     match lens_opt with
+     | None ->
+         prerr_endline "--memory-put/--memory-delete require --lens DIR";
+         exit 2
+     | Some lens ->
+         let memory_run () =
+           match (!memory_put, !memory_delete) with
+           | Some title, _ ->
+               let content =
+                 match !memory_content_file with
+                 | Some f -> Agent_memory.read_content f
+                 | None ->
+                     failwith
+                       "--memory-put needs --memory-content-file FILE ('-' = stdin)"
+               in
+               let mid = Option.value !memory_id ~default:(Agent_memory.uuid4 ()) in
+               let r =
+                 Agent_memory.put ~lens ~mid ~title ~content ~tags:!memory_tags
+                   ~scope:!memory_scope ~ws:(Sys.getcwd ())
+                   ~src:(try Unix.gethostname () with _ -> "unknown")
+               in
+               Printf.printf "node %s %s\n" r.node_id
+                 (if r.created then "created" else "updated");
+               print_endline r.tree_path
+           | None, Some addr ->
+               if not (Agent_memory.is_memory_type !memory_type) then
+                 failwith ("unknown --memory-type: " ^ !memory_type);
+               let r =
+                 Agent_memory.delete ~lens ~type_:!memory_type ~address:addr ()
+               in
+               (match r.removed_file with
+                | Some f -> Printf.printf "removed %s\n" f
+                | None -> print_endline "node not in lens; tombstone still enqueued");
+               print_endline r.tombstone
+           | None, None -> assert false
+         in
+         (match
+            (try
+               memory_run ();
+               Ok ()
+             with
+             | Invalid_argument m -> Error m
+             | Failure m -> Error m
+             | Sys_error m -> Error m
+             | e -> Error (Printexc.to_string e))
+          with
+          | Error m ->
+              prerr_endline ("error: " ^ m);
+              exit 1
+          | Ok () -> exit 0)
    end);
   let lens_lookup =
     match lens_opt with
