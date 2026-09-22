@@ -1482,7 +1482,12 @@
       (list "kawaii" "HAPPY" "GINGER"
         "Put a Smile on Your Face"
         "Rork's Happy Ginger Beer is filled with delicious Ginger Bug, powerful antioxidants, and soothing anti-inflammatories. One taste will leave you smiling from ear to ear. The ginger is spicy enough to linger on your tongue leaving you ready for another sip. And another. And another. These life-giving probiotics grow naturally in the Cody air. They're not freaky lab bacteria engineered by venture capitalists. We use Organic Cane Sugar, not (alleged) carcinogens like Aspartame. It's refreshing, delicious, and can't be used for birth control like Stevia (look it up). Enjoy over ice, flip flops and sunglasses optional."
-        rb/label-art-happy))))
+        rb/label-art-happy))
+    (cons "Ginger Bug Lemonade"
+      (list "two-col" "Ginger Bug Lemonade" ""
+        "Squeeze the Day"
+        "Real lemonade is old magic. Two centuries ago the punch houses made oleo saccharum — sugar massaged into lemon peels until the fruit surrenders its oils. That fragrant gold was the soul of any respectable punch, and it is the soul of ours. We build it the old way, then let the ginger bug liven the whole thing with its fine Wyoming fizz. Organic lemons, organic cane sugar, wild probiotics, and patience. Sunshine, saved up for a cloudy day. Shake gently; drink joyfully; share with someone thirsty."
+        rb/label-art-logo))))
 
 (define (rb/label-ingredients name)
   "Ingredient names for a recipe, dot-joined (vintage style line)."
@@ -1674,8 +1679,9 @@
     ".ppsheet { display:grid; grid-template-columns:repeat(" (str cols) "," w ");"
     " grid-auto-rows:" h "; column-gap:" gx "; row-gap:" gy ";"
     " padding:" y0 " " x0 "; background:#fff; }"
-    ".ppcell { width:" w "; height:" h "; position:relative; overflow:hidden; }"
-    ".l4x3 { left:calc(50% - 2in); top:calc(50% - 1.5in); }"
+    ".ppcell { width:" w "; height:" h "; position:relative; }"
+    ".ppbleed { position:absolute; z-index:0; }"
+    ".l4x3 { left:calc(50% - 2in); top:calc(50% - 1.5in); z-index:1; }"
     ".l4x3.rot { transform:rotate(" rot "deg); }"
     ".ppcal { outline:2px dashed #d00; }"
     ".ppbar { font-family:monospace; font-size:12px; padding:10px 14px; background:#222; color:#eee; }"
@@ -1693,17 +1699,28 @@
           (cons (car names)
                 (rb/label-cells (append (cdr names) (list (car names))) (- n 1))))))
 
-(define (rb/label-cell-html name batch date rot cal?)
-  "One die cell holding the rotated 4x3 label design."
+(define (rb/label-bg-for name)
+  "Label background color of the recipe's template (the cell bleed color)."
+  (cond
+    ((string-eq (rb/label-style-for name) "two-col") "#472619")
+    ((string-eq (rb/label-style-for name) "kawaii") "#fdf8ef")
+    (else "#2b1d12")))
+
+(define (rb/label-cell-html name batch date rot cal? bleed)
+  "One die cell: label-bg bleed ring, then the rotated 4x3 design."
   (string-append
-    "<div class=\"ppcell" (if cal? " ppcal" "") "\">"
+    "<div class=\"ppcell"
+    (if cal? " ppcal" "")
+    "\"><div class=\"ppbleed\" style=\"inset:-" bleed ";background:"
+    (rb/label-bg-for (string-trim name))
+    "\"></div>"
     "<div class=\"l4x3"
     (if (string-eq rot "0") "" " rot")
     "\">"
     (rb/label-card-html (string-trim name) batch date)
     "</div></div>"))
 
-(define (rb/label-sheet-html names cols rows w h x0 y0 gx gy rot sheets batch date cal?)
+(define (rb/label-sheet-html names cols rows w h x0 y0 gx gy rot sheets batch date bleed cal?)
   "One or more letter sheets of 4-up labels, print-ready at 100% scale."
   (string-append
     "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Label sheet — Avery Presta 94252 (4-up)</title>"
@@ -1718,7 +1735,7 @@
         (string-append
           "<div class=\"ppsheet\">"
           (string-join
-            (rb/map (lambda (nm) (rb/label-cell-html nm batch date rot cal?))
+            (rb/map (lambda (nm) (rb/label-cell-html nm batch date rot cal? bleed))
               (rb/label-cells names (* cols rows)))
             "")
           "</div>"))
@@ -1735,6 +1752,7 @@
         (let ((cols (parse-int (rb/param-default "cols" "2")))
               (rows (parse-int (rb/param-default "rows" "2")))
               (sheets (parse-int (rb/param-default "sheets" "1")))
+              (bleed (rb/param-default "bleed" "0.1in"))
               (batch (rb/param-default "batch" ""))
               (date (rb/param-default "date" ""))
               (rot (rb/param-default "rot" "90"))
@@ -1749,6 +1767,7 @@
               (rb/param-default "gx" "0.5in")
               (rb/param-default "gy" "1in")
               rot sheets batch date
+              bleed
               (not (string-eq cal "")))))))))
 
 (define (rb/label-page-html name batch date)
