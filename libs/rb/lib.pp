@@ -1403,7 +1403,13 @@
         (let ((r (rb/find-recipe (as-str name))))
           (if (null? r)
               (html/page (list (rb/h1 "Recipe not found")))
-            (render-html (rb/label-html r))))))))
+            (html/page
+              (list
+                (render-html
+                  (string-append
+                    "<p><a href=\"/labels?name=" (url-encode (as-str name))
+                    "\">Print 4-up sheet (Avery 94252) →</a></p>"))
+                (render-html (rb/label-html r))))))))))
 
 (define (rb/label-html r)
   "Inline HTML for a printable product label."
@@ -1423,6 +1429,115 @@
       "<p style=\"font-size:8px;margin:2px 0;color:#8B4513\">Pricklypear Soda Co.</p>"
       "</div>"
       "</div>")))
+
+;; ============================================================
+;; LABEL SHEET — /labels — Avery Presta 94252 (4-up, 3in x 4in)
+;; Fills one letter sheet with 4 copies of the label, laid out for
+;; Avery 94252 die cuts: 2 cols x 2 rows, 3in x 4in cells, 1.25in
+;; side margins, 1.5in top margin (kept clear of the printer's
+;; unprintable band so full-bleed backgrounds survive).
+;;
+;; First print with any new stock: add &cal=1 — the cells print as
+;; dashed red boxes so you can hold the sheet to the light against
+;; the die cuts. Nudge with query params (persisted in the URL):
+;;   &x0=1.25in &y0=1.5in &w=3in &h=4in &cols=2 &rows=2 &sheets=1
+;; ============================================================
+
+(define (rb/label-cells names n)
+  "First n label names, cycling names until filled."
+  (if (<= n 0)
+      ()
+      (if (null? names)
+          ()
+          (cons (car names)
+                (rb/label-cells (append (cdr names) (list (car names))) (- n 1))))))
+
+(define (rb/label-cell name batch cal?)
+  "One 3in x 4in label cell (dashed calibration box when cal?)."
+  (string-append
+    "<div class=\"lbl"
+    (if cal? " lbl-cal" "")
+    "\"><div class=\"lbl-top\"><div class=\"lbl-name\">"
+    (html-escape name)
+    "</div><div class=\"lbl-tag\">Ginger bug soda — handcrafted in Wyoming</div></div>"
+    (if cal?
+        ""
+        (string-append
+          "<div class=\"lbl-body\">Brewed from real ginger bug starter — "
+          "never artificial flavoring.<br>Ingredients: filtered water, cane sugar, ginger, lemon, live cultures.<br> "
+          "Refrigerate. Keep the culture alive.<br>"
+          (if (string-eq batch "")
+              ""
+              (string-append "Batch #" (html-escape batch) "<br>"))
+          "</div>"))
+    "<div class=\"lbl-law\">Not licensed or inspected per Wyo. Stat. 35-10-301<br>Pricklypear Soda Co.</div></div>"))
+
+(define (rb/label-sheet-html names cols rows w h x0 y0 sheets batch cal?)
+  "One or more letter sheets of 4-up labels, print-ready at 100% scale."
+  (string-append
+    "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Label sheet — Avery 94252</title>"
+    "<style>"
+    "@page{size:letter portrait;margin:0}"
+    "*{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}"
+    "body{margin:0;background:#8888;}"
+    ".ppsheet{display:grid;grid-template-columns:repeat(" (str cols) "," w ");"
+    "grid-auto-rows:" h ";padding:" y0 " " x0 ";background:#fff;}"
+    ".lbl{width:" w ";height:" h ";border:2px solid #8B4513;border-radius:12px;"
+    "background:linear-gradient(160deg,#f7ecd9,#eed7b4);color:#5C3317;"
+    "display:flex;flex-direction:column;justify-content:space-between;"
+    "padding:18px 20px;font-family:Georgia,'Times New Roman',serif;}"
+    ".lbl-cal{border:2px dashed #d00;border-radius:12px;background:transparent;}"
+    ".lbl-name{font-size:20pt;font-weight:700;letter-spacing:1px;text-align:center;"
+    "margin:6px 0 2px;text-transform:uppercase;}"
+    ".lbl-tag{font-size:9pt;font-style:italic;text-align:center;color:#8B4513;}"
+    ".lbl-rule{border-top:1px solid #B08D5F;margin:8px 24px;}"
+    ".lbl-body{font-size:9pt;text-align:center;line-height:1.6;}"
+    ".lbl-law{font-size:6.5pt;text-align:center;color:#8B4513;line-height:1.4;}"
+    ".ppbar{font-family:monospace;font-size:12px;padding:10px 14px;background:#222;color:#eee;}"
+    ".ppbar b{color:#ffd;} .ppbar button{font-size:14px;padding:6px 18px;cursor:pointer;}"
+    "@media print{.ppbar{display:none} .ppsheet{box-shadow:none} body{background:#fff}"
+    ".ppsheet{page-break-after:always;} .ppsheet:last-child{page-break-after:auto;}}"
+    "</style></head><body>"
+    "<div class=\"ppbar\">Avery Presta 94252 — 4-up 3&times;4in — print dialog: <b>Margins: None · Scale: 100%</b> · Background graphics: <b>ON</b>. "
+    "Calibration: <b>&cal=1</b> · nudge: <b>&x0= &y0= &w= &h= &cols= &rows= &sheets=</b> · "
+    "<button onclick=\"window.print()\">Print</button></div>"
+    (string-join
+      (rb/map (lambda (ig)
+        (string-append
+          "<div class=\"ppsheet\">"
+          (string-join (rb/map (lambda (n) (rb/label-cell (string-trim n) batch cal?)) (rb/label-cells names (* cols rows))) "")
+          "</div>"))
+        (rb/label-cells (list "x") sheets))
+      "")
+    "</body></html>"))
+
+(define (rb/param-default name default)
+  "Request param name as trimmed string, or default when missing/empty."
+  (let ((s (request-param name)))
+    (if (null? s)
+        default
+        (if (string-eq (string-trim s) "") default (string-trim s)))))
+
+(define (rb/page-labels)
+  "Label sheet page (Avery 94252 4-up): fills a sheet with copies of the label."
+  (seq
+    (let ((all (rb/param-default "names" ""))
+          (one (rb/param-default "name" "Traditional Root Beer")))
+      (let ((names (if (string-eq all "") (list one) (string-split all ","))))
+        (let ((cols (parse-int (rb/param-default "cols" "2")))
+              (rows (parse-int (rb/param-default "rows" "2")))
+              (sheets (parse-int (rb/param-default "sheets" "1")))
+              (batch (rb/param-default "batch" ""))
+              (cal (rb/param-default "cal" "")))
+          (bytes-response "text/html" "0"
+            (rb/label-sheet-html
+              names cols rows
+              (rb/param-default "w" "3in")
+              (rb/param-default "h" "4in")
+              (rb/param-default "x0" "1.25in")
+              (rb/param-default "y0" "1.5in")
+              sheets batch
+              (not (string-eq cal "")))))))))
 
 ;; ============================================================
 ;; BATCHES PAGE — /batches
@@ -1794,6 +1909,7 @@
 (route "/shopping" "rb/page-shopping")
 (route "/capital" "rb/page-capital")
 (route "/label" "rb/page-label")
+(route "/labels" "rb/page-labels")
 (route "/batches" "rb/page-batches")
 (route "/purchases" "rb/page-purchases")
 (route "/orders" "rb/page-orders")
