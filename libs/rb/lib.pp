@@ -1486,7 +1486,7 @@
     (cons "Ginger Bug Lemonade"
       (list "two-col" "Ginger Bug Lemonade" ""
         "Squeeze the Day"
-        "Real lemonade is old magic. Two centuries ago the punch houses made oleo saccharum — sugar massaged into lemon peels until the fruit surrenders its oils. That fragrant gold was the soul of any respectable punch, and it is the soul of ours. We build it the old way, then let the ginger bug liven the whole thing with its fine Wyoming fizz. Organic lemons, organic cane sugar, wild probiotics, and patience. Sunshine, saved up for a cloudy day. Shake gently; drink joyfully; share with someone thirsty."
+        "Real lemonade is a lost art. Two centuries ago the punch houses made oleo saccharum — sugar massaged into lemon peels until the fruit surrenders its oils. That fragrant gold was the soul of any respectable punch, and it is the soul of ours. We build it the old way, then let the ginger bug liven the whole thing with its fine Wyoming fizz. Organic lemons, organic cane sugar, wild probiotics, and patience. Sunshine, saved up for a cloudy day. Shake gently; drink joyfully; share with someone thirsty."
         rb/label-art-logo))))
 
 (define (rb/label-ingredients name)
