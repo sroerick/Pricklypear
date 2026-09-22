@@ -1431,17 +1431,258 @@
       "</div>")))
 
 ;; ============================================================
-;; LABEL SHEET — /labels — Avery Presta 94252 (4-up, 3in x 4in)
-;; Fills one letter sheet with 4 copies of the label, laid out for
-;; Avery 94252 die cuts: 2 cols x 2 rows, 3in x 4in cells, 1.25in
-;; side margins, 1.5in top margin (kept clear of the printer's
-;; unprintable band so full-bleed backgrounds survive).
+;; LABELS — /label + /labels — ported from the rb OCaml server
+;; (~/dev/wyo.tech/rb/src/server.ml label pages + data/labels/*.txt),
+;; laid out for Avery Presta 94252 (letter, 4 per sheet): die cut is
+;; 3in x 4in portrait cells, margins 1in all around, gutters 0.5in
+;; (across) x 1in (down) — measured from Avery's own blank template.
 ;;
-;; First print with any new stock: add &cal=1 — the cells print as
-;; dashed red boxes so you can hold the sheet to the light against
-;; the die cuts. Nudge with query params (persisted in the URL):
-;;   &x0=1.25in &y0=1.5in &w=3in &h=4in &cols=2 &rows=2 &sheets=1
+;; The designs are authored at their native 4in x 3in landscape and
+;; rotated 90deg into each die cell (same as Avery's app does).
+;; Obituary: the original rb/label-html simple parchment card (2026-09
+;; v1) is replaced by these ports of the real print designs.
+;;
+;; Nudge params on /labels (persisted in the URL):
+;;   x0= y0= w= h= gx= gy= cols= rows= sheets= rot=90|270
+;;   cal=1  — dashed calibration boxes to verify against die cuts
+;;   batch= date=  — batch number + bottling date on the labels
+;;
+;; Per-recipe art/copy lives in rb/label-specs below (port of the
+;; rb repo's data/labels/*.txt); edit there for new copy.
 ;; ============================================================
+
+;; bottle art (media id, uploaded 2026-09-21 from rb repo assets).
+(define rb/label-art-bottle "/media/0f37dec5-22d2-4a31-9595-e0fae2eb4ebd")
+
+;; happy art (media id, uploaded 2026-09-21 from rb repo assets).
+(define rb/label-art-happy "/media/58777bf7-9eea-4588-94e3-1dc353d412bf")
+
+;; logo art (media id, uploaded 2026-09-21 from rb repo assets).
+(define rb/label-art-logo "/media/01797c15-d526-48a4-b261-d60e55c3fc6d")
+
+(define (rb/label-tagline name)
+  "Per-recipe fallback tagline (port of rb tagline_for_recipe)."
+  (let ((n (string-downcase name)))
+    (cond
+      ((string-contains? n "traditional root beer") "It's Relaxing!")
+      ((string-contains? n "ginger ale") "Bright, sharp, alive.")
+      ((string-contains? n "simple root beer") "Old-school.")
+      (else ""))))
+
+;; Per-recipe label copy: (recipe-name . (style product sub tagline copy art)).
+;; Port of rb repo data/labels/*.txt; add new batches/recipes here.
+(define rb/label-specs
+  (list
+    (cons "Experimental Root Beer 004: 1896 edition"
+      (list "two-col" "Old Fashioned Root Beer" ""
+        "Just What The Doctor Ordered"
+        "Did you know you've never had real Root Beer? The United States government made real Root Beer illegal in 1960. Sassafras, a medicinal herb with a centuries long history of curing what ails you, was made illegal. But don't worry! Aspartame is just fine. Rork's is a delicious beverage fortified with traditional healing herbs. It's smooth and creamy, with a hint of those Real Deal Herbs. Drink once a day for detox effects, or before bedtime for a wonderful sleep."
+        rb/label-art-bottle))
+    (cons "Happy Ginger Ginger Beer"
+      (list "kawaii" "HAPPY" "GINGER"
+        "Put a Smile on Your Face"
+        "Rork's Happy Ginger Beer is filled with delicious Ginger Bug, powerful antioxidants, and soothing anti-inflammatories. One taste will leave you smiling from ear to ear. The ginger is spicy enough to linger on your tongue leaving you ready for another sip. And another. And another. These life-giving probiotics grow naturally in the Cody air. They're not freaky lab bacteria engineered by venture capitalists. We use Organic Cane Sugar, not (alleged) carcinogens like Aspartame. It's refreshing, delicious, and can't be used for birth control like Stevia (look it up). Enjoy over ice, flip flops and sunglasses optional."
+        rb/label-art-happy))))
+
+(define (rb/label-ingredients name)
+  "Ingredient names for a recipe, dot-joined (vintage style line)."
+  (let ((r (rb/find-recipe name)))
+    (if (null? r)
+        ""
+        (string-join
+          (rb/map (lambda (c) (rb/get "name" c))
+            (rb/ingredient-costs (rb/get "costs" r)))
+          " ·  "))))
+
+(define (rb/label-style-for name)
+  "Pick the label template: two-col / kawaii / vintage (port of dispatch)."
+  (let ((spec (rb/get name rb/label-specs)))
+    (if (null? spec)
+        (if (string-starts-with? (string-downcase name) "happy ginger")
+            "kawaii" "vintage")
+        (list-ref spec 0))))
+
+;; ---------- vintage (dark, centered, QR) — port of vintage_label_page
+
+(define (rb/vintage-label-html name batch date)
+  (let ((ing (rb/label-ingredients name))
+        (tg (rb/label-tagline name)))
+    (string-append
+      "<div class=\"l4x3 v-card\">"
+      "<div class=\"v-band\"><img class=\"v-logo\" src=\"" rb/label-art-logo "\" alt=\"Rork's\"><span class=\"v-brand\">Brewed in Wyoming</span></div>"
+      "<div class=\"v-name\">" (html-escape (string-upcase name)) "</div>"
+      (if (string-eq tg "") "" (string-append "<div class=\"v-tag\">" (html-escape tg) "</div>"))
+      "<div class=\"v-div\"><span class=\"v-ddiv\">\226\142\142  \226\142\142  \226\142\142</span></div>"
+      (if (string-eq ing "")
+          ""
+          (string-append "<div class=\"v-ing\">" (html-escape ing) "</div>"))
+      "<div class=\"v-brow\"><span>Batch #" (html-escape batch) "</span><span>" (html-escape (string-upcase date)) "</span></div>"
+      "<div class=\"v-bot\">"
+      (if (string-eq batch "")
+          "<div class=\"v-size\">500 mL</div>"
+          (string-append
+            "<div class=\"v-qr\"><img src=\"https://api.qrserver.com/v1/create-qr-code/?size=200x200&data="
+            (url-encode (string-append "https://wyo.town/rb/review/" batch))
+            "\" alt=\"Scan to review\"></div>"
+            "<div class=\"v-btext\"><div class=\"v-scan\">Scan to review</div><div class=\"v-refill\">Return for refill</div></div>"
+            "<div class=\"v-size\">500 mL</div>"))
+      "</div></div>")))
+
+;; ---------- two-col vintage — port of two_col_vintage_label_page
+
+(define (rb/twocol-label-html name batch date spec)
+  (let ((product (list-ref spec 1))
+        (sub (list-ref spec 2))
+        (tag (list-ref spec 3))
+        (copy (list-ref spec 4))
+        (art (list-ref spec 5)))
+    (string-append
+      "<div class=\"l4x3 t-card\">"
+      "<div class=\"t-tagline\">Brewed in Wyoming</div>"
+      "<div class=\"t-left\"><div>"
+      "<div class=\"t-brand\">Rork's</div>"
+      "<div class=\"t-name\">" (html-escape product) "</div>"
+      (if (string-eq sub "") "" (string-append "<div class=\"t-sub\">" (html-escape sub) "</div>"))
+      "<div class=\"t-jingle\">" (html-escape tag) "</div>"
+      "<div class=\"t-div\"></div>"
+      "<div class=\"t-copy\">" (html-escape copy) "</div>"
+      "</div>"
+      "<div class=\"t-meta\"><span>Batch #" (html-escape batch) "</span><span>" (html-escape (string-upcase date)) "</span></div>"
+      "</div>"
+      "<div class=\"t-right\">"
+      "<img class=\"t-art\" src=\"" art "\" alt=\"" (html-escape product) "\">"
+      "<div class=\"t-note\">Made in a home kitchen, not subject to inspection</div>"
+      "<span class=\"t-stamp\">500 mL</span>"
+      "</div></div>")))
+
+;; ---------- kawaii — port of happy_label_page
+
+(define (rb/kawaii-label-html name batch date spec)
+  (let ((product (list-ref spec 1))
+        (sub (list-ref spec 2))
+        (tag (list-ref spec 3))
+        (copy (list-ref spec 4))
+        (art (list-ref spec 5)))
+    (string-append
+      "<div class=\"l4x3 k-card\">"
+      "<div class=\"k-tagline\">Brewed in Wyoming</div>"
+      "<div class=\"k-left\"><div>"
+      "<div class=\"k-brand\">Rork's</div>"
+      "<div class=\"k-name\">" (html-escape product) "</div>"
+      (if (string-eq sub "") "" (string-append "<div class=\"k-sub\">" (html-escape sub) "</div>"))
+      "<div class=\"k-jingle\">" (html-escape tag) "</div>"
+      "<div class=\"k-div\"></div>"
+      "<div class=\"k-copy\">" (html-escape copy) "</div>"
+      "</div>"
+      "<div class=\"k-meta\"><span>Batch #" (html-escape batch) "</span><span>" (html-escape (string-upcase date)) "</span></div>"
+      "</div>"
+      "<div class=\"k-right\">"
+      "<img class=\"k-art\" src=\"" art "\" alt=\"" (html-escape product) "\">"
+      "<span class=\"k-stamp\">500 mL</span>"
+      "</div></div>")))
+
+(define (rb/label-card-html name batch date)
+  "One 4in x 3in label, dispatched to the right template."
+  (let ((spec (rb/get name rb/label-specs))
+        (b (if (null? batch) "" batch))
+        (dt (if (null? date) "" date)))
+    (cond
+      ((string-eq (rb/label-style-for name) "two-col")
+       (rb/twocol-label-html name b dt spec))
+      ((string-eq (rb/label-style-for name) "kawaii")
+       (rb/kawaii-label-html name b dt spec))
+      (else (rb/vintage-label-html name b dt)))))
+
+;; ---------- shared CSS (port of the three OCaml style blocks)
+
+(define (rb/label-css)
+  (string-append
+    "<link rel=\"preconnect\" href=\"https://fonts.googleapis.com\">"
+    "<link rel=\"preconnect\" href=\"https://fonts.gstatic.com\" crossorigin>"
+    "<link rel=\"stylesheet\" href=\"https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&family=IM+Fell+English:ital@0;1&family=IM+Fell+English+SC&family=Source+Serif+4:ital,wght@0,400;0,600;1,400&family=Fredoka:wght@500;700&family=Nunito:wght@600;800&display=swap\">"
+    "<style>"
+    "* { margin:0; padding:0; box-sizing:border-box; -webkit-print-color-adjust:exact; print-color-adjust:exact; }"
+    ".l4x3 { width:4in; height:3in; position:absolute; transform-origin:center; overflow:hidden; }"
+    ".lbot { border:1px dashed #999; }"
+    ;; ---- two-col vintage ----
+    ".t-card { background:#472619; color:#f5e6c8; font-family:'IM Fell English','IM Fell English SC',Georgia,serif;"
+    " padding:0.14in 0.16in; display:flex; flex-direction:row; align-items:stretch; gap:0.12in; position:relative; }"
+    ".t-card::before { content:\"\"; position:absolute; inset:0.06in; border:1px solid #8b6b3d; border-radius:3px; pointer-events:none; }"
+    ".t-card::after { content:\"\"; position:absolute; inset:0.09in; border:1px solid #5c4528; border-radius:2px; pointer-events:none; }"
+    ".t-left { flex:1; display:flex; flex-direction:column; justify-content:space-between; z-index:1; padding:0.02in 0; min-width:0; }"
+    ".t-brand { font-family:'IM Fell English SC','IM Fell English',serif; font-size:10pt; letter-spacing:0.16em; color:#c4a265; text-transform:uppercase; }"
+    ".t-tagline { font-family:'IM Fell English SC',serif; font-size:7.5pt; letter-spacing:0.12em; color:#8b6b3d; text-transform:uppercase;"
+    " position:absolute; top:0.18in; right:0.2in; z-index:2; }"
+    ".t-name { font-family:'Playfair Display',Georgia,serif; font-weight:900; font-size:12pt; color:#f5e6c8; line-height:1.05; margin-top:0.06in; }"
+    ".t-sub { font-family:'IM Fell English SC','IM Fell English',serif; font-size:14pt; letter-spacing:0.1em; color:#c4a265; margin-top:0.02in; }"
+    ".t-jingle { font-family:'IM Fell English',serif; font-style:italic; font-size:11pt; color:#c4a265; margin-top:0.05in; }"
+    ".t-div { height:1px; background:repeating-linear-gradient(to right,#8b6b3d 0,#8b6b3d 4px,transparent 4px,transparent 8px); margin:0.05in 0; }"
+    ".t-copy { font-family:'Source Serif 4','Source Serif Pro',Georgia,serif; font-weight:400; font-size:8.5pt; color:#e8dcc4; line-height:1.3; text-align:left; hyphens:auto; }"
+    ".t-meta { display:flex; justify-content:space-between; align-items:baseline; font-family:'IM Fell English SC',serif; font-size:9pt; color:#c4a265; letter-spacing:0.08em; text-transform:uppercase; }"
+    ".t-right { flex:0 0 1.2in; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:0.06in; z-index:1; position:relative; }"
+    ".t-art { max-height:1.85in; max-width:100%; width:auto; height:auto; object-fit:contain; border-radius:4px; }"
+    ".t-note { font-family:'Source Serif 4',Georgia,serif; font-size:5.5pt; line-height:1.2; color:#d4b994; text-align:center; max-width:1.15in; }"
+    ".t-stamp { font-family:'Playfair Display',serif; font-weight:700; font-size:9pt; color:#f5e6c8; background:#3a1f14; border:1px solid #8b6b3d; border-radius:999px; padding:0.03in 0.1in; }"
+    ;; ---- kawaii ----
+    ".k-card { background:#fdf8ef; color:#3b2210; font-family:'Nunito',system-ui,sans-serif;"
+    " padding:0.18in 0.2in; display:flex; flex-direction:row; align-items:stretch; gap:0.18in; position:relative; }"
+    ".k-card::before { content:\"\"; position:absolute; inset:0.08in; border:2.5px solid #f2a820; border-radius:14px; pointer-events:none; }"
+    ".k-card::after { content:\"\"; position:absolute; inset:0.12in; border:1px dashed #d95020; border-radius:10px; pointer-events:none; }"
+    ".k-left { flex:1; display:flex; flex-direction:column; justify-content:space-between; z-index:1; padding:0.05in 0; min-width:0; }"
+    ".k-brand { font-family:'Fredoka',sans-serif; font-weight:700; font-size:8pt; letter-spacing:0.1em; color:#d95020; text-transform:uppercase; }"
+    ".k-tagline { font-family:'Nunito',sans-serif; font-weight:600; font-size:6pt; letter-spacing:0.15em; color:#8b6b3d; text-transform:uppercase;"
+    " position:absolute; top:0.18in; right:0.2in; z-index:2; }"
+    ".k-name { font-family:'Fredoka',sans-serif; font-weight:700; font-size:19pt; color:#d95020; line-height:1.02; margin-top:0.1in; }"
+    ".k-sub { font-family:'Fredoka',sans-serif; font-weight:500; font-size:13pt; color:#f2a820; margin-top:0.02in; }"
+    ".k-jingle { font-family:'Nunito',sans-serif; font-weight:800; font-style:italic; font-size:8.5pt; color:#4a8c3f; margin-top:0.08in; }"
+    ".k-div { height:1px; background:repeating-linear-gradient(to right,#d95020 0,#d95020 4px,transparent 4px,transparent 8px); margin:0.08in 0; }"
+    ".k-copy { font-family:'Nunito',sans-serif; font-weight:600; font-size:5pt; color:#5a4030; line-height:1.32; text-align:justify; }"
+    ".k-meta { display:flex; justify-content:space-between; align-items:baseline; font-family:'Nunito',sans-serif; font-weight:800; font-size:7pt; color:#d95020; letter-spacing:0.08em; text-transform:uppercase; }"
+    ".k-right { flex:0 0 1.2in; display:flex; flex-direction:column; align-items:center; justify-content:center; z-index:1; position:relative; }"
+    ".k-art { max-height:2.4in; max-width:100%; width:auto; height:auto; object-fit:contain; }"
+    ".k-stamp { position:absolute; bottom:-0.02in; right:0; font-family:'Fredoka',sans-serif; font-weight:700; font-size:9pt; color:#d95020; background:#fff7db; border:1.5px solid #f2a820; border-radius:999px; padding:0.04in 0.14in; }"
+    ;; ---- vintage ----
+    ".v-card { background:#2b1d12; color:#f5e6c8; font-family:'IM Fell English','IM Fell English SC',Georgia,serif;"
+    " padding:0.16in 0.2in; display:flex; flex-direction:column; justify-content:space-between; position:relative; }"
+    ".v-card::before { content:\"\"; position:absolute; inset:0.07in; border:1px solid #8b6b3d; border-radius:3px; pointer-events:none; }"
+    ".v-card::after { content:\"\"; position:absolute; inset:0.1in; border:1px solid #5c4528; border-radius:2px; pointer-events:none; }"
+    ".v-band { display:flex; align-items:center; justify-content:center; gap:0.12in; margin-top:0.05in; z-index:1; }"
+    ".v-logo { height:0.5in; width:auto; }"
+    ".v-brand { font-family:'IM Fell English SC','IM Fell English',serif; font-size:8pt; letter-spacing:0.18em; color:#c4a265; text-transform:uppercase; }"
+    ".v-name { text-align:center; font-family:'Playfair Display',Georgia,serif; font-weight:900; font-size:15pt; color:#f5e6c8; line-height:1.05; margin-top:0.06in; z-index:1; padding:0 0.08in; }"
+    ".v-tag { text-align:center; font-family:'IM Fell English',serif; font-style:italic; font-size:9pt; color:#c4a265; margin-top:0.05in; z-index:1; }"
+    ".v-div { display:flex; align-items:center; justify-content:center; gap:0.06in; margin:0.06in 0.1in; z-index:1; }"
+    ".v-div::before, .v-div::after { content:\"\"; flex:1; height:1px; background:#8b6b3d; }"
+    ".v-ddiv { color:#8b6b3d; font-size:7pt; letter-spacing:0.3em; }"
+    ".v-brow { display:flex; justify-content:space-between; align-items:baseline; font-family:'IM Fell English SC',serif; font-size:7.5pt; color:#c4a265; letter-spacing:0.1em; text-transform:uppercase; padding:0 0.05in; z-index:1; }"
+    ".v-ing { text-align:center; font-family:'IM Fell English',serif; font-style:italic; font-size:7pt; color:#d4b994; line-height:1.25; padding:0 0.12in; z-index:1; }"
+    ".v-bot { display:flex; align-items:center; justify-content:space-between; gap:0.1in; z-index:1; padding:0 0.06in; }"
+    ".v-qr { padding:3px; background:#f5e6c8; border:1px solid #8b6b3d; border-radius:2px; }"
+    ".v-qr img { display:block; width:0.55in; height:0.55in; }"
+    ".v-btext { flex:1; text-align:right; }"
+    ".v-scan { font-family:'IM Fell English SC',serif; font-size:6.5pt; color:#c4a265; letter-spacing:0.12em; text-transform:uppercase; }"
+    ".v-refill { font-family:'IM Fell English',serif; font-style:italic; font-size:6pt; color:#8b6b3d; margin-top:0.02in; }"
+    ".v-size { font-family:'Playfair Display',serif; font-weight:700; font-size:9pt; color:#f5e6c8; }"
+    "</style>"))
+
+(define (rb/label-sheet-css cols rows w h x0 y0 gx gy rot cal?)
+  (string-append
+    (rb/label-css)
+    "<style>"
+    "@page { size:letter portrait; margin:0; }"
+    "body { margin:0; background:#e8e4da; }"
+    ".ppsheet { display:grid; grid-template-columns:repeat(" (str cols) "," w ");"
+    " grid-auto-rows:" h "; column-gap:" gx "; row-gap:" gy ";"
+    " padding:" y0 " " x0 "; background:#fff; }"
+    ".ppcell { width:" w "; height:" h "; position:relative; overflow:hidden; }"
+    ".l4x3 { left:calc(50% - 2in); top:calc(50% - 1.5in); }"
+    ".l4x3.rot { transform:rotate(" rot "deg); }"
+    ".ppcal { outline:2px dashed #d00; }"
+    ".ppbar { font-family:monospace; font-size:12px; padding:10px 14px; background:#222; color:#eee; }"
+    ".ppbar b { color:#ffd; } .ppbar button { font-size:14px; padding:6px 18px; cursor:pointer; }"
+    "@media print { .ppbar { display:none } .ppsheet { page-break-after:always; box-shadow:none; }"
+    " .ppsheet:last-child { page-break-after:auto; } body { background:#fff } }"
+    "</style>"))
 
 (define (rb/label-cells names n)
   "First n label names, cycling names until filled."
@@ -1452,74 +1693,41 @@
           (cons (car names)
                 (rb/label-cells (append (cdr names) (list (car names))) (- n 1))))))
 
-(define (rb/label-cell name batch cal?)
-  "One 3in x 4in label cell (dashed calibration box when cal?)."
+(define (rb/label-cell-html name batch date rot cal?)
+  "One die cell holding the rotated 4x3 label design."
   (string-append
-    "<div class=\"lbl"
-    (if cal? " lbl-cal" "")
-    "\"><div class=\"lbl-top\"><div class=\"lbl-name\">"
-    (html-escape name)
-    "</div><div class=\"lbl-tag\">Ginger bug soda — handcrafted in Wyoming</div></div>"
-    (if cal?
-        ""
-        (string-append
-          "<div class=\"lbl-body\">Brewed from real ginger bug starter — "
-          "never artificial flavoring.<br>Ingredients: filtered water, cane sugar, ginger, lemon, live cultures.<br> "
-          "Refrigerate. Keep the culture alive.<br>"
-          (if (string-eq batch "")
-              ""
-              (string-append "Batch #" (html-escape batch) "<br>"))
-          "</div>"))
-    "<div class=\"lbl-law\">Not licensed or inspected per Wyo. Stat. 35-10-301<br>Pricklypear Soda Co.</div></div>"))
+    "<div class=\"ppcell" (if cal? " ppcal" "") "\">"
+    "<div class=\"l4x3"
+    (if (string-eq rot "0") "" " rot")
+    "\">"
+    (rb/label-card-html (string-trim name) batch date)
+    "</div></div>"))
 
-(define (rb/label-sheet-html names cols rows w h x0 y0 sheets batch cal?)
+(define (rb/label-sheet-html names cols rows w h x0 y0 gx gy rot sheets batch date cal?)
   "One or more letter sheets of 4-up labels, print-ready at 100% scale."
   (string-append
-    "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Label sheet — Avery 94252</title>"
-    "<style>"
-    "@page{size:letter portrait;margin:0}"
-    "*{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}"
-    "body{margin:0;background:#8888;}"
-    ".ppsheet{display:grid;grid-template-columns:repeat(" (str cols) "," w ");"
-    "grid-auto-rows:" h ";padding:" y0 " " x0 ";background:#fff;}"
-    ".lbl{width:" w ";height:" h ";border:2px solid #8B4513;border-radius:12px;"
-    "background:linear-gradient(160deg,#f7ecd9,#eed7b4);color:#5C3317;"
-    "display:flex;flex-direction:column;justify-content:space-between;"
-    "padding:18px 20px;font-family:Georgia,'Times New Roman',serif;}"
-    ".lbl-cal{border:2px dashed #d00;border-radius:12px;background:transparent;}"
-    ".lbl-name{font-size:20pt;font-weight:700;letter-spacing:1px;text-align:center;"
-    "margin:6px 0 2px;text-transform:uppercase;}"
-    ".lbl-tag{font-size:9pt;font-style:italic;text-align:center;color:#8B4513;}"
-    ".lbl-rule{border-top:1px solid #B08D5F;margin:8px 24px;}"
-    ".lbl-body{font-size:9pt;text-align:center;line-height:1.6;}"
-    ".lbl-law{font-size:6.5pt;text-align:center;color:#8B4513;line-height:1.4;}"
-    ".ppbar{font-family:monospace;font-size:12px;padding:10px 14px;background:#222;color:#eee;}"
-    ".ppbar b{color:#ffd;} .ppbar button{font-size:14px;padding:6px 18px;cursor:pointer;}"
-    "@media print{.ppbar{display:none} .ppsheet{box-shadow:none} body{background:#fff}"
-    ".ppsheet{page-break-after:always;} .ppsheet:last-child{page-break-after:auto;}}"
-    "</style></head><body>"
-    "<div class=\"ppbar\">Avery Presta 94252 — 4-up 3&times;4in — print dialog: <b>Margins: None · Scale: 100%</b> · Background graphics: <b>ON</b>. "
-    "Calibration: <b>&cal=1</b> · nudge: <b>&x0= &y0= &w= &h= &cols= &rows= &sheets=</b> · "
+    "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Label sheet — Avery Presta 94252 (4-up)</title>"
+    (rb/label-sheet-css cols rows w h x0 y0 gx gy rot cal?)
+    "</head><body>"
+    "<div class=\"ppbar\">Avery Presta 94252 — 4 per sheet (3&times;4in cells, 1in margins, "
+    "0.5in/1in gutters, designs rotated 90&deg;) — print dialog: <b>Margins: None &middot; Scale: 100%</b>, Background graphics: <b>ON</b>. "
+    "Calibration: <b>&cal=1</b> &middot; nudge: <b>&x0= &y0= &gx= &gy= &w= &h= &cols= &rows= &rot= &sheets=</b> &middot; "
     "<button onclick=\"window.print()\">Print</button></div>"
     (string-join
       (rb/map (lambda (ig)
         (string-append
           "<div class=\"ppsheet\">"
-          (string-join (rb/map (lambda (n) (rb/label-cell (string-trim n) batch cal?)) (rb/label-cells names (* cols rows))) "")
+          (string-join
+            (rb/map (lambda (nm) (rb/label-cell-html nm batch date rot cal?))
+              (rb/label-cells names (* cols rows)))
+            "")
           "</div>"))
         (rb/label-cells (list "x") sheets))
       "")
     "</body></html>"))
 
-(define (rb/param-default name default)
-  "Request param name as trimmed string, or default when missing/empty."
-  (let ((s (request-param name)))
-    (if (null? s)
-        default
-        (if (string-eq (string-trim s) "") default (string-trim s)))))
-
 (define (rb/page-labels)
-  "Label sheet page (Avery 94252 4-up): fills a sheet with copies of the label."
+  "Label sheet page (Avery Presta 94252): fills sheets with print labels."
   (seq
     (let ((all (rb/param-default "names" ""))
           (one (rb/param-default "name" "Traditional Root Beer")))
@@ -1528,16 +1736,45 @@
               (rows (parse-int (rb/param-default "rows" "2")))
               (sheets (parse-int (rb/param-default "sheets" "1")))
               (batch (rb/param-default "batch" ""))
+              (date (rb/param-default "date" ""))
+              (rot (rb/param-default "rot" "90"))
               (cal (rb/param-default "cal" "")))
           (bytes-response "text/html" "0"
             (rb/label-sheet-html
               names cols rows
               (rb/param-default "w" "3in")
               (rb/param-default "h" "4in")
-              (rb/param-default "x0" "1.25in")
-              (rb/param-default "y0" "1.5in")
-              sheets batch
+              (rb/param-default "x0" "1in")
+              (rb/param-default "y0" "1in")
+              (rb/param-default "gx" "0.5in")
+              (rb/param-default "gy" "1in")
+              rot sheets batch date
               (not (string-eq cal "")))))))))
+
+(define (rb/label-page-html name batch date)
+  "Single-label page: the naked 4x3in design (print = one label)."
+  (string-append
+    "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Label — Batch #" (html-escape batch) "</title>"
+    (rb/label-css)
+    "<style>@page { margin:0; size:4in 3in; } body { margin:0; } .l4x3 { left:0; top:0; }"
+    ".v-card, .t-card, .k-card { width:4in; height:3in; }"
+    "@media print { .lbot { border:none } }</style></head><body>"
+    (rb/label-card-html (string-trim name) batch date)
+    "</body></html>"))
+
+(define (rb/page-label)
+  "Label page: prints one 4x3in label, dialed to the design templates."
+  (seq
+    (let ((name (rb/param-default "name" ""))
+          (batch (rb/param-default "batch" ""))
+          (date (rb/param-default "date" "")))
+      (if (string-eq name "")
+          (html/page (list (rb/h1 "Label: pass ?name=recipe")))
+        (let ((r (rb/find-recipe name)))
+          (if (null? r)
+              (html/page (list (rb/h1 "Recipe not found")))
+            (bytes-response "text/html" "0"
+              (rb/label-page-html name batch date))))))))
 
 ;; ============================================================
 ;; BATCHES PAGE — /batches
