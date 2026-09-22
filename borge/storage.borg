@@ -405,6 +405,111 @@
          - Dedup-by-sha256 on put (index exists; policy later)
    |))
    )
+
+  (subsection file-lens
+   (doc "Personal file sync: path-addressed envelopes OVER the blob store (dropbox-shaped, habitat-shaped)")
+   (status implemented)
+   (implements image/lib/media.ml image/lib/http_media.ml image/lib/http.ml
+               scripts/pp_files.py)
+   (details
+    (doc (|
+         THE QUESTION: "what if I want to sync all my files a la
+         dropbox?" The habitat already ships the two halves —
+         media_blobs (bytes, sha256, author-owned, range-serving) and
+         the local-first lens (path-addressed nodes, three-way sync on
+         (branch, generation)). DIFFBOX (files) is the composition:
+         a blob holds the bytes; a DATUM ROW holds the path. No new
+         storage engine, no new table — the row IS the path index the
+         sync manifests key on.
+
+         DATA MODEL (two layers, one closure)
+         ------------------------------------
+         - BYTES stay in media_blobs (storage.media, unchanged
+           shape). The files flavor adds exactly one allowed type:
+           application/octet-stream — the "anything" carrier. text/html
+           stays DENIED (stored-XSS on inline serving); octet-stream is
+           served as application/octet-stream and cannot execute. The
+           files ceiling matches audio: 64 MiB per request (TOAST
+           compresses; chunked/resumable upload stays PLANNED — GB
+           files wait for the chunk endpoint, never the eval path).
+         - PATHS are datum rows of type FILE. A row body envelope:
+             { "path"           : "docs/book/src/ch1.md"
+             , "blob-id"        : "<media_blobs uuid>"
+             , "sha256"         : "<hex>"
+             , "size"           : "12345"
+             , "mtime"          : "<unix secs>"
+             , "content-type"   : "application/octet-stream"
+             }
+           Row paths are author-relative (no leading /, no .., root is
+           the sync root). The author column + RLS datum confinement
+           IS the per-user filespace: data.u.<user>.file/<uuid> rides
+           the standard replication unit — every lens gets file rows
+           with no new sync machinery.
+
+         The type is declared lazily by the FIRST client on the branch
+         ((deftype 'file 'path 'blob-id 'sha256 'size 'mtime
+         'content-type)); rows are free-form when undeclared, but the
+         client declares so create/update fail loudly on missing
+         fields rather than half-write envelopes.
+
+         DEDUP: GET /api/media/by-sha256/<hex> (auth; confined to the
+         caller's own blobs via the same visible_sql predicate —
+         another user's blob is neither visible nor reusable, the
+         author column is the filespace wall). 200 = { ok, id, ... }
+         (client reuses the blob); 404 = push it. The client hashes
+         BEFORE uploading — no change, no bytes on the wire — and
+         records blob-id in the local state sidecar.
+
+         CLIENT: scripts/pp_files.py (same env as pp_media.py:
+         PP_URL / PP_USER / PP_PASS / PP_PASS_FILE)
+
+           python3 scripts/pp_files.py init <root>            # declare 'file type + write state sidecar
+           python3 scripts/pp_files.py push  <root>           # hash -> dedup-get -> blob-put -> upsert rows
+           python3 scripts/pp_files.py pull  <root>           # rows -> fetch missing/stale blobs -> materialize
+           python3 scripts/pp_files.py status <root>          # dry: push/pull/conflict counts and names
+
+         State sidecar is <root>/.ppfiles.json: {"path-blob-id",
+         "path-sha256", "path-size", "path-mtime"} — the CLIENT's
+         last-synced map. It is client bookkeeping, never authority.
+
+         CONFLICT POLICY (v0 — per-PATH, keep-both-coward, boring on
+         purpose — local-first.sync-conflicts generalized per file)
+           - push with local mtime newer than server row: last-writer
+             wins, row updated (the envelope is the version coordinate
+             — mtime + sha256, not a fresh vector clock).
+           - push with server row NEWER than local: --force overwrites,
+             otherwise SKIP and report (status/push name the path).
+           - pull onto a locally-changed file (local sha != state AND
+             != server sha): the file STAYS, server bytes land beside
+             it as <path>.ppconflict-<timestamp>. Never silent loss.
+           - deletes: removing a local file pushes a TOMBLESS delete —
+             the row is deleted (author-owned delete prim); the blob is
+             RETAINED (dedup + accident recovery). Blob GC is a
+             non-goal until measured.
+
+         NON-GOALS (v0 — deliberately)
+         -----------------------------
+         - Chunked / resumable upload: >64 MiB files are out of scope
+           until the chunk endpoint exists. Never /api/eval (64 KiB).
+         - Blob GC / quotas (media non-goals inherit).
+         - Live watching (inotify) — push/pull/status are commands;
+           a watcher is a cron/systemd unit around the same verbs.
+         - Symlinks, exec bits, hardlinks: regular files only. Git
+           tracks content, not mode metadata — same contract here.
+         - End-to-end encryption, public sharing links, folders-as-
+           rows. The path field IS the folder structure.
+         - Multi-machine REAL-TIME (dropbox instant sync). The habitat
+           is sync-on-demand; sync-loop wrappers can tighten it.
+   |))
+   )
+   (verify
+    (build "dune build @all")
+    (test "image/test/media_test.ml — octet-stream allowed (files flavor), text/html still denied, files ceiling = audio = 64 MiB")
+    (smoke "scripts/dev.sh up; POST /api/media content-type application/octet-stream stores arbitrary bytes; GET /media/<id> round-trips sha256")
+    (smoke "GET /api/media/by-sha256/<hex> returns 200 + id on a known blob, 404 on unknown, 401 unauth, and never answers another user's blob")
+    (smoke "pp_files.py init; push a mixed dir (text + binary); pull into an EMPTY dir — byte-identical trees (cmp)")
+    (smoke "change two files on both sides, pull: changed one updates, conflicted one keeps both sides (<path>.ppconflict-<stamp>)")
+    (smoke "delete a local file + push: the server row is gone (apply), the blob id remains listable (retention non-goal documented)"))
    (verify
     (build "dune build @all")
     (test "image/test/media_test.ml — put/meta/list/delete + mime reject")

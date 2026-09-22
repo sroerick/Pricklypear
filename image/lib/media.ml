@@ -42,6 +42,10 @@ let allowed_content_types =
   ; "audio/mp4" (* .m4a / aac in mp4 *)
   ; "audio/aac" (* raw ADTS .aac *)
   ; "audio/webm" (* opus in webm (browser recordings) *)
+  ; "application/octet-stream" (* files-lens v0: the "anything" suitcase —
+       arbitrary personal files sync via pp_files.py. text/html stays
+       denied (stored-XSS on inline serving); octet-stream has no active
+       content, GET /media serves it inert as a browser download. *)
   ]
 
 (* Friendly aliases normalized to a canonical whitelisted type on
@@ -73,9 +77,17 @@ let content_type_allowed (ct : string) : bool =
 let is_audio_content_type (ct : string) : bool =
   String.starts_with ~prefix:"audio/" (normalize_content_type ct)
 
-(* Type-aware upload ceiling: music files get the big one. *)
+let is_files_content_type (ct : string) : bool =
+  normalize_content_type ct = "application/octet-stream"
+
+(* Type-aware upload ceiling: music files get the big one; the files
+   flavor rides the same ceiling (64 MiB — chunked upload stays a
+   non-goal until the chunk endpoint exists, storage.files-file-lens). *)
 let max_http_bytes_for (ct : string) : int =
-  if is_audio_content_type ct then max_http_audio_bytes else max_http_bytes
+  if
+    is_audio_content_type ct || is_files_content_type ct
+  then max_http_audio_bytes
+  else max_http_bytes
 
 let sanitize_filename (name : string option) : string option =
   match name with
@@ -323,6 +335,46 @@ let get_meta (store : Store.t) ~(id : string)
           | [] -> None
     with _ ->
       None)
+
+(** (files-lens) sha256 dedup lookup: newest blob with this digest,
+    author-confined via the same visible_sql predicate. The file-lens
+    client hashes LOCALLY first and calls this BEFORE uploading — no
+    change, zero bytes on the wire. 404 (None) = push it. Not exposed
+    as a Lisp prim (bulk-adjacent; HTTP edge only). *)
+let get_meta_by_sha256
+    (store : Store.t) ~(sha256 : string)
+    ~(visible_to : (string * bool) option) () : meta option =
+  match Io_db.Db.current_conn store with
+  | None -> None
+  | Some conn ->
+      let sql, params =
+        match visible_to with
+        | Some (actor, is_admin) ->
+            ( "SELECT id::text, author, content_type, \
+               NULLIF(filename, ''), byte_size::text, sha256, meta::text, \
+               created_at::text \
+               FROM media_blobs WHERE sha256 = $1 AND "
+              ^ visible_sql ~is_admin ~actor_param:3
+              ^ " ORDER BY created_at DESC LIMIT 1"
+            , if is_admin then [ Pgx.Value.of_string sha256 ]
+              else
+                [ Pgx.Value.of_string sha256; Pgx.Value.of_string actor ] )
+        | None ->
+            ( "SELECT id::text, author, content_type, \
+               NULLIF(filename, ''), byte_size::text, sha256, meta::text, \
+               created_at::text \
+               FROM media_blobs WHERE sha256 = $1 \
+               ORDER BY created_at DESC LIMIT 1"
+            , [ Pgx.Value.of_string sha256 ] )
+      in
+      (try
+        let rows =
+          Store_db.exec conn ~params sql
+        in
+        match rows with
+        | row :: _ -> row_to_meta row
+        | [] -> None
+      with _ -> None)
 
 let get_bytes (store : Store.t) ~(id : string)
   ?(visible_to : (string * bool) option) () : (meta * string) option =

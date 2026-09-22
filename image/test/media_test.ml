@@ -8,8 +8,12 @@ let test_normalize_and_whitelist () =
     (Pricklypear_image_lib.Media.content_type_allowed "image/jpeg; charset=binary");
   check bool "pdf ok" true
     (Pricklypear_image_lib.Media.content_type_allowed "application/pdf");
-  check bool "octet denied" false
+  (* files-lens v0 (storage.files-file-lens): octet-stream is the files
+     carrier — allowed, served inert; html still denied (stored-XSS). *)
+  check bool "octet allowed (files flavor)" true
     (Pricklypear_image_lib.Media.content_type_allowed "application/octet-stream");
+  check bool "octet normalized from upper" true
+    (Pricklypear_image_lib.Media.content_type_allowed "APPLICATION/OCTET-STREAM; param=1");
   check bool "html denied" false
     (Pricklypear_image_lib.Media.content_type_allowed "text/html");
   check string "normalize strips params" "image/png"
@@ -151,7 +155,9 @@ let test_caps () =
   check int "pdf cap 5MiB" (5 * 1024 * 1024)
     (max_http_bytes_for "application/pdf");
   check int "audio cap 64MiB" (64 * 1024 * 1024)
-    (max_http_bytes_for "audio/mpeg")
+    (max_http_bytes_for "audio/mpeg");
+  check int "files cap 64MiB" (64 * 1024 * 1024)
+    (max_http_bytes_for "application/octet-stream")
 
 let test_parse_range () =
   let open Pricklypear_image_lib.Http_media in
