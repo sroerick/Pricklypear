@@ -1041,6 +1041,10 @@ let routes : route list =
     rt "api-media-list" [ `GET ] (Exact "/api/media")
       (fun env ->
         launch env (fun session -> api_media_list session env.reqd ~target:env.target));
+    rt "api-media-by-sha-hex" [ `GET ] (Prefix_nonempty "/api/media/by-sha256/")
+      (fun env ->
+        let sha256 = prefix_rest "/api/media/by-sha256/" env.path in
+        launch env (fun session -> api_media_by_sha session env.reqd ~sha256));
     rt "api-media-delete" [ `DELETE ] (Prefix_nonempty "/api/media/")
       (fun env ->
         let id = prefix_rest "/api/media/" env.path in

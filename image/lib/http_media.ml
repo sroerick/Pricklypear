@@ -252,6 +252,47 @@ let api_media_list (session : Session.t) (reqd : Httpun.Reqd.t)
         (`Assoc [ ("ok", `Bool true); ("items", `List items) ]);
       ()
 
+(* files-lens dedup probe (storage.files-file-lens): GET
+   /api/media/by-sha256/<hex> — 200 {ok,id,...} | 404 | 401. The hex is
+   length-checked (64) before it touches a uuid-shaped query param
+   (this lookup keys sha256, not id, so no uuid cast to dodge). *)
+let api_media_by_sha (session : Session.t) (reqd : Httpun.Reqd.t)
+    ~(sha256 : string) : unit =
+  match require_authed_user session with
+  | Error () ->
+      unauthorized_api reqd;
+      ()
+  | Ok (actor, is_admin) ->
+      let sha = String.lowercase_ascii (String.trim sha256) in
+      let valid =
+        String.length sha = 64
+        && String.for_all
+             (function
+               | '0' .. '9' | 'a' .. 'f' -> true
+               | _ -> false)
+             sha
+      in
+      if not valid then
+        not_found_json reqd "no blob with that sha256"
+      else
+        let got =
+          Media.get_meta_by_sha256 (Session.store session) ~sha256:sha
+            ~visible_to:(Some (actor, is_admin)) ()
+        in
+        (match got with
+         | None -> not_found_json reqd "no blob with that sha256"
+         | Some m ->
+             json_response reqd
+               (`Assoc
+                 [ ("ok", `Bool true)
+                 ; ("id", `String m.id)
+                 ; ("content_type", `String m.content_type)
+                 ; ("byte_size", `Int m.byte_size)
+                 ; ("sha256", `String m.sha256)
+                 ; ("url", `String (Media.url_of_id m.id))
+                 ]);
+             ())
+
 let api_media_delete (session : Session.t) (reqd : Httpun.Reqd.t)
     ~(id : string) : unit =
   match require_authed_user session with
@@ -502,7 +543,7 @@ let media_page (session : Session.t) (reqd : Httpun.Reqd.t)
         HTML.div [HTML.class_ "card"] [
           HTML.h2 [] [txt "Upload"];
           HTML.p [HTML.class_ "meta"] [
-            txt "Images and PDF, max 5 MiB. Allowed: %s." allowed;
+            txt "Max 5 MiB for images/PDF; 64 MiB for audio and files. Allowed: %s." allowed;
           ];
           HTML.form
             [ HTML.method_ `POST
@@ -524,8 +565,10 @@ let media_page (session : Session.t) (reqd : Httpun.Reqd.t)
             HTML.button [HTML.type_ "submit"] [txt "Upload"];
           ];
           HTML.p [HTML.class_ "meta"] [
-            txt "Agents: POST /api/media (raw or JSON) or ";
+            txt "Agents: POST /api/media (raw or JSON), ";
             HTML.code [] [txt "scripts/pp_media.py put ./shot.png"];
+            txt ", or whole-directory file sync: ";
+            HTML.code [] [txt "scripts/pp_files.py push ~/ppfiles"];
             txt ".";
           ];
         ]
