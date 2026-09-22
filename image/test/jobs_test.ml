@@ -582,6 +582,45 @@ let test_schedule_crud () =
           let _ = conn in
           ignore (S.exec conn "DELETE FROM schedules"))
 
+let test_impossible_cron_disables () =
+  with_store (fun store ->
+      match S.conn_of store with
+      | None -> ()
+      | Some conn ->
+        ignore (S.exec conn "DELETE FROM schedules");
+        (* i-1789100668: a stuck row the way 09-14 prod had it: enabled,
+           due (next_run in the past), spec parses but never matches. *)
+        ignore (S.exec conn
+                  "INSERT INTO schedules (name, fn, args, branch, submitted_by, \
+                   cron, every_ms, next_run, enabled) \
+                   VALUES ('pp-test-impossible','jfn','{}','system/main','t',\
+                   '0 0 30 2 *',NULL,0,true)");
+        (match J.claim_due_schedule ~store with
+         | Some sch ->
+             Alcotest.(check string) "impossible row is due"
+               "pp-test-impossible" sch.J.s_name;
+             (* pre-fix: advance rescheduled +60s -> refired every minute.
+                post-fix: no next match -> the schedule is disabled. *)
+             J.advance_schedule ~store ~name:sch.J.s_name
+               ~fired_at:(now_ms ())
+               ~cron:sch.J.s_cron ~every_ms:sch.J.s_every_ms;
+             (match J.claim_due_schedule ~store with
+              | Some _ ->
+                  Alcotest.fail "impossible cron still due after advance"
+              | None -> ());
+             (match J.list_schedules ~store () with
+              | Pricklypear_lisp.Ast.VList l ->
+                  Alcotest.(check bool) "schedule disabled" true
+                    (List.exists
+                       (function
+                         | Pricklypear_lisp.Ast.VStr s ->
+                             contains_sub s "\"enabled\":false"
+                         | _ -> false)
+                       l)
+              | _ -> Alcotest.fail "list_schedules returned non-list")
+         | None -> Alcotest.fail "impossible schedule not claimed");
+        ignore (S.exec conn "DELETE FROM schedules"))
+
 let test_eval_src_args () =
   (* numeric arg: stored jsonb '1' -> (f 1) — the 4.1 args-bug regression *)
   Alcotest.(check string) "numeric arg splices bare"
@@ -753,6 +792,8 @@ let () =
             test_every_ms_drift
         ; Alcotest.test_case "cron across-month boundary" `Quick
             test_cron_across_month
-        ; Alcotest.test_case "schedule CRUD + claim/advance/disable" `Quick
-            test_schedule_crud ] )
+          ; Alcotest.test_case "schedule CRUD + claim/advance/disable" `Quick
+              test_schedule_crud
+          ; Alcotest.test_case "impossible cron disables on advance" `Quick
+              test_impossible_cron_disables ] )
     ]
