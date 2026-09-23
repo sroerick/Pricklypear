@@ -154,6 +154,67 @@ let checks = [
     let hs = Effect.txn_lint e in
     Alcotest.(check bool) "s4u hint" true
       (List.exists (contains ~sub:"select-for-update") hs));
+  (* bumpers M2 (borge/bumpers.borg notices-envelope): define-notices *)
+  ("define_notices pure quiet define", `Quick, fun () ->
+    (* well-formed, doc'd, pure: exactly ONE notice (the define kind) *)
+    let ns =
+      Effect.define_notices ~name:"add" ~doc:(Some "adds two") (Reader.read_one "(lambda (a b) (+ a b))")
+    in
+    Alcotest.(check int) "one notice" 1 (List.length ns);
+    (match ns with
+     | [ n ] ->
+         Alcotest.(check string) "kind" "define" n.kind;
+         Alcotest.(check string) "name" "add" n.name;
+         Alcotest.(check string) "effects" "pure"
+           (Option.value n.effects ~default:"");
+         Alcotest.(check bool) "no bench on a quiet define" false
+           (contains ~sub:"bench" n.text)
+     | _ -> Alcotest.fail "expected exactly one notice"));
+  ("define_notices effects badge text", `Quick, fun () ->
+    let ns =
+      Effect.define_notices ~name:"save" ~doc:(Some "d") (Reader.read_one "(lambda (j) (create 'note j))")
+    in
+    (match ns with
+     | [ n ] ->
+         Alcotest.(check string) "effects badge" "db-write"
+           (Option.value n.effects ~default:"") ;
+         Alcotest.(check bool) "bench pointer rides the define kind" true
+           (contains ~sub:"bench" n.text);
+         Alcotest.(check bool) "timing pointer" true
+           (contains ~sub:"/timing" n.text)
+     | _ -> Alcotest.fail "expected one define notice"));
+  ("define_notices missing docstring tip", `Quick, fun () ->
+    let ns =
+      Effect.define_notices ~name:"save" ~doc:None (Reader.read_one "(lambda (j) (+ 1 j))")
+    in
+    Alcotest.(check int) "two notices" 2 (List.length ns);
+    (match ns with
+     | [ d; t ] ->
+         Alcotest.(check string) "define kind" "define" d.kind;
+         Alcotest.(check string) "tip kind" "tip" t.kind;
+         Alcotest.(check bool) "doc nudge mentions function-doc" true
+           (contains ~sub:"function-doc" t.text);
+         Alcotest.(check bool) "doc nudge names the function" true
+           (contains ~sub:"(define save" t.text)
+     | _ -> Alcotest.fail "expected define + tip");
+    (* budget: a define never exceeds the per-response budget of 2 *)
+    Alcotest.(check bool) "within budget" true
+      (List.length (Effect.cap_notices ns) = 2));
+  ("taper_tips once per session", `Quick, fun () ->
+    let mk () =
+      Effect.define_notices ~name:"f" ~doc:None (Reader.read_one "(lambda () 1)")
+    in
+    let first, fired = Effect.taper_tips ~fired:[] (mk ()) in
+    Alcotest.(check bool) "first define keeps the tip" true
+      (List.exists (fun (n : Effect.define_notice) -> n.kind = "tip") first);
+    let second, fired' = Effect.taper_tips ~fired (mk ()) in
+    Alcotest.(check bool) "tip dropped on replay" false
+      (List.exists (fun (n : Effect.define_notice) -> n.kind = "tip") second);
+    Alcotest.(check bool) "define kind still fires on replay" true
+      (List.exists (fun (n : Effect.define_notice) -> n.kind = "define") second);
+    Alcotest.(check int) "fired set grows once" 1 (List.length fired');
+    Alcotest.(check bool) "fired set monotone" true
+      (List.length fired' >= List.length fired));
 ]
 
 let () =

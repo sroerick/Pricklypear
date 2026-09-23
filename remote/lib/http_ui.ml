@@ -93,7 +93,17 @@ let handle_eval (rt : Remote.t) (reqd : Httpun.Reqd.t) : unit =
     else
       try
         let v = Remote.eval rt expr in
-        Pricklypear_lisp.Reader.pp_value v
+        let base = Pricklypear_lisp.Reader.pp_value v in
+        (* bumpers M2 (borge/bumpers.borg notices-envelope): lens local
+           define notices rendered muted under the result. *)
+        let ns =
+          List.map
+            (fun n -> ";; notice: " ^ Wire_codec.notice_to_line n)
+            (Remote.take_local_notices rt)
+        in
+        (match ns with
+         | [] -> base
+         | _ -> String.concat "\n" (base :: ns))
       with
       | Ast.Interp_error ie -> Ast.pp_interp_error ie
       | Reader.Reader_error (msg, ln, col) ->

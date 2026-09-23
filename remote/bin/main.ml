@@ -565,10 +565,20 @@ let () =
                Eio.Time.sleep clock backoff
            done));
 
+  let print_local_notices () =
+    (* bumpers M2 (borge/bumpers.borg notices-envelope): lens local
+       define notices, drained after the value. Out of band on stderr
+       with the same ";; notice: " prefix as the image pp_eval, so the
+       value stream on stdout stays clean. *)
+    List.iter
+      (fun n -> prerr_endline (";; notice: " ^ Wire_codec.notice_to_line n))
+      (Remote.take_local_notices t)
+  in
   let eval_print src =
     try
       let v = Remote.eval t src in
-      print_endline (Reader.pp_value v)
+      print_endline (Reader.pp_value v);
+      print_local_notices ()
     with
     | Ast.Interp_error ie ->
         Printf.eprintf "error: %s\n%!" (Ast.pp_interp_error ie); exit 1
@@ -598,7 +608,8 @@ let () =
            | line ->
                (try
                   let v = Remote.eval t line in
-                  print_endline (Reader.pp_value v)
+                  print_endline (Reader.pp_value v);
+                  print_local_notices ()
                 with
                 | Ast.Interp_error ie ->
                     Printf.printf "error: %s\n%!" (Ast.pp_interp_error ie)

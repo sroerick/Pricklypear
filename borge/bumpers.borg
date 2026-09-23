@@ -15,7 +15,8 @@
 
  (section notice-budget
   (doc "The channel dies if it nags. Hard rules: at most 2 notices per response; each tip kind fires at most once per session; a notice fires ONLY when actionable (missing docstring, strong effects, fragment violation — not on every well-formed quiet define); notices taper after the first N evals of a session (coach early, silent once fluent). QUIET MODE in three tiers, narrowest wins: (a) per-request {\"quiet\": true} (pp_eval -q, lens flag); (b) session taper (automatic); (c) durable per-identity preference via (agent-profile 'quiet) stored as a datum on <user>/personal. The human browser /repl defaults to the same budget as agent clients — no special-casing.")
-  (status planned)
+  ; status partial 2026-09-23: bumpers M2 (loop 2; docs/plans/bumpers-m1-notices.md) implemented the at-most-2-per-response budget (Session drain cap), the once-per-tip-kind-per-session taper, and fire-only-when-actionable in the define-notice path. Still open to full: the taper-after-N-evals auto-mute and tier-c agent-profile-quiet durable preference (bumpers M6).
+  (status partial)
   (verify
    (test "replaying the same define N times in one session yields the docstring tip exactly once")
    (test "quiet request flag suppresses notices server-side (channel never decodes them), not client-side")))

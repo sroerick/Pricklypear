@@ -54,6 +54,18 @@ type t = {
      (pp-remote --lens) so the lens/list + lens/read surface prims can
      browse the substrate. None = no lens; the prims return empty. *)
   mutable lens : Lens_store.lens option;
+  (* bumpers M2 (borge/bumpers.borg notices-envelope): local-eval side
+     channel. On a LOCAL top-level define, [eval_local] runs the SAME
+     pure generator as the image define path
+     ([Effect.define_notices] / [Effect.taper_tips]) so the lens emits
+     IDENTICAL notice text for the same AST; results buffer here,
+     drained + capped at the notice budget by [take_local_notices] and
+     printed by the host (pp-remote -e, the /eval surface). Out of
+     band — the value [Remote.eval] returns is untouched. *)
+  mutable local_notices : Wire_codec.notice list;
+  (* bumpers M2 session taper for the LENS process: tip kinds already
+     fired locally (once per kind per process/session). *)
+  mutable local_fired_tips : string list;
 }
 
 let value_to_json = Prims_pure.value_to_json
@@ -180,6 +192,49 @@ let load_def (t : t) (name : string) (src : string) : value =
   Def_cache.store t.def_cache name v;
   v
 
+(* bumpers M2 (borge/bumpers.borg notices-envelope): generate + buffer
+   notices for a LOCAL top-level define after it evaluated. Runs the
+   SAME pure generator as the image define path ([Effect.define_notices]
+   + [Effect.taper_tips]) so the lens emits IDENTICAL notice text for the
+   same AST (bumpers M2 wire bullet). Best-effort: src that does not
+   parse as exactly one top-level define (multi-form, malformed) is
+   silently skipped — notices are advisory, and never modify the return
+   value. Writes only [t]'s own session fields. *)
+let notice_local (t : t) (src : string) : unit =
+  match
+    try Some (Reader.read_one src) with _ -> None
+  with
+  | None -> ()
+  | Some expr -> (
+      match Eval.parse_top_define expr with
+      | None -> ()
+      | Some { name; body; doc } ->
+          let candidates = Effect.define_notices ~name ~doc body in
+          let kept, fired =
+            Effect.taper_tips ~fired:t.local_fired_tips candidates
+          in
+          t.local_fired_tips <- fired;
+          let to_wire (n : Effect.define_notice) : Wire_codec.notice =
+            { Wire_codec.kind = n.kind; name = Some n.name;
+              effects = n.effects; text = n.text }
+          in
+          let held = t.local_notices @ List.map to_wire kept in
+          let rec cap n acc = function
+            | _ when n = 0 -> List.rev acc
+            | x :: rest -> cap (n - 1) (x :: acc) rest
+            | [] -> List.rev acc
+          in
+          t.local_notices <- cap Effect.notice_budget [] held)
+
+(* bumpers M2: read-and-clear the LOCAL notice buffer for this lens
+   process. Already capped at the notice budget by [notice_local];
+   drained by the host (pp-remote -e / the /eval surface) and printed
+   after the value. *)
+let take_local_notices (t : t) : Wire_codec.notice list =
+  let ns = t.local_notices in
+  t.local_notices <- [];
+  ns
+
 (** Lazy env miss inlined into [eval_local]: on [Unbound_var name],
     fetch the def source and materialize it, then retry the expression.
     Bounds retries per name so a genuinely unbound name fails cleanly. *)
@@ -229,7 +284,11 @@ let eval_local (t : t) (src : string) : value =
                    Def_cache.remove t.def_cache name;
                    raise (Interp_error (Unbound_var name)))))
   in
-  go ()
+  let v = go () in
+  (* bumpers M2 (borge/bumpers.borg notices-envelope): local define
+     notices — out of band, never touch [v]. *)
+  notice_local t src;
+  v
 
 (** Hybrid placement entry point (borge/local-first.borg placement).
     Decide once per expression whether it runs LOCAL under the proxy rim
@@ -443,6 +502,8 @@ let make ~(transport : transport) ?(remote_eval : (string -> value) option)
       remote_eval;
       lens_lookup;
       lens = None;
+      local_notices = [];  (* bumpers M2: local-eval notice buffer *)
+      local_fired_tips = [];  (* bumpers M2: lens session taper *)
     }
   in
   register_pure_prims t;
