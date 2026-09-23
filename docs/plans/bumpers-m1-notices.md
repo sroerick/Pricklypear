@@ -5,6 +5,9 @@ planned, committed 2026-09-23 as 28069dc) milestone by milestone.
 This file is the shared memory between loops: pick the next unchecked
 task, do only it, verify, update this file, commit, end.
 
+**Loop status:** M1 DONE (see M1 section · all M1 checkboxes checked).
+Next unchecked milestone: **M2 — define-notices**.
+
 **Spec authority (read first):**
 - `borge/bumpers.borg` — the whole design (notices envelope, notice
   budget, verify-route, fragment-by-default, discovery surfaces,
@@ -77,7 +80,75 @@ task, do only it, verify, update this file, commit, end.
   borge/bumpers.borg to (status partial)/implemented as appropriate,
   in the same commit as the last task of the milestone.
 
-## M1 — notices envelope + pp_eval -q
+## M1 — notices envelope + pp_eval -q  (LOOP #1: DONE, committed)
+
+- [x] Add a per-eval notice accumulator: an OCaml ref/buffer scoped to
+  one `Session.eval_one` call (list of dict-shaped notices:
+  `{kind,name?,effects?,text}`). No notices are generated yet — this
+  milestone is PLUMBING ONLY.
+- [x] `api_eval` in `image/lib/http_pages.ml`: include `"notices": []`
+  or the drained list in the success envelope; REQUEST flag
+  `"quiet": true` suppresses the field entirely.
+- [x] Shared shape lives in `pure/wire_codec.ml` (or adjacent pure
+  module) so remote proxy rims serialize identically. Add codec tests
+  in `pure/test/` or `lisp/test/codec_test.ml` as fits.
+- [x] `cli/bin/pp_eval.ml`: `-q`/`--quiet` flag → sends the quiet flag;
+  when notices are present and not quiet, print them after the value
+  (stderr, prefixed `;; notice: `).
+- [x] Verify: `dune build @all`; `dune runtest`; manual:
+  `pp_eval -j '(+ 1 2)'` unchanged output; a test that an old-style
+  request (no quiet flag) gets a well-formed response.
+- [x] `borge drift` clean of new code drift.
+
+**M1 progress note (loop #1, committed 55a57cc):** shipped. Design choices worth
+recording for later loops:
+- The shared notice shape + codec went IN `pure/wire_codec.ml`
+  (`Wire_codec.notice` / `notice_to_json` / `notices_to_json` /
+  `notice_of_json` / `notice_to_line`) — the plan's primary suggestion,
+  and deliberately NOT a new `pure/notices.ml` file: every pure module
+  is declared in `lisp-interpreter.borg pure-prim-modules`, and a new
+  file would have added a drift item that `borge` cannot auto-resolve
+  without a spec edit. `wire_codec.ml` is already declared there, so
+  zero new drift. (The wire-field home is the same file prim-seam's
+  shared-codec / chapter-boundaries already points at.) M2's *generator*
+  still goes to `lisp/lib/notices.ml` (its own declaration decision
+  then; lisp/lib cannot see pure/, so generation will emit the shape
+  directly or via a lisp-side type — next loop's call, potentially a
+  `borge issue new` if a declaration is needed).
+- Session buffer: `pending_notices : Wire_codec.notice list` field on
+  `session_types.t`; RESET at the top of every `Session.eval_one` (so a
+  non-api_eval caller — REPL, jobs — can't leak a prior eval's notices
+  into the next envelope), drained by `api_eval` via
+  `Session.take_notices` (read-and-clear). `pp_eval` links
+  `pricklypear-pure-prims` now (for the shared rendering).
+- Quiet is a request flag parsed in `api_eval` (`Body_fields
+  "quiet": true`); quiet responses omit the notices field entirely, so
+  they are wire-identical to an old-style client.
+- Manual verify (local dev image, fresh throwaway PG on 5435/18081):
+  old-style `(+ 1 2)` → `{"ok":true,"value":3,"notices":[]}`; quiet →
+  `{"ok":true,"value":3}` (no notices key); unbound error shape
+  unchanged; bare-JSON body path also carries `notices:[]`. `pp_eval -j
+  '(+ 1 2)'` output unchanged. End-to-end notice printing proven with a
+  fake peer: `-j` keeps stdout JSON clean, notices on stderr as `;;
+  notice: define add [pure]: defined add`; `-q` suppresses entirely.
+- New tests: 7 notices cases added to `pure/test/wire_codec_test.ml`
+  (full/minimal JSON shape, additive no-null rule, empty + 2-list
+  assembly, of_json round-trip, malformed rejection, to_line) — all
+  green; wire-codec suite now 17 tests.
+- **PRE-EXISTING, NOT OURS (verified):** `image/test/seed_sources_test`
+  fails 5/9 on master independent of this work — a strict linter over
+  `libs/*.pp` (kernel-form defines / parse errors / bare top-level
+  forms / define-time sibling calls). Proven by running the built test
+  against `git archive HEAD libs` in a clean dir: identical 5 failures
+  with zero bumpers code involved. Leave them alone; not a bumpers
+  concern. `borge check` stays 42/43 (storage.borg:521 pre-existing);
+  `borge drift` stays at the 23-item pre-existing baseline (zero new).
+- Not in M1 scope (still open, per spec verify): browser /repl muted
+  notice rendering (only meaningful once M2 generates notices); the
+  lens local-eval `notices` wire field is M2's seam (uses the same
+  generator).
+
+## M2 — define-notices (effects + doc + bench/staleness)
 
 - [ ] Add a per-eval notice accumulator: an OCaml ref/buffer scoped to
   one `Session.eval_one` call (list of dict-shaped notices:

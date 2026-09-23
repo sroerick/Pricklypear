@@ -166,6 +166,14 @@ type t = {
       finishing. Quota enforced at insert. The stream type is defined
       here to avoid a module cycle (Net_prims references it). *)
   mutable net_streams : (string, Unix.file_descr) Hashtbl.t;
+  (** bumpers M1 (borge/bumpers.borg notices-envelope): per-eval notice
+      buffer drained into the /api/eval envelope after a successful
+      eval. Reset at the top of every [Session.eval_one]; api_eval
+      drains it (Session.take_notices). PLUMBING ONLY in M1 — no notices
+      are generated yet. Invariant: notices are OUT OF BAND — they never
+      modify the value eval_one returns, so define's return contract is
+      untouched (docs/plans/bumpers-m1-notices.md invariant 1). *)
+  mutable pending_notices : Wire_codec.notice list;
   }
 
 (** Tenant tier (spec_town_profile 2026-09-13): delegated tokens always

@@ -3,7 +3,8 @@
  (public_name pp-eval)
  (package pricklypear-cli)
  (modules pp_eval)
- (libraries pricklypear-cli.lib cmdliner yojson unix))
+ (libraries pricklypear-cli.lib cmdliner yojson unix
+            pricklypear-pure-prims))
 
 (executable
  (name pp_sync)

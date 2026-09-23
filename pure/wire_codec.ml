@@ -5,6 +5,86 @@
 open Pricklypear_lisp.Ast
 
 
+(* ---- bumpers notices codec (borge/bumpers.borg notices-envelope) ----
+
+   Notices travel OUT OF BAND on the /api/eval envelope: an additive
+   "notices" field, {"ok","value"[, "error"]} + "notices":[...]. The
+   bumpers plan milestone M1 (docs/plans/bumpers-m1-notices.md) lands
+   ONLY the wire shape + codec + per-session buffer + pp_eval -q proof
+   of the additive contract — NO notices are generated until M2+, so
+   every "value" consumer is untouched by construction. Invariants kept
+   here: (1) define's return value NEVER changes (notices are strictly
+   out-of-band); (2) the field is additive-only — never rename/re-shape
+   ok/value/error; (3) the request flag {"quiet": true} suppresses the
+   field entirely, so a quiet request is wire-identical to an old
+   client that never heard of notices. The same codec is linked by the
+   image, the proxy rims (remote/), the lens, and pp-eval — one shape,
+   the same reason the error codec is factored here. The notice
+   CONCEPT (budget, kinds, taper) is owned by bumpers.borg; this file
+   owns only the shape.
+
+   A notice is a small dict: {kind, name?, effects?, text}. kind is one
+   of define|route|tip|warn; name?/effects? carry the define/route name
+   and the effect badge when relevant; text is the payload. *)
+
+type notice = {
+  kind : string;
+  name : string option;
+  effects : string option;
+  text : string;
+}
+
+let notice_to_json (n : notice) : Yojson.Safe.t =
+  let fields =
+    [ ("kind", `String n.kind) ]
+    @ (match n.name with Some s -> [ ("name", `String s) ] | None -> [])
+    @ (match n.effects with
+      | Some s -> [ ("effects", `String s) ]
+      | None -> [])
+    @ [ ("text", `String n.text) ]
+  in
+  `Assoc fields
+
+let notices_to_json (ns : notice list) : Yojson.Safe.t =
+  `List (List.map notice_to_json ns)
+
+(** Inverse of [notice_to_json] (used by pp-eval / lens to render notices
+    a peer sent us; also the round-trip witness in the pure test). A
+    notice missing kind or text is malformed and rejected (None). *)
+let notice_of_json (j : Yojson.Safe.t) : notice option =
+  match j with
+  | `Assoc fields ->
+      let str k =
+        match List.assoc_opt k fields with
+        | Some (`String s) -> Some s
+        | _ -> None
+      in
+      (match (str "kind", str "text") with
+      | Some kind, Some text ->
+          Some { kind; name = str "name"; effects = str "effects"; text }
+      | _ -> None)
+  | _ -> None
+
+(** Compact one-line rendering, shared by every rim that prints notices
+    to a person or agent (pp-eval stderr, the line REPL, the browser
+    /repl muted line). Product-experience owns pretty HTML rendering;
+    this is the minimal form so pp_eval / lens / line REPL emit
+    IDENTICAL text for the same notice. *)
+let notice_to_line (n : notice) : string =
+  let head =
+    match n.name with
+    | Some nm -> (
+        match n.effects with
+        | Some e -> Printf.sprintf "%s %s [%s]" n.kind nm e
+        | None -> Printf.sprintf "%s %s" n.kind nm)
+    | None -> (
+        match n.effects with
+        | Some e -> Printf.sprintf "%s [%s]" n.kind e
+        | None -> n.kind)
+  in
+  Printf.sprintf "%s: %s" head n.text
+
+
 (* ---- http response header parsing (helper for http-get prim) ----
 
    curl -D writes headers like:

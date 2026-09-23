@@ -144,7 +144,7 @@ let unwrap_list_of_strings (printed : string) : string list =
 
 let live ~url ~user ~password ~timeout expr =
   Pp_client.eval_expr ~base_url:url ~user ~password ~expr
-    ~timeout_s:timeout
+    ~timeout_s:timeout ~quiet:false
 
 let live_value r =
   match r with
