@@ -265,6 +265,11 @@
  (libraries pricklypear-image pricklypear-lisp alcotest eio_main))
 
 (test
+ (name agent_profile_test)
+ (modules agent_profile_test)
+ (libraries pricklypear-image pricklypear-lisp pricklypear-common alcotest eio_main))
+
+(test
  (name delegation_test)
  (modules delegation_test)
  (libraries pricklypear-image pricklypear-lisp alcotest eio_main))

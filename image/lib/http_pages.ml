@@ -1586,6 +1586,15 @@ let api_eval (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
         (`Assoc [("ok", `Bool false); ("error", `String "expr required")]);
       ()
   | Some expr ->
+      (* bumpers M6 (borge/bumpers.borg notices-envelope quiet tiers):
+         the THIRD quiet tier — the durable per-identity preference
+         stored by (agent-profile 'quiet) on the identity's personal
+         branch, loaded once at session-make (Session.load_agent_profile)
+         and updated in-memory by the prim on set. Tier ordering,
+         narrowest wins: (a) the per-request {"quiet": true} flag takes
+         precedence, (b) the automatic session taper (M2, internal), then
+         (c) the durable preference. quiet = request_flag || durable. *)
+      let quiet = quiet || Session.durable_quiet session in
       (try
       let trace = Sys.getenv_opt "PP_EVAL_TRACE" <> None in
       let t0 = if trace then Unix.gettimeofday () else 0.0 in

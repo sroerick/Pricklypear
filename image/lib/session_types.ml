@@ -195,6 +195,16 @@ type t = {
       once declared standalone, re-publishing the path without the
       annotation keeps it silent. *)
   mutable standalone_routes : string list;
+  (** bumpers M6 (borge/bumpers.borg notices-envelope quiet tiers):
+      DURABLE per-identity quiet preference — tier (c) of the three-tier
+      quiet mode (request flag > session taper > durable datum), served
+      by the (agent-profile 'quiet) prim. Loaded once at session-make
+      from the identity's "profile" datum (authored by the identity; see
+      Session.load_agent_profile) and updated in-memory by the prim on
+      set. api_eval reads it via Session.durable_quiet as the third tier:
+      quiet = request_flag || durable. Anonymous/public identities
+      (system/main, shared) stay in-memory only — nothing durable. *)
+  mutable durable_quiet : bool;
   }
 
 (** Tenant tier (spec_town_profile 2026-09-13): delegated tokens always

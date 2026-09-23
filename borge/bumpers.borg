@@ -15,7 +15,7 @@
 
  (section notice-budget
   (doc "The channel dies if it nags. Hard rules: at most 2 notices per response; each tip kind fires at most once per session; a notice fires ONLY when actionable (missing docstring, strong effects, fragment violation — not on every well-formed quiet define); notices taper after the first N evals of a session (coach early, silent once fluent). QUIET MODE in three tiers, narrowest wins: (a) per-request {\"quiet\": true} (pp_eval -q, lens flag); (b) session taper (automatic); (c) durable per-identity preference via (agent-profile 'quiet) stored as a datum on <user>/personal. The human browser /repl defaults to the same budget as agent clients — no special-casing.")
-  ; status partial 2026-09-23: bumpers M2 (loop 2; docs/plans/bumpers-m1-notices.md) implemented the at-most-2-per-response budget (Session drain cap), the once-per-tip-kind-per-session taper, and fire-only-when-actionable in the define-notice path. Still open to full: the taper-after-N-evals auto-mute and tier-c agent-profile-quiet durable preference (bumpers M6).
+  ; status partial 2026-09-23: bumpers M2 (loop 2; docs/plans/bumpers-m1-notices.md) implemented the at-most-2-per-response budget (Session drain cap), the once-per-tip-kind-per-session taper, and fire-only-when-actionable in the define-notice path. bumpers M6 (loop 8; docs/plans/bumpers-m1-notices.md M6) shipped tier-c — the durable per-identity quiet preference via (agent-profile 'quiet): forms () | ('quiet getter) | ('quiet #t|#f setter), registered inline in image/lib/session.ml make (beside analyze/explain, past the module-cycle boundary), persisted as a user datum type "profile" (author = the identity; mirrored data.u.<user>.profile.<id>; find_profile_datum / set_agent_profile_quiet / load_agent_profile + session_types.durable_quiet), loaded once per identity-session at registry make and consulted in api_eval as quiet = request-flag || durable (tier a > tier c; tier b is the automatic taper). Anonymous/public stay in-memory only. Still open to full: the taper-after-N-evals auto-mute.
   (status partial)
   (verify
    (test "replaying the same define N times in one session yields the docstring tip exactly once")
@@ -74,8 +74,13 @@
   ; load-library persist); the doc-coverage footer "documented X/Y — (docs-missing \"pkg\")" on
   ; package describe; and the (docs-missing [pkg]) prim listing visible bindings without docstrings
   ; (function-doc () = missing: store doc, else special-form summary, else prim blurb). These
-  ; discovery prims are classified ReadDb in lisp/lib/effect.ml (discovery never writes). Still
-  ; open to full (bumpers M6): the error-codec hint field (pure/wire_codec.ml) and the (help) prim.
+  ; discovery prims are classified ReadDb in lisp/lib/effect.ml (discovery never writes). bumpers M6
+  ; (loop 8; docs/plans/bumpers-m1-notices.md M6) shipped the error-codec hint field
+  ; (pure/wire_codec.ml error_hint — known classes only, unknown carry NONE: Unbound_var "a/b" ->
+  ; (apropos "a/"), Unbound_var "name" -> (apropos "name"), Prim_error (p,_,"bad-args") ->
+  ; (function-doc "p"); additive-only on the existing error envelope, absent for unknown classes).
+  ; Still
+  ; open to full: the (help) prim.
   (status partial)
   (verify
    (test "describe output for a package includes an effect badge per binding and a doc-coverage footer")
@@ -84,7 +89,12 @@
 
  (section sequencing
   (doc "M1 notices-envelope + pp_eval -q (wire shape lands additive; nothing else fires yet). M2 define-notices (effects + doc + bench pointer) under the budget rules. M3 route-notices at route_gate (htmx pointer + effects + fragment classification remark). M4 verify-route dry-run. M5 badges in describe/apropos-docs + docs-missing + app-check lint. M6 error hints + durable (agent-profile 'quiet). Each milestone is independently promotable; nothing in the chapter requires the later ones for the earlier to be useful. Habitat-note hygiene: when M2 lands, the feedback half of agent-bowling-bumpers should point here; the note remains the design inbox for the construction half.")
-  (status planned)
+  ; status implemented 2026-09-23: all six milestones shipped across loops 1-8 of
+  ; docs/plans/bumpers-m1-notices.md — M1 (wire shape + pp_eval -q), M2 (define-notices), M3
+  ; (route-notices), M4 (verify-route), M5 (discovery surfaces), M6 (error hints +
+  ; (agent-profile 'quiet) durable quiet). Per invariant, no prim-seam / lisp-interpreter / image
+  ; semantics sections were touched by the feedback-half make.
+  (status implemented)
   (verify
    (test "borge report shows bumpers progressing per milestone without touching prim-seam/lisp-interpreter/image semantics sections")))
 

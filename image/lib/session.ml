@@ -680,6 +680,121 @@ let notice_define (t : t) ~(name : string)
     in
     t.pending_notices <- t.pending_notices @ List.map to_wire kept
 
+(* ---- bumpers M6: (agent-profile 'quiet) durable quiet preference -----
+   (borge/bumpers.borg notices-envelope quiet tiers)
+
+   QUIET MODE has three tiers, narrowest wins: (a) the per-request
+   {"quiet": true} flag; (b) the automatic session taper (M2's
+   once-per-tip-kind); (c) a durable per-identity preference via
+   (agent-profile 'quiet), persisted as a user datum of type "profile"
+   (tree datum, author = the identity; mirrored path
+   data.u.<user>.profile.<id>). The session consults the durable flag in
+   api_eval as the third tier: quiet = request_flag || durable. The datum
+   body is a tiny JSON {"username": u, "quiet": bool}. Anonymous /
+   public identities (shared system/main — no personal garden) stay
+   in-memory only, nothing durable. Reads are best-effort: DB-down or no
+   row degrades to false (quiet OFF is the safe default — a durable
+   preference must never wedge an eval response). Invariant 7 (telemetry
+   is not content): this is generated preference state owned by the
+   (agent-profile 'quiet) prim, and the per-session read happens ONCE at
+   session-make (registry per-identity slot), never on the per-eval
+   path — no notes-tree reads at all. *)
+
+let profile_type = "profile"
+
+(** Find the identity's profile datum (type "profile", author = the
+    session identity). Returns (id, fields-JSON) of the newest row. *)
+let find_profile_datum (t : t) : (string * string) option =
+  let uname = t.manifest.username in
+  Io_db.Db.with_transaction_low t.store (function
+    | None -> None
+    | Some conn ->
+        let sql =
+          "SELECT id::text, fields::text FROM tree_data_rows " ^
+          "WHERE type_name = $1 AND author = $2 " ^
+          "ORDER BY updated_at DESC LIMIT 1"
+        in
+        (match
+           Store_db.exec conn
+             ~params:
+               [ Pgx.Value.of_string profile_type; Pgx.Value.of_string uname ]
+             sql
+         with
+         | [ [ id_c; fields_c ] ] -> (
+             match
+               ( Pgx.Value.to_string id_c, Pgx.Value.to_string fields_c )
+             with
+             | Some id, Some fields -> Some (id, fields)
+             | _ -> None)
+         | _ -> None))
+
+(** Set + persist the durable quiet preference for the session identity.
+    Anonymous/public stay in-memory only. The persist is best-effort (a DB-down write degrades to the in-memory value and never raises — a
+    preference write must not break the eval response that carried it). *)
+let set_agent_profile_quiet (t : t) ~(quiet : bool) : unit =
+  t.durable_quiet <- quiet;
+  let uname = t.manifest.username in
+  if uname = "" || uname = "anonymous" || uname = "public" then ()
+  else begin
+    let fields_json =
+      Yojson.Safe.to_string
+        (`Assoc [ ("username", `String uname); ("quiet", `Bool quiet) ])
+    in
+    match find_profile_datum t with
+    | Some (id, _) ->
+        (try
+           let (_ : Pricklypear_lisp.Ast.value) =
+             Crud.update_impl t.store ~type_name:profile_type ~id
+               ~fields_json ~caller:uname
+           in
+           ()
+         with _ -> ())
+    | None ->
+        (try
+           let (_ : Crud.datum_write) =
+             Crud.create_outcome t.store ~type_name:profile_type
+               ~fields_json ~author:uname
+           in
+           ()
+         with _ -> ())
+  end
+
+(** Load the identity's durable quiet preference from the store. Called
+    once at session-make (per-identity registry slot) after the
+    personal/agent-branch attach; never per-eval. Best-effort: DB-down or
+    no row -> false. Anonymous stays false. *)
+let load_agent_profile (t : t) : unit =
+  let uname = t.manifest.username in
+  if uname = "" || uname = "anonymous" || uname = "public" then
+    t.durable_quiet <- false
+  else
+    match find_profile_datum t with
+    | Some (_id, fields_json) ->
+        let quiet =
+          try
+            match Yojson.Safe.from_string fields_json with
+            | `Assoc fields -> (
+                match List.assoc_opt "quiet" fields with
+                | Some (`Bool b) -> b
+                | _ -> false)
+            | _ -> false
+          with _ -> false
+        in
+        t.durable_quiet <- quiet
+    | None -> t.durable_quiet <- false
+
+(** Accessor for api_eval's third quiet tier (tier c: durable
+    preference). The request flag (tier a) takes precedence in api_eval;
+    tier b (session taper) is automatic via fired_tip_kinds. *)
+let durable_quiet (t : t) : bool = t.durable_quiet
+
+(** The (agent-profile …) effective profile JSON: {"username", "quiet"}. *)
+let agent_profile_json (t : t) : string =
+  Yojson.Safe.to_string
+    (`Assoc
+       [ ("username", `String t.manifest.username)
+       ; ("quiet", `Bool t.durable_quiet) ])
+
 let rec eval_one (t : t) (input : string) : Pricklypear_lisp.Ast.value =
   (* bumpers M1 (borge/bumpers.borg notices-envelope): per-eval notice
      buffer — reset so each eval_one starts fresh; api_eval drains it
@@ -1391,6 +1506,7 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
       pending_notices = [];  (* bumpers M1: per-eval notice buffer (plumbing only) *)
       fired_tip_kinds = [];  (* bumpers M2: session taper (once per tip kind per session) *)
       standalone_routes = [];  (* bumpers M3: route annotations that silenced the fragment family *)
+      durable_quiet = false;  (* bumpers M6: durable per-identity quiet preference, loaded at attach *)
     }
   in
   (* Register session-aware primitives (whoami, current-author,
@@ -1445,6 +1561,35 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
           (match Analyze.explain_function (!t).store ~fn_name:name with
            | Ok s -> Pricklypear_lisp.Ast.VStr s
            | Error e -> Pricklypear_lisp.Ast.VStr e));
+  (* bumpers M6 (borge/bumpers.borg notices-envelope quiet tiers): the
+     (agent-profile 'quiet) durable per-identity quiet preference — tier
+     (c) of the three-tier quiet mode (request flag > session taper >
+     durable datum). Registered here (not prims_agent) because it
+     reads/writes Session helpers below the module cycle boundary, the
+     same reason analyze/explain/route-dispatch/verify-route are
+     inline. Forms:
+       (agent-profile)          -> VStr {"username","quiet"}
+       (agent-profile 'quiet)   -> VBool current quiet (getter)
+       (agent-profile 'quiet #t|#f) -> set + persist, VStr profile
+     Anonymous/public identities set in-memory only (nothing durable on
+     shared system/main). Classified WriteDb in lisp/lib/effect.ml (it
+     CAN write a datum — conservative, like create/update). *)
+  Primitives.register prim_table "agent-profile"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VSymbol "quiet" ] ->
+          Pricklypear_lisp.Ast.VBool (durable_quiet !t)
+      | [ Pricklypear_lisp.Ast.VSymbol "quiet"; Pricklypear_lisp.Ast.VBool b ]
+        ->
+          set_agent_profile_quiet !t ~quiet:b;
+          Pricklypear_lisp.Ast.VStr (agent_profile_json !t)
+      | [] -> Pricklypear_lisp.Ast.VStr (agent_profile_json !t)
+      | _ ->
+          (raise (Pricklypear_lisp.Ast.Interp_error
+                    (Pricklypear_lisp.Ast.Prim_error
+                       ("agent-profile",
+                        "expected () | ('quiet) | ('quiet #t|#f)",
+                        "bad-args")))));
   (* Register CRUD primitives (get/create/update/delete/list) over
      the shared data_rows table. Same pattern as control prims:
      they capture (!t) and return their real DB result under the Eio rim. *)
