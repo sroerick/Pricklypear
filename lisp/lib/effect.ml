@@ -293,6 +293,13 @@ let write_db_prims = [
   (* route/dispatch executes a named handler — conservative WriteDb so
      public routes can never call it *)
   "route/dispatch";
+  (* bumpers M4 verify-route (borge/bumpers.borg verify-route): invokes a
+     named route handler once to measure it. SAME executor semantics as
+     route/dispatch — it RUNS arbitrary handler code, so it is
+     conservatively WriteDb (a public handler must never be able to call
+     it and trigger another route's writes). read-db is only the "honest
+     floor" if it were purely static; it is not (see M4 note). *)
+  "verify-route";
 ]
 
 let branch_prims = [
@@ -863,3 +870,104 @@ let route_notice (f : route_facts) : define_notice list =
   in
   [ { kind = "route"; name = f.path;
       effects = Option.map EffSet.badge f.effects; text } ]
+
+(* ---- bumpers M4: verify-route warnings (borge/bumpers.borg
+   verify-route) ---------------------------------------------------------
+
+   Static advisory lint over a route handler body for the
+   (verify-route "/path") dry-run report. FIRST named warning pattern
+   (prod 2026-12-30 layout stylesheet lambda incident): the handler
+   embeds a large literal constant that it would rebuild on EVERY
+   invocation (big inline CSS/JSON string, or a big (list ...) of literal
+   strings fed to html/join/string-append), where a delay-define would
+   pay it once.
+
+   Conservative by construction: only LITERAL constants in the AST count
+   (a handler that builds its page from request-dependent data has no
+   such literals, so it can never be flagged — false negatives
+   acceptable, false positives not), and the thresholds are deliberately
+   high so a small legitimate constant is never nagged. Deliberately
+   per-handler-batch only: it does NOT chase calls into sibling
+   functions, so a handler that merely CALLS a heavy constant-builder is
+   a false-miss by design (cross-function cost analysis is a later
+   bumpers tier, bumpers sequencing). *)
+
+(** Payload of a literal value in estimated chars (strings + symbols +
+    nested list literals). *) 
+let literal_payload (v : value) : int =
+  let rec go acc = function
+    | VStr s -> acc + String.length s
+    | VSymbol s -> acc + String.length s
+    | VList xs -> List.fold_left (fun a x -> go a x) acc xs
+    | _ -> acc
+  in
+  go 0 v
+
+(** A literal big enough to deserve the rebuild warning: >= 1024 chars of
+    payload, or a literal list with >= 24 elements (the stylesheet was a
+    ~30-element CSS string list). *) 
+let large_const_threshold = 1024
+let large_const_min_items = 24
+
+let is_large_literal (v : value) : bool =
+  literal_payload v >= large_const_threshold
+  || (match v with
+      | VList xs -> List.length xs >= large_const_min_items
+      | _ -> false)
+
+(** [true] when [e] is a pure literal atomic (Lit or Quote) — the only
+    things our constant walk treats as constant leaves. *) 
+let is_literal_atom (e : expr) : bool =
+  match e with
+  | Lit _ | Quote _ -> true
+  | _ -> false
+
+(** Sum of literal payload over an expr (Lit leaves + (list ...) app
+    literal args); non-literals contribute 0. *) 
+let rec const_payload (e : expr) : int =
+  match e with
+  | Lit v -> literal_payload v
+  | Quote e' -> const_payload e'
+  | App (Var "list", args) ->
+      List.fold_left (fun acc a -> acc + const_payload a) 0 args
+  | _ -> 0
+
+(** Does the body embed a large literal constant on the per-invocation
+    path? Flags: a large single literal, a (list ...) whose args are ALL
+    literals with >= 24 elements or >= 1024 chars payload (the
+    rebuild-worthy constant-list case), or any large literal nested
+    deeper (recurse into args/lambdas/seqs/defines). App heads and
+    lambda bodies all recurse so "(html/join (list <30 str>))" — the
+    actual layout incident shape — is caught. *) 
+let rec has_large_const_on_path (e : expr) : bool =
+  match e with
+  | Lit v -> is_large_literal v
+  | Quote e' -> has_large_const_on_path e'
+  | App (Var "list", args) ->
+      (List.for_all is_literal_atom args
+       && (List.length args >= large_const_min_items
+           || const_payload e >= large_const_threshold))
+      || List.exists has_large_const_on_path args
+  | Lambda (_, body) | Define (_, body) -> has_large_const_on_path body
+  | If (a, b, c) ->
+      has_large_const_on_path a || has_large_const_on_path b
+      || has_large_const_on_path c
+  | Let (_, v, body) ->
+      has_large_const_on_path v || has_large_const_on_path body
+  | Letrec (bs, body) ->
+      has_large_const_on_path body
+      || List.exists (fun (_, e') -> has_large_const_on_path e') bs
+  | Seq (a, b) -> has_large_const_on_path a || has_large_const_on_path b
+  | Prim (_, args) -> List.exists has_large_const_on_path args
+  | App (h, args) ->
+      has_large_const_on_path h || List.exists has_large_const_on_path args
+  | Var _ -> false
+
+(** Warnings for a (verify-route "/path") dry run of the handler body.
+    At most one warning today (the report stays sparse): the large-
+    constant-rebuild nudge. *) 
+let verify_route_warnings (body : expr) : string list =
+  if has_large_const_on_path body then
+    [ "large constant literal rebuilt per invocation — consider (delay ...) "
+      ^ "so a delay-define pays it once" ]
+  else []
