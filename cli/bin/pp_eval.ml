@@ -51,14 +51,30 @@ let print_result ~(as_json : bool) (r : Pp_client.eval_result) : int =
     1
   end
 
-let run_one ~url ~user ~password ~timeout ~as_json expr =
+(* bumpers M1 (borge/bumpers.borg notices-envelope): print notices the
+   server attached, one per stderr line prefixed ";; notice: " so the
+   value stream on stdout stays clean (-j JSON stays machine-parseable;
+   notices are out-of-band on stderr). Rendered via the shared codec so
+   pp-eval emits the SAME text as the lens and line REPL for a given
+   notice. *)
+let print_notices (r : Pp_client.eval_result) : unit =
+  List.iter
+    (fun j ->
+      match Wire_codec.notice_of_json j with
+      | Some n -> prerr_endline (";; notice: " ^ Wire_codec.notice_to_line n)
+      | None -> prerr_endline (";; notice: " ^ Yojson.Safe.to_string j))
+    r.notices
+
+let run_one ~url ~user ~password ~timeout ~as_json ~quiet expr =
   let r =
     Pp_client.eval_expr ~base_url:url ~user ~password ~expr
-      ~timeout_s:timeout
+      ~timeout_s:timeout ~quiet
   in
-  print_result ~as_json r
+  let rc = print_result ~as_json r in
+  if not quiet then print_notices r;
+  rc
 
-let interactive ~url ~user ~password ~timeout ~as_json =
+let interactive ~url ~user ~password ~timeout ~as_json ~quiet =
   prerr_endline (Printf.sprintf "[pp-eval] %s  user=%s" url user);
   prerr_endline "[pp-eval] enter Lisp forms; :quit to exit";
   let rec loop rc =
@@ -72,7 +88,7 @@ let interactive ~url ~user ~password ~timeout ~as_json =
       then rc
       else
         let code =
-          run_one ~url ~user ~password ~timeout ~as_json line
+          run_one ~url ~user ~password ~timeout ~as_json ~quiet line
         in
         loop (if code <> 0 then code else rc)
     with End_of_file ->
@@ -94,7 +110,7 @@ let read_stdin_exprs () =
     in
     go []
 
-let main url user password password_file timeout as_json interactive_flag
+let main url user password password_file timeout as_json quiet interactive_flag
     evals expr_opt =
   let password =
     Pp_client.resolve_password ~password ~password_file
@@ -105,7 +121,7 @@ let main url user password password_file timeout as_json interactive_flag
       "pp-eval: set PP_PASS or PP_PASS_FILE or --password (or PP_TOKEN)";
     2
   end else if interactive_flag then
-    interactive ~url ~user ~password ~timeout ~as_json
+    interactive ~url ~user ~password ~timeout ~as_json ~quiet
   else
     let exprs = List.rev evals in
     let exprs =
@@ -122,7 +138,7 @@ let main url user password password_file timeout as_json interactive_flag
       List.fold_left
         (fun rc expr ->
           let code =
-            run_one ~url ~user ~password ~timeout ~as_json expr
+            run_one ~url ~user ~password ~timeout ~as_json ~quiet expr
           in
           if code <> 0 then code else rc)
         0 exprs
@@ -155,6 +171,14 @@ let as_json =
   let doc = "Print full JSON result {ok,value|error} (agent-friendly)." in
   Arg.(value & flag & info [ "j"; "json" ] ~doc)
 
+let quiet =
+  let doc =
+    "Quiet bumpers: send {\"quiet\": true} to the image (server \
+     suppresses the notices field entirely) and skip notice printing \
+     (borge/bumpers.borg notices-envelope M1)."
+  in
+  Arg.(value & flag & info [ "q"; "quiet" ] ~doc)
+
 let interactive_flag =
   let doc = "Interactive multi-turn session." in
   Arg.(value & flag & info [ "i"; "interactive" ] ~doc)
@@ -172,7 +196,7 @@ let expr_opt =
 let term =
   Term.(
     const main $ url $ user $ password $ password_file $ timeout
-    $ as_json $ interactive_flag $ evals $ expr_opt)
+    $ as_json $ quiet $ interactive_flag $ evals $ expr_opt)
 
 let cmd =
   let doc = "Eval Lisp on a live Pricklypear image (no Python)." in

@@ -7,6 +7,12 @@ type eval_result = {
   value : string option;
   error : string option;
   raw : string;
+  notices : Yojson.Safe.t list;
+  (** bumpers M1 (borge/bumpers.borg notices-envelope): the parsed
+      "notices" array from the envelope, when present. Empty on a quiet
+      request (server suppresses the field) or absent. Notice DICTS stay
+      as raw JSON — this lib links no pure-prims; the caller renders
+      via Wire_codec.notice_of_json / notice_to_line. *)
 }
 
 let getenv name = Sys.getenv_opt name
@@ -132,23 +138,36 @@ let parse_eval_json (raw : string) : eval_result =
       | `Null -> None
       | other -> Some (Yojson.Safe.to_string other)
     in
-    { ok; value; error; raw }
+    let notices =
+      match j |> member "notices" with
+      | `List xs -> xs
+      | `Null -> []
+      | _ -> []
+    in
+    { ok; value; error; raw; notices }
   with exn ->
     {
       ok = false;
       value = None;
       error = Some (Printf.sprintf "bad JSON: %s (%s)" (Printexc.to_string exn) raw);
       raw;
+      notices = [];
     }
 
-let eval_expr ~base_url ~user ~password ~expr ~timeout_s : eval_result =
+let eval_expr ~base_url ~user ~password ~expr ~timeout_s ~quiet :
+    eval_result =
   let url = eval_url base_url in
   let body =
-    Yojson.Safe.to_string
-      (`Assoc [ ("expr", `String expr) ])
+    let fields = [ ("expr", `String expr) ] in
+    (* bumpers M1: {"quiet": true} suppresses the notices field on the
+       wire entirely (server-side), so a quiet request is identical to
+       an old-style client's. *)
+    let fields = if quiet then ("quiet", `Bool true) :: fields else fields in
+    Yojson.Safe.to_string (`Assoc fields)
   in
   match curl_post ~url ~user ~password ~body ~timeout_s with
-  | Error e -> { ok = false; value = None; error = Some e; raw = "" }
+  | Error e ->
+      { ok = false; value = None; error = Some e; raw = ""; notices = [] }
   | Ok raw -> parse_eval_json raw
 
 (** Strip outer Lisp/pp_value quotes from a VStr print. *)

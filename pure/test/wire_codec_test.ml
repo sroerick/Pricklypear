@@ -152,9 +152,110 @@ let test_http_parse_headers_url_value () =
         (Option.value ~default:"?" (str_field fields "location"))
   | _ -> Alcotest.fail "headers not a JSON object"
 
+(* ---- bumpers notices codec (borge/bumpers.borg notices-envelope, M1).
+
+   The additive "notices" field on the /api/eval envelope: shared shape
+   in pure (wire_codec.ml) so the image, proxy rims, lens, and pp-eval
+   serialize/deserialize ONE shape. These tests pin the dict shape
+   {kind,name?,effects?,text}, the additive-only rule (a full notice
+   serializes with exactly those keys; a bare one omits the optional
+   keys rather than emitting nulls), the empty-array default for a
+   response with no notices, and the round-trip identity pp-eval uses
+   to render a notice a peer sent it. *)
+
+let assoc_str (fields : (string * Yojson.Safe.t) list) (k : string) : string =
+  match List.assoc_opt k fields with
+  | Some (`String s) -> s
+  | _ -> ""
+
+let test_notice_full_json () =
+  let n =
+    Wire_codec.
+      { kind = "define"; name = Some "add"; effects = Some "pure"; text = "hi" }
+  in
+  match Wire_codec.notice_to_json n with
+  | `Assoc fields ->
+      (* additive-only: exactly the four keys, no nulls, ok/value untouched *)
+      let keys = List.map fst fields in
+      Alcotest.(check (list string)) "keys in spec order"
+        [ "kind"; "name"; "effects"; "text" ] keys;
+      Alcotest.(check string) "kind" "define" (assoc_str fields "kind");
+      Alcotest.(check string) "name" "add" (assoc_str fields "name");
+      Alcotest.(check string) "effects" "pure" (assoc_str fields "effects");
+      Alcotest.(check string) "text" "hi" (assoc_str fields "text")
+  | _ -> Alcotest.fail "notice_to_json not an object"
+
+let test_notice_minimal_json () =
+  let n = Wire_codec.{ kind = "tip"; name = None; effects = None; text = "doc me" } in
+  match Wire_codec.notice_to_json n with
+  | `Assoc fields ->
+      let keys = List.map fst fields in
+      Alcotest.(check (list string)) "optional keys omitted (no nulls)"
+        [ "kind"; "text" ] keys
+  | _ -> Alcotest.fail "notice_to_json not an object"
+
+let test_notices_to_json_empty () =
+  Alcotest.(check string) "no notices -> []" "[]"
+    (Yojson.Safe.to_string (Wire_codec.notices_to_json []))
+
+let test_notices_to_json_two () =
+  let ns =
+    [ Wire_codec.{ kind = "define"; name = Some "a"; effects = None; text = "t1" }
+    ; Wire_codec.{ kind = "tip"; name = None; effects = None; text = "t2" }
+    ]
+  in
+  match Wire_codec.notices_to_json ns with
+  | `List [ _; _ ] -> Alcotest.(check bool) "two notices" true true
+  | _ -> Alcotest.fail "expected a 2-element array"
+
+let test_notice_of_json_roundtrip () =
+  let full =
+    Wire_codec.
+      {
+        kind = "route";
+        name = Some "/x";
+        effects = Some "read-db";
+        text = "p";
+      }
+  in
+  let minimal = Wire_codec.{ kind = "warn"; name = None; effects = None; text = "w" } in
+  let rt n =
+    match Wire_codec.notice_of_json (Wire_codec.notice_to_json n) with
+    | Some n' -> n' = n
+    | None -> false
+  in
+  Alcotest.(check bool) "full round-trips" true (rt full);
+  Alcotest.(check bool) "minimal round-trips" true (rt minimal)
+
+let test_notice_of_json_malformed () =
+  (* malformed: missing kind / missing text / non-object *)
+  Alcotest.(check bool) "missing kind" true
+    (Wire_codec.notice_of_json (`Assoc [ ("text", `String "x") ]) = None);
+  Alcotest.(check bool) "missing text" true
+    (Wire_codec.notice_of_json (`Assoc [ ("kind", `String "tip") ]) = None);
+  Alcotest.(check bool) "non-object" true
+    (Wire_codec.notice_of_json (`String "nope") = None)
+
+let test_notice_to_line () =
+  Alcotest.(check string) "full line" "define add [pure]: hi"
+    (Wire_codec.notice_to_line
+       Wire_codec.{ kind = "define"; name = Some "add"; effects = Some "pure"; text = "hi" });
+  Alcotest.(check string) "minimal line" "tip: doc me"
+    (Wire_codec.notice_to_line
+       Wire_codec.{ kind = "tip"; name = None; effects = None; text = "doc me" })
+
 let () =
   Alcotest.run "pricklypear-wire-codec"
-    [ ( "wire-codec"
+    [ ( "notices"
+      , [ ("notice-full-json", `Quick, test_notice_full_json)
+        ; ("notice-minimal-json", `Quick, test_notice_minimal_json)
+        ; ("notices-to-json-empty", `Quick, test_notices_to_json_empty)
+        ; ("notices-to-json-two", `Quick, test_notices_to_json_two)
+        ; ("notice-of-json-roundtrip", `Quick, test_notice_of_json_roundtrip)
+        ; ("notice-of-json-malformed", `Quick, test_notice_of_json_malformed)
+        ; ("notice-to-line", `Quick, test_notice_to_line)
+        ] )
+    ; ( "wire-codec"
       , [ ("unbound-roundtrip", `Quick, test_unbound)
         ; ("prim-error-roundtrip", `Quick, test_prim_error)
         ; ("user-error-roundtrip", `Quick, test_user_error)

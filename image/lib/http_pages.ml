@@ -1560,20 +1560,25 @@ let inspect_row_page (session : Session.t) (type_name : string) (id : string)
 
 let api_eval (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
   let body = read_body reqd in
-  let expr_opt =
+  let expr_opt, quiet =
     match parse_body body with
     | Body_fields items ->
-        (match List.assoc_opt "expr" items with
-         | Some (`String s) -> Some s
-         | _ -> None)
+        let q =
+          match List.assoc_opt "quiet" items with
+          | Some (`Bool true) -> true
+          | _ -> false
+        in
+        ( (match List.assoc_opt "expr" items with
+          | Some (`String s) -> Some s
+          | _ -> None)
+        , q )
     | Body_other -> (
         (* a bare JSON string is accepted as the expression *)
         match Yojson.Safe.from_string body with
-        | `String s -> Some s
-        | _ -> None)
+        | `String s -> (Some s, false)
+        | _ -> (None, false))
     | Body_form ->
-        (* also accept raw text body *)
-        if String.trim body = "" then None else Some body
+        if String.trim body = "" then (None, false) else (Some body, false)
   in
   match expr_opt with
   | None ->
@@ -1593,7 +1598,25 @@ let api_eval (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
              output. value_to_json re-parses JSON-lookalike VStrs into
              real JSON objects/arrays so field data round-trips as
              clean, valid JSON (i-fields-as-string-2026-08-12). *)
-          let j = `Assoc [("ok", `Bool true); ("value", Prims_pure.value_to_json v)] in
+          (* bumpers M1 (borge/bumpers.borg notices-envelope): the
+             notices field is ADDITIVE on the success envelope
+             {"ok","value"[,"error"]} + "notices":[...]; the request
+             flag {"quiet": true} suppresses the field entirely, so a
+             quiet request is wire-identical to an old-style client.
+             Notices never touch "value" (define's contract invariant;
+             docs/plans/bumpers-m1-notices.md). M1 is plumbing only —
+             no notices are generated yet, so non-quiet responses carry
+             []. Pending-notice producers (M2+: define/route) append to
+             the session buffer and are drained here. *)
+          let notices = Session.take_notices session in
+          let base =
+            [ ("ok", `Bool true); ("value", Prims_pure.value_to_json v) ]
+          in
+          let base =
+            if quiet then base
+            else base @ [ ("notices", Wire_codec.notices_to_json notices) ]
+          in
+          let j = `Assoc base in
           let t2 = if trace then Unix.gettimeofday () else 0.0 in
           if trace then
             Printf.eprintf "[eval-trace] api_eval           eval %7.1f ms  json %7.1f ms\n%!"

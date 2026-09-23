@@ -620,7 +620,22 @@ let register_request_prims (t : t) (tbl : Primitives.t) : unit =
    real DB result wrapped in a promise. Only [define] keeps an AST-level
    intercept: it's read-level special (the name arg is a Var that must
    not be evaluated), so it can't become a regular prim. *)
+(* bumpers M1: read-and-clear the per-eval notice buffer. The ONLY
+   intentional drain is api_eval after a successful eval; the reset at
+   the top of the next eval_one catches any leftovers. Pending-notice
+   producers (M2+: define/route) append to [t.pending_notices]. *)
+let take_notices (t : t) : Wire_codec.notice list =
+  let ns = t.pending_notices in
+  t.pending_notices <- [];
+  ns
+
 let rec eval_one (t : t) (input : string) : Pricklypear_lisp.Ast.value =
+  (* bumpers M1 (borge/bumpers.borg notices-envelope): per-eval notice
+     buffer — reset so each eval_one starts fresh; api_eval drains it
+     into the envelope after the value. Notices are strictly OUT OF
+     BAND: nothing here ever adds to or reads from the return value, so
+     define's contract is untouched. M1 is plumbing only (no producers). *)
+  t.pending_notices <- [];
   try
     let expr = Pricklypear_lisp.Reader.read_one input in
     (* Pre-eval intercept: (define name <body>) is the only AST-level
@@ -733,7 +748,6 @@ let rec eval_one (t : t) (input : string) : Pricklypear_lisp.Ast.value =
       raise (Pricklypear_lisp.Ast.Interp_error
                   (Pricklypear_lisp.Ast.Parse_error (msg, line, col)))
   | exn -> raise exn
-
 
 (* --- Library loader: same .pp text as in git libs/ --- *)
 
@@ -1321,6 +1335,7 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
       impact_queue = [];
       change_transcript = [];
       net_streams = Hashtbl.create 16;
+      pending_notices = [];  (* bumpers M1: per-eval notice buffer (plumbing only) *)
     }
   in
   (* Register session-aware primitives (whoami, current-author,
