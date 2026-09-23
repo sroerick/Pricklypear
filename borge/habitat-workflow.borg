@@ -244,6 +244,48 @@
   
    )
   )
+  (subsection gen-drift
+   (doc "Drift on the time axis: compare the (branch, path, gen) of a spec section against the bindings it owns — code ahead of spec (shipped past intent) or spec ahead of code (intent nobody built). spec-checks is the promote-time snapshot; this is the standing temporal check, with tree-time as the record layer.")
+   (status planned)
+   (* agent note (|2026-09-23 spec'd from a borge-in-Nopales design session (roerick + pi). The analysis that produced it: borge-OCaml's drift walks a FOREIGN repo (parse modules, match implements entries); in the habitat the spec and the implementation are ONE STORE, so drift is intramural — gen comparison between adjacent tree nodes, no parser, no repo walk, no .borg.meta. This is the Nopales counterpart of borge drift for the product-package layer, and the standing form of the anti-flip-flop tripwire (spec-checks check 2) between promotes.|) *)
+   (verify
+    (smoke "a binding written after its spec section's last edit shows unreviewed-code on the /spec row for that package")
+    (smoke "a spec section edited after its newest binding shows unimplemented-intent on the /spec row")
+    (smoke "a define of a spec-owned binding surfaces a staleness notice via bumpers (code newer than spec) when quiet-mode allows"))
+   (details
+    (doc (|
+         book-view references give section -> bindings edges
+         (a section names the bindings it owns). Each side of
+         the edge carries a tree gen (tree-time.versioned-leaves):
+         the section node's gen, and each binding's node gen on
+         the visible chain.
+
+         DIRECTION A (unreviewed-code): binding gen > section
+         gen — the code moved after the spec last acknowledged
+         it. spec-checks already bounces this AT promote time
+         (code->spec acknowledgment); gen-drift makes the same
+         signal continuous between promotes. Direction A on
+         system/main means someone promoted past the checklist
+         and the /spec page says so.
+
+         DIRECTION B (unimplemented-intent): section gen >
+         every owned-binding gen — the spec intent is newer
+         than any code. Normal during design (planned chapters
+         do this constantly); becomes a signal when it goes
+         stale: the intent nobody built.
+
+         Both directions are two joins over tree_versions —
+         no special tables, because it is a property OF the
+         storage keys (branch, path, gen). Implementation
+         target is the /spec health row plus a cheap
+         (spec/drift pkg) prim for REPL use; bumpers consumes
+         direction A on define (a staleness notice of the kind
+         \"you just rewrote a binding whose spec section last
+         spoke 40 gens ago\").
+   |))
+
+   )
+  )
   (subsection book-view
    (doc "The literate inversion: spec doc outlines own narrative order; bindings inline underneath — drift becomes rendering")
    (status implemented)
@@ -271,6 +313,51 @@
          decided here.
    |))
   
+   )
+  )
+  (subsection temporal-log
+   (doc "The temporal log is a RENDERING, not content. Agents' in-place temporal notes live as log/ child nodes under the section they annotate; the declarative chapter view collapses them; the record layer underneath both views is the tree-time gen stream. Reconciles the literate-book ideal with the demonstrated agent need for adjacent temporal context.")
+   (status planned)
+   (* agent note (|2026-09-23 (roerick + pi): agents keep leaving temporal notes in spec artifacts, which irritates the literate-book ideal — but the instinct is load-bearing (adjacent context beats a separate journal). borge-OCaml (docs/literate.borg) had to PROTECT human comments from silent agent deletion because file and log are one flat artifact: two audiences, one channel, guaranteed friction. The habitat can serve both audiences from one tree because renderings are queries.|) *)
+   (verify
+    (smoke "the /book rendering of spec/<pkg> omits log/ children; the log rendering lists them in ascending gen order")
+    (smoke "a section with NO log children still answers as-of reads via tree-time gen stream")
+    (test "spec-health rows exclude log/ child text from binding counts and coverage"))
+   (details
+    (doc (|
+         CONVENTION: a temporal note about a section is a child
+         outline node named log-* (kind log). Agents append log
+         children; they do not rewrite the parent body when
+         saying \"what happened\". Human declarative edits live
+         in the parent body. Appending is cheap and exactly
+         what tree_nodes does.
+
+         RECORD VS ANNOTATION: tree-time is the record even
+         when no log child exists — \"the section as it stood
+         when M2 shipped\" is (tree/get path :gen N), worked
+         whether or not anyone annotated. Log children are
+         annotation ON the record, not the record. This kills
+         the pressure to make log entries complete: the gen
+         stream already is.
+
+         RENDERINGS: the declarative chapter view (book-view,
+         book export) collapses log/ children; the temporal
+         view is the same outline ordered by gen with log
+         text inline. Two projections, one storage — the same
+         two-flavor pattern as habitat-book's reader vs
+         workshop exports.
+
+         LOOSENESS RULE, written down: borge works because
+         the core loop (declare before build, verify after,
+         surface drift) is cheap, and the prose is free. Keep
+         it that way: status vocabulary stays an enumerable,
+         machine-checkable set; implements-lines stay a
+         lightweight parseable convention; everything else is
+         prose. WHATEVER IS LOOSE MUST BE CHECKABLE IN PLACE
+         — looseness is a rendering choice, not an absence of
+         authority.
+   |))
+
    )
   )
   (subsection spec-health
@@ -339,6 +426,20 @@
          - NOT provenance/audit of AI-authored code — that is
            ai-authoring.provenance. This chapter consumes
            author info but defines no new attribution model.
+         - NOT a port of borge-the-tool's RIM. The 2026-09-23
+           analysis (recorded in gen-drift): borge's value is a
+           small core loop (declare before build; verify after;
+           surface drift; prose docs force WHAT+WHY), and most
+           of its code is OCaml+git substrate — parser, sexp
+           comment attachment, per-language conventions,
+           worktree choreography, LLM review glue. The habitat
+           ALREADY OWNS the substrate, differently shaped:
+           branches are the worktrees, promote is the commit,
+           tree-time is semantic history, bumpers notices are
+           the hooks. Porting any of that rim is standing
+           forbidden; the ONLY things to build are the
+           vocabulary (conventions above) and the checks
+           (spec-checks, gen-drift) that exist nowhere yet.
    |))
   
  
