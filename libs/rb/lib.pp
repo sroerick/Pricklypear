@@ -1514,15 +1514,15 @@
   (list
     (cons "Ginger Bug Lemonade"
       (list
-        (cons "--bg" "#f2d64b")
-        (cons "--cream" "#6b4410")
-        (cons "--gold" "#8a6a14")
-        (cons "--copy" "#5f430f")
-        (cons "--note" "#7a5c28")
-        (cons "--frame" "#b58a2a")
-        (cons "--frame2" "#dcc045")
-        (cons "--stampbg" "#6b4410")
-        (cons "--stampink" "#fdf3d9")))))
+        (cons "--bg" "#f7eab5")
+        (cons "--cream" "#6a4a18")
+        (cons "--gold" "#b3892e")
+        (cons "--copy" "#5c451a")
+        (cons "--note" "#8a713d")
+        (cons "--frame" "#c9a84c")
+        (cons "--frame2" "#e7d69a")
+        (cons "--stampbg" "#6a4a18")
+        (cons "--stampink" "#f9f1d9")))))
 
 (define (rb/label-palette name)
   (rb/get name rb/label-palettes))
