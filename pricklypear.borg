@@ -20,6 +20,7 @@
  (untracked "docs/chat-ui-redesign.md" "living spec draft pending the chat-ui-p1 merge")
  (untracked "docs/security-review-2026-09.md" "September hardening pass record — living")
  (untracked "docs/plans/rail-trees-v4.md" "ACTIVE make-phase handoff; spec: borge/filmstrip.borg rail-trees-v4")
+  (untracked "docs/plans/bumpers-m1-notices.md" "ACTIVE make-phase handoff; spec: borge/bumpers.borg sequencing M1-M6")
  (untracked "archive/" "historical receipts (executed handoffs, deploy notes, proposals, reviews, retired probes); not spec, kept for the trail — see archive/README.md")
 
  (* agent note (|2026-08 drift pass: scripts/ orphans excused with reasons. These are operational tooling (smoke/verify/dev/deploy/seed), not product features. Deletion candidates flagged inline for a future purge.|) *)
