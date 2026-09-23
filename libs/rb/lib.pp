@@ -1701,7 +1701,7 @@
     ".v-size { font-family:'Playfair Display',serif; font-weight:700; font-size:9pt; color:#f5e6c8; }"
     "</style>"))
 
-(define (rb/label-sheet-css cols rows w h x0 y0 gx gy rot cal?)
+(define (rb/label-sheet-css cols rows w h x0 y0 gx gy rot cal? frame?)
   (string-append
     (rb/label-css)
     "<style>"
@@ -1719,6 +1719,9 @@
     ".ppbar b { color:#ffd; } .ppbar button { font-size:14px; padding:6px 18px; cursor:pointer; }"
     "@media print { .ppbar { display:none } .ppsheet { page-break-after:always; box-shadow:none; }"
     " .ppsheet:last-child { page-break-after:auto; } body { background:#fff } }"
+    (if frame?
+        ""
+        " .nf .t-card::before, .nf .t-card::after, .nf .v-card::before, .nf .v-card::after, .nf .k-card::before, .nf .k-card::after { display:none; }")
     "</style>"))
 
 (define (rb/label-cells names n)
@@ -1753,12 +1756,14 @@
     (rb/label-card-html (string-trim name) batch date)
     "</div></div>"))
 
-(define (rb/label-sheet-html names cols rows w h x0 y0 gx gy rot sheets batch date bleed cal?)
+(define (rb/label-sheet-html names cols rows w h x0 y0 gx gy rot sheets batch date bleed cal? frame?)
   "One or more letter sheets of 4-up labels, print-ready at 100% scale."
   (string-append
     "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Label sheet — Avery Presta 94252 (4-up)</title>"
-    (rb/label-sheet-css cols rows w h x0 y0 gx gy rot cal?)
-    "</head><body>"
+    (rb/label-sheet-css cols rows w h x0 y0 gx gy rot cal? frame?)
+    "</head><body"
+    (if frame? "" " class=\"nf\"")
+    ">"
     "<div class=\"ppbar\">Avery Presta 94252 — 4 per sheet (3&times;4in cells, 1in margins, "
     "0.5in/1in gutters, designs rotated 90&deg;) — print dialog: <b>Margins: None &middot; Scale: 100%</b>, Background graphics: <b>ON</b>. "
     "Calibration: <b>&cal=1</b> &middot; nudge: <b>&x0= &y0= &gx= &gy= &w= &h= &cols= &rows= &rot= &sheets=</b> &middot; "
@@ -1789,6 +1794,7 @@
               (batch (rb/param-default "batch" ""))
               (date (rb/param-default "date" ""))
               (rot (rb/param-default "rot" "90"))
+              (frame (rb/param-default "frame" "0"))
               (cal (rb/param-default "cal" "")))
           (bytes-response "text/html" "0"
             (rb/label-sheet-html
@@ -1801,7 +1807,8 @@
               (rb/param-default "gy" "1in")
               rot sheets batch date
               bleed
-              (not (string-eq cal "")))))))))
+              (not (string-eq cal ""))
+              (string-eq frame "1")))))))))
 
 (define (rb/label-page-html name batch date)
   "Single-label page: the naked 4x3in design (print = one label)."
