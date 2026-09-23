@@ -55,15 +55,28 @@
   ; arg on (route …)/(public-route …) (route annotation branch of the declaration sentence) — session-scoped
   ; and monotone via session_types.standalone_routes; cross-session durability filed BORGE-1790180098
   ; (needs a route-meta schema change, which M3 forbids). route_gate legality UNCHANGED (no new denial
-  ; cases). Still open to full: the (app-check "pkg") per-route report is bumpers M5.
-  (status partial)
+  ; cases). app-check shipped bumpers M5 (loop 7; docs/plans/bumpers-m1-notices.md M5):
+  ; the (app-check "pkg") prim (image/lib/agent_tools.ml, registered in prims_code.ml) reports
+  ; per-route fragment/shell/not-html classification (unbound = handler not defined yet) using the
+  ; same Effect.classify_route_shape / Route_gate.handler_body walk as the route-notices — advisory
+  ; only, route_gate stays about legality. Classified ReadDb (discovery, never writes).
+  (status implemented)
   (verify
    (test "app-check classifies fragment vs shell vs not-html per route; a declared-standalone route draws no fragment notices in later sessions")
    (test "route_gate publishes a full-shell handler with identical legality rules as a fragment handler")))
 
  (section discovery-surfaces
   (doc "The reference side of the same channel — discovery prims that already exist (describe / apropos-docs / function-doc) gain the missing affordances: effect badges in their text output (read-db vs write-db visible in every listing — an agent learns a package's capability structure from ONE describe), a doc-coverage footer on package describe (\"documented 12/15 — (docs-missing \\\"pkg\\\")\"), and a (docs-missing [pkg]) prim listing visible bindings without docstrings. Error-occasion teaching rides the shared codec: known error classes carry an optional \"hint\" field (Unbound_var -> (apropos ...), bad-args on a prim -> (function-doc ...)) so discovery arrives at the moment it is wanted. A (help) prim renders a short start-here from the existing Special_forms catalog for anyone who never read /agent.txt.")
-  (status planned)
+  ; status partial 2026-09-23: bumpers M5 (loop 7; docs/plans/bumpers-m1-notices.md M5) shipped the
+  ; reference half: effect badges + arity ("name (args) [read-db]") in describe single-binding,
+  ; package listing, and apropos fallback (image/lib/agent_tools.ml binding_annot / lambda_params,
+  ; which reads BOTH the constructor Lambda body and the reader App-lambda form the boot seed and
+  ; load-library persist); the doc-coverage footer "documented X/Y — (docs-missing \"pkg\")" on
+  ; package describe; and the (docs-missing [pkg]) prim listing visible bindings without docstrings
+  ; (function-doc () = missing: store doc, else special-form summary, else prim blurb). These
+  ; discovery prims are classified ReadDb in lisp/lib/effect.ml (discovery never writes). Still
+  ; open to full (bumpers M6): the error-codec hint field (pure/wire_codec.ml) and the (help) prim.
+  (status partial)
   (verify
    (test "describe output for a package includes an effect badge per binding and a doc-coverage footer")
    (test "prim bad-args errors carry a hint field; unknown error classes carry none")
