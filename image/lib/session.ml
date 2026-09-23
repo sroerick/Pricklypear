@@ -1378,6 +1378,7 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
       net_streams = Hashtbl.create 16;
       pending_notices = [];  (* bumpers M1: per-eval notice buffer (plumbing only) *)
       fired_tip_kinds = [];  (* bumpers M2: session taper (once per tip kind per session) *)
+      standalone_routes = [];  (* bumpers M3: route annotations that silenced the fragment family *)
     }
   in
   (* Register session-aware primitives (whoami, current-author,

@@ -79,6 +79,38 @@ let checks =
         | Error m ->
             Alcotest.(check bool) "walk denial" true
               (contains ~sub:"failed the effect walk" m) );
+    ( "handler_body extracts a VLambda body",
+      `Quick,
+      fun () ->
+        let env = setup_env () in
+        match Route_gate.handler_body env "welcome" with
+        | Some _ -> ()
+        | None -> Alcotest.fail "expected a body for a defined lambda" );
+    ( "handler_body is None for an unbound name",
+      `Quick,
+      fun () ->
+        let env = setup_env () in
+        Alcotest.(check bool) "unbound -> None" true
+          (Route_gate.handler_body env "missing/mystery" = None) );
+    ( "route classifier sees the same body the gate reads",
+      `Quick,
+      fun () ->
+        let env = setup_env () in
+        (match Route_gate.handler_body env "broken-sibling" with
+         | Some body ->
+             Alcotest.(check string) "redirect-bearing sibling is html-ish"
+               "fragment"
+               (Effect.route_shape_string (Effect.classify_route_shape body))
+         | None -> ());
+        let env2 = Env.create () in
+        let ev s = ignore (Eval.eval_string ~prims:Eval.empty_prims env2 s) in
+        ev "(define (page) (layout/page (list 1)))";
+        (match Route_gate.handler_body env2 "page" with
+         | Some body ->
+             Alcotest.(check string) "layout/page body is a shell" "shell"
+               (Effect.route_shape_string
+                  (Effect.classify_route_shape body))
+         | None -> Alcotest.fail "page handler should have a body" ));
   ]
 
 let () = Alcotest.run "route_gate" [ "sibling-hardening", checks ]

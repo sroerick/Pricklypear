@@ -182,6 +182,19 @@ type t = {
       distinct from [pending_notices] (per-eval, reset each eval) — this
       is per-SESSION identity state and survives resets. *)
   mutable fired_tip_kinds : string list;
+  (** bumpers M3 (borge/bumpers.borg fragment-by-default): which route
+      paths were published with the 'standalone annotation THIS SESSION
+      (route annotation, session-scoped). Declared-standalone routes
+      silence the fragment-family remark in their route notice. Minimal
+      mechanism per docs/plans/bumpers-m1-notices.md M3: a trailing
+      'standalone arg on (route ...)/(public-route ...); session-scoped
+      because route-notices fire only at publish time (store-rehydrated
+      routes never re-publish) and the cross-session durability gap is
+      filed as a borge issue (a route meta column would be a schema
+      change, which this milestone forbids). Monotone within a session:
+      once declared standalone, re-publishing the path without the
+      annotation keeps it silent. *)
+  mutable standalone_routes : string list;
   }
 
 (** Tenant tier (spec_town_profile 2026-09-13): delegated tokens always
