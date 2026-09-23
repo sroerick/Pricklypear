@@ -222,7 +222,7 @@ recording for later loops:
   lens local define emits the same generator, taper once per lens
   process, zero prim calls — out of band).
 
-**M2 progress note (loop #2, committed ...):** define-notices shipped
+**M2 progress note (loop #2, committed d961b0e):** define-notices shipped
 end to end. Design choices worth recording for later loops:
 - **Generator home = effect.ml, NOT a new lisp/lib/notices.ml.** The
   plan suggested `lisp/lib/notices.ml` but every lisp/lib module is
