@@ -623,11 +623,50 @@ let register_request_prims (t : t) (tbl : Primitives.t) : unit =
 (* bumpers M1: read-and-clear the per-eval notice buffer. The ONLY
    intentional drain is api_eval after a successful eval; the reset at
    the top of the next eval_one catches any leftovers. Pending-notice
-   producers (M2+: define/route) append to [t.pending_notices]. *)
+   producers (M2+: define/route) append to [t.pending_notices].
+
+   bumpers M2 (borge/bumpers.borg notice-budget): the drain caps what it
+   serves at the per-response budget (first N win) — the eval response
+   is the budget unit, so a begin-wrapped multi-define batch cannot
+   burst past 2 notices. The cap shares [Effect.notice_budget], the one
+   budget constant (lisp/lib/effect.ml). *)
 let take_notices (t : t) : Wire_codec.notice list =
   let ns = t.pending_notices in
   t.pending_notices <- [];
-  ns
+  let rec take n acc = function
+    | _ when n = 0 -> List.rev acc
+    | x :: rest -> take (n - 1) (x :: acc) rest
+    | [] -> List.rev acc
+  in
+  take Pricklypear_lisp.Effect.notice_budget [] ns
+
+(* bumpers M2 define-notices (borge/bumpers.borg notices-envelope):
+   generate + buffer the notices for one interactive top-level define.
+   Gated on BULK LOAD/SEED windows via the existing
+   [suppress_refresh_on_define] flag — load_string/load_library and the
+   boot seed set it for their whole window, and per-define notices there
+   would be pure noise (a library load is not a coaching moment). The
+   per-session taper drops tip-kinds that already fired; the ≤2
+   response budget is enforced at drain ([take_notices]). All of this is
+   pure AST work + session state — no tree/notes reads, so nothing here
+   touches the notes-tree eval path before /health serves (2026-09-14
+   promote incident invariant). *)
+let notice_define (t : t) ~(name : string)
+    ~(body : Pricklypear_lisp.Ast.expr) ~(doc : string option) : unit =
+  if t.ui_shell.suppress_refresh_on_define then ()
+  else
+    let candidates =
+      Pricklypear_lisp.Effect.define_notices ~name ~doc body
+    in
+    let kept, fired =
+      Pricklypear_lisp.Effect.taper_tips ~fired:t.fired_tip_kinds candidates
+    in
+    t.fired_tip_kinds <- fired;
+    let to_wire (n : Pricklypear_lisp.Effect.define_notice) : Wire_codec.notice =
+      { Wire_codec.kind = n.kind; name = Some n.name;
+        effects = n.effects; text = n.text }
+    in
+    t.pending_notices <- t.pending_notices @ List.map to_wire kept
 
 let rec eval_one (t : t) (input : string) : Pricklypear_lisp.Ast.value =
   (* bumpers M1 (borge/bumpers.borg notices-envelope): per-eval notice
@@ -683,6 +722,7 @@ let rec eval_one (t : t) (input : string) : Pricklypear_lisp.Ast.value =
         end else ()
       in
       let () = record_define_side_effects t ~name in
+      let () = notice_define t ~name ~body:body_expr ~doc in
     v
   in
   (* Persist one top-level-shaped form (define | defmacro) — shared by
@@ -932,6 +972,7 @@ and eval_form (t : t) (expr : Pricklypear_lisp.Ast.expr)
       end else ()
     in
     let () = record_define_side_effects t ~name in
+    let () = notice_define t ~name ~body:body_expr ~doc in
     v
   in
   (* Persist one top-level-shaped form (define | defmacro), honoring the
@@ -1336,6 +1377,7 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
       change_transcript = [];
       net_streams = Hashtbl.create 16;
       pending_notices = [];  (* bumpers M1: per-eval notice buffer (plumbing only) *)
+      fired_tip_kinds = [];  (* bumpers M2: session taper (once per tip kind per session) *)
     }
   in
   (* Register session-aware primitives (whoami, current-author,

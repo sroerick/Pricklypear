@@ -5,8 +5,12 @@ planned, committed 2026-09-23 as 28069dc) milestone by milestone.
 This file is the shared memory between loops: pick the next unchecked
 task, do only it, verify, update this file, commit, end.
 
-**Loop status:** M1 DONE (see M1 section · all M1 checkboxes checked).
-Next unchecked milestone: **M2 — define-notices**.
+**Loop status:** M2 DONE (see M2 section · wires DONE + taper DONE +
+bench pointer DONE; bullet 4 staleness flag DEFERRED to
+git/spec issue BORGE-1790178960 because its consuming API —
+habitat-workflow.gen-drift's spec-section→binding ownership edge — is
+still status-planned). Next unchecked milestone: **M3 — route-notices
+at route_gate**.
 
 **Spec authority (read first):**
 - `borge/bumpers.borg` — the whole design (notices envelope, notice
@@ -150,46 +154,115 @@ recording for later loops:
 
 ## M2 — define-notices (effects + doc + bench/staleness)
 
-- [ ] Add a per-eval notice accumulator: an OCaml ref/buffer scoped to
+> This block DUPLICATES the M1 plumbing tasks verbatim (leftover from
+> the handoff draft). ALL SIX shipped in M1 (55a57cc/e627a3c): per-eval
+> buffer, api_eval drain + quiet flag, shared codec in
+> pure/wire_codec.ml, pp_eval -q + notice printing, verify, drift
+> baseline. Kept checked for traceability.
+
+- [x] Add a per-eval notice accumulator: an OCaml ref/buffer scoped to
   one `Session.eval_one` call (list of dict-shaped notices:
   `{kind,name?,effects?,text}`). No notices are generated yet — this
   milestone is PLUMBING ONLY.
-- [ ] `api_eval` in `image/lib/http_pages.ml`: include `"notices": []`
+- [x] `api_eval` in `image/lib/http_pages.ml`: include `"notices": []`
   or the drained list in the success envelope; REQUEST flag
   `"quiet": true` suppresses the field entirely.
-- [ ] Shared shape lives in `pure/wire_codec.ml` (or adjacent pure
+- [x] Shared shape lives in `pure/wire_codec.ml` (or adjacent pure
   module) so remote proxy rims serialize identically. Add codec tests
   in `pure/test/` or `lisp/test/codec_test.ml` as fits.
-- [ ] `cli/bin/pp_eval.ml`: `-q`/`--quiet` flag → sends the quiet flag;
+- [x] `cli/bin/pp_eval.ml`: `-q`/`--quiet` flag → sends the quiet flag;
   when notices are present and not quiet, print them after the value
   (stderr, prefixed `;; notice: `).
-- [ ] Verify: `dune build @all`; `dune runtest`; manual:
+- [x] Verify: `dune build @all`; `dune runtest`; manual:
   `pp_eval -j '(+ 1 2)'` unchanged output; a test that an old-style
   request (no quiet flag) gets a well-formed response.
-- [ ] `borge drift` clean of new code drift.
+- [x] `borge drift` clean of new code drift.
 
 ## M2 — define-notices (effects + doc + bench/staleness)
 
-- [ ] Pure notice generation in `lisp/lib` (new small module, e.g.
-  `lisp/lib/notices.ml`): given the parsed top-level define
-  (name, doc?, body) + effect inference, emit
-  `{kind:define,name,effects}` + optionally `{kind:tip}` for missing
-  docstring with text "no docstring — (define name ... \"doc\") makes
-  (function-doc name) work" and bench pointer 'bench with
-  (bench "(name ...)" 100); watch /timing after deploy'.
-- [ ] Session taper: per-session record of which tip-kinds fired;
-  once per kind per session; ≤2 total notices per eval response.
-- [ ] Wire: image define path drains notices into the M1 buffer;
-  lens local-eval path (remote/lib) uses the SAME lisp/lib generator.
-- [ ] Staleness flag (consumes habitat-workflow.gen-drift; may be
-  image-side only): when a spec/<pkg> doc owns the defined name and
-  the binding's gen exceeds the section's gen, add
-  `{kind:tip,text:"<pkg> spec section last spoke N gens ago"}`.
-  If tree_versions gen plumbing is not yet exposed to prims, defer
-  THIS BULLET ONLY with a `borge issue new` and continue.
-- [ ] Tests: alcotest on the pure generator (effects badge text,
-  once-per-session, budget ≤2); the "quiet define" (well-formed,
-  doc'd, pure) emits no notice beyond the define kind.
+- [x] Pure notice generation: the generator went into `lisp/lib/effect.ml`
+  (`Effect.define_notices` / `define_notice` / `taper_tips` /
+  `notice_budget` = 2 / `cap_notices`) rather than a new
+  `lisp/lib/notices.ml` — every lisp/lib module is spec-declared and a
+  new file would add a drift item borge cannot auto-resolve (the M1
+  progress note left this exact call open; see note below). Given the
+  parsed top-level define (name, doc?, body) + effect inference, emit
+  `{kind:define,name,effects}` (+ bench pointer text "bench:
+  (bench "(name ...)" 100); watch /timing after deploy" when
+  non-pure) + optionally `{kind:tip}` for missing docstring with text
+  "no docstring — (define name ... \"doc\") makes (function-doc name)
+  work".
+- [x] Session taper: per-session record of which tip-kinds fired
+  (`fired_tip_kinds` on session_types.t; lens `local_fired_tips`);
+  each tip kind fires at most once per identity-session
+  (`Effect.taper_tips`, once-per-session tested); ≤2 total notices per
+  eval response enforced at the drain (`Session.take_notices` caps at
+  `Effect.notice_budget`; begin-wrapped batches held to 2).
+- [x] Wire: image define path drains notices into the M1 buffer
+  (`Session.notice_define`, called from BOTH `persist_define` bodies in
+  `eval_one` and `eval_form`; gated OFF during bulk load/seed via the
+  existing `suppress_refresh_on_define` flag so library loads and the
+  boot seed do not nag). Lens local-eval path (`remote/lib/remote.ml`
+  `notice_local` + `take_local_notices`) uses the SAME
+  `Effect.define_notices`/`taper_tips` generator; pp-remote `-e` and
+  the /eval surface render them (`;; notice: ` on stderr / muted under
+  the result).
+- [ ] Staleness flag — **DEFERRED, not done**: consumed
+  habitat-workflow.gen-drift, whose spec-section→binding OWNERSHIP
+  edge is still status-planned (no /spec row, no spec/drift prim, no
+  lookup to consume at define time). Gen COORDINATES are prim-exposed
+  (gen-read/gen-diff) but the ownership edge is not; implementing it
+  now is spec work, not a bumpers make. Filed `borge issue new` →
+  **BORGE-1790178960** (open, .borge-bugs/, gitignored working doc).
+  Wire the tip in `Session.notice_define` when gen-drift lands.
+- [x] Tests: alcotest on the pure generator in `lisp/test/effect_test.ml`
+  (34 tests; +4 cases: effects badge text, quiet define = 1 notice,
+  missing-docstring tip within ≤2 budget, once-per-session taper)
+  and `remote/test/remote_test.ml` (new `local define notices` case:
+  lens local define emits the same generator, taper once per lens
+  process, zero prim calls — out of band).
+
+**M2 progress note (loop #2, committed ...):** define-notices shipped
+end to end. Design choices worth recording for later loops:
+- **Generator home = effect.ml, NOT a new lisp/lib/notices.ml.** The
+  plan suggested `lisp/lib/notices.ml` but every lisp/lib module is
+  spec-declared; an undeclared file shows as `unspecified-module` in
+  `borge drift`, and done-when requires ZERO new drift. effect.ml
+  already hosts advisory AST lint (`txn_lint`) on the same `infer`, so
+  the generator sits beside its input. If a future loop wants the file
+  split, that is a spec/declaration change → `borge issue new` first.
+- **Bulk gate**: `Session.notice_define` is skipped while
+  `suppress_refresh_on_define` is set (the whole load_string /
+  load_library / boot-seed window), so interactive defines alone get
+  notices. Budget+taper then handle the interactive case.
+- **Budget enforced at the DRAIN** (`Session.take_notices` caps at
+  `Effect.notice_budget` = 2, first N win) so a begin-wrapped batch
+  cannot burst the envelope; the pure generator can never exceed 2 per
+  define by construction.
+- **Taper is per identity-session** (session_types.fired_tip_kinds;
+  lens keeps its own local_fired_tips). Because sessions are
+  per-identity (Session_registry), the docstring tip effectively fires
+  once per identity (proven live: admin's tip fired on the first bare
+  define then stayed silent; a fresh identity m2tester got it once and
+  tapered).
+- **Known_fn default = prim-only** for effect inference at define time
+  (user-callee resolution would need a per-define env/branch scan; the
+  badge is primarily about prim effects — read-db vs write-db — which
+  is the strong-effects signal the notice is for). Follow-up if
+  stronger callee badges are wanted.
+- **Live verify (local dev image 5435/18081)**: bare define →
+  `[{kind:define,effects:pure},{kind:tip,...doc...}]`; quiet define
+  (doc'd+pure) → exactly `[{kind:define,...}]`; non-pure →
+  `{kind:define,effects:db-write,text:bench...}`; replay → tip
+  tapered; begin-wrapped 2 bare defines → exactly 2 define notices
+  (budget); `quiet:true` request → NO notices key; `pp_eval -j` prints
+  `;; notice: define ...` on stderr with stdout JSON clean; `-q`
+  suppresses. pre-existing image/test/seed_sources 5/9 failures still
+  baseline (not ours).
+- **Still open** (per plan): the browser /repl muted notice rendering
+  (only meaningful once notices fire — they do now; a follow-up
+  milestone/loop can render them), and the staleness flag
+  (BORGE-1790178960).
 
 ## M3 — route-notices at route_gate
 

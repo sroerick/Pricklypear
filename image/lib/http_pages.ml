@@ -1604,10 +1604,13 @@ let api_eval (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
              flag {"quiet": true} suppresses the field entirely, so a
              quiet request is wire-identical to an old-style client.
              Notices never touch "value" (define's contract invariant;
-             docs/plans/bumpers-m1-notices.md). M1 is plumbing only —
-             no notices are generated yet, so non-quiet responses carry
-             []. Pending-notice producers (M2+: define/route) append to
-             the session buffer and are drained here. *)
+             docs/plans/bumpers-m1-notices.md). M1 shipped the DRAIN
+             (plumbing only); M2 added the first producers (Session
+             notice_define on interactive defines, gated off in bulk
+             load/seed) and the response budget cap inside
+             take_notices. Pending-notice producers append to the
+             session buffer; this drain is the only intentional
+             consumer. *)
           let notices = Session.take_notices session in
           let base =
             [ ("ok", `Bool true); ("value", Prims_pure.value_to_json v) ]

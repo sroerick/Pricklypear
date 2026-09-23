@@ -273,6 +273,43 @@ let test_pure_catalog_parity () =
   Alcotest.(check int) "zero prim calls (pure stayed local)" 0
     (List.length !calls)
 
+(** bumpers M2 (borge/bumpers.borg notices-envelope): a LOCAL top-level
+    define emits notices through the SAME pure generator as the image
+    define path ([Effect.define_notices] + [Effect.taper_tips]); the
+    value [Remote.eval] returns is untouched (out of band). The
+    once-per-session taper drops the missing-docstring tip on replay. *)
+let test_local_define_notices () =
+  let transport, calls, _ = mock_transport () in
+  let t = Remote.make ~transport () in
+  (* quiet define (doc'd, pure): exactly ONE notice — the define kind.
+     Function-sugar docstrings are LEADING: (define (f …) "doc" body). *)
+  let _v = Remote.eval t "(define (add a b) \"adds a and b\" (+ a b))" in
+  let ns1 = Remote.take_local_notices t in
+  Alcotest.(check int) "quiet define -> one notice" 1 (List.length ns1);
+  (match ns1 with
+   | [ n ] ->
+       Alcotest.(check string) "kind" "define" n.kind;
+       Alcotest.(check string) "effects" "pure"
+         (Option.value n.effects ~default:"")
+   | _ -> Alcotest.fail "expected exactly one define notice");
+  (* bare define (no docstring) -> define + docstring tip *)
+  let _ = Remote.eval t "(define (f x) (+ x 1))" in
+  let ns2 = Remote.take_local_notices t in
+  Alcotest.(check int) "bare define -> two notices" 2 (List.length ns2);
+  Alcotest.(check bool) "docstring tip present" true
+    (List.exists (fun (n : Wire_codec.notice) -> n.kind = "tip") ns2);
+  (* replay of a bare define: the docstring tip tapers out (once per
+     lens process), the define kind still fires *)
+  let _ = Remote.eval t "(define (g x) (+ x 2))" in
+  let ns3 = Remote.take_local_notices t in
+  Alcotest.(check bool) "no docstring tip on replay" false
+    (List.exists (fun (n : Wire_codec.notice) -> n.kind = "tip") ns3);
+  Alcotest.(check bool) "define kind still fires on replay" true
+    (List.exists (fun (n : Wire_codec.notice) -> n.kind = "define") ns3);
+  (* notices are out of band: local defines ran with ZERO prim calls *)
+  Alcotest.(check int) "local defines made zero prim calls" 0
+    (List.length !calls)
+
 let () =
   Alcotest.run "remote"
     [
@@ -283,6 +320,7 @@ let () =
           Alcotest.test_case "lazy def miss fetches + evals" `Quick test_lazy_def_miss;
           Alcotest.test_case "genuinely unbound fails cleanly" `Quick test_genuinely_unbound;
           Alcotest.test_case "no local store-write prims" `Quick test_no_local_store_write;
+          Alcotest.test_case "local define notices (bumpers M2)" `Quick test_local_define_notices;
           Alcotest.test_case "transaction routed to remote_eval wholesale" `Quick test_transaction_routed_remote;
           Alcotest.test_case "transaction without hook raises" `Quick test_transaction_without_hook_raises;
           Alcotest.test_case "stepping over a remote client" `Quick test_stepping_via_client;

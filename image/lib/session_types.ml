@@ -174,6 +174,14 @@ type t = {
       modify the value eval_one returns, so define's return contract is
       untouched (docs/plans/bumpers-m1-notices.md invariant 1). *)
   mutable pending_notices : Wire_codec.notice list;
+  (** bumpers M2 (borge/bumpers.borg notices-envelope / notice-budget):
+      session taper — which tip KINDS have already fired this session.
+      Each tip kind fires at most once per session (coach early, silent
+      once fluent). M2's only tip is the missing-docstring tip (kind
+      "tip"). Written via Effect.taper_tips at define-notice generation;
+      distinct from [pending_notices] (per-eval, reset each eval) — this
+      is per-SESSION identity state and survives resets. *)
+  mutable fired_tip_kinds : string list;
   }
 
 (** Tenant tier (spec_town_profile 2026-09-13): delegated tokens always

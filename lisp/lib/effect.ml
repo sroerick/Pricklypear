@@ -648,3 +648,93 @@ let txn_lint ?(known_fn : known_fn_lookup = fun _ -> None) (e : expr)
       "soft txn: select-for-update without with-transaction — row lock will not span later prims"
       :: !hints;
   List.rev !hints
+
+(* ---- bumpers M2: define-notices (borge/bumpers.borg notices-envelope) ----
+
+   Pure, advisory generation for a top-level (define …). Given the
+   parsed define (name, doc?, peeled body) + effect inference, it emits
+   the candidate notices: a {kind:define} (name + effect badge + bench
+   pointer when the body has effects) and, when the docstring is
+   missing, a {kind:tip} (the docstring nudge). A well-formed, doc'd,
+   pure define yields exactly ONE notice (the define kind) — the M2
+   "quiet define".
+
+   Resides HERE in effect.ml rather than a new lisp/lib/notices.ml
+   deliberately: every lisp/lib module is spec-declared and borge drift
+   would flag an undeclared file as unspecified-module; effect.ml
+   already hosts advisory AST lint (txn_lint) on this same infer, so
+   the generator sits beside its input (docs/plans/bumpers-m1-notices.md
+   M1 progress note left this home decision to the M2 loop). The image
+   define path and the lens local-eval path call this SAME function so
+   both emit identical notice text (bumpers M2 wire bullet). *)
+
+type define_notice = {
+  kind : string;  (* "define" | "tip" | "warn" (bumpers notices-envelope) *)
+  name : string;
+  effects : string option;  (* effect badge when the kind carries one *)
+  text : string;
+}
+
+(** Hard budget: at most [notice_budget] notices per eval response
+    (bumpers.notice-budget — the channel dies if it nags). The pure
+    generator never exceeds it per define; the session drain caps at the
+    same constant. *)
+let notice_budget = 2
+
+(** Cap a list at the notice budget (first N win). Shared by the pure
+    generator callers and the session drain so the budget is ONE
+    constant. *)
+let cap_notices (ns : define_notice list) : define_notice list =
+  let rec go n acc = function
+    | _ when n = 0 -> List.rev acc
+    | x :: rest -> go (n - 1) (x :: acc) rest
+    | [] -> List.rev acc
+  in
+  go notice_budget [] ns
+
+(** Candidate notices for one top-level define. [body] is the peeled
+    body (lambda leading-doc already stripped, as parse_top_define
+    returns); [doc] None triggers the docstring tip. Effect inference
+    uses [known_fn] for user-callee resolution when provided; default is
+    prim-only (conservative floor). *)
+let define_notices ?(known_fn : known_fn_lookup = fun _ -> None)
+    ~(name : string) ~(doc : string option) (body : expr) :
+    define_notice list =
+  let fx = infer ~known_fn body in
+  let badge = EffSet.badge fx in
+  let define_text =
+    if EffSet.is_pure fx then "defined"
+    else
+      Printf.sprintf
+        "bench: (bench \"(%s 1)\" 100); watch /timing after deploy" name
+  in
+  let notice =
+    { kind = "define"; name; effects = Some badge; text = define_text }
+  in
+  match doc with
+  | Some _ -> [ notice ]
+  | None ->
+      let tip_text =
+        Printf.sprintf
+          "no docstring — (define %s ... \"doc\") makes (function-doc %s) work"
+          name name
+      in
+      [ notice; { kind = "tip"; name; effects = None; text = tip_text } ]
+
+(** Session taper (bumpers.notice-budget): each tip KIND fires at most
+    once per session. Pure fold — [fired] is the session's set of
+    tip-kinds already emitted (a list of kind strings). Returns the
+    kept notices plus the updated fired set, so the session mutates
+    exactly one value. *)
+let taper_tips ~(fired : string list) (ns : define_notice list) :
+    define_notice list * string list =
+  let kept, fired' =
+    List.fold_left
+      (fun (kept, fired) n ->
+        match n.kind with
+        | "tip" when List.mem "tip" fired -> (kept, fired)
+        | "tip" -> (n :: kept, "tip" :: fired)
+        | _ -> (n :: kept, fired))
+      ([], fired) ns
+  in
+  (List.rev kept, fired')
