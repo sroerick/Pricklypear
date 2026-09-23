@@ -342,6 +342,48 @@ let checks = [
          Alcotest.(check bool) "not-yet-defined text" true
            (contains ~sub:"not yet defined" n.text)
      | _ -> Alcotest.fail "expected exactly one route notice"));
+  (* bumpers M4 (borge/bumpers.borg verify-route): static constant-rebuild
+     warnings -- the first named verify-route warning pattern. Conservative:
+     only literal constants warn; request-dependent builds never can. *)
+  ("verify_route_warnings large css string literal", `Quick, fun () ->
+    (* one big inline CSS string (>= 1024 chars) -> warn *) 
+    let big = String.make 1500 'x' in
+    let ws = Effect.verify_route_warnings (Reader.read_one (Printf.sprintf "(html/style (html/text \"%s\"))" big)) in
+    Alcotest.(check int) "one warning" 1 (List.length ws);
+    (match ws with
+     | [ w ] ->
+         Alcotest.(check bool) "delay nudge" true (contains ~sub:"delay" w)
+     | _ -> Alcotest.fail "expected the constant-rebuild warning"));
+  ("verify_route_warnings big literal list (layout incident shape)", `Quick, fun () ->
+    (* a (list ...) of 30 literal CSS strings fed to html/join — the actual
+       prod 2026-12-30 layout stylesheet shape -> warn *) 
+    let parts =
+      List.init 30 (fun i -> Printf.sprintf ".cl%d{color:#%06x}" i (i * 0x111111))
+    in
+    let src = "(html/join (list " ^ String.concat " " (List.map (fun s -> Printf.sprintf "\"%s\"" s) parts) ^ "))" in
+    let ws = Effect.verify_route_warnings (Reader.read_one src) in
+    Alcotest.(check int) "one warning" 1 (List.length ws);
+    Alcotest.(check bool) "delay nudge" true
+      (List.exists (contains ~sub:"delay") ws));
+  ("verify_route_warnings small constants never warn", `Quick, fun () ->
+    let ws =
+      Effect.verify_route_warnings
+        (Reader.read_one "(html/p (html/attr \"class\" \"x\") (html/text \"hello world\"))")
+    in
+    Alcotest.(check int) "no warnings" 0 (List.length ws));
+  ("verify_route_warnings request-dependent build never warns", `Quick, fun () ->
+    (* builds HTML from a request param + rows — no AST literal payload -> no warn *) 
+    let ws =
+      Effect.verify_route_warnings
+        (Reader.read_one "(html/div (html/attr \"class\" (string-append \"doc-\" (as-str (request-param \"slug\")))) (html/join (rows 'note \"{}\")))")
+    in
+    Alcotest.(check int) "no warnings" 0 (List.length ws));
+  ("verify_route_warnings many small strings within 24 stay quiet", `Quick, fun () ->
+    (* 10 short literal strings < 24 items and < 1024 chars -> no warn *) 
+    let parts = List.init 10 (fun i -> Printf.sprintf "\"short-%d\"" i) in
+    let src = "(list " ^ String.concat " " parts ^ ")" in
+    let ws = Effect.verify_route_warnings (Reader.read_one src) in
+    Alcotest.(check int) "no warnings" 0 (List.length ws));
 ]
 
 let () =

@@ -586,6 +586,16 @@ let route_dispatch_fn :
   ref (fun _t _handler _req ->
          Pricklypear_lisp.Ast.VStr "route/dispatch: not initialized")
 
+(* Late-bound thunk for the bumpers M4 verify-route prim (borge/bumpers.
+   borg verify-route). Defined after call_handler (which needs the store
+   + env + current_request machinery that only exists past `make`); this
+   ref lets the prim registered inside make reference it without a
+   forward-let, mirroring route_dispatch_fn. Bound right after
+   call_handler. *)
+let verify_route_fn : (t -> string -> Pricklypear_lisp.Ast.value) ref =
+  ref (fun _t _path ->
+         Pricklypear_lisp.Ast.VStr "verify-route: not initialized")
+
 let register_net_prims (t : t) (tbl : Primitives.t) : unit =
 
   Prims_net.register t tbl;
@@ -1501,6 +1511,21 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
           | Some (handler, _) -> Pricklypear_lisp.Ast.VStr handler
           | None -> Pricklypear_lisp.Ast.VNil)
        | _ -> raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("prim", "route/lookup needs one path", "bad-args"))));
+  (* bumpers M4 verify-route (borge/bumpers.borg verify-route): dry-run
+     a route — (verify-route "/path") resolves the handler on the
+     session's chain, reports static cost/effects/shape + warnings, then
+     invokes it ONCE under the standard step budget. Budget overflow is
+     a REPORT FIELD ({kind:"budget-exceeded"}), never a 500. Implemented
+     via the late-bound [verify_route_fn] (bound right after
+     call_handler) so the prim has no forward reference to the session
+     machinery. WriteDb-classified (same executor semantics as
+     route/dispatch): denies public-route handlers from probing other
+     routes. *)
+  Primitives.register prim_table "verify-route"
+    (fun args ->
+       match args with
+       | [Pricklypear_lisp.Ast.VStr path] -> !verify_route_fn !t path
+       | _ -> raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("prim", "verify-route needs one path string", "bad-args"))));
   (* AI + list-branches / current-branch registered inside
      register_crud_prims above (they capture t). *)
   (* Make primitives reachable by name in the env, so `(+)` etc.
@@ -2111,3 +2136,86 @@ let () =
             (Printf.sprintf "route/dispatch: unbound handler %s" handler)
         | Handler_error msg ->
           Pricklypear_lisp.Ast.VStr (Printf.sprintf "route/dispatch: %s" msg)))
+
+(* Late-bind the bumpers M4 verify-route thunk now that call_handler
+   (and the env/route/request machinery it needs) exists. The report is
+   a JSON dict an agent can read before opening a browser or promoting:
+   {route, handler, effects (static badge), shape (fragment|shell|
+   not-html), cost {ms, prim-calls, eval-cost}, warnings []}. Budget
+   overflow surfaces as {kind:"budget-exceeded"} IN the report — never
+   an exception/500. Invocation binds a default GET request (empty
+   params) so request-* prims inside the handler resolve instead of
+   raising "no active request", mirroring route/dispatch; the handler
+   runs under a FRESH standard step budget via eval_string_rim_budgeted
+   (the same proven inner-rim path route/dispatch uses), so prim-calls /
+   eval-cost are this run's own accumulators. No /timing ring sample and
+   no X-Timing-Ms header: verify is a probe, not a real request. *) 
+let () =
+  verify_route_fn :=
+    (fun t path ->
+      let open Pricklypear_lisp in
+      let env =
+        match Request_context.get () with
+        | Some ctx -> Request_context.env ctx
+        | None -> t.eval_state.env
+      in
+      let report fields : Pricklypear_lisp.Ast.value =
+        Pricklypear_lisp.Ast.VStr (Yojson.Safe.to_string (`Assoc fields))
+      in
+      match lookup_route t path with
+      | None -> report [ ("route", `String path); ("error", `String "no such route") ]
+      | Some handler ->
+        let body = Pricklypear_lisp.Route_gate.handler_body env handler in
+        let effects, shape =
+          match body with
+          | Some b ->
+              ( (try Some (Pricklypear_lisp.Effect.EffSet.badge (Pricklypear_lisp.Effect.infer b))
+                 with _ -> Some "?")
+              , Pricklypear_lisp.Effect.classify_route_shape b )
+          | None -> (None, Pricklypear_lisp.Effect.NotHtml)
+        in
+        let warnings =
+          match body with
+          | Some b -> Pricklypear_lisp.Effect.verify_route_warnings b
+          | None -> []
+        in
+        let req : Session_types.request =
+          { method_ = `GET; path; params = []; body = ""; headers = [] }
+        in
+        let budget = Pricklypear_lisp.Eval.make_budget () in
+        let t0 = Unix.gettimeofday () in
+        let outcome =
+          t.current_request <- Some req;
+          Fun.protect
+            ~finally:(fun () -> t.current_request <- None)
+            (fun () ->
+              try
+                let _v =
+                  eval_string_rim_budgeted t ("(" ^ handler ^ ")") budget
+                in
+                `Ok
+              with
+              | Ast.Interp_error Ast.Budget_exceeded -> `Budget
+              | exn -> `Error (pp_interp_exn exn))
+        in
+        let ms = (Unix.gettimeofday () -. t0) *. 1000. in
+        let cost =
+          `Assoc
+            [ ("ms", `Float ms)
+            ; ("prim-calls", `Int budget.prim_calls)
+            ; ("eval-cost", `Int budget.steps) ]
+        in
+        let base =
+          [ ("route", `String path)
+          ; ("handler", `String handler)
+          ; ( "effects"
+            , `String (Option.value ~default:"?" effects) )
+          ; ("shape", `String (Pricklypear_lisp.Effect.route_shape_string shape))
+          ; ("cost", cost)
+          ; ( "warnings"
+            , `List (List.map (fun w -> `String w) warnings) ) ]
+        in
+        (match outcome with
+         | `Ok -> report base
+         | `Budget -> report (( "kind", `String "budget-exceeded" ) :: base)
+         | `Error msg -> report (("error", `String msg) :: base)))

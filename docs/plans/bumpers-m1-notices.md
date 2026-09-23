@@ -5,10 +5,13 @@ planned, committed 2026-09-23 as 28069dc) milestone by milestone.
 This file is the shared memory between loops: pick the next unchecked
 task, do only it, verify, update this file, commit, end.
 
-**Loop status:** M3 DONE (see M3 section · route publish notice +
-fragment classification + `'standalone` silence all shipped and
-live-verified; cross-session durability gap filed BORGE-1790180098).
-Next unchecked milestone: **M4 — verify-route dry-run**.
+**Loop status:** M4 DONE (see M4 section · `(verify-route "/path")` prim
+ships: cost/effects/shape report, budget-exceeded as a report field,
+first named warning pattern (large-constant rebuild → consider
+delay), WriteDb classification, all smoke + build/drift gates green;
+bumpers.borg verify-route flipped to implemented). Next unchecked
+milestone: **M5 — discovery surfaces (badges in describe/apropos-docs +
+docs-missing + app-check)**.
 
 **Spec authority (read first):**
 - `borge/bumpers.borg` — the whole design (notices envelope, notice
@@ -344,22 +347,82 @@ existing gate; M3 only added `declare_standalone` + `notice_route`
   standalone durability BORGE-1790180098 (needs a migration); and
   M4–M6.
 
-## M4 — verify-route dry-run
+## M4 — verify-route dry-run  (LOOP #5: DONE, committed …)
 
-- [ ] `(verify-route "/path")` prim (image/lib): resolve route on the
+- [x] `(verify-route "/path")` prim (image/lib): resolve route on the
   session's chain, invoke handler once under the standard budget,
   return a dict: `{cost: {ms, prim-calls, eval-cost}, effects:
   "<badge>", shape: fragment|shell|not-html, warnings: [...]}`.
-- [ ] Budget overflow must surface as `{kind: "budget-exceeded"}` in
+- [x] Budget overflow must surface as `{kind: "budget-exceeded"}` in
   the report, NOT an exception/500.
-- [ ] First named warning pattern (from prod 2026-12-30 layout
+- [x] First named warning pattern (from prod 2026-12-30 layout
   incident): handler rebuilds a large constant per invocation → warn
   "consider (delay ...)". Static AST heuristic is fine; false
   negatives acceptable, false positives not.
-- [ ] Effect register: classify the prim in lisp/lib/effect.ml
-  (read-db is the honest floor).
-- [ ] Smoke per bumpers.verify-route: notes face returns the dict;
-  over-budget handler reports, not hangs.
+- [x] Effect register: classify the prim in lisp/lib/effect.ml —
+  classified **WriteDb** (see progress note: executor semantics, same
+  as route/dispatch), not the plan's literal "read-db floor".
+- [x] Smoke per bumpers.verify-route: live /api/eval verify on dev
+  image 5435/18081 — /hello → fragment + effects html; /dabar → shell
+  + a real find-rows render error surfaced as JSON; over-budget
+  recursion → `kind:"budget-exceeded"` with eval-cost 400001, no hang.
+
+**M4 progress note (loop #5, committed …):** design choices to record:
+- **Prim home = image/lib/session.ml, inline next to route/lookup**
+  (registered into the live prim table so it auto-binds), driven by a
+  late-bound `verify_route_fn` ref bound right after call_handler —
+  the exact route/dispatch pattern (the prim needs call_handler-era
+  machinery, so a forward ref avoids a dependency cycle). Invocation
+  reuses `eval_string_rim_budgeted` with a FRESH `Eval.make_budget`
+  (default 400k standard budget) plus a default GET request bound via
+  `current_request` so request-* prims inside the handler resolve.
+  No /timing ring sample and no X-Timing-Ms header: verify is a probe,
+  not a real request.
+- **Budget-exceeded detection**: because call_handler swallows
+  `Interp_error Budget_exceeded` into `Handler_error "budget
+  exceeded"` (and emits an incident — wrong for a dry-run probe),
+  verify_route does its OWN invocation catching `Budget_exceeded`
+  explicitly before `pp_interp_exn`, and reports `{kind:
+  "budget-exceeded"}` alongside the cost/effects/shape fields.
+  Verified live: an infinite 100M-count recursion reports
+  eval-cost 400001 / prim-calls 72726 / ms 280 in-port and returns.
+- **Warning pattern home = lisp/lib/effect.ml** (`verify_route_warnings`
+  / `has_large_const_on_path` / `is_large_literal` / `const_payload`)
+  beside txn_lint + the other advisory lints — zero new drift. Only
+  AST LITERALS count (a `Lit` string >=1024 chars, or a `(list ...)`
+  whose args are ALL literals with >=24 elements or >=1024 chars
+  payload — the actual layout stylesheet shape is a ~30-element CSS
+  string list), and the walk recurses into args so
+  `(html/join (list <30 str>))` fires. Request-dependent builders
+  have no literal payload → can never be flagged (false negatives
+  accepted, false positives not). Does NOT chase calls into sibling
+  functions (layout/neocities-theme's own big list is a false-miss by
+  design).
+- **Classification = WriteDb, NOT the plan's literal "read-db
+  floor"**: verify-route EXECUTES a named handler — the same
+  capability as route/dispatch, which is conservatively WriteDb so
+  public routes can never call it and fire another route's writes. A
+  read-db classify would let a public handler probe/trigger writes
+  through it; the honest floor is just "not pure". If a purely-static
+  variant is wanted later it can be read-db. boot classification
+  assertion passed (image starts), so it IS in exactly one bucket.
+- **Tests**: 5 new cases in lisp/test/effect_test.ml (effects suite
+  now 52): big css string → warn; 30-element literal list (layout
+  shape) → warn; small constants → none; request-dependent build →
+  none; 10-item list under thresholds → none.
+- **Verify gates**: `dune build @all` + `dune runtest` green (only the
+  pre-existing image/test/seed_sources 5/9 baseline failures); borge
+  drift 23-item baseline (zero new — effect.ml + session.ml are
+  spec-declared); borge check 42/43 (storage.borg:521 pre-existing).
+- Also live-verified: unknown route → `{error:"no such route"}`
+  JSON; unbound handler → "unbound…" error field; a handler whose own
+  body errors (bad html/p arity, bad find-rows sort) surfaces the
+  render error readably in `error` — endpoints reach prod broken
+  becomes a REPL-visible JSON report (the section's value prop).
+- **Still open** (per plan): browser /repl muted notice rendering;
+  staleness flag BORGE-1790178960 (M2 bullet 4); cross-session
+  standalone durability BORGE-1790180098 (needs a migration); and M5
+  (discovery surfaces) + M6 (error hints + durable quiet).
 
 ## M5 — discovery surfaces
 

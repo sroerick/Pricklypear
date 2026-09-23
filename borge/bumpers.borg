@@ -23,8 +23,23 @@
 
  (section verify-route
   (doc "The dry-run tier — the one that buys back one-shot features. (verify-route \"/path\") invokes the handler once under the standard budget and returns a report dict: render cost (time, prim calls, eval-cost counter), effect set, and SHAPE classification: fragment (fits a glochid/habitat pane), full-shell page, or not-html-at-all. Unformed pages, broken endpoints, and budget-exceeded renders become a JSON result an agent can read before opening a browser or promoting. Known failure patterns become named warnings inside the report as they recur (first entry, from prod 2026-12-30: per-call allocation of large constants inside a render loop — the layout stylesheet lambda incident — warn when a handler rebuilds a big constant value per invocation where a delay-define would pay it once).")
-  (implements "image/lib (planned: verify_route prim)" )
-  (status planned)
+  (implements "image/lib (verify_route prim, session.ml)" )
+  ; status implemented 2026-09-23: bumpers M4 (loop 5; docs/plans/bumpers-m1-notices.md M4) shipped
+  ; the (verify-route "/path") prim (image/lib/session.ml verify_route_fn, inline prim registration
+  ; next to route/dispatch): resolves the handler on the session's chain, reports static
+  ; {cost{ms,prim-calls,eval-cost}, effects badge, shape} + verify_route_warnings, then invokes
+  ; the handler ONCE under a fresh standard budget (default 400k steps) with a default GET
+  ; request bound so request-* prims resolve. Budget overflow is a REPORT FIELD
+  ; {kind:"budget-exceeded"} — never an exception/500 (verified: an infinite 100M-count
+  ; recursion reports eval-cost 400001 in-port and returns, not a hang). First named warning
+  ; pattern implemented in lisp/lib/effect.ml (verify_route_warnings / has_large_const_on_path):
+  ; a large literal constant (>=1024 chars or a (list ...) of >=24 literal strings fed to
+  ; html/join) rebuilt per invocation -> "consider (delay ...)". Conservative by construction:
+  ; only AST literals count, so request-dependent builders can never be flagged (false
+  ; negatives acceptable, not false positives). The prim itself is classified WriteDb (same
+  ; executor semantics as route/dispatch — it RUNS a named handler, so a public-route handler
+  ; must never be able to call it and trigger another route's writes).
+  (status implemented)
   (verify
    (smoke "(verify-route on a notes face) returns cost + effects + fragment classification as JSON")
    (test "a handler exceeding the standard budget surfaces as a report field with kind budget-exceeded, not as a 500 or a browser hang")))
