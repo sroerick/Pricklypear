@@ -5,12 +5,10 @@ planned, committed 2026-09-23 as 28069dc) milestone by milestone.
 This file is the shared memory between loops: pick the next unchecked
 task, do only it, verify, update this file, commit, end.
 
-**Loop status:** M2 DONE (see M2 section · wires DONE + taper DONE +
-bench pointer DONE; bullet 4 staleness flag DEFERRED to
-git/spec issue BORGE-1790178960 because its consuming API —
-habitat-workflow.gen-drift's spec-section→binding ownership edge — is
-still status-planned). Next unchecked milestone: **M3 — route-notices
-at route_gate**.
+**Loop status:** M3 DONE (see M3 section · route publish notice +
+fragment classification + `'standalone` silence all shipped and
+live-verified; cross-session durability gap filed BORGE-1790180098).
+Next unchecked milestone: **M4 — verify-route dry-run**.
 
 **Spec authority (read first):**
 - `borge/bumpers.borg` — the whole design (notices envelope, notice
@@ -266,23 +264,85 @@ end to end. Design choices worth recording for later loops:
 
 ## M3 — route-notices at route_gate
 
-- [ ] On route publish: notice with path, handler, effect badge,
+- [x] On route publish: notice with path, handler, effect badge,
   htmx-harness pointer (docs/agent-ui-harness.md tier ladder as a
   short text: "verify tiered: wget content → scripted flow → CDP
   snapshot+vision; graduate green flows into scripts/smoke_<pkg>_ui.sh").
-- [ ] Fragment classification: STATIC check over handler AST — if the
+- [x] Fragment classification: STATIC check over handler AST — if the
   handler body calls a full-shell constructor (layout/page, html/html,
   or a head tag), classify full-shell; remark "renders a full shell;
   apps fit glochid/habitat panes as fragments built from libs/ui +
   libs/layout; standalone page? declare it". Pure; in lisp/lib so
   lens agrees.
-- [ ] Declared-standalone silences the fragment family: accept a
+- [x] Declared-standalone silences the fragment family: accept a
   route annotation or per-package datum (pick the minimal mechanism;
   cite your choice in the commit + update bumpers.borg fragment-by-
   default details via a borge issue if the mechanism diverges from
   what the section says).
-- [ ] route_gate semantics UNCHANGED: no new denial cases. Test: a
+- [x] route_gate semantics UNCHANGED: no new denial cases. Test: a
   full-shell handler publishes exactly as before, only with a notice.
+
+**M3 progress note (loops #3+#4, committed …):** route-notices shipped end to end.
+The previous loop left the whole implementation in the working tree
+uncommitted and unverified; this loop verified it build/test/live and
+landed it. Design choices worth recording:
+- **Generator + classifier home = lisp/lib/effect.ml** (same reasoning
+  as M2's define-notices: every lisp/lib module is spec-declared, so
+  `Effect.classify_route_shape` / `route_shape_string` /
+  `route_notice` / `route_facts` / `expr_uses_head` sit beside
+  define_notices on the same `infer` — zero new drift).
+  `Route_gate.handler_body` (image/lisp seam) hoists the gate's own
+  raw lookup so the classifier reads the handler body EXACTLY as the
+  gate does (no VThunk force → no request-context requirement, pure).
+- **Mechanism for bullet 3 = route annotation, not package datum**: a
+  trailing `'standalone` arg on `(route path handler ['standalone])` /
+  `(route path handler vis 'standalone)` / `(public-route path
+  handler ['standalone])`, accepted as string or quoted symbol. The
+  spec's fragment-by-default says "route annotation or package datum,
+  e.g. standalone: true" — the route annotation branch matches the
+  letter of the spec, so NO borge issue for divergence; the choice is
+  cited here + in the commit. **Session-scoped** (in-memory
+  `session_types.standalone_routes`, monotone: once declared, later
+  re-publishes of the path stay silent even without the annotation)
+  because route-notices fire only at publish time. The cross-session
+  durability gap (a fresh session re-publishing the path without the
+  annotation draws the full-shell remark again) needs a route-meta
+  column = schema change, which M3 forbids (invariant 5) → filed
+  **BORGE-1790180098** (open, .borge-bugs/).
+- **route-notice text varies by shape**: Shell → full-shell remark +
+  htmx-harness pointer; Fragment → harness pointer; NotHtml →
+  "published"; unbound handler (define-after-route still allowed on
+  non-public routes, unchanged from before) → "published (handler not
+  yet defined…)". kind "route" is NOT a tip, so the session taper
+  doesn't apply; the ≤2 budget is still enforced at the api_eval drain
+  (begin-wrapped publish batches held to 2).
+- **Gated off during seed/load** via the same
+  `suppress_refresh_on_define` flag as define-notices — library loads
+  and boot seed never nag.
+- **route_gate untouched**: `register_route_checked` keeps its
+existing gate; M3 only added `declare_standalone` + `notice_route`
+  calls on the SUCCESS path. Verified live: unbound public route still
+  denied ("…is not a defined function", no notice); bad visibility
+  arg still rejected; 32 existing 2-arg `(route path handler)` calls
+  across libs/ are unaffected.
+- **Existing arg shapes unchanged**: 2-arg, 3-arg visibility, and the
+  `public-route` forms all still parse; 4-arg adds the standalone
+  tail. The 3-arg "visibility must be …" error message now mentions
+  standalone (cosmetic).
+- **Verify**: `dune build @all` + `dune runtest` green (only
+  pre-existing image/test/seed_sources 5/9 baseline failures); borge
+  drift at the 23-item baseline (zero new); borge check 42/43.
+  Live dev image (throwaway PG 5435 / 18081): full-shell page publishes
+  with remark+harness, fragment carries harness pointer, not-html says
+  published, `'standalone` silences monotone (incl. re-publish without
+  the annotation), `quiet:true` drops the notices field, budget caps a
+  begin-wrapped route+2 defines at 2 notices, M2 define-notices still
+  fire. borge/bumpers.borg fragment-by-default flipped (status partial)
+  — the M5 app-check consumer is what keeps it short of implemented.
+- **Still open** (per plan): browser /repl muted notice rendering;
+  staleness flag BORGE-1790178960 (M2 bullet 4); cross-session
+  standalone durability BORGE-1790180098 (needs a migration); and
+  M4–M6.
 
 ## M4 — verify-route dry-run
 

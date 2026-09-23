@@ -215,6 +215,133 @@ let checks = [
     Alcotest.(check int) "fired set grows once" 1 (List.length fired');
     Alcotest.(check bool) "fired set monotone" true
       (List.length fired' >= List.length fired));
+  (* ---- bumpers M3: route-notices (fragment-by-default classifier) ---- *)
+  ("classify_route_shape full shell (layout/page)", `Quick, fun () ->
+    let shape =
+      Effect.classify_route_shape
+        (Reader.read_one "(layout/page (list (html/div (list (html/text \"hi\")))))")
+    in
+    Alcotest.(check string) "shell" "shell" (Effect.route_shape_string shape));
+  ("classify_route_shape layout/page-with-css is shell", `Quick, fun () ->
+    let shape =
+      Effect.classify_route_shape
+        (Reader.read_one "(layout/page-with-css (list (html/p (list (html/text \"x\")))))")
+    in
+    Alcotest.(check string) "shell" "shell" (Effect.route_shape_string shape));
+  ("classify_route_shape html/page is shell", `Quick, fun () ->
+    let shape =
+      Effect.classify_route_shape
+        (Reader.read_one "(html/page (list (html/h1 (list (html/text \"y\")))))")
+    in
+    Alcotest.(check string) "shell" "shell" (Effect.route_shape_string shape));
+  ("classify_route_shape shell nested inside let", `Quick, fun () ->
+    let shape =
+      Effect.classify_route_shape
+        (Reader.read_one "(let (parts (list (html/div (list)))) \
+                          (layout/page (list parts)))")
+    in
+    Alcotest.(check string) "shell" "shell" (Effect.route_shape_string shape));
+  ("classify_route_shape fragment (html/div only)", `Quick, fun () ->
+    let shape =
+      Effect.classify_route_shape
+        (Reader.read_one "(html/div (html/attr \"class\" \"x\") (html/text \"hi\"))")
+    in
+    Alcotest.(check string) "fragment" "fragment" (Effect.route_shape_string shape));
+  ("classify_route_shape fragment via render-html (no full shell)", `Quick, fun () ->
+    let shape =
+      Effect.classify_route_shape
+        (Reader.read_one "(render-html (html/join (list (html/p (list (html/text \"x\"))))))")
+    in
+    Alcotest.(check string) "fragment" "fragment" (Effect.route_shape_string shape));
+  ("classify_route_shape not-html (json endpoint)", `Quick, fun () ->
+    let shape =
+      Effect.classify_route_shape
+        (Reader.read_one "(json-emit (dict-set (dict-set (dict-keys (list)) \"a\" 1) \"b\" 2))")
+    in
+    Alcotest.(check string) "not-html" "not-html" (Effect.route_shape_string shape));
+  ("classify_route_shape not-html (plain string)", `Quick, fun () ->
+    let shape =
+      Effect.classify_route_shape (Reader.read_one "\"hello world\"")
+    in
+    Alcotest.(check string) "not-html" "not-html" (Effect.route_shape_string shape));
+  ("route_notice full shell carries remark + harness pointer", `Quick, fun () ->
+    let ns =
+      Effect.route_notice
+        { Effect.path = "/pages"
+        ; effects = Some Effect.EffSet.empty
+        ; shape = Effect.Shell
+        ; standalone = false }
+    in
+    (match ns with
+     | [ n ] ->
+         Alcotest.(check string) "kind" "route" n.kind;
+         Alcotest.(check string) "name" "/pages" n.name;
+         Alcotest.(check bool) "full shell remark" true
+           (contains ~sub:"full shell" n.text);
+         Alcotest.(check bool) "harness pointer" true
+           (contains ~sub:"verify tiered" n.text);
+         Alcotest.(check bool) "standalone hint" true
+           (contains ~sub:"standalone page? declare it" n.text)
+     | _ -> Alcotest.fail "expected exactly one route notice"));
+  ("route_notice fragment has harness pointer, no shell remark", `Quick, fun () ->
+    let ns =
+      Effect.route_notice
+        { Effect.path = "/widget"
+        ; effects = Some Effect.EffSet.empty
+        ; shape = Effect.Fragment
+        ; standalone = false }
+    in
+    (match ns with
+     | [ n ] ->
+         Alcotest.(check bool) "harness pointer" true
+           (contains ~sub:"verify tiered" n.text);
+         Alcotest.(check bool) "no shell remark" false
+           (contains ~sub:"full shell" n.text)
+     | _ -> Alcotest.fail "expected exactly one route notice"));
+  ("route_notice not-html carries no harness pointer", `Quick, fun () ->
+    let ns =
+      Effect.route_notice
+        { Effect.path = "/api/data"
+        ; effects = Some Effect.EffSet.empty
+        ; shape = Effect.NotHtml
+        ; standalone = false }
+    in
+    (match ns with
+     | [ n ] ->
+         Alcotest.(check bool) "just published" true
+           (contains ~sub:"published" n.text);
+         Alcotest.(check bool) "no harness pointer" false
+           (contains ~sub:"verify tiered" n.text)
+     | _ -> Alcotest.fail "expected exactly one route notice"));
+  ("route_notice standalone silences fragment family", `Quick, fun () ->
+    let ns =
+      Effect.route_notice
+        { Effect.path = "/pages"
+        ; effects = Some Effect.EffSet.empty
+        ; shape = Effect.Shell
+        ; standalone = true }
+    in
+    (match ns with
+     | [ n ] ->
+         Alcotest.(check bool) "silenced" true
+           (contains ~sub:"standalone" n.text);
+         Alcotest.(check bool) "no full shell remark" false
+           (contains ~sub:"full shell" n.text)
+     | _ -> Alcotest.fail "expected exactly one route notice"));
+  ("route_notice unbound handler (no body) notes not-yet-defined", `Quick, fun () ->
+    let ns =
+      Effect.route_notice
+        { Effect.path = "/later"
+        ; effects = None
+        ; shape = Effect.NotHtml
+        ; standalone = false }
+    in
+    (match ns with
+     | [ n ] ->
+         Alcotest.(check bool) "effects omitted" true (n.effects = None);
+         Alcotest.(check bool) "not-yet-defined text" true
+           (contains ~sub:"not yet defined" n.text)
+     | _ -> Alcotest.fail "expected exactly one route notice"));
 ]
 
 let () =

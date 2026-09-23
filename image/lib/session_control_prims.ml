@@ -192,8 +192,74 @@ let register ~(hooks : hooks) (t : t) (tbl : Primitives.t) : unit =
        now unknown / non-function handlers are DENIED. *)
     (Pricklypear_lisp.Route_gate.check_public_handler ~env:t.eval_state.env handler)
   in
+  (* bumpers M3 route-notices (borge/bumpers.borg notices-envelope /
+     fragment-by-default): on a successful route publish, generate +
+     buffer ONE notice — {kind:route, name:path, effects:badge, text:
+     remark} — with the htmx-harness pointer (docs/agent-ui-harness.md
+     tier ladder), the full-shell remark for a full-shell page, and the
+     standalone silence. All of this is pure AST work — handler body read
+     via [Route_gate.handler_body], effects via [Effect.infer], shape via
+     [Effect.classify_route_shape] — plus session state; no tree/notes
+     reads, so nothing here touches the notes-tree eval path before
+     /health serves (2026-09-14 promote incident invariant). Gated on the
+     same bulk load/seed window as define-notices. The ≤2-per-response
+     budget is enforced at the api_eval drain; kind "route" is not a tip,
+     so the session taper does not apply. *)
+  let notice_route ~(path : string) ~(handler : string)
+      ~(standalone : bool) : unit =
+    if t.ui_shell.suppress_refresh_on_define then ()
+    else
+      let body =
+        Pricklypear_lisp.Route_gate.handler_body t.eval_state.env handler
+      in
+      let effects, shape =
+        match body with
+        | Some b ->
+            ( (try Some (Pricklypear_lisp.Effect.infer b)
+               with _ -> Some Pricklypear_lisp.Effect.EffSet.empty)
+            , Pricklypear_lisp.Effect.classify_route_shape b )
+        | None -> (None, Pricklypear_lisp.Effect.NotHtml)
+      in
+      (* A standalone declaration is monotone within the session: once a
+         path is declared standalone, re-publishing it without the
+         annotation keeps the fragment family silenced (the declaration
+         states the route IS standalone, not per-publish intent). *)
+      let standalone = standalone || List.mem path t.standalone_routes in
+      let candidates =
+        Pricklypear_lisp.Effect.route_notice
+          { Pricklypear_lisp.Effect.path; effects; shape; standalone }
+      in
+      let to_wire (n : Pricklypear_lisp.Effect.define_notice)
+          : Wire_codec.notice =
+        { Wire_codec.kind = n.kind; name = Some n.name;
+          effects = n.effects; text = n.text }
+      in
+      t.pending_notices <- t.pending_notices @ List.map to_wire candidates
+  in
+  (* Route annotation (bumpers M3 fragment-by-default): a publish with
+     the 'standalone annotation records the path in the session's
+     standalone set (monotone — first declaration wins for the session)
+     so the fragment-family remark stays silent on later re-publishes
+     of the same path. Only the ANNOTATED publish records; a plain
+     publish is not a declaration. *)
+  let declare_standalone ~(standalone : bool) ~(path : string) : unit =
+    if standalone && not (List.mem path t.standalone_routes) then
+      t.standalone_routes <- path :: t.standalone_routes
+  in
+  (* [true] when an extra route-prim arg is the standalone annotation
+     ('standalone / "standalone"). Accepted as either a string (the same
+     form route visibility uses) or a quoted symbol, mirroring the route
+     prim's docstring. *)
+  let arg_is_standalone = function
+    | Pricklypear_lisp.Ast.VStr s ->
+        String.lowercase_ascii (String.trim s) = "standalone"
+    | Pricklypear_lisp.Ast.VSymbol s ->
+        String.lowercase_ascii (String.trim s) = "standalone"
+    | _ -> false
+  in
   let register_route_checked ~route_path ~handler ~visibility
-      ~(pass_vis_to_store : bool) : Pricklypear_lisp.Ast.value =
+      ~(pass_vis_to_store : bool) ~(standalone : bool)
+    : Pricklypear_lisp.Ast.value =
     (* Publish-time gate. SKIPPED during additive boot seed: at seed the
        env holds only the kernel prim catalog (fingerprint-skipped
        defines never bind), so an env-based gate would deny every fresh
@@ -231,6 +297,8 @@ let register ~(hooks : hooks) (t : t) (tbl : Primitives.t) : unit =
           else
             Store.register_route t.store ~route:route_path ~handler ()
         in
+        let () = declare_standalone ~standalone ~path:route_path in
+        let () = notice_route ~path:route_path ~handler ~standalone in
         (Pricklypear_lisp.Ast.VStr route_path))
   in
   Primitives.register_server_only tbl "route"
@@ -249,21 +317,46 @@ let register ~(hooks : hooks) (t : t) (tbl : Primitives.t) : unit =
             (* handler-only: pass_vis_to_store=false so DB keeps visibility
                on UPDATE; memory keeps prior or private for new. *)
             register_route_checked ~route_path ~handler ~visibility:vis
-              ~pass_vis_to_store:false
+              ~pass_vis_to_store:false ~standalone:false
         | [ Pricklypear_lisp.Ast.VStr route_path;
             Pricklypear_lisp.Ast.VStr handler;
-            vis_v ] ->
+            e3 ] ->
+            if arg_is_standalone e3 then
+              (* (route path handler 'standalone): keeps prior/private
+                 visibility (pass_vis_to_store=false), silences the
+                 fragment family (bumpers M3 fragment-by-default). *)
+              let vis =
+                match Hashtbl.find_opt t.routes route_path with
+                | Some (_, v) -> v
+                | None -> "private"
+              in
+              register_route_checked ~route_path ~handler ~visibility:vis
+                ~pass_vis_to_store:false ~standalone:true
+            else
+              (match parse_vis e3 with
+               | None ->
+                   (Pricklypear_lisp.Ast.VStr
+                        "route: visibility must be public, private, or standalone")
+               | Some vis ->
+                   register_route_checked ~route_path ~handler
+                     ~visibility:vis ~pass_vis_to_store:true
+                     ~standalone:false)
+        | [ Pricklypear_lisp.Ast.VStr route_path;
+            Pricklypear_lisp.Ast.VStr handler;
+            vis_v;
+            e4 ] ->
+            (* (route path handler visibility 'standalone) *)
             (match parse_vis vis_v with
-             | None ->
-                 (Pricklypear_lisp.Ast.VStr
-                      "route: visibility must be public or private")
-             | Some vis ->
+             | Some vis when arg_is_standalone e4 ->
                  register_route_checked ~route_path ~handler ~visibility:vis
-                   ~pass_vis_to_store:true)
+                   ~pass_vis_to_store:true ~standalone:true
+             | _ ->
+                 (Pricklypear_lisp.Ast.VStr
+                      "route: bad args (path handler [public|private] ['standalone])"))
         | _ ->
             (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("route", "bad args", "bad-args")))));
 
-  (* (public-route path handler) sugar *)
+  (* (public-route path handler ['standalone]) sugar *)
   Primitives.register tbl "public-route"
     (fun args ->
       if t.manifest.username = "anonymous" then
@@ -273,7 +366,16 @@ let register ~(hooks : hooks) (t : t) (tbl : Primitives.t) : unit =
         | [ Pricklypear_lisp.Ast.VStr route_path;
             Pricklypear_lisp.Ast.VStr handler ] ->
             register_route_checked ~route_path ~handler ~visibility:"public"
-              ~pass_vis_to_store:true
+              ~pass_vis_to_store:true ~standalone:false
+        | [ Pricklypear_lisp.Ast.VStr route_path;
+            Pricklypear_lisp.Ast.VStr handler;
+            e3 ] ->
+            if arg_is_standalone e3 then
+              register_route_checked ~route_path ~handler ~visibility:"public"
+                ~pass_vis_to_store:true ~standalone:true
+            else
+              (Pricklypear_lisp.Ast.VStr
+                   "public-route: bad args (path handler ['standalone])")
         | _ ->
             (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("public-route", "bad args", "bad-args")))));
 

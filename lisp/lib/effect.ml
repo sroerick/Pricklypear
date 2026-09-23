@@ -738,3 +738,128 @@ let taper_tips ~(fired : string list) (ns : define_notice list) :
       ([], fired) ns
   in
   (List.rev kept, fired')
+
+
+(* ---- bumpers M3: route-notices (borge/bumpers.borg notices-envelope /
+       fragment-by-default) ----
+
+   Pure route-publish notice generation + shape classification. The image
+   route prim (session_control_prims register_route_checked) calls this
+   on a successful publish; the classifier is exposed separately so the
+   M5 (app-check "pkg") per-route report can reuse it. Resides HERE the
+   same reason define_notices does: every lisp/lib module is
+   spec-declared and effect.ml already hosts the advisory AST lensing on
+   this same [infer]. The notice is a [define_notice]-shaped dict with
+   kind "route" — the SAME wire codec as M1/M2, no new shape
+   (prim-seam shared-codec: an additive "notices" field, out of band). *)
+
+type route_shape = Fragment | Shell | NotHtml
+
+(** Canonical shape name (used by M5 app-check reports). *)
+let route_shape_string = function
+  | Fragment -> "fragment"
+  | Shell -> "shell"
+  | NotHtml -> "not-html"
+
+(** Full-shell constructor heads (fragment-by-default): a handler that
+    applies any of these renders a COMPLETE HTML document shell.
+    layout/page (+ variants) is the neocities full page; html/page is the
+    plain full page. This is the chapter's "layout/page, html/html, or a
+    head tag". Static set — false negatives acceptable, false positives
+    not: calling a fragment a shell would nag a legitimate fragment, and
+    a full-shell page is a deliberate citizen, never a publish block. *)
+let full_shell_constructors : string list =
+  [ "layout/page"; "layout/page-with-css"; "html/page" ]
+
+(** Name prefixes/tags that mean a handler produces HTML output rather
+    than plain text/JSON — distinguishes NotHtml from Fragment. *)
+let html_generation_prefixes : string list =
+  [ "html/"; "ui/"; "layout/"; "css/"; "theme/" ]
+
+(** [true] when [name] is a head that generates HTML (a fragment or a
+    page) — as opposed to a plain-string/JSON endpoint. *)
+let is_html_generation_name (name : string) : bool =
+  name = "render-html" || name = "redirect"
+  || List.exists
+       (fun p ->
+         String.length name >= String.length p
+         && String.sub name 0 (String.length p) = p)
+       html_generation_prefixes
+
+(** Pure AST walk: does [e] apply any head matching [pred]? Walks
+    App/Prim heads and recurses arguments, lambdas, and bodies. Static —
+    no eval, no effect inference. *)
+let rec expr_uses_head (pred : string -> bool) (e : expr) : bool =
+  match e with
+  | Var _ | Lit _ | Quote _ -> false
+  | Lambda (_, body) | Define (_, body) -> expr_uses_head pred body
+  | If (t, a, b) ->
+      expr_uses_head pred t || expr_uses_head pred a
+      || expr_uses_head pred b
+  | Let (_, v, body) | Seq (v, body) ->
+      expr_uses_head pred v || expr_uses_head pred body
+  | Letrec (bs, body) ->
+      expr_uses_head pred body
+      || List.exists (fun (_, e') -> expr_uses_head pred e') bs
+  | Prim (name, args) -> pred name || List.exists (expr_uses_head pred) args
+  | App (Var name, args) -> pred name || List.exists (expr_uses_head pred) args
+  | App (h, args) -> expr_uses_head pred h || List.exists (expr_uses_head pred) args
+
+(** Static fragment/shape classification of a route handler body.
+    [Shell]: calls a full-shell constructor. [NotHtml]: produces no HTML
+    (a plain-text or JSON endpoint). [Fragment]: HTML that is NOT a full
+    shell (fits glochid/habitat panes). Advisory only — route_gate stays
+    about legality (handler exists, effects permitted), never about
+    shape (bumpers fragment-by-default: the lane sensor, not the wall). *)
+let classify_route_shape (body : expr) : route_shape =
+  let shell n = List.mem n full_shell_constructors in
+  if expr_uses_head shell body then Shell
+  else if expr_uses_head is_html_generation_name body then Fragment
+  else NotHtml
+
+(** htmx-harness pointer (docs/agent-ui-harness.md tier ladder): the same
+    short text rides every HTML-bearing route notice — cheapest
+    observation first, graduate green flows into the package smoke. *)
+let htmx_harness_pointer : string =
+  "verify tiered: wget content -> scripted flow -> CDP snapshot+vision; "
+  ^ "graduate green flows into scripts/smoke_<pkg>_ui.sh"
+
+(** Full-shell remark (fragment-by-default): a full-shell page is
+    legitimate, just declared. *)
+let full_shell_remark : string =
+  "renders a full shell; apps fit glochid/habitat panes as fragments "
+  ^ "built from libs/ui + libs/layout; standalone page? declare it"
+
+(** Facts the image route prim has at publish time. [effects] and
+    [shape] are [None]/[NotHtml] when the handler body is not (yet) a
+    visible function — define-after-route is still allowed, so a publish
+    without a body cannot claim a badge or a shape. *)
+type route_facts = {
+  path : string;
+  effects : effect_set option;
+  shape : route_shape;
+  standalone : bool;
+}
+
+(** Candidate notice for one route publish. EXACTLY one notice (kind
+    "route" — budget-friendly): path + effect badge, plus the htmx-
+    harness pointer on every HTML-bearing route, the full-shell remark on
+    a full-shell page, "published" on a plain endpoint, and the
+    standalone silence (fragment family off, route_gate legality
+    unchanged). *)
+let route_notice (f : route_facts) : define_notice list =
+  let text =
+    if f.standalone then
+      "declared standalone - fragment family silenced (route_gate legality unchanged)"
+    else
+      match f.effects with
+      | None ->
+          "published (handler not yet defined; define it then re-verify)"
+      | Some _ -> (
+          match f.shape with
+          | Shell -> full_shell_remark ^ " | " ^ htmx_harness_pointer
+          | Fragment -> htmx_harness_pointer
+          | NotHtml -> "published")
+  in
+  [ { kind = "route"; name = f.path;
+      effects = Option.map EffSet.badge f.effects; text } ]

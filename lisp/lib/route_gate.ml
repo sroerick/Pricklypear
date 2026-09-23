@@ -53,6 +53,24 @@ let expand_body (env : Env.env) (body : expr) : expr =
     that actually applies it denies with the normal unresolved-name
     message; the handler's OWN body stays strict (expand_body
     propagates, and check_public_handler turns that into a denial). *)
+(* NOT Env.lookup: lookup forces VThunks, and forcing EXECUTES the
+   handler body — under no current_request that raises "no active
+   request" for any request-context prim before we ever see the cell.
+   Raw walk of the public env records only (Env.env fields are plain
+   values in ast.ml). Split out at top level (rather than a local in
+   check_public_handler) so [handler_body] — the bumpers M3 classifier
+   twin — reads the handler the exact same way the gate does. *)
+let raw_lookup (e : Env.env) (name : string) : value option =
+  let rec go e =
+    match Hashtbl.find_opt e.bindings name with
+    | Some v -> Some v
+    | None ->
+      (match e.parent with
+       | Some p -> go p
+       | None -> None)
+  in
+  go e
+
 let env_lambda_bindings (env : Env.env) : (string * expr) list =
   Env.fold env
     (fun name v acc ->
@@ -103,22 +121,6 @@ let check_public_handler ~(env : Env.env) (handler : string)
       (Printf.sprintf
          "public route denied: handler %S is not a defined function"
          handler)
-  in
-  (* NOT Env.lookup: lookup forces VThunks, and forcing EXECUTES the
-     handler body — under no current_request that raises "no active
-     request" for any request-context prim before we ever see the cell.
-     Raw walk of the public env records only (Env.env fields are plain
-     values in ast.ml). *)
-  let raw_lookup (e : Env.env) (name : string) : value option =
-    let rec go e =
-      match Hashtbl.find_opt e.bindings name with
-      | Some v -> Some v
-      | None ->
-        (match e.parent with
-         | Some p -> go p
-         | None -> None)
-    in
-    go e
   in
   match raw_lookup env handler with
   | None -> deny_not_a_function ()
@@ -180,3 +182,22 @@ let check_public_handler ~(env : Env.env) (handler : string)
               handler))
   | Some (VThunk _) -> deny_not_a_function ()
   | Some _ -> deny_not_a_function ()
+
+(** Extract the handler BODY expression for [name] from [env] without
+    executing anything — the same raw, force-free walk the gate uses
+    ([raw_lookup] never forces a VThunk, so no handler body runs and no
+    fiber-local request context is required). Returns the lambda body for
+    a VLambda or an unforced/forced VThunk cell; [None] when the name is
+    absent or bound to a non-function (a named prim, a literal, …).
+
+    Shared by the public-route gate (above) and the bumpers M3
+    route-notice classifier ([Effect.classify_route_shape] needs the
+    BODY, not a verdict) so both read the handler the same way and both
+    stay pure. *)
+let handler_body (env : Env.env) (name : string) : expr option =
+  match raw_lookup env name with
+  | None -> None
+  | Some (VLambda (_, body, _)) -> Some body
+  | Some (VThunk { contents = Unforced { thunk_body = body; _ } }) -> Some body
+  | Some (VThunk { contents = Forced (VLambda (_, body, _)) }) -> Some body
+  | Some _ -> None
