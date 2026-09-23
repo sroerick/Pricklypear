@@ -5,13 +5,14 @@ planned, committed 2026-09-23 as 28069dc) milestone by milestone.
 This file is the shared memory between loops: pick the next unchecked
 task, do only it, verify, update this file, commit, end.
 
-**Loop status:** M4 DONE (see M4 section · `(verify-route "/path")` prim
-ships: cost/effects/shape report, budget-exceeded as a report field,
-first named warning pattern (large-constant rebuild → consider
-delay), WriteDb classification, all smoke + build/drift gates green;
-bumpers.borg verify-route flipped to implemented). Next unchecked
-milestone: **M5 — discovery surfaces (badges in describe/apropos-docs +
-docs-missing + app-check)**.
+**Loop status:** M5 DONE (see M5 section · discovery surfaces ship:
+`(docs-missing [pkg])` + `(app-check "pkg")` prims, effect badges + arity
+(`name (args) [read-db]`) across describe single-binding/package/apropos
+fallback, describe doc-coverage footer, all smoke + build/drift/check
+gates green; bumpers.borg discovery-surfaces flipped to partial
+(badges/footer/docs-missing half), fragment-by-default flipped to
+implemented (its last open item was app-check). Next unchecked
+milestone: **M6 — error hints + durable quiet**.
 
 **Spec authority (read first):**
 - `borge/bumpers.borg` — the whole design (notices envelope, notice
@@ -426,17 +427,79 @@ existing gate; M3 only added `declare_standalone` + `notice_route`
 
 ## M5 — discovery surfaces
 
-- [ ] Effect badges in describe / apropos-docs text output
+- [x] Effect badges in describe / apropos-docs text output
   (`image/lib/agent_tools.ml`): `name (args) [read-db]`.
-- [ ] `(docs-missing [pkg])` prim: visible bindings without
+- [x] `(docs-missing [pkg])` prim: visible bindings without
   docstrings (function-doc () means missing), filtered to package
   prefix when given.
-- [ ] describe package footer: "documented X/Y — (docs-missing
+- [x] describe package footer: "documented X/Y — (docs-missing
   \"pkg\")" when Y > X.
-- [ ] `(app-check "pkg")`: per-route fragment/shell/not-html
+- [x] `(app-check "pkg")`: per-route fragment/shell/not-html
   classification report (reuse M3 classifier). Advisory only.
-- [ ] This implements habitat-workflow.spec-health's "gap follows the
+- [x] This implements habitat-workflow.spec-health's "gap follows the
   agent around" line — note the cross-ref in the commit.
+
+**M5 progress note (loops #6+#7, committed …):** design choices to record:
+- **Generator home = image/lib/agent_tools.ml, beside the other agent
+  tools** (describe/apropos_docs/function-doc already live there) —
+  pure formatters (`annotate_name`, `doc_coverage_footer`,
+  `app_check_line`, `lambda_params`, `binding_has_doc`) declared so the
+  no-DB agent_tools_test suite can pin their shape. Prims registered in
+  `image/lib/prims_code.ml` (`docs-missing`, `app-check`);
+  `session.ml` re-exports; `lisp/lib/effect.ml` classifies both
+  prims ReadDb (discovery never writes).
+- **The last loop (#6) left M5 uncommitted + broken**: helper was named
+  `mm5_annotate` in the test but `annotate_name` in the code → the test
+  binary would not compile. Fixed the test to `annotate_name`; also
+  corrected a stray `*)` comment.
+- **Badge + arity in describe**: single binding
+  `name (args) [badge]` (args from the body's lambda params), package
+  listing, AND the apropos-fallback listing all carry
+  `binding_annot ~known_fn` (store functions are effect-inferred over
+  their body with the precomputed branch known_fn so user-callee
+  capabilities are credited; prims/special forms resolve from the
+  classified catalog; unknown → "[?]" never a false "pure"). The
+  standalone `(apropos-docs pat)` prim stays structured `(name, doc)`
+  pairs (consumers exact-match names); badges are in the describe TEXT
+  output, matching the "text output" reading of the bullet.
+- **Arity decode gap found this loop**: seeded/load-library bodies
+  persist as the reader form `App (Var "lambda", params :: _)` (flat
+  encoding: first param = App head, rest = args array, `Lit VNil` for
+  ()), while interactive define-sugar persists a `Lambda` constructor.
+  `binding_annot` only matched `Lambda` → arity never rendered for
+  seeded funcs. Added `lambda_params : expr -> string list option`
+  handling BOTH shapes (+ 4 tests pinning the encodings; m5 suite now
+  11 tests). Live: `(describe "todo/add")` →
+  `todo/add (list-id title) [db-write]`; `todo/page` (thunk) →
+  `todo/page [db-write]`.
+- **Footer** `documented X/Y — (docs-missing "pkg")` only when Y > X
+  (pinned as a pure formatter). Live: `(describe "todo")` ends with
+  `documented 22/149 — (docs-missing "todo")`.
+- **docs-missing**: filter is package prefix (same match as
+  package-bindings). Live: `(count (docs-missing "todo"))` = 127;
+  `(docs-missing)` = full cross-package list, no auth/DB cost surprises.
+- **app-check**: per-route classification over `Route_gate.handler_body`
+  + `Effect.classify_route_shape` (exactly the M3 classifier); `unbound`
+  when the handler isn't defined yet; empty pkg = all routes; matches
+  handler == pkg OR pkg/ prefix (= package-bindings semantics, same as
+  docs-missing). Live: `(app-check "welcome")` → 4 routes with
+  shell/fragment/not-html badges; `(app-check "todo")` → "no routes
+  whose handler is in this package" (todo has no routes on the dev
+  seed — /notes etc aren't registered there either; not a bug, the
+  report is what it reports).
+- **Spec flips**: discovery-surfaces planned→partial (badges/footer/
+  docs-missing shipped; the error-codec hint field + (help) prim stay
+  for M6), fragment-by-default partial→implemented (its last open item
+  — the app-check report — now ships). Commit cites
+  habitat-workflow.spec-health.
+- **Verify**: `dune build @all` + `dune runtest` green (only the
+  pre-existing image/test/seed_sources 5/9 baseline failures); borge
+  drift 23-item baseline (zero new); borge check 42/43. Live dev
+  image (throwaway PG 5433/18080) confirmed all four surfaces.
+- **Still open** (per plan): browser /repl muted notice rendering;
+  staleness flag BORGE-1790178960 (M2 bullet 4); cross-session
+  standalone durability BORGE-1790180098 (needs a migration); and M6
+  (error hints + durable quiet).
 
 ## M6 — error hints + durable quiet
 

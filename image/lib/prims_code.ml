@@ -513,7 +513,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
       | _ ->
           (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("apropos-docs", "need pattern-str", "bad-args")))));
 
-  (* (Agent_tools.describe name-or-pkg) -> VStr selective reveal text *)
+  (* (Agent_tools.describe name-or-pkg) -> VStr selective reveal text *) 
   Primitives.register tbl "describe"
     (fun args ->
       match args with
@@ -522,6 +522,37 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
           (Pricklypear_lisp.Ast.VStr s)
       | _ ->
           (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("prim", "describe: need name-or-package-str", "bad-args")))));
+
+  (* (docs-missing [pkg]) -> VList of visible bindings without docstrings.
+     bumpers M5 discovery-surfaces; function-doc () means missing. Related to
+     (function-doc name) / (apropos-docs pat): resolves the doc string the same
+     way (store doc, else special-form summary, else prim blurb). *) 
+  Primitives.register tbl "docs-missing"
+    (fun args ->
+      match args with
+      | [] | [ Pricklypear_lisp.Ast.VNil ] ->
+          Pricklypear_lisp.Ast.VList
+            (List.map (fun n -> Pricklypear_lisp.Ast.VStr n)
+               (Agent_tools.docs_missing t ()))
+      | [ Pricklypear_lisp.Ast.VStr pkg ] ->
+          Pricklypear_lisp.Ast.VList
+            (List.map (fun n -> Pricklypear_lisp.Ast.VStr n)
+               (Agent_tools.docs_missing t ~pkg ()))
+      | _ ->
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("docs-missing", "need optional package-str", "bad-args")))));
+
+  (* (app-check "pkg") -> VStr per-route fragment-fit report (bumpers M5,
+     fragment-by-default). Advisory classification only - route_gate stays
+     about legality, never about shape. *) 
+  Primitives.register tbl "app-check"
+    (fun args ->
+      match args with
+      | [] | [ Pricklypear_lisp.Ast.VNil ] ->
+          (Pricklypear_lisp.Ast.VStr (Agent_tools.app_check t ()))
+      | [ Pricklypear_lisp.Ast.VStr pkg ] ->
+          (Pricklypear_lisp.Ast.VStr (Agent_tools.app_check t ~pkg ()))
+      | _ ->
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("app-check", "need package-str", "bad-args")))));
 
   (* (export-package pkg) -> VStr lib.pp text *)
   Primitives.register tbl "export-package"

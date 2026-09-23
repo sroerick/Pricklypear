@@ -379,12 +379,173 @@ let apropos_docs (t : t) (pat : string) : (string * string) list =
   in
   go [] names
 
+(* ---- bumpers M5: discovery surfaces (borge/bumpers.borg
+       discovery-surfaces) -------------------------------------------------
+
+   The reference side of the feedback channel: effect badges in describe
+   text (read-db vs write-db visible in every listing), a doc-coverage
+   footer on package describe, a (docs-missing [pkg]) prim listing
+   visible bindings without docstrings, and an (app-check pkg) per-route
+   fragment/shell/not-html classification (reuses the M3 classifier;
+   advisory only — route_gate stays legality-only, never about shape).
+   The doc-coverage footer is what habitat-workflow.spec-health's
+   "gap follows the agent around" line promises: describe surfaces it
+   without waiting for a report run. Pure formatters are declared here so
+   the no-DB agent_tools_test suite can pin their shape. *)
+
+(** Pure: render a listing name with its arity + effect badge:
+    "name (a b) [db-write]". [args] None or [] → no parens. *)
+let annotate_name (name : string) (args : string list option)
+    (badge : string) : string =
+  let arg_str =
+    match args with
+    | Some ps when ps <> [] -> " (" ^ String.concat " " ps ^ ")"
+    | _ -> ""
+  in
+  name ^ arg_str ^ " [" ^ badge ^ "]"
+
+(** Pure: doc-coverage footer "documented X/Y — (docs-missing \"pkg\")",
+    only when Y > X (undocumented bindings exist). *)
+let doc_coverage_footer ~(documented : int) ~(total : int) ~(pkg : string)
+  : string option =
+  if total > documented then
+    Some
+      (Printf.sprintf "documented %d/%d — (docs-missing \"%s\")"
+         documented total pkg)
+  else None
+
+(** Pure: one app-check report line. [shape] ∈ fragment|shell|not-html|unbound. *)
+let app_check_line ~(path : string) ~(handler : string) ~(shape : string)
+    ~(vis : string) : string =
+  Printf.sprintf "  %-26s  %-24s  %-9s  [%s]" path handler shape vis
+
+(** Is [name] missing a docstring? Mirrors the function-doc prim: store
+    doc, else special-form summary, else prim blurb — function-doc ()
+    means missing. *)
+let binding_has_doc (t : t) (name : string) : bool =
+  match Store.lookup_function_doc t.store name with
+  | Some _ -> true
+  | None ->
+      Pricklypear_lisp.Special_forms.find name <> None
+      || (let b = Primitives.prim_summary name in
+          b <> "built-in primitive")
+
+(** Effect badge + arity annotation for a visible binding [name]:
+    "name (a b) [db-write]". Store functions are effect-inferred over
+    their body with the precomputed branch [known_fn] (describe passes
+    it) so user-callee capabilities are credited; prims/special forms
+    resolve from the classified capability catalog. Unclassified names
+    get "[?]" — never a false "pure". *)
+
+(** Extract lambda param names from a stored body expr. Bodies persist in
+    TWO shapes: the constructor [Lambda (ps, _)] (interactive define-sugar
+    via parse_top_define) and the reader form
+    [App (Var "lambda", params :: _)] which is what the boot seed and
+    load-library persist — there [params] is the flat list encoding
+    (first param as the App head, remaining params as the args array;
+    [Lit VNil] for ()). None when the body isn't a lambda. *)
+let lambda_params (e : Pricklypear_lisp.Ast.expr) : string list option =
+  match e with
+  | Pricklypear_lisp.Ast.Lambda (ps, _) -> Some ps
+  | Pricklypear_lisp.Ast.App (Pricklypear_lisp.Ast.Var "lambda", params_expr :: _)
+    ->
+      (match params_expr with
+       | Pricklypear_lisp.Ast.Lit Pricklypear_lisp.Ast.VNil -> Some []
+       | Pricklypear_lisp.Ast.App (Pricklypear_lisp.Ast.Var first, rest) ->
+           Some
+             (first
+             :: List.filter_map
+                  (function
+                    | Pricklypear_lisp.Ast.Var s -> Some s
+                    | _ -> None)
+                  rest)
+       | _ -> None)
+  | _ -> None
+
+let binding_annot ?(known_fn : Pricklypear_lisp.Effect.known_fn_lookup =
+  fun _ -> None) (t : t) (name : string) : string =
+  match Store.lookup_function t.store name with
+  | Some (body, _, _) ->
+      (match Pricklypear_lisp.Ast.expr_of_body_json body with
+       | Some e ->
+           let args = lambda_params e in
+           let badge =
+             Pricklypear_lisp.Effect.EffSet.badge
+               (Pricklypear_lisp.Effect.infer ~known_fn e)
+           in
+           annotate_name name args badge
+       | None -> name ^ " [?]")
+  | None ->
+      (* not stored: special form / prim / unknown *)
+      let is_known =
+        Pricklypear_lisp.Special_forms.find name <> None
+        || (Primitives.prim_summary name <> "built-in primitive")
+      in
+      if is_known then
+        annotate_name name None
+          (Pricklypear_lisp.Effect.EffSet.badge
+             (Pricklypear_lisp.Effect.default_prim_lookup name))
+      else name ^ " [?]"
+
+(** Visible bindings without docstrings (bumpers M5; function-doc () =
+    missing). [pkg] None → every visible binding; Some p → package
+    prefix filter (same match as package-bindings). *)
+let docs_missing (t : t) ?(pkg : string option) () : string list =
+  let names =
+    match pkg with
+    | None ->
+        Store.list_function_names t.store
+        |> List.map (fun (n, _, _) -> n) |> List.sort_uniq String.compare
+    | Some p -> package_binding_names t p
+  in
+  List.filter (fun n -> not (binding_has_doc t n)) names
+
+(** (app-check "pkg"): per-route fragment/shell/not-html classification
+    report for every route whose handler lives in package [pkg] (reuses
+    the M3 classifier + the gate's own handler-body walk). Advisory —
+    route_gate stays legality-only. Empty pkg → all routes. *)
+let app_check (t : t) ?(pkg : string option) () : string =
+  let pkg = Option.value pkg ~default:"" in
+  let label = if pkg = "" then "(root)" else pkg in
+  let match_handler handler =
+    pkg = "" || handler = pkg
+    || (String.length handler > String.length pkg
+        && String.sub handler 0 (String.length pkg + 1) = pkg ^ "/")
+  in
+  let routes =
+    Store.list_routes t.store
+    |> List.filter (fun (_, handler, _) -> match_handler handler)
+    |> List.sort (fun (a, _, _) (b, _, _) -> String.compare a b)
+  in
+  if routes = [] then
+    Printf.sprintf
+      "app-check %s: no routes whose handler is in this package" label
+  else
+    let lines =
+      List.map
+        (fun (path, handler, vis) ->
+          let shape =
+            match
+              Pricklypear_lisp.Route_gate.handler_body t.eval_state.env handler
+            with
+            | None -> "unbound"
+            | Some body ->
+                Pricklypear_lisp.Effect.route_shape_string
+                  (Pricklypear_lisp.Effect.classify_route_shape body)
+          in
+          app_check_line ~path ~handler ~shape ~vis)
+        routes
+    in
+    Printf.sprintf "app-check %s (%d routes)\n%s"
+      label (List.length routes) (String.concat "\n" lines)
+
 (** Package or binding description for selective agent reveal. *)
 let describe (t : t) (needle : string) : string =
   let needle = String.trim needle in
   if needle = "" then
     "describe: need name or package string"
   else
+    let known_fn = known_fn_from_store t in
     let pkgs = list_package_names t in
     let pkg_names = package_binding_names t needle in
     let is_pkg =
@@ -410,25 +571,29 @@ let describe (t : t) (needle : string) : string =
       in
       (Printf.sprintf
            "%s\n  doc: %s\n  next: (function-source %S) (function-ast %S)"
-           needle doc needle needle)
+           (binding_annot ~known_fn t needle) doc needle needle)
     else if is_pkg then
       let exports = package_export_names t needle in
-      let pairs =
-        let rec go acc = function
-          | [] -> (List.rev acc)
-          | name :: rest ->
-              let d = Store.lookup_function_doc t.store name in
-              let doc = match d with Some s -> s | None -> "" in
-              go ((name, doc) :: acc) rest
-        in
-        go [] exports
-      in
       let lines =
         List.map
-          (fun (n, d) ->
-            if d = "" then Printf.sprintf "  - %s" n
-            else Printf.sprintf "  - %s — %s" n d)
-          pairs
+          (fun name ->
+            let n = binding_annot ~known_fn t name in
+            let d = Store.lookup_function_doc t.store name in
+            match d with
+            | Some s when s <> "" ->
+                Printf.sprintf "  - %s — %s" n s
+            | _ -> Printf.sprintf "  - %s" n)
+          exports
+      in
+      let total = List.length pkg_names in
+      let documented =
+        List.length
+          (List.filter (fun n -> binding_has_doc t n) pkg_names)
+      in
+      let footer =
+        match doc_coverage_footer ~documented ~total ~pkg:needle with
+        | Some f -> "\n" ^ f
+        | None -> ""
       in
       let body =
         Printf.sprintf
@@ -441,7 +606,7 @@ let describe (t : t) (needle : string) : string =
           (if lines = [] then "  (none)" else String.concat "\n" lines)
           needle (needle ^ "/")
       in
-      body
+      body ^ footer
     else
       (* Fallback: treat as apropos hit list *)
       let pairs = apropos_docs t needle in
@@ -453,8 +618,9 @@ let describe (t : t) (needle : string) : string =
         let lines =
           List.map
             (fun (n, d) ->
-              if d = "" then Printf.sprintf "  - %s" n
-              else Printf.sprintf "  - %s — %s" n d)
+              let an = binding_annot ~known_fn t n in
+              if d = "" then Printf.sprintf "  - %s" an
+              else Printf.sprintf "  - %s — %s" an d)
             (let rec take n xs =
                match n, xs with
                | _, [] -> []

@@ -203,8 +203,13 @@ let read_db_prims = [
   "gen-now";  (* borge/tree-time.borg reads-as-of-gen ReadDb *)
   "gen-read"; "gen-diff";  (* borge/tree-time.borg reads-as-of-gen ReadDb *)
   "data-history";  (* borge/tree-time.borg S3 datum history ReadDb *)
-  (* code introspection / call graph (prims_code, prims_graph) *)
+  (* code introspection / call graph (prims_code, prims_graph) +
+     bumpers M5 discovery surfaces (borge/bumpers.borg discovery-surfaces):
+     docs-missing lists visible bindings without docstrings, app-check
+     reports per-route fragment-fit — both read branch-visible defs/routes
+     (ReadDb), never write. *) 
   "analyze"; "explain"; "describe"; "apropos-docs"; "find-code";
+  "docs-missing"; "app-check";
   "code-history"; "code-diff"; "diff";
   "callees"; "callers"; "dependents"; "used-by-routes"; "holes";
   "backlinks"; "out-links"; "branch-changes"; "change-transcript";
