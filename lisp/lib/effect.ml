@@ -258,6 +258,11 @@ let write_db_prims = [
   "load-string"; "load-library";  (* persist defs/routes onto branch *)
   "add-ssh-key"; "revoke-ssh-key";
   "set-llm-key"; "clear-llm-key";
+  (* bumpers M6 (borge/bumpers.borg notices-envelope quiet tiers):
+     (agent-profile 'quiet) persists a per-identity datum (type
+     "profile") — it CAN write, so conservative WriteDb like
+     create/update. *)
+  "agent-profile";
   "with-public-write";  (* elevates anon → may write data_rows *)
   "submit-job"; "submit-job-at"; "cancel-job";  (* borge/jobs.borg WriteDb *)
   "with-step"; "__step__";  (* checkpoint write; composes with Txn for exactly-once *)

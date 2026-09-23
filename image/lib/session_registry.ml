@@ -96,6 +96,11 @@ let make_user_session (t : t) ~(actor : string option)
     ~user_type:user.Auth_store.user_type
     ~parent_user_id:user.Auth_store.parent_user_id
     ~delegated ~actor ();
+  (* bumpers M6: load the identity's durable quiet preference (tier c)
+     once at session-make; api_eval consults it as the third quiet tier.
+     Best-effort inside (DB-down -> false). Runs AFTER the personal/agent
+     branch attach so the read lands on the identity's own garden. *)
+  Session.load_agent_profile s;
   s
 
 (** Get-or-create the session for [key]. Lookup is mutex-guarded;

@@ -115,6 +115,51 @@ let test_generic_exn () =
         (contains_seq m "connection refused")
   | exn -> Alcotest.fail ("expected User_error \"exn\", got: " ^ Printexc.to_string exn)
 
+(* ---- bumpers M6 error hints (borge/bumpers.borg discovery-surfaces):
+   known error classes carry an optional "hint" field (unbound var ->
+   (apropos ...), prim bad-args -> (function-doc ...)); unknown classes
+   carry NONE (must stay additive + never a false suggestion). *) 
+
+let test_error_hint_unbound () =
+  (* namespaced unbound var -> suggest the namespace prefix; plain name
+     -> suggest the name itself (apropos matches substring) *)
+  Alcotest.(check string) "namespaced stem" "(apropos \"todo/\")"
+    (Option.value ~default:"?"
+       (Wire_codec.error_hint
+          (Interp_error (Unbound_var "todo/nonesuch"))));
+  Alcotest.(check string) "plain name stem" "(apropos \"frobnic\")"
+    (Option.value ~default:"?"
+       (Wire_codec.error_hint (Interp_error (Unbound_var "frobnic"))));
+  (* rides the wire JSON as an additive field *)
+  let json = wire (Interp_error (Unbound_var "todo/nonesuch")) in
+  Alcotest.(check bool) "hint on the wire" true
+    (contains_seq json "\"hint\":\"(apropos \\\"todo/\\\")\"")
+
+let test_error_hint_prim_bad_args () =
+  Alcotest.(check string) "prim bad-args hint" "(function-doc \"tree/get\")"
+    (Option.value ~default:"?"
+       (Wire_codec.error_hint
+          (Interp_error (Prim_error ("tree/get", "bad args (need type, id)", "bad-args")))));
+  let json = wire
+      (Interp_error (Prim_error ("tree/get", "bad args (need type, id)", "bad-args"))) in
+  Alcotest.(check bool) "hint on the wire" true
+    (contains_seq json "\"hint\":\"(function-doc \\\"tree/get\\\")\"")
+
+let test_error_hint_absent_unknown () =
+  (* unknown classes carry NO hint: User_error, Budget_exceeded, a
+     non-bad-args Prim_error, Reader_error, and the generic exn *)
+  let no_hint exn =
+    Alcotest.(check bool) ("no hint for " ^ Printexc.to_string exn) true
+      (Wire_codec.error_hint exn = None);
+    Alcotest.(check bool) "no hint key on the wire" true
+      (not (contains_seq (wire exn) "\"hint\":"))
+  in
+  no_hint (Interp_error (User_error ("boom", "denied")));
+  no_hint (Interp_error Budget_exceeded);
+  no_hint (Interp_error (Prim_error ("tree/get", "failed: no DB", "db")));
+  no_hint (Pricklypear_lisp.Reader.Reader_error ("unbalanced paren", 3, 7));
+  no_hint (Failure "disk gone")
+
 let test_garbage_json () =
   (* a non-object payload degrades to User_error, never a crash *)
   match unwire "[1,2]" with
@@ -258,6 +303,9 @@ let () =
     ; ( "wire-codec"
       , [ ("unbound-roundtrip", `Quick, test_unbound)
         ; ("prim-error-roundtrip", `Quick, test_prim_error)
+        ; ("error-hint-unbound", `Quick, test_error_hint_unbound)
+        ; ("error-hint-prim-bad-args", `Quick, test_error_hint_prim_bad_args)
+        ; ("error-hint-absent-unknown", `Quick, test_error_hint_absent_unknown)
         ; ("user-error-roundtrip", `Quick, test_user_error)
         ; ("budget-roundtrip", `Quick, test_budget)
         ; ("reader-error-roundtrip", `Quick, test_reader_error)

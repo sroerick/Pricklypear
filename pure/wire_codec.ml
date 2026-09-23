@@ -129,6 +129,35 @@ let http_parse_headers (blob : string) : string =
    NB: [json_to_value] maps JSON strings to VStr, so a deserialized
    value is never a VSymbol on its own — symbols are a read-side
    concern. *)
+(** bumpers M6 (borge/bumpers.borg discovery-surfaces / sequencing): an
+    optional "hint" field on the error envelope — discovery arrives at
+    the moment it is wanted. KNOWN classes only; unknown classes carry
+    none (a hint must be actionable or absent). Generated here in pure
+    so the image and every proxy rim emit the SAME hint text:
+      Unbound_var "a/b"                      -> (apropos "a/")      (find the namespace)
+      Unbound_var "frobnic"                  -> (apropos "frobnic")  (spelling help)
+      Prim_error (p, _, "bad-args")          -> (function-doc "p")    (prim docs)
+    The hint is advisory — [error_of_json] does NOT replay it (it is not
+    part of the exn being reconstructed; a peer re-reading our error
+    keeps the hint text only if it inspects the raw JSON). The stem for
+    an unbound var is its namespace prefix when namespaced (todo/add ->
+    "todo/"), else the full name: apropos matches by substring, so
+    (apropos "todo/") lists the whole namespace and (apropos "frobnic")
+    surfaces the correct spelling. *) 
+let error_hint (exn : exn) : string option =
+  match exn with
+  | Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Unbound_var name) ->
+      let stem =
+        match String.rindex_opt name '/' with
+        | Some i -> String.sub name 0 (i + 1)
+        | None -> name
+      in
+      Some (Printf.sprintf "(apropos \"%s\")" stem)
+  | Pricklypear_lisp.Ast.Interp_error
+      (Pricklypear_lisp.Ast.Prim_error (p, _, "bad-args")) ->
+      Some (Printf.sprintf "(function-doc \"%s\")" p)
+  | _ -> None
+
 let error_to_json (exn : exn) : Yojson.Safe.t =
   match exn with
   | Pricklypear_lisp.Ast.Interp_error e ->
@@ -147,6 +176,11 @@ let error_to_json (exn : exn) : Yojson.Safe.t =
       (match Pricklypear_lisp.Ast.interp_error_loc e with
        | Some (line, col) ->
            base := !base @ [ ("line", `Int line); ("col", `Int col) ]
+       | None -> ());
+      (* bumpers M6: optional "hint" field for known error classes;
+         absent (not null) for unknown classes — additive-only. *)
+      (match error_hint exn with
+       | Some h -> base := !base @ [ ("hint", `String h) ]
        | None -> ());
       `Assoc !base
   | Pricklypear_lisp.Reader.Reader_error (m, line, col) ->

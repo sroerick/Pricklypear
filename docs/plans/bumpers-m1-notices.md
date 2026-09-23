@@ -5,14 +5,18 @@ planned, committed 2026-09-23 as 28069dc) milestone by milestone.
 This file is the shared memory between loops: pick the next unchecked
 task, do only it, verify, update this file, commit, end.
 
-**Loop status:** M5 DONE (see M5 section · discovery surfaces ship:
-`(docs-missing [pkg])` + `(app-check "pkg")` prims, effect badges + arity
-(`name (args) [read-db]`) across describe single-binding/package/apropos
-fallback, describe doc-coverage footer, all smoke + build/drift/check
-gates green; bumpers.borg discovery-surfaces flipped to partial
-(badges/footer/docs-missing half), fragment-by-default flipped to
-implemented (its last open item was app-check). Next unchecked
-milestone: **M6 — error hints + durable quiet**.
+**Loop status:** M6 DONE (see M6 section · error hints + durable quiet ship:
+`pure/wire_codec.ml` `error_hint` (Unbound_var -> `(apropos …)`, prim bad-args ->
+`(function-doc …)`, unknown classes none, additive on the error envelope) and the
+`(agent-profile …)` prim (tier-c durable quiet, user datum type `profile`, read once
+per identity-session in api_eval as `quiet = request flag || durable`). All six
+milestones M1–M6 now ship; `borge/bumpers.borg` sequencing flipped to implemented,
+notice-budget + discovery-surfaces notes updated. smoke + the new DB-backed
+`image/test/agent_profile_test.ml` + build/drift/check gates green (`dune runtest`
+only the pre-existing seed_sources 5/9 baseline; drift 23-item baseline zero new;
+check 42/43). Next open items (all NOT in M1–M6 scope): browser /repl muted notice
+rendering; staleness flag (BORGE-1790178960); cross-session standalone durability
+(BORGE-1790180098).
 
 **Spec authority (read first):**
 - `borge/bumpers.borg` — the whole design (notices envelope, notice
@@ -501,15 +505,76 @@ existing gate; M3 only added `declare_standalone` + `notice_route`
   standalone durability BORGE-1790180098 (needs a migration); and M6
   (error hints + durable quiet).
 
-## M6 — error hints + durable quiet
+## M6 — error hints + durable quiet  (LOOP #8: DONE, committed …)
 
-- [ ] `pure/wire_codec.ml` error codec: optional `"hint"` field for
+- [x] `pure/wire_codec.ml` error codec: optional `"hint"` field for
   known error classes — Unbound_var → '(apropos "<stem>")';
   prim bad-args → '(function-doc "<prim>")'. Unknown classes: none.
-- [ ] `(agent-profile 'quiet)` prim: store per-identity datum on
+- [x] `(agent-profile 'quiet)` prim: store per-identity datum on
   <user>/personal; session consults it as the third quiet tier
   (request flag > session taper > durable datum). Narrowest wins.
-- [ ] Tests for both; bumpers.borg M6 status flip + `borge drift`.
+- [x] Tests for both; bumpers.borg M6 status flip + `borge drift`.
+
+**M6 progress note (loop #8, committed …):** design choices to record:
+- **Hint home = pure/wire_codec.ml `error_hint`** (beside error_to_json; the plan's
+  tool). Pure, so the image AND every proxy rim emit the same hint text. Known
+  classes only, unknown carry NONE (a hint must be actionable or absent — the borg
+  test's letter). Stem for an unbound var = namespace prefix when namespaced
+  (`todo/add` -> `(apropos "todo/")` to find the namespace; apropos matches by
+  substring), else the full name (`frobnic` -> `(apropos "frobnic")` for spelling
+  help). bad-args = `Prim_error (p, _, "bad-args")` -> `(function-doc "p")`
+  (matches only the kind the borg test names; User_error bad-args like `(car 1 2)`
+  has no name field and gets no hint — by the letter). Hint is advisory: NOT
+  replayed by error_of_json (documented in the comment). Note: `(verify-route)`
+  bare raises `Prim_error ("prim", …)` (pre-existing arg-validation wrap), so its
+  hint is `(function-doc "prim")` — harmless, mirrors the error's name field.
+  3 new codec tests: namespaced + plain unbound, prim bad-args, and the
+  unknown-classes-none sweep (wire-codec suite now 20).
+- **agent-profile prim home = image/lib/session.ml `make`, inline beside
+  analyze/explain** — NOT prims_agent.ml: the prim reads/writes Session helpers and
+  prims_agent -> Session would be a cycle via prims_db (prims registered inside
+  make close over (!t) the same way route/dispatch + verify-route do). Forms:
+  `(agent-profile)` -> VStr {"username","quiet"}; `(agent-profile 'quiet)` ->
+  VBool getter; `(agent-profile 'quiet #t|#f)` -> setter, persists, returns the
+  profile VStr. Classified **WriteDb** in lisp/lib/effect.ml (it CAN write a datum
+  — conservative like create/update, so a public-route/AI gate can never use it to
+  mutate).
+- **Storage = user datum type "profile"** (not a new table, no migration —
+  invariant 5). Writes go through the existing Crud.create_outcome / update_impl
+  (tree datum, author = the identity; mirrored path data.u.<user>.profile.<id>);
+  read via `tree_data_rows WHERE type_name='profile' AND author=$user`. The
+  session field is `session_types.durable_quiet : bool`; `load_agent_profile` runs
+  ONCE at make_user_session (after the personal/agent attach) — never per-eval;
+  `set_agent_profile_quiet` updates in-memory + persists (best-effort: DB-down
+  write degrades to the in-memory value, never raises). Anonymous/public
+  (system/main, shared) set in-memory only — nothing durable. api_eval computes
+  `quiet = request_flag || durable`; tier (b) session taper stays automatic
+  (fired_tip_kinds).
+- **Tests**: new DB-backed image/test/agent_profile_test.ml (skips without PG, the
+  rls_floor pattern): fresh identity starts false; set #t persists across a NEW
+  session of the same identity; unset #f persists across a THIRD session;
+  anonymous set #t is in-memory but a fresh anonymous session loads false. 2 tests,
+  green on the dev PG. Plus the 3 pure codec hint tests.
+- **Live verify (dev image 5433/18080, rebuilt + restarted)**: m6tester identity —
+  getter `{"username","quiet":false}`; bare define → 2 notices; `('quiet #t)` →
+  profile true; next define → NO notices key (durable tier, no request flag);
+  fresh eval same identity → still quiet; `('quiet #f)` → notices return;
+  request `quiet:true` with durable #t still quiet; unbound var error carries
+  `"hint":"(apropos \"m6-nonexistent\")"`; bad-args carries
+  `"hint":"(function-doc …)"`. Cleaned up (m6tester back to #f).
+- **Spec flips (borge/bumpers.borg)**: sequencing planned→implemented (all six
+  milestones shipped); notice-budget stays partial with the M6 note appended
+  (tier-c done; the taper-after-N-evals auto-mute remains the open-to-full item);
+  discovery-surfaces stays partial with the M6 note appended (error-codec hint
+  done; the (help) prim remains open — NOT in plan M6 scope).
+- **Verify**: `dune build @all` + `dune runtest` green (only pre-existing
+  image/test/seed_sources 5/9 baseline); borge drift 23-item baseline (zero new —
+  pure/wire_codec.ml, lisp/lib/effect.ml, image/lib/{session,session_types,
+  session_registry,http_pages}.ml are all spec-declared); borge check 42/43
+  (storage.borg:521 pre-existing).
+- **Still open** (per plan, none in M1–M6 scope): browser /repl muted notice
+  rendering; staleness flag BORGE-1790178960 (M2 bullet 4, needs gen-drift OWNERSHIP
+  edge); cross-session standalone durability BORGE-1790180098 (needs a migration).
 
 ## Done-when (loop completion condition)
 
