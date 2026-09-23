@@ -1486,7 +1486,7 @@
     (cons "Ginger Bug Lemonade"
       (list "two-col" "Ginger Bug Lemonade" ""
         "Squeeze the Day"
-        "Real lemonade is a lost art. Two centuries ago the punch houses made oleo saccharum — sugar massaged into lemon peels until the fruit surrenders its oils. That fragrant gold was the soul of any respectable punch, and it is the soul of ours. We build it the old way, then let the ginger bug liven the whole thing with its fine Wyoming fizz. Organic lemons, organic cane sugar, wild probiotics, and patience. Sunshine, saved up for a cloudy day. Shake gently; drink joyfully; share with someone thirsty."
+        "Real lemonade is a lost art. Two centuries ago the punch houses made oleo saccharum — sugar massaged into lemon peels until the fruit surrenders its oils. That fragrant gold was the soul of any respectable punch, and it is the soul of ours. We build it the old way, then let the ginger bug liven it with fine Wyoming fizz. Sunshine, saved for a cloudy day. Shake gently; share generously."
         rb/label-art-logo))))
 
 (define (rb/label-ingredients name)
@@ -1506,6 +1506,37 @@
         (if (string-starts-with? (string-downcase name) "happy ginger")
             "kawaii" "vintage")
         (list-ref spec 0))))
+
+;; Optional per-recipe color palettes for the two-col template.
+;; CSS custom properties overriding the root-beer defaults — k = "--var", v = color.
+;; Lemonade: butter-yellow paper, brown ink (label-compliance friendly).
+(define rb/label-palettes
+  (list
+    (cons "Ginger Bug Lemonade"
+      (list
+        (cons "--bg" "#f2d64b")
+        (cons "--cream" "#6b4410")
+        (cons "--gold" "#8a6a14")
+        (cons "--copy" "#5f430f")
+        (cons "--note" "#7a5c28")
+        (cons "--frame" "#b58a2a")
+        (cons "--frame2" "#dcc045")
+        (cons "--stampbg" "#6b4410")
+        (cons "--stampink" "#fdf3d9")))))
+
+(define (rb/label-palette name)
+  (rb/get name rb/label-palettes))
+
+(define (rb/label-palette-attr name)
+  "Inline style attr of the recipe's css-var palette; () when default."
+  (let ((pal (rb/label-palette name)))
+    (if (null? pal)
+        ()
+        (string-append " style=\""
+          (string-join
+            (rb/map (lambda (kv) (string-append (car kv) ":" (cdr kv) ";")) pal)
+            "")
+          "\""))))
 
 ;; ---------- vintage (dark, centered, QR) — port of vintage_label_page
 
@@ -1542,7 +1573,7 @@
         (copy (list-ref spec 4))
         (art (list-ref spec 5)))
     (string-append
-      "<div class=\"l4x3 t-card\">"
+      "<div class=\"l4x3 t-card\"" (or (rb/label-palette-attr name) "") ">"
       "<div class=\"t-tagline\">Brewed in Wyoming</div>"
       "<div class=\"t-left\"><div>"
       "<div class=\"t-brand\">Rork's</div>"
@@ -1610,24 +1641,24 @@
     ".l4x3 { width:4in; height:3in; position:absolute; transform-origin:center; overflow:hidden; }"
     ".lbot { border:1px dashed #999; }"
     ;; ---- two-col vintage ----
-    ".t-card { background:#472619; color:#f5e6c8; font-family:'IM Fell English','IM Fell English SC',Georgia,serif;"
+    ".t-card { background:var(--bg,#472619); color:var(--cream,#f5e6c8); font-family:'IM Fell English','IM Fell English SC',Georgia,serif;"
     " padding:0.14in 0.16in; display:flex; flex-direction:row; align-items:stretch; gap:0.12in; position:relative; }"
-    ".t-card::before { content:\"\"; position:absolute; inset:0.06in; border:1px solid #8b6b3d; border-radius:3px; pointer-events:none; }"
-    ".t-card::after { content:\"\"; position:absolute; inset:0.09in; border:1px solid #5c4528; border-radius:2px; pointer-events:none; }"
+    ".t-card::before { content:\"\"; position:absolute; inset:0.06in; border:1px solid var(--frame,#8b6b3d); border-radius:3px; pointer-events:none; }"
+    ".t-card::after { content:\"\"; position:absolute; inset:0.09in; border:1px solid var(--frame2,#5c4528); border-radius:2px; pointer-events:none; }"
     ".t-left { flex:1; display:flex; flex-direction:column; justify-content:space-between; z-index:1; padding:0.02in 0; min-width:0; }"
-    ".t-brand { font-family:'IM Fell English SC','IM Fell English',serif; font-size:10pt; letter-spacing:0.16em; color:#c4a265; text-transform:uppercase; }"
+    ".t-brand { font-family:'IM Fell English SC','IM Fell English',serif; font-size:10pt; letter-spacing:0.16em; color:var(--gold,#c4a265); text-transform:uppercase; }"
     ".t-tagline { font-family:'IM Fell English SC',serif; font-size:7.5pt; letter-spacing:0.12em; color:#8b6b3d; text-transform:uppercase;"
     " position:absolute; top:0.18in; right:0.2in; z-index:2; }"
-    ".t-name { font-family:'Playfair Display',Georgia,serif; font-weight:900; font-size:12pt; color:#f5e6c8; line-height:1.05; margin-top:0.06in; }"
-    ".t-sub { font-family:'IM Fell English SC','IM Fell English',serif; font-size:14pt; letter-spacing:0.1em; color:#c4a265; margin-top:0.02in; }"
-    ".t-jingle { font-family:'IM Fell English',serif; font-style:italic; font-size:11pt; color:#c4a265; margin-top:0.05in; }"
-    ".t-div { height:1px; background:repeating-linear-gradient(to right,#8b6b3d 0,#8b6b3d 4px,transparent 4px,transparent 8px); margin:0.05in 0; }"
-    ".t-copy { font-family:'Source Serif 4','Source Serif Pro',Georgia,serif; font-weight:400; font-size:8.5pt; color:#e8dcc4; line-height:1.3; text-align:left; hyphens:auto; }"
-    ".t-meta { display:flex; justify-content:space-between; align-items:baseline; font-family:'IM Fell English SC',serif; font-size:9pt; color:#c4a265; letter-spacing:0.08em; text-transform:uppercase; }"
+    ".t-name { font-family:'Playfair Display',Georgia,serif; font-weight:900; font-size:12pt; color:var(--cream,#f5e6c8); line-height:1.05; margin-top:0.06in; }"
+    ".t-sub { font-family:'IM Fell English SC','IM Fell English',serif; font-size:14pt; letter-spacing:0.1em; color:var(--gold,#c4a265); margin-top:0.02in; }"
+    ".t-jingle { font-family:'IM Fell English',serif; font-style:italic; font-size:11pt; color:var(--gold,#c4a265); margin-top:0.05in; }"
+    ".t-div { height:1px; background:repeating-linear-gradient(to right,var(--frame,#8b6b3d) 0,var(--frame,#8b6b3d) 4px,transparent 4px,transparent 8px); margin:0.05in 0; }"
+    ".t-copy { font-family:'Source Serif 4','Source Serif Pro',Georgia,serif; font-weight:400; font-size:8.5pt; color:var(--copy,#e8dcc4); line-height:1.3; text-align:left; hyphens:auto; }"
+    ".t-meta { display:flex; justify-content:space-between; align-items:baseline; font-family:'IM Fell English SC',serif; font-size:9pt; color:var(--gold,#c4a265); letter-spacing:0.08em; text-transform:uppercase; }"
     ".t-right { flex:0 0 1.2in; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:0.06in; z-index:1; position:relative; }"
     ".t-art { max-height:1.85in; max-width:100%; width:auto; height:auto; object-fit:contain; border-radius:4px; }"
-    ".t-note { font-family:'Source Serif 4',Georgia,serif; font-size:5.5pt; line-height:1.2; color:#d4b994; text-align:center; max-width:1.15in; }"
-    ".t-stamp { font-family:'Playfair Display',serif; font-weight:700; font-size:9pt; color:#f5e6c8; background:#3a1f14; border:1px solid #8b6b3d; border-radius:999px; padding:0.03in 0.1in; }"
+    ".t-note { font-family:'Source Serif 4',Georgia,serif; font-size:5.5pt; line-height:1.2; color:var(--note,#d4b994); text-align:center; max-width:1.15in; }"
+    ".t-stamp { font-family:'Playfair Display',serif; font-weight:700; font-size:9pt; color:var(--stampink,#f5e6c8); background:var(--stampbg,#3a1f14); border:1px solid var(--frame,#8b6b3d); border-radius:999px; padding:0.03in 0.1in; }"
     ;; ---- kawaii ----
     ".k-card { background:#fdf8ef; color:#3b2210; font-family:'Nunito',system-ui,sans-serif;"
     " padding:0.18in 0.2in; display:flex; flex-direction:row; align-items:stretch; gap:0.18in; position:relative; }"
@@ -1702,7 +1733,9 @@
 (define (rb/label-bg-for name)
   "Label background color of the recipe's template (the cell bleed color)."
   (cond
-    ((string-eq (rb/label-style-for name) "two-col") "#472619")
+    ((string-eq (rb/label-style-for name) "two-col")
+     (let ((bg (assoc "--bg" (rb/label-palette name))))
+       (if (null? bg) "#472619" (cdr bg))))
     ((string-eq (rb/label-style-for name) "kawaii") "#fdf8ef")
     (else "#2b1d12")))
 
