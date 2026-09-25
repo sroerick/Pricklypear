@@ -1,0 +1,135 @@
+(project pricklypear-workstreams
+ (doc "The orchestration layer: turns the triage board into a managed delivery
+  pipeline where each workstream is a list, each card has a status pipeline +
+  comment/event thread + acceptance criteria, and the wall-clock work (spec,
+  implement, review) is executed by LOCAL agents (laptop pi ralph/subagent loops)
+  claiming cards from the habitat. The habitat is the record + queue; the laptop
+  is the executor. NO agents run inside the prod image (jobs runner stays for
+  small eval jobs). Supersedes the cron-generated static workstreams mirror note
+  (2026-09-25: retired — a mirror that reports nothing is worse than no mirror).")
+ (status planned)
+
+ ;; ---------------------------------------------------------------------------
+ ;; RELATIONSHIPS (what it is / isn't)
+ ;; ---------------------------------------------------------------------------
+ (section scope
+  (doc "Extends borge/work-triage.borg (board + triage-pass + issue-board bridge).
+   Adds: PER-WORKSTREAM lists (Basecamp-project shaped; one list = one
+   workstream, sharing the same column taxonomy), CARD DETAIL v2 (comments
+   thread + transition events interleaved, acceptance criteria, target branch),
+   per-column AGENT RECIPES (the instruction template for the work each column
+   represents), the CLAIM/BRIEF protocol (how a local pi executor claims a card,
+   gets a self-contained brief, works, and writes back a transition + comment),
+   the LIVE /workstreams face, and standup v2. Does NOT build an in-image agent
+   runtime, does NOT re-spec core todo data model, does NOT touch auth/delegation
+   beyond parameter-passing (owner creds or a delegated token).")
+  (implements "libs/todo/lib.pp (card detail v2 + recipes)" "libs/standup/lib.pp (v2)"
+              "libs/workstreams/lib.pp (face + claim/probe helpers, planned)"
+              "scripts/pp-flow.sh (local executor, planned)")
+  (status planned))
+
+ ;; ---------------------------------------------------------------------------
+ ;; THE DATA MODEL (all Nopales, no kernel changes)
+ ;; ---------------------------------------------------------------------------
+ (section workstream-lists
+  (doc "A workstream is a todo-list with title = stream name (glochid, saguaro,
+   town, …) and the shared column taxonomy via its `columns` field (set with
+   kanban/columns-set; todo/state/columns-for-list already reads it). The
+   shared `Board` list (0b21ffaa) is the cross-stream overview. New intake
+   lands in the workstream's TODO column; the triage pass or the owner places
+   it.")
+  (status implemented-live)  ;; lists created: glochid (fa93a1af), Board (0b21ffaa)
+  (verify
+   (test "each workstream list carries the same column set as Board"
+         "every open board card sits in a named column")))
+
+ (section card-comments
+  (doc "Two new datum types, seeded by the todo lib (deftype on load):
+   `todo-comment` (fields: item_id, body; author + ts come from the row
+   metadata / version history) and `todo-event` (fields: item_id, from_state,
+   to_state; auto-written by every state transition via todo/state/next + the
+   cycle/move writers). The card detail page interleaves events and comments
+   chronologically (Linear-style activity feed). Comments are the ONLY place
+   cross-agent context is recorded; transitions are the ONLY signal for
+   standup and claim logic.")
+  (implements "libs/todo/lib.pp deftype todo-comment todo-event"
+              "libs/todo/lib.pp card detail v2")
+  (status planned)
+  (verify
+   (test "a comment on a card appears on its detail page thread"
+         "a state transition appends a todo-event row"
+         "feed interleaves events+comments in time order")))
+
+ (section acceptance
+  (doc "Each card carries optional `acceptance` (criteria body) and `branch`
+   (target branch for the work). These ride the todo-item datum like
+   notes/assignee; the brief renders them. Enables 'any agent can pick up a
+   card cold' because the card names the deliverable, the target, and the
+   done-test.")
+  (implements "libs/todo/lib.pp")
+  (status planned))
+
+ (section column-recipes
+  (doc "The workstream list datum carries a `recipes` field: a dict mapping
+   COLUMN NAME -> instruction template (text). E.g. CODE: 'you are the
+   implementer for Pricklypear; branch <branch>; implement <title>; acceptance: <acceptance>;
+   build with dune; live smoke on <target>; when done move the card to
+   LOGIC-REVIEW and comment what you shipped + how reviewed.' A recipe is the
+   bridge between the record and the executor — it IS the oracle step boiled
+   down to instructions. The brief fn renders card + column recipe + context
+   (repo path, branch, host, creds ref) into one self-contained prompt.")
+  (implements "libs/todo/lib.pp flow/brief")
+  (status planned))
+
+ (section claim-brief-protocol
+  (doc "THE local executor contract (laptop pi, NOT the image):
+   1. CLAIM: the executor (or roerick) sets `assignee` on the card (=claim;
+      existing todo/item/assign machinery — landing gregor's assignment work
+      provides this on master).
+   2. BRIEF: `(flow/brief card-id)` renders the full prompt; for a ralph loop
+      the brief IS the plan file; for a subagent it's the task.
+   3. WORK: the agent reads the brief, does the work on the named branch.
+   4. WRITE-BACK: the agent moves the card to the next column
+      (todo/state/next-for-list) and posts a todo-comment describing what it
+      did + evidence. A transition to a REVIEW column is the 'ready for
+      roerick' signal; the human gate is a real column (HUMAN-REVIEW), never
+      an agent.)
+   The claim lease is a pid/ts on the assignee field to prevent double-spawn;
+   a stale lease (>12h) is reclaimable.")
+  (implements "scripts/pp-flow.sh (planned)" "libs/flow (brief fn, planned)")
+  (status planned)
+  (verify
+   (test "executor claim → brief contains title+acceptance+column recipe"
+         "write-back lands an event + comment and advances exactly one column"
+         "stale claims are reclaimable")))
+
+ (section live-face
+  (doc "A `/workstreams` route (package workstreams) computed at render time:
+   per-workstream column counts (open cards only), 'ready for HUMAN-REVIEW'
+   rollup across streams, 'stale' (open >3d) flags, and links into
+   /kanban?list=<id> + card detail. Retires the cron 'workstreams' note; the
+   note is replaced by a pointer to the live face.")
+  (implements "libs/workstreams/lib.pp (planned)")
+  (status planned)
+  (verify
+   (test "each stream shows live counts matching kanban"
+         "HUMAN-REVIEW rollup lists every card in that column across streams")))
+
+ (section standup-v2
+  (doc "Extends libs/standup: reads per-workstream counts + the human-review
+   rollup + yesterday's transitions (via todo-event rows / data-history), so
+   gregor's 09:00 brief says 'here's where each stream is, here's what moved,
+   here's what's ready for you' — from the live store, not a static mirror.")
+  (implements "libs/standup/lib.pp v2")
+  (status planned))
+
+ (section landing-gregors-assignment-work
+  (doc "Requires porting 0f1b9a4+b7059e6+133b228+89e5ddf (assignment/priority/
+   queue // make-card,move-card,stale // /kanban-review) into master's SINGLE
+   libs/todo/lib.pp (master is one lib.pp per package family, 4a17395; the
+   item/lib.pp split from the orphaned todo-assignment branch does NOT match
+   master's layout and is not merged). Carry the functions, not the file
+   layout. Provides assignee (claim) + priority (queue) that this chapter's
+   protocol depends on.")
+  (status planned))
+)
