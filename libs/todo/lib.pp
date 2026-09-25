@@ -19,6 +19,12 @@
     todo/list/create
     todo/list/delete
     todo/ensure-inbox
+    todo/comments-init!
+    todo/comment/add
+    todo/comment/list
+    todo/event/record
+    todo/event/list
+    todo/feed
 ))
 
 (define todo/active-items
@@ -1492,6 +1498,165 @@
               #t
               (string-eq (todo/item/assignee (cdr row)) u)))
           (todo/item/active (todo/item/all)))))))
+
+;; ------------------------------------------------------------------
+;; comment + event datums (card detail v2 feed) — borge/workstreams.borg
+;; card-comments. Two datum types seeded on load (guarded, idempotent):
+;;   todo-comment (item_id, body) — author + timestamps come from the ROW
+;;     METADATA (node author / created_at), not body fields, per spec: the
+;;     datum itself is deliberately minimal.
+;;   todo-event   (item_id, from_state, to_state) — auto-written by every
+;;     real card-state transition (todo/cycle, todo/item/cycle, set-state
+;;     writers); the ONLY transition signal standup + claim logic use.
+;; todo/feed interleaves events + comments chronologically (Linear-style
+;; activity feed) for card detail v2.
+;; ------------------------------------------------------------------
+
+(define todo/comments-init!
+  (lambda
+    ()
+    "Ensure the todo-comment / todo-event datum types exist. Guarded so a
+     re-load (load-library) is safe and a non-admin load degrades to a no-op
+     value instead of an error; boot seeds these onto system/main as admin."
+    (seq
+      (if
+        (null? (type-fields (quote todo-comment)))
+        (deftype (quote todo-comment) (quote item_id) (quote body))
+        "todo-comment ok")
+      (if
+        (null? (type-fields (quote todo-event)))
+        (deftype (quote todo-event) (quote item_id) (quote from_state) (quote to_state))
+        "todo-event ok"))))
+
+(define todo/datum/rows-for-item
+  (lambda
+    (type item limit)
+    "Raw node-JSONs (id/path/kind/type/body/author/created_at/updated_at/rank)
+     of all `type` datums whose body.item_id === item, in store order (callers
+     that need chronology sort by created_at — see todo/datum/insert-by-ts)."
+    (list/filter
+      (lambda
+        (n)
+        (let
+          ((b (dict-get n "body")))
+          (let
+            ((i (if (null? b) () (dict-get b "item_id"))))
+            (and (not (null? i)) (string-eq (as-str i) (as-str item))))))
+      (tree/list (todo/tree/prefix type) 1 limit))))
+
+(define todo/datum/feed-entry
+  (lambda
+    (kind n)
+    "One feed entry dict (JSON string) from a datum node-JSON: kind + id + ts
+     + author from row metadata, plus the payload fields the kind needs."
+    (let
+      ((b (dict-get n "body")))
+      (if
+        (string-eq kind "comment")
+        (dict-set*
+          "{}"
+          (list
+            "kind" "comment"
+            "id" (as-str (dict-get n "id"))
+            "ts" (as-str (dict-get n "created_at"))
+            "author" (as-str (dict-get n "author"))
+            "text" (as-str (dict-get b "body"))))
+        (dict-set*
+          "{}"
+          (list
+            "kind" "event"
+            "id" (as-str (dict-get n "id"))
+            "ts" (as-str (dict-get n "created_at"))
+            "author" (as-str (dict-get n "author"))
+            "from_state" (as-str (dict-get b "from_state"))
+            "to_state" (as-str (dict-get b "to_state"))))))))
+
+(define todo/datum/insert-by-ts
+  (lambda
+    (e sorted)
+    "Insert feed entry e into a ts-ascending sorted list (oldest first). The
+     node created_at strings are PG timestamptz text, uniformly shaped, so a
+     lexicographic compare IS chronological order."
+    (if
+      (null? sorted)
+      (list e)
+      (if
+        (string<?
+          (as-str (dict-get e "ts"))
+          (as-str (dict-get (car sorted) "ts")))
+        (cons e sorted)
+        (cons
+          (car sorted)
+          (todo/datum/insert-by-ts e (cdr sorted)))))))
+
+(define todo/datum/merge-by-ts
+  (lambda
+    (a b)
+    "Stable merge of two ts-ascending feed-entry lists into one."
+    (list/foldl
+      (lambda (acc e) (todo/datum/insert-by-ts e acc))
+      a
+      b)))
+
+(define todo/comment/add
+  (lambda
+    (item body)
+    "Append a comment datum to card item; returns the comment id. Author +
+     ts ride the row metadata (session user / created_at)."
+    (todo/comments-init!)
+    (as-str
+      (todo/tree/create
+        "todo-comment"
+        (dict-set*
+          "{}"
+          (list "item_id" (as-str item) "body" (as-str body)))))))
+
+(define todo/event/record
+  (lambda
+    (item from to)
+    "Record a card state transition datum (item_id, from_state, to_state);
+     returns the event id. Callers (todo/cycle + the state writers) call this
+     only when the state actually changed (from != to)."
+    (todo/comments-init!)
+    (as-str
+      (todo/tree/create
+        "todo-event"
+        (dict-set*
+          "{}"
+          (list
+            "item_id" (as-str item)
+            "from_state" (as-str from)
+            "to_state" (as-str to)))))))
+
+(define todo/comment/list
+  (lambda
+    (item)
+    "All comment node-JSONs for card item, newest first."
+    (todo/datum/rows-for-item "todo-comment" item 200)))
+
+(define todo/event/list
+  (lambda
+    (item)
+    "All event node-JSONs for card item, newest first."
+    (todo/datum/rows-for-item "todo-event" item 200)))
+
+(define todo/feed
+  (lambda
+    (item)
+    "Chronological activity feed for card item: todo-event transitions and
+     todo-comment rows interleaved by created_at, oldest first. Returns a
+     list of feed-entry dicts (JSON strings) tagged kind = comment | event."
+    (todo/comments-init!)
+    (todo/datum/merge-by-ts
+      (list/map
+        (lambda (n) (todo/datum/feed-entry "comment" n))
+        (todo/comment/list item))
+      (list/map
+        (lambda (n) (todo/datum/feed-entry "event" n))
+        (todo/event/list item)))))
+
+;; seed the datum types on load (idempotent; no-ops when already present)
+(todo/comments-init!)
 
 (define todo/items-for
   (lambda
