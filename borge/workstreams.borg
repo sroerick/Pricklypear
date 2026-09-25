@@ -63,7 +63,7 @@
    auto-scope; never hardcode a shared data.<type> path.")
   (implements "libs/todo/lib.pp deftype todo-comment todo-event"
               "libs/todo/lib.pp card detail v2")
-  (status planned)
+  (status implemented-live)  ;; orchestration tasks 2+3 (2026-09-25: comments/events/feed, transition events)
   (verify
    (test "a comment on a card appears on its detail page thread"
          "a state transition appends a todo-event row"
@@ -76,7 +76,7 @@
    card cold' because the card names the deliverable, the target, and the
    done-test.")
   (implements "libs/todo/lib.pp")
-  (status planned))
+  (status implemented-live)  ;; orchestration task 4 (2026-09-25: acceptance + branch fields)
 
  (section column-recipes
   (doc "The workstream list datum carries a `recipes` field: a dict mapping
@@ -103,7 +103,7 @@
    the card's title/acceptance/branch/state), so every list gets actionable
    instructions before anyone configures a per-list override.")
   (implements "libs/todo/lib.pp (todo/recipes-*)" "libs/todo/lib.pp flow/brief")
-  (status planned))
+  (status implemented-live)  ;; orchestration task 6 (2026-09-27: todo/recipes-* + default family)
 
  (section claim-brief-protocol
   (doc "THE local executor contract (laptop pi, NOT the image):
@@ -124,8 +124,8 @@
       (HUMAN-REVIEW), never an agent.)
    The claim lease is a pid/ts on the assignee field to prevent double-spawn;
    a stale lease (>12h) is reclaimable.")
-  (implements "scripts/pp-flow.sh (planned)" "libs/todo/lib.pp todo/flow-brief")
-  (status planned)
+  (implements "scripts/pp-flow.sh" "libs/todo/lib.pp todo/flow-brief")
+  (status implemented-live)  ;; orchestration tasks 7+8 (2026-09-27: todo/flow-brief + scripts/pp-flow.sh)
   (verify
    (test "executor claim → brief contains title+acceptance+column recipe"
          "write-back lands an event + comment and advances exactly one column"
@@ -137,8 +137,8 @@
    rollup across streams, 'stale' (open >3d) flags, and links into
    /kanban?list=<id> + card detail. Retires the cron 'workstreams' note; the
    note is replaced by a pointer to the live face.")
-  (implements "libs/workstreams/lib.pp (planned)")
-  (status planned)
+  (implements "libs/workstreams/lib.pp")
+  (status implemented-live)  ;; orchestration task 9 (2026-09-27: /workstreams live face)
   (verify
    (test "each stream shows live counts matching kanban"
          "HUMAN-REVIEW rollup lists every card in that column across streams")))
@@ -159,5 +159,5 @@
    master's layout and is not merged). Carry the functions, not the file
    layout. Provides assignee (claim) + priority (queue) that this chapter's
    protocol depends on.")
-  (status planned))
+  (status implemented-live))  ;; orchestration task 1 (2026-09-27: 286360d; kanban half already merged in libs/kanban)
 )
