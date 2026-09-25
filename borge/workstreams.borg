@@ -149,7 +149,7 @@
    gregor's 09:00 brief says 'here's where each stream is, here's what moved,
    here's what's ready for you' — from the live store, not a static mirror.")
   (implements "libs/standup/lib.pp v2")
-  (status planned))
+  (status implemented-live))  ;; orchestration task 10 (2026-09-27: per-stream counts + review rollup + moved-yesterday, guarded)
 
  (section landing-gregors-assignment-work
   (doc "Requires porting 0f1b9a4+b7059e6+133b228+89e5ddf (assignment/priority/
