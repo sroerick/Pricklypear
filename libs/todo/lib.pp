@@ -30,6 +30,8 @@
     todo/item/branch
     todo/item/set-acceptance
     todo/item/set-branch
+    todo/item/kind
+    todo/item/set-kind
     todo/recipes-default
     todo/recipes-for-list
     todo/recipe
@@ -83,6 +85,8 @@
             "branch"
             ""
             "pipeline"
+            ""
+            "kind"
             ""))))))
 
 (define todo/add-form
@@ -1039,6 +1043,8 @@
             "branch"
             ""
             "pipeline"
+            ""
+            "kind"
             ""))))))
 
 (define todo/item/all
@@ -1613,6 +1619,36 @@
         ()
         (seq
           (todo/tree/set-field "todo-item" (as-str id) "branch" (as-str branch))
+          (as-str id))))))
+
+;; kind field — borge/workstreams.borg pipeline-model issues-convergence:
+;; a todo-item with a kind tag (BUG/DESIGN/SMELL/CLEANUP) is READ AS AN
+;; ISSUE ROW on /issues, rendered through the shared state pipeline (own
+;; override > list columns > global default). Body builders seed "";
+;; set-kind is a content edit via tree/set-field (not a state transition,
+;; no todo-event), mirroring acceptance/branch above.
+(define todo/item/kind
+  (lambda
+    (fields)
+    "The issue-kind tag of item fields (BUG/DESIGN/SMELL/CLEANUP); empty when
+     absent. A non-empty kind is the /issues convergence flag: the card shows
+     up as an issue row through the shared pipeline."
+    (let
+      ((k (dict-get fields "kind")))
+      (if (null? k) "" (as-str k)))))
+
+(define todo/item/set-kind
+  (lambda
+    (id kind)
+    "Set card id's kind tag (empty clears — card leaves the /issues rows).
+     Returns id, or () when the item is missing."
+    (let
+      ((row (todo/tree/get "todo-item" (as-str id))))
+      (if
+        (null? row)
+        ()
+        (seq
+          (todo/tree/set-field "todo-item" (as-str id) "kind" (as-str kind))
           (as-str id))))))
 
 ;; ------------------------------------------------------------------

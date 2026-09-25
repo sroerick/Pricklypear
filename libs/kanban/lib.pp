@@ -222,7 +222,8 @@
             "due" ""
             "position" "0"
             "done" "false"
-            "pipeline" ""))))))
+            "pipeline" ""
+            "kind" ""))))))
 
 ;; ------------------------------------------------------------------
 ;; HTML rendering
@@ -807,6 +808,8 @@ function kbDrop(ev){
             "done"
             "false"
             "pipeline"
+            ""
+            "kind"
             ""))))))
 
 ;; (The old 2-arg kanban/move-card that lived here was removed 2026-09-03:
