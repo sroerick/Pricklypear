@@ -26,6 +26,10 @@
     todo/event/transition!
     todo/event/list
     todo/feed
+    todo/item/acceptance
+    todo/item/branch
+    todo/item/set-acceptance
+    todo/item/set-branch
 ))
 
 (define todo/active-items
@@ -64,7 +68,11 @@
             "position"
             "0"
             "done"
-            "false"))))))
+            "false"
+            "acceptance"
+            ""
+            "branch"
+            ""))))))
 
 (define todo/add-form
   (lambda
@@ -675,9 +683,12 @@
               (let
                 ((state (todo/item-state fields)))
                 (let
-                  ((lid (todo/item-list-id fields)))
-                  (html/div
-                    (html/attr "class" "card todo-detail")
+                  ((acceptance (todo/item/acceptance fields))
+                    (branch (todo/item/branch fields)))
+                  (let
+                    ((lid (todo/item-list-id fields)))
+                    (html/div
+                      (html/attr "class" "card todo-detail")
                     (html/join
                       (list
                         (html/p*
@@ -731,13 +742,30 @@
                                     (html/attr "rows" "8")
                                     (html/attr "class" "todo-notes")))
                                 notes)
+                              (html/p*
+                                (html/attr "class" "muted")
+                                (html/join
+                                  (list
+                                    (html/strong "Branch: ")
+                                    (html/code branch))))
+                              (if
+                                (string-eq acceptance "")
+                                ()
+                                (html/div
+                                  (html/attr "class" "todo-acceptance")
+                                  (html/join
+                                    (list
+                                      (html/p*
+                                        (html/attr "class" "muted")
+                                        "Acceptance")
+                                      (html/pre (html/text acceptance))))))
                               (html/div
                                 ""
                                 (html/join
                                   (list
                                     (html/button (html/attr "type" "submit") "Save")
                                     " "
-                                    (html/a (string-append "/todos?view=" view) "Cancel")))))))))))))))))))
+                                    (html/a (string-append "/todos?view=" view) "Cancel"))))))))))))))))))))
 
 (define todo/done?
   (lambda
@@ -987,7 +1015,11 @@
             "position"
             "0"
             "done"
-            "false"))))))
+            "false"
+            "acceptance"
+            ""
+            "branch"
+            ""))))))
 
 (define todo/item/all
   (lambda () (todo/tree/rows "todo-item" 200)))
@@ -1513,6 +1545,56 @@
               #t
               (string-eq (todo/item/assignee (cdr row)) u)))
           (todo/item/active (todo/item/all)))))))
+
+;; acceptance + branch fields — borge/workstreams.borg acceptance. These ride
+;; the todo-item datum like notes/assignee: todo/add + todo/item/add seed them
+;; (default ""), the save writers preserve them via dict-set* on the existing
+;; fields, and kanban's dict-set* reorders/renames also preserve them. New
+;; cards created by libs/kanban/make-card (a fresh body) simply have "" until
+;; set with todo/item/set-acceptance / todo/item/set-branch. Setters write via
+;; tree/set-field — a content edit, NOT a state transition, so they deliberately
+;; do NOT mint a todo-event.
+(define todo/item/acceptance
+  (lambda
+    (fields)
+    "The acceptance criteria body of item fields; empty when absent."
+    (let
+      ((a (dict-get fields "acceptance")))
+      (if (null? a) "" (as-str a)))))
+
+(define todo/item/branch
+  (lambda
+    (fields)
+    "The target branch for the work; empty when absent."
+    (let
+      ((b (dict-get fields "branch")))
+      (if (null? b) "" (as-str b)))))
+
+(define todo/item/set-acceptance
+  (lambda
+    (id text)
+    "Set card id's acceptance criteria (empty clears). Returns id, or () when the item is missing."
+    (let
+      ((row (todo/tree/get "todo-item" (as-str id))))
+      (if
+        (null? row)
+        ()
+        (seq
+          (todo/tree/set-field "todo-item" (as-str id) "acceptance" (as-str text))
+          (as-str id))))))
+
+(define todo/item/set-branch
+  (lambda
+    (id branch)
+    "Set card id's target branch (empty clears). Returns id, or () when the item is missing."
+    (let
+      ((row (todo/tree/get "todo-item" (as-str id))))
+      (if
+        (null? row)
+        ()
+        (seq
+          (todo/tree/set-field "todo-item" (as-str id) "branch" (as-str branch))
+          (as-str id))))))
 
 ;; ------------------------------------------------------------------
 ;; comment + event datums (card detail v2 feed) — borge/workstreams.borg
@@ -2929,9 +3011,12 @@
               (let
                 ((state (todo/item/state fields)))
                 (let
-                  ((lid (todo/item/list-id fields)))
-                  (html/div
-                    (html/attr "class" "card todo-detail")
+                  ((acceptance (todo/item/acceptance fields))
+                    (branch (todo/item/branch fields)))
+                  (let
+                    ((lid (todo/item/list-id fields)))
+                    (html/div
+                      (html/attr "class" "card todo-detail")
                     (html/join
                       (list
                         (html/p*
@@ -2985,13 +3070,30 @@
                                     (html/attr "rows" "8")
                                     (html/attr "class" "todo-notes")))
                                 notes)
+                              (html/p*
+                                (html/attr "class" "muted")
+                                (html/join
+                                  (list
+                                    (html/strong "Branch: ")
+                                    (html/code branch))))
+                              (if
+                                (string-eq acceptance "")
+                                ()
+                                (html/div
+                                  (html/attr "class" "todo-acceptance")
+                                  (html/join
+                                    (list
+                                      (html/p*
+                                        (html/attr "class" "muted")
+                                        "Acceptance")
+                                      (html/pre (html/text acceptance))))))
                               (html/div
                                 ""
                                 (html/join
                                   (list
                                     (html/button (html/attr "type" "submit") "Save")
                                     " "
-                                    (html/a (string-append "/todos?view=" view) "Cancel")))))))))))))))))))
+                                    (html/a (string-append "/todos?view=" view) "Cancel"))))))))))))))))))))
 
 (define todo/ui/handle-post
   (lambda
