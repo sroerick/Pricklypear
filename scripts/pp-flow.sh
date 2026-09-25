@@ -22,7 +22,8 @@
 #   --dry-run              no side effects (overrides mode selection)
 #
 # Env / knobs:
-#   PP_URL PP_USER PP_PASS — set explicitly or in ~/.config/pricklypear/env
+#   PP_URL PP_USER PP_PASS (or PP_TOKEN for Bearer auth) - env vars, or
+#   ~/.config/pricklypear/env; environment wins over the file
 #   PP_FLOW_PI — the pi runner (default: `pi -p`); set to e.g. `true` to stub
 #                the agent for tests:  PP_FLOW_PI=true ./scripts/pp-flow.sh --run <id>
 #   PP_FLOW_LOG_DIR — where run logs + brief files go (default <repo>/.ralph)
@@ -80,17 +81,24 @@ if [ -z "$CARD" ]; then
   echo "pp-flow: missing card id (see --help)" >&2
   exit 2
 fi
-[ -n "$APASS" ] || { echo "pp-flow: no password (set PP_PASS or --password)" >&2; exit 2; }
+[ -n "$APASS" ] || [ -n "${PP_TOKEN:-}" ] || { echo "pp-flow: no credentials (set PP_PASS, or PP_TOKEN for Bearer auth)" >&2; exit 2; }
 
 # ---- eval plumbing -----------------------------------------------------------
 # Every todo call runs inside (begin (load-library "todo") ...) so a fresh
 # session still has the lib (and the executor badge is the usual load path).
-pp_eval() { "$SCRIPT_DIR/pp-eval.sh" -j --url "$URL" --user "$AUSER" --password "$APASS" -e "$1" 2>&1; }
+pp_eval() { if [ -n "$APASS" ]; then "$SCRIPT_DIR/pp-eval.sh" -j --url "$URL" --user "$AUSER" --password "$APASS" -e "$1" 2>&1; else "$SCRIPT_DIR/pp-eval.sh" -j --url "$URL" -e "$1" 2>&1; fi; }
 pp_todo_raw() { pp_eval "(begin (load-library \"todo\") $1)"; }
-pp_todo_val() { pp_todo_raw "$1" | jq -r '.value // empty' 2>/dev/null; }
-
-# JSON-encode a shell string into a Nopales string literal (quotes/newlines safe).
-json_str() { python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$1"; }
+pp_todo_val() { if [ -n "$APASS" ]; then "$SCRIPT_DIR/pp-eval.sh" --url "$URL" --user "$AUSER" --password "$APASS" -e "(begin (load-library \"todo\") $1)" 2>/dev/null; else "$SCRIPT_DIR/pp-eval.sh" --url "$URL" -e "(begin (load-library \"todo\") $1)" 2>/dev/null; fi; }
+# Nopales-safe string literal via POSIX awk (escape backslash, dquote, tab;
+# join newline-separated records with \n). OpenBSD ksh has no ${v//pat/rep}.
+# No interpreter one-liner, matching the repo's no-Python rule.
+json_str() {
+  # CR dropped; tab escaped; newline joins records so a single-line arg (card
+  # ids!) never gains a trailing \n.
+  printf '"%s"' "$(printf '%s' "$1" | tr -d '\r' | awk 'BEGIN { ORS = "" }
+    NR > 1 { print "\\n" }
+    { gsub(/\\/, "\\\\"); gsub(/"/, "\\\""); gsub(/\t/, "\\t"); print $0 }')"
+}
 
 card_assignee() { pp_todo_val "(todo/item/assignee (todo/item/get $1))"; }
 brief_of()      { pp_todo_val "(todo/flow-brief $1)"; }
@@ -114,7 +122,11 @@ claim() {
     *)  echo "pp-flow: card $CARD has non-flow assignee \"$cur\"; claiming anyway" >&2 ;;
   esac
   lease="executor:$$@$(date +%s)"
-  pp_todo_raw "(todo/item/assign $(json_str "$CARD") $(json_str "$lease"))" >/dev/null
+    assigned="$(pp_todo_val "(todo/item/assign $(json_str "$CARD") $(json_str "$lease"))")"
+    if [ -z "$assigned" ]; then
+      echo "pp-flow: claim write failed (card missing or write denied)" >&2
+      return 4
+    fi
   echo "$lease"
 }
 
@@ -122,6 +134,21 @@ claim() {
 write_back() {
   id="$1"
   msg="${2:-pp-flow: auto advanced the card to the next column}"
+  # Existence first: a missing card reports state TODO (default), and
+  # todo/comment/add happily orphans a comment on it (verified live 09-25).
+  exists="$(pp_todo_val "(if (null? (todo/item/get $id)) \"missing\" \"ok\")")"
+  if [ "$exists" != "ok" ]; then
+    echo "pp-flow: card $id not found; not advancing, not commenting" >&2
+    return 3
+  fi
+  cur="$(pp_todo_val "(todo/item/state (todo/item/get $id))")"
+  case "$cur" in
+    DONE|PARKED|CANCELLED|ARCHIVED)
+      # todo/cycle WRAPS at the end of the column set - advancing here would
+      # resurrect a closed card back to TODO.
+      echo "pp-flow: card $id is terminal ($cur); not advancing" >&2
+      return 3 ;;
+  esac
   adv="$(pp_todo_val "(todo/cycle $id)")"
   newstate="$(pp_todo_val "(todo/item/state (todo/item/get $id))")"
   cmt="$(pp_todo_val "(todo/comment/add $id $(json_str "$msg"))")"
@@ -149,7 +176,7 @@ case "$MODE" in
     exit 0
     ;;
   write-back)
-    write_back "$(json_str "$CARD")" "$MSG"
+    write_back "$(json_str "$CARD")" "$MSG" || exit $?
     exit 0
     ;;
   run)
@@ -166,10 +193,14 @@ case "$MODE" in
     PI_RUNNER="${PP_FLOW_PI:-pi -p}"
     LOG_FILE="$LOG_DIR/flow-$SHORT.log"
     echo "pp-flow: running agent ($PI_RUNNER) on $CARD ..." >&2
-    if [ "$PI_RUNNER" = "true" ] || ! command -v "${PI_RUNNER%% *}" >/dev/null 2>&1; then
-      # stub / missing runner: record the brief as the 'transcript'
+    if [ "$PI_RUNNER" = "true" ]; then
+      # explicit test stub: record the brief as the 'transcript', succeed
       cp "$BRIEF_FILE" "$LOG_FILE"
       rc=0
+    elif ! command -v "${PI_RUNNER%% *}" >/dev/null 2>&1; then
+      # missing runner is a CONFIG error, not a successful no-op
+      echo "pp-flow: runner not found: $PI_RUNNER (set PP_FLOW_PI)" >&2
+      rc=127
     else
       # shellcheck disable=SC2086
       $PI_RUNNER "$(cat "$BRIEF_FILE")" > "$LOG_FILE" 2>&1
@@ -177,11 +208,12 @@ case "$MODE" in
     fi
     echo "pp-flow: agent rc=$rc; transcript -> $LOG_FILE" >&2
     if [ "$rc" -ne 0 ]; then
-      echo "pp-flow: agent failed (rc=$rc); NOT advancing the card — fix and re-run" >&2
+      pp_todo_raw "(todo/item/unassign $(json_str "$CARD"))" >/dev/null
+      echo "pp-flow: agent failed (rc=$rc); card NOT advanced, claim released — fix and re-run" >&2
       exit "$rc"
     fi
     evid="$(tail -c 1200 "$LOG_FILE" | tr '\n' ' ' | tr -s ' ' | cut -c1-500)"
-    write_back "$(json_str "$CARD")" "executor pid $$: $evid"
+      write_back "$(json_str "$CARD")" "executor pid $$: $evid" || exit $?
     echo "pp-flow: write-back complete for $CARD"
     ;;
 esac
