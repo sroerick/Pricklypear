@@ -19,6 +19,20 @@ let prim_date_today (_args : value list) : value =
 let prim_now (_args : value list) : value =
   VInt (Int64.of_float (Unix.gettimeofday ()))
 
+(** (now-iso) -> VStr "YYYY-MM-DDTHH:MM:SSZ" (UTC, ISO 8601).
+    The app-facing timestamp stamp: uniform 20-char shape so plain
+    string compare IS chronological order (same convention as PG
+    timestamptz text; workstreams/date-prefix and
+    todo/datum/insert-by-ts already rely on it). Before this prim the
+    chat lib stamped created_at "" — blank DM timestamps.
+    BORGE-i-<filed>, see borge issue register. *)
+let prim_now_iso (_args : value list) : value =
+  let tm = Unix.gmtime (Unix.gettimeofday ()) in
+  VStr
+    (Printf.sprintf "%04d-%02d-%02dT%02d:%02d:%02dZ"
+       (tm.Unix.tm_year + 1900) (tm.Unix.tm_mon + 1) tm.Unix.tm_mday
+       tm.Unix.tm_hour tm.Unix.tm_min tm.Unix.tm_sec)
+
 (** (now-ms) -> VInt unix epoch milliseconds. *)
 let prim_now_ms (_args : value list) : value =
   VInt (Int64.of_float (Unix.gettimeofday () *. 1000.0))
