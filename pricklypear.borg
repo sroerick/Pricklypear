@@ -50,6 +50,7 @@
  (untracked "scripts/pp_eval.py" "pp-eval CLI client for POST /api/eval")
  (untracked "scripts/pp_sync.py" "pp-sync vault/snapshot tooling for package branches")
  (untracked "scripts/pp-flow.sh" "claim/brief protocol local executor (borge/workstreams.borg claim-brief-protocol; orchestration task 8)")
+ (untracked "scripts/pp-flow-autolith.sh" "pp-flow PP_FLOW_PI adapter running one brief through Autolith's headless run-job (borge/workstreams.borg autolith-runner)")
  (untracked "scripts/load_upsets.py" "upsets package loader (one pp_eval -i session; defines persist)")
  (untracked "scripts/load_upsets_lib.py" "Nopales top-level form splitter used by the upsets loader")
  (untracked "scripts/pp_outline.py" "pp-outline tooling for structural editing")
