@@ -30,6 +30,10 @@
     todo/item/branch
     todo/item/set-acceptance
     todo/item/set-branch
+    todo/recipes-default
+    todo/recipes-for-list
+    todo/recipe
+    todo/recipe-set
 ))
 
 (define todo/active-items
@@ -1783,6 +1787,145 @@
 
 ;; seed the datum types on load (idempotent; no-ops when already present)
 (todo/comments-init!)
+
+;; ------------------------------------------------------------------
+;; column recipes (workstreams.borg column-recipes) — the bridge between
+;; RECORD and EXECUTOR. The workstream list datum carries an optional
+;; `recipes` JSON dict field mapping COLUMN NAME -> instruction text (the
+;; per-column agent recipe). Reads fall back to the built-in default family
+;; (todo/recipes-default) so every list gets actionable instructions even
+;; before anyone configures it; recipe-set writes the explicit dict.
+;; NAMING NOTE (orchestration task 6 resolution): the plan originally named
+;; these kanban/recipes-for-list + kanban/recipe-set + kanban/recipe, but the
+;; kanban lib (libs/kanban/lib.pp) is OFF-LIMITS this loop (Do-NOT rule), and
+;; master's convention is one clean namespace per family file. These live in
+;; the todo family as todo/recipes-* (they operate on the todo-list datum);
+;; the shared column taxonomy they cover is SPEC/CODE/LOGIC-REVIEW/UI-REVIEW/
+;; HUMAN-REVIEW/DONE/PARKED (borge/work-triage.borg board).
+;; ------------------------------------------------------------------
+
+(define todo/recipes-default
+  (list
+    (cons "SPEC"
+      "You are the SPEC author for Pricklypear (Nopales/OCaml Lisp OS; the borge book is the spec and the source of truth — code drift means code is wrong). The card above is your work item; its acceptance criteria + target branch ride on the datum. Write/update the borge .borg chapter for it. Finish with `borge drift` clean and the spec committed on the target branch. Then move the card to CODE and post a comment: what you specified + how the reader verifies it.")
+    (cons "CODE"
+      "You are the IMPLEMENTER for Pricklypear (OCaml 5.4 / Nopales, dune build, borge spec). Implement the card above against its acceptance criteria, on its target branch, in /home/roerick/dev/wyo.tech/pricklypear. Build/test: eval $(opam env --switch=poohstack --set-switch); dune build; dune runtest (lisp/common at least). After .borg edits run `borge drift`. Live-smoke on the target host before write-back. When done, move the card to LOGIC-REVIEW and post a comment: what shipped + how you verified it.")
+    (cons "LOGIC-REVIEW"
+      "You are the LOGIC REVIEWER for Pricklypear. Review the card's work on its target branch against its acceptance criteria: read the change, check borge drift + build + the stated verification, judge logic. PASS -> move the card to HUMAN-REVIEW and comment your verdict + evidence. FAIL -> move it BACK to CODE with a comment listing exactly what to fix.")
+    (cons "UI-REVIEW"
+      "You are the UI REVIEWER for Pricklypear. Exercise the card's work on its target branch for interaction + rendering against its acceptance criteria (load the routes, click through). PASS -> move the card to HUMAN-REVIEW and comment. FAIL -> move it BACK to CODE with a comment of what to fix.")
+    (cons "HUMAN-REVIEW"
+      "ROERICK GATE — do NOT move this card yourself. It is ready for the human gate on its target branch; acceptance criteria are on the datum. Post any notes as comments; leave the state in HUMAN-REVIEW. Only the human passes this gate.")
+    (cons "DONE"
+      "This card is done. Nothing to execute. If it landed here by accident, move it back to the correct column and comment why.")
+    (cons "PARKED"
+      "This card is deliberately parked. Do not work it. If the park looks stale, comment and leave it — only the human unparks.")
+    (cons "TODO"
+      "Intake: place the card into the correct pipeline column — SPEC if it needs a spec/decision before code, CODE if it is executable now — set priority if useful, assign an owner if known, then comment where you placed it and why."))
+  "The built-in default recipe family per shared column (work-triage taxonomy).
+     todo/recipe falls back to these when a list has no explicit recipe for a
+     column. Columns without an entry fall to the generic fallback at read
+     time, so a brief always has instructions.")
+
+(define todo/recipes-for-list
+  (lambda
+    (list-id)
+    (let
+      ((lf (todo/tree/get "todo-list" (as-str list-id))))
+      (if
+        (null? lf)
+        (list)
+        (let
+          ((r (dict-get lf "recipes")))
+          (if
+            (null? r)
+            (list)
+            (list/map
+              (lambda
+                (k)
+                (cons
+                  (as-str k)
+                  (as-str (dict-get r (as-str k)))))
+              (dict-keys r)))))))
+  "The list's EXPLICIT `recipes` dict as an assoc list ((column . text) ...),
+     stored on the todo-list datum; () when the list is missing or has no
+     recipes field. Defaults are NOT mixed in — use todo/recipe for the
+     effective (fallback-aware) text of one column.")
+
+(define todo/recipe
+  (lambda
+    (list-id column)
+    (let
+      ((col (as-str column))
+        (explicit (assoc (as-str column) (todo/recipes-for-list list-id))))
+      (if
+        (if
+          explicit
+          (not (string-eq (as-str (cdr explicit)) ""))
+          #f)
+        (as-str (cdr explicit))
+        (let
+          ((dflt (assoc col todo/recipes-default)))
+          (if
+            dflt
+            (as-str (cdr dflt))
+            (string-append
+              col
+              ": work the card above on Pricklypear — follow its acceptance criteria and target branch; build/test with dune; verify; then advance the card one column and comment what you did + evidence."))))))
+  "The EFFECTIVE recipe instruction text for column in list-id: the list's
+     explicit recipe when set (non-empty), else the default family entry for
+     that column (todo/recipes-default), else a generic fallback. Never
+     returns () — every column in every list produces an instruction, so a
+     flow/brief always has text to hand the executor.")
+
+(define todo/recipes-drop
+  (lambda
+    (json key)
+    (let
+      ((k (as-str key)))
+      (list/foldl
+        (lambda
+          (acc jk)
+          (if
+            (string-eq (as-str jk) k)
+            acc
+            (dict-set acc (as-str jk) (as-str (dict-get json (as-str jk))))))
+        "{}"
+        (dict-keys json))))
+  "Rebuild a JSON dict without key (empty/absent dict stays {}). Helper for
+     todo/recipe-set removal — there is no dict-del prim, so drop = fold.")
+
+(define todo/recipe-set
+  (lambda
+    (list-id column text)
+    (let
+      ((lf (todo/tree/get "todo-list" (as-str list-id))))
+      (if
+        (null? lf)
+        "no such list"
+        (let
+          ((cur (dict-get lf "recipes")))
+          (let
+            ((base (if (null? cur) "" (as-str cur)))
+              (col (as-str column))
+              (tx (as-str text)))
+            (let
+              ((newr
+                (if
+                  (string-eq tx "")
+                  (todo/recipes-drop base col)
+                  (dict-set base col tx))))
+              (let
+                ((body (dict-set* lf (list "recipes" newr))))
+                (seq
+                  (tree/upsert
+                    (node-path (quote todo-list) (as-str list-id))
+                    "datum" "todo-list" body)
+                  (as-str list-id)))))))))
+  "Set the recipe instruction text for column on list-id (content edit of the
+     LIST datum via tree/upsert — NOT a card state transition, so no
+     todo-event is minted). Empty text REMOVES that column's entry. Returns
+     the list id, or a no-such-list message.")
 
 (define todo/items-for
   (lambda
