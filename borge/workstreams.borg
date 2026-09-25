@@ -51,7 +51,16 @@
    cycle/move writers). The card detail page interleaves events and comments
    chronologically (Linear-style activity feed). Comments are the ONLY place
    cross-agent context is recorded; transitions are the ONLY signal for
-   standup and claim logic.")
+   standup and claim logic.
+   STORAGE (2026-09-25): like todo-item itself these datums are USER-scoped in
+   the one-tree — node-path resolves data.todo-comment to
+   data.u.<user>.todo-comment, and the RLS floor confines reads/writes to the
+   caller's user garden. The thread therefore lives under the writing ACCOUNT;
+   the claim/brief protocol runs executors under owner creds or a single
+   shared executor account (auth/delegation is parameter-passing only, per
+   scope), so everyone on a card sees the same feed. All reads/writes go
+   through node-path (todo/comment/* — todo/event/* — todo/feed) and
+   auto-scope; never hardcode a shared data.<type> path.")
   (implements "libs/todo/lib.pp deftype todo-comment todo-event"
               "libs/todo/lib.pp card detail v2")
   (status planned)
