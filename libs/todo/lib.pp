@@ -23,6 +23,7 @@
     todo/comment/add
     todo/comment/list
     todo/event/record
+    todo/event/transition!
     todo/event/list
     todo/feed
 ))
@@ -1281,36 +1282,50 @@
         (null? fields)
         ()
         (let
-          ((lid
-            (if
-              (string-eq (as-str list-id) "")
-              (todo/list/ensure-inbox)
-              (as-str list-id))))
-          (todo/tree/save
-            "todo-item"
-            id
-            (dict-set*
-              fields
-              (list
-                "title"
-                (as-str title)
-                "notes"
-                (as-str notes)
-                "due"
-                (as-str due)
-                "state"
-                (as-str state)
-                "list_id"
-                lid))))))))
+          ((prev (todo/item/state fields))
+            (next (as-str state))
+            (lid
+              (if
+                (string-eq (as-str list-id) "")
+                (todo/list/ensure-inbox)
+                (as-str list-id))))
+          (seq
+            (todo/tree/save
+              "todo-item"
+              id
+              (dict-set*
+                fields
+                (list
+                  "title"
+                  (as-str title)
+                  "notes"
+                  (as-str notes)
+                  "due"
+                  (as-str due)
+                  "state"
+                  next
+                  "list_id"
+                  lid)))
+            (todo/event/transition! id prev next)))))))
 
 (define todo/item/set-state
   (lambda
     (id state)
-    (todo/tree/set-field
-      "todo-item"
-      id
-      "state"
-      (as-str state))))
+    "Set card state, recording a todo-event when it actually changes. Returns
+     the event id (real transition) or () (no change / missing card). The
+     choke point: todo/item/cycle, archive, the item save, and future move
+     writers all record transitions through here."
+    (let
+      ((cur (todo/tree/get "todo-item" (as-str id))))
+      (if
+        (null? cur)
+        (list)
+        (let
+          ((prev (todo/item/state cur))
+            (next (as-str state)))
+          (seq
+            (todo/tree/set-field "todo-item" (as-str id) "state" next)
+            (todo/event/transition! id prev next)))))))
 
 (define todo/item/state
   (lambda
@@ -1506,8 +1521,14 @@
 ;;     METADATA (node author / created_at), not body fields, per spec: the
 ;;     datum itself is deliberately minimal.
 ;;   todo-event   (item_id, from_state, to_state) — auto-written by every
-;;     real card-state transition (todo/cycle, todo/item/cycle, set-state
-;;     writers); the ONLY transition signal standup + claim logic use.
+;;     real card-state transition. Wired (task 3): todo/set-state,
+;;     todo/item/set-state, todo/save, todo/item/save all route through
+;;     todo/event/transition! (record only when the state actually changed),
+;;     so todo/cycle, todo/item/cycle, archive, the /todos detail form, and
+;;     the future move writers all append events for free. The kanban
+;;     move-card renumber (a position-reorder in libs/kanban) writes state
+;;     directly via tree/upsert and is intentionally out of scope here (the
+;;     kanban lib is off-limits this loop).
 ;; todo/feed interleaves events + comments chronologically (Linear-style
 ;; activity feed) for card detail v2.
 ;; ------------------------------------------------------------------
@@ -1615,8 +1636,8 @@
   (lambda
     (item from to)
     "Record a card state transition datum (item_id, from_state, to_state);
-     returns the event id. Callers (todo/cycle + the state writers) call this
-     only when the state actually changed (from != to)."
+     returns the event id. Private-ish: user code should call
+     todo/event/transition!, which records ONLY on a real change."
     (todo/comments-init!)
     (as-str
       (todo/tree/create
@@ -1627,6 +1648,18 @@
             "item_id" (as-str item)
             "from_state" (as-str from)
             "to_state" (as-str to)))))))
+
+(define todo/event/transition!
+  (lambda
+    (id from to)
+    "Record a todo-event for card id when the state actually changed
+     (from != to); no-op otherwise. Returns the event id, or () when the
+     states are equal. THE choke point every card-state writer calls:
+     todo/set-state, todo/item/set-state, todo/save, todo/item/save."
+    (if
+      (string-eq (as-str from) (as-str to))
+      ()
+      (todo/event/record id from to))))
 
 (define todo/comment/list
   (lambda
@@ -2494,27 +2527,31 @@
         (null? fields)
         ()
         (let
-          ((lid
-            (if
-              (string-eq (as-str list-id) "")
-              (todo/ensure-inbox)
-              (as-str list-id))))
-          (todo/tree/save
-            "todo-item"
-            id
-            (dict-set*
-              fields
-              (list
-                "title"
-                (as-str title)
-                "notes"
-                (as-str notes)
-                "due"
-                (as-str due)
-                "state"
-                (as-str state)
-                "list_id"
-                lid))))))))
+          ((prev (todo/item-state fields))
+            (next (as-str state))
+            (lid
+              (if
+                (string-eq (as-str list-id) "")
+                (todo/ensure-inbox)
+                (as-str list-id))))
+          (seq
+            (todo/tree/save
+              "todo-item"
+              id
+              (dict-set*
+                fields
+                (list
+                  "title"
+                  (as-str title)
+                  "notes"
+                  (as-str notes)
+                  "due"
+                  (as-str due)
+                  "state"
+                  next
+                  "list_id"
+                  lid)))
+            (todo/event/transition! id prev next)))))))
 
 (define todo/seqtest
   (lambda () 7))
@@ -2522,11 +2559,21 @@
 (define todo/set-state
   (lambda
     (id state)
-    (todo/tree/set-field
-      "todo-item"
-      id
-      "state"
-      (as-str state))))
+    "Set card state, recording a todo-event when it actually changes. Returns
+     the event id (real transition) or () (no change / missing card). The
+     choke point: todo/cycle, archive, the save writer, and future move
+     writers all record transitions through here."
+    (let
+      ((cur (todo/tree/get "todo-item" (as-str id))))
+      (if
+        (null? cur)
+        (list)
+        (let
+          ((prev (todo/item-state cur))
+            (next (as-str state)))
+          (seq
+            (todo/tree/set-field "todo-item" (as-str id) "state" next)
+            (todo/event/transition! id prev next)))))))
 
 (define todo/state-options
   (lambda
