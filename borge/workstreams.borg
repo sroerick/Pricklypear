@@ -110,17 +110,21 @@
    1. CLAIM: the executor (or roerick) sets `assignee` on the card (=claim;
       existing todo/item/assign machinery — landing gregor's assignment work
       provides this on master).
-   2. BRIEF: `(flow/brief card-id)` renders the full prompt; for a ralph loop
-      the brief IS the plan file; for a subagent it's the task.
+   2. BRIEF: `(todo/flow-brief card-id)` renders the full prompt; for a ralph
+      loop the brief IS the plan file; for a subagent it's the task. NAMING
+      NOTE: the build plan named this flow/brief; a `libs/flow` package would
+      be a NEW family file, and the orchestration loop's Do-NOT rule limits
+      it to todo/standup/workstreams libs — so the brief lives in the todo
+      family as todo/flow-brief (implemented orchestration task 7).
    3. WORK: the agent reads the brief, does the work on the named branch.
    4. WRITE-BACK: the agent moves the card to the next column
-      (todo/state/next-for-list) and posts a todo-comment describing what it
-      did + evidence. A transition to a REVIEW column is the 'ready for
-      roerick' signal; the human gate is a real column (HUMAN-REVIEW), never
-      an agent.)
+      (todo/state/next-for-list through todo/cycle) and posts a todo-comment
+      describing what it did + evidence. A transition to a REVIEW column is
+      the 'ready for roerick' signal; the human gate is a real column
+      (HUMAN-REVIEW), never an agent.)
    The claim lease is a pid/ts on the assignee field to prevent double-spawn;
    a stale lease (>12h) is reclaimable.")
-  (implements "scripts/pp-flow.sh (planned)" "libs/flow (brief fn, planned)")
+  (implements "scripts/pp-flow.sh (planned)" "libs/todo/lib.pp todo/flow-brief")
   (status planned)
   (verify
    (test "executor claim → brief contains title+acceptance+column recipe"

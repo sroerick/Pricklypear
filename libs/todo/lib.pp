@@ -34,6 +34,7 @@
     todo/recipes-for-list
     todo/recipe
     todo/recipe-set
+    todo/flow-brief
 ))
 
 (define todo/active-items
@@ -1926,6 +1927,95 @@
      LIST datum via tree/upsert — NOT a card state transition, so no
      todo-event is minted). Empty text REMOVES that column's entry. Returns
      the list id, or a no-such-list message.")
+
+;; ------------------------------------------------------------------
+;; flow/brief — the executor brief (borge/workstreams.borg
+;; claim-brief-protocol). todo/flow-brief renders card + column recipe +
+;; context (repo path, build/tests invocation, target host, write-back eval
+;; snippet) into ONE self-contained text prompt: the plan file for a ralph
+;; loop, the task string for a subagent. NAMING NOTE (orchestration task 7
+;; resolution): the plan named this flow/brief; a `libs/flow` package would be
+;; a NEW family file, and the Do-NOT rule limits this loop to todo/standup/
+;; workstreams libs — so it lives in the todo family as todo/flow-brief.
+;; ------------------------------------------------------------------
+
+(define todo/flow-brief
+  (lambda
+    (card-id)
+    (let
+      ((fields (todo/tree/get "todo-item" (as-str card-id))))
+      (if
+        (null? fields)
+        ()
+        (let
+          ((cid (as-str card-id))
+            (title (todo/item/title fields))
+            (state (todo/item/state fields))
+            (list-id (todo/item/list-id fields))
+            (acceptance (todo/item/acceptance fields))
+            (branch (todo/item/branch fields))
+            (assignee (todo/item/assignee fields)))
+          (let
+            ((lname
+              (if
+                (string-eq list-id "")
+                "(no list)"
+                (let
+                  ((lf (todo/tree/get "todo-list" list-id)))
+                  (if
+                    (null? lf)
+                    list-id
+                    (todo/list/title lf))))))
+            (string-append
+              "PRICKLYPEAR EXECUTOR BRIEF — claim/brief protocol (borge/workstreams.borg)\n"
+              "Self-contained task: work the card below on the laptop repo, then write back\n"
+              "to the habitat. Follow the column recipe. Do not promote to prod.\n\n"
+              "== CARD ==\n"
+              "  card id:    "
+              cid
+              "\n  title:      "
+              title
+              "\n  state:      "
+              state
+              "\n  list:       "
+              lname
+              " ("
+              list-id
+              ")\n  assignee:   "
+              assignee
+              "\n  acceptance: "
+              (if (string-eq acceptance "") "(none)" acceptance)
+              "\n  branch:     "
+              (if (string-eq branch "") "(default)" branch)
+              "\n\n== COLUMN RECIPE ("
+              state
+              ") ==\n"
+              (todo/recipe list-id state)
+              "\n\n== CONTEXT ==\n"
+              "  repo:    /home/roerick/dev/wyo.tech/pricklypear\n"
+              "  build:   eval $(opam env --switch=poohstack --set-switch); dune build\n"
+              "  tests:   dune runtest lisp; dune runtest common\n"
+              "  spec:    the .borg book is the spec + source of truth; run `borge drift` after spec edits\n\n"
+              "== WRITE-BACK (when the work is DONE; not before) ==\n"
+              "  cd /home/roerick/dev/wyo.tech/pricklypear\n"
+              "  set -a; . ~/.config/pricklypear/env; set +a     # PP_URL / PP_USER / PP_PASS\n"
+              "  scripts/pp-eval.sh -q '(begin (load-library \"todo\") (todo/cycle \""
+              cid
+              "\") (todo/comment/add \""
+              cid
+              "\" \"<evidence: what you did + how verified>\"))'\n"
+              "  todo/cycle advances the card exactly one column and records a todo-event;\n"
+              "  todo/comment/add posts your evidence on the card thread. If the recipe needs\n"
+              "  a different destination (e.g. review FAIL -> back to CODE), set it explicitly:\n"
+              "  scripts/pp-eval.sh -q '(todo/set-state \""
+              cid
+              "\" \"<COLUMN>\")'\n"))))))
+  "Render card + column recipe + context into ONE self-contained text prompt
+     (the executor brief). Includes the card title/state/list/acceptance/
+     branch/assignee, the effective column recipe (todo/recipe), repo + build
+     context, and the write-back eval snippet (advance one column + post a
+     comment). Returns () for a missing card. For a ralph loop this IS the
+     plan file; for a subagent it's the task.")
 
 (define todo/items-for
   (lambda
