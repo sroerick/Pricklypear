@@ -765,7 +765,7 @@
                                   (list
                                     (html/button (html/attr "type" "submit") "Save")
                                     " "
-                                    (html/a (string-append "/todos?view=" view) "Cancel"))))))))))))))))))))
+                                    (html/a (string-append "/todos?view=" view) "Cancel"))))))) (todo/ui/feed-html id view))))))))))))))
 
 (define todo/done?
   (lambda
@@ -841,10 +841,18 @@
     (let
       ((action (as-str (request-param "action"))))
       (if
-        (string-eq action "cycle")
-        (todo/cycle (request-param "id"))
+        (string-eq action "comment")
+        (let
+          ((c (request-param "comment")))
+          (if
+            (or (null? c) (string-eq (as-str c) ""))
+            ()
+            (todo/comment/add (request-param "id") (as-str c))))
         (if
-          (string-eq action "delete")
+          (string-eq action "cycle")
+          (todo/cycle (request-param "id"))
+          (if
+            (string-eq action "delete")
           (todo/delete (request-param "id"))
           (if
             (string-eq action "archive")
@@ -874,7 +882,7 @@
                         (request-param "due")
                         (request-param "state")
                         (request-param "list_id"))
-                      (todo/add (todo/ensure-inbox) (request-param "title")))))))))))))
+                      (todo/add (todo/ensure-inbox) (request-param "title"))))))))))))))
 
 (define todo/item-due
   (lambda
@@ -1695,11 +1703,14 @@
 (define todo/datum/merge-by-ts
   (lambda
     (a b)
-    "Stable merge of two ts-ascending feed-entry lists into one."
+    "Merge two feed-entry lists (ANY order) into one ts-ascending list.
+     Walks both through the sorted insetter from an empty list, so the
+     result is chronological regardless of the helpers' own ordering.
+     (rows-for-item feeds NEWEST-first; this rebuilds oldest-first.)"
     (list/foldl
       (lambda (acc e) (todo/datum/insert-by-ts e acc))
-      a
-      b)))
+      (list)
+      (append a b))))
 
 (define todo/comment/add
   (lambda
@@ -2989,6 +3000,101 @@
                           (html/attr "autocomplete" "off"))))
                     (html/button (html/attr "type" "submit") "Add")))))))))))
 
+;; ------------------------------------------------------------------
+;; card detail v2: interleaved activity feed + comment composer.
+;; borge/workstreams.borg card-comments / card-detail-v2. todo/feed gives
+;; chronological entries; these renderers turn them into <li>s and the
+;; composer POSTs action=comment back to the SAME /todos detail page
+;; (no route fork - the spec's card-detail-v2 shape). Author + timestamp
+;; ride the row metadata (todo/datum/feed-entry).
+;; ------------------------------------------------------------------
+
+(define todo/ui/feed-item-html
+  (lambda
+    (e)
+    "One feed <li> from a feed entry dict (JSON): events render as a
+     state-arrow line, comments as their body text. Oldest-first order
+     comes from todo/feed."
+    (let
+      ((kind (as-str (dict-get e "kind")))
+        (author (as-str (dict-get e "author")))
+        (ts (as-str (dict-get e "ts"))))
+      (let
+        ((stamp
+          (html/span
+            (html/attr "class" "muted todo-feed-stamp")
+            (html/text (string-append author " @ " ts)))))
+        (if
+          (string-eq kind "event")
+          (html/li
+            (html/attr "class" "todo-feed-item todo-feed-event")
+            (html/join
+              (list
+                stamp
+                (html/span
+                  (html/attr "class" "todo-feed-arrow")
+                  (html/text
+                    (string-append
+                      (as-str (dict-get e "from_state"))
+                      " -> "
+                      (as-str (dict-get e "to_state"))))))))
+          (html/li
+            (html/attr "class" "todo-feed-item todo-feed-comment")
+            (html/join
+              (list
+                stamp
+                (html/p (html/text (as-str (dict-get e "text"))))))))))))
+
+(define todo/ui/feed-html
+  (lambda
+    (id view)
+    "The card-detail v2 activity section: an h2 + <ul> of the interleaved
+     comment/event feed, then a comment composer. Plain POST action=comment
+     to /todos (same shape as the Save form) — todo/page posts the comment
+     then redirects back to the current view."
+    (let
+      ((entries (todo/feed id)))
+      (let
+        ((items
+          (if
+            (null? entries)
+            (html/p* (html/attr "class" "muted") "No activity yet.")
+            (html/ul
+              (html/attr "class" "todo-feed")
+              (html/join
+                (list/map
+                  (lambda (e) (todo/ui/feed-item-html e))
+                  entries))))))
+        (html/div
+          (html/attr "class" "todo-feed-section")
+          (html/join
+            (list
+              (html/h2 (html/text "Activity"))
+              items
+              (html/form
+                "POST"
+                "/todos"
+                (html/attrs
+                  (list
+                    (html/attr "class" "todo-comment-form")))
+                (html/join
+                  (list
+                    (html/hidden "action" "comment")
+                    (html/hidden "id" id)
+                    (html/hidden "view" view)
+                    (html/label (html/attr "for" "comment") "Comment")
+                    (html/textarea
+                      "comment"
+                      (html/attrs
+                        (list
+                          (html/attr "id" "comment")
+                          (html/attr "rows" "3")
+                          (html/attr "class" "todo-comment-input")))
+                      "")
+                    (html/div
+                      ""
+                      (html/button (html/attr "type" "submit") "Comment"))))))))))))
+
 (define todo/ui/detail
   (lambda
     (id view)
@@ -3093,7 +3199,7 @@
                                   (list
                                     (html/button (html/attr "type" "submit") "Save")
                                     " "
-                                    (html/a (string-append "/todos?view=" view) "Cancel"))))))))))))))))))))
+                                    (html/a (string-append "/todos?view=" view) "Cancel"))))))) (todo/ui/feed-html id view))))))))))))))
 
 (define todo/ui/handle-post
   (lambda
@@ -3127,6 +3233,13 @@
             (request-param "due")
             (request-param "state")
             (request-param "list_id")))
+        ((string-eq action "comment")
+          (let
+            ((c (request-param "comment")))
+            (if
+              (or (null? c) (string-eq (as-str c) ""))
+              ()
+              (todo/comment/add (request-param "id") (as-str c)))))
         (else
           (todo/item/add
             (todo/list/ensure-inbox)
