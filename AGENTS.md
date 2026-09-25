@@ -11,6 +11,16 @@ discussions, edit the spec directly or just talk — do NOT file issues.
 
 ## Status (2026-08-31 reconcile)
 
+**Orchestration (2026-09-25):** the work-triage board became a real delivery
+pipeline — spec `borge/workstreams.borg` (registered in the book after
+work-triage). Workstream = a todo-list (glochid `fa93a1af`, Board `0b21ffaa`,
+…), same column taxonomy everywhere; the habitat is the **record + queue**, the
+laptop is the **executor** (scripts/pp-flow.sh + pi ralph/subagent claim cards
+via the brief protocol; no agents in the prod image). List deletion is allowed
+(`todo/delete-list`; default-Inbox guarded) — the old 'never delete' rule was
+retired 2026-09-25 after a 365→9 list cleanup (snapshot
+`backups/pre-cleanup-20260925-005600.json`).
+
 **Single-image v1 habitat is the running system.** Spec is a multi-file
 literate book (chapter `.borg` files + root). `borge report` after the
 habitat-book reconcile is roughly **268 implemented / 53 planned /
