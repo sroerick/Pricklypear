@@ -121,11 +121,34 @@ claim() {
 # ---- write-back: advance one column + post an evidence comment -------------------
 write_back() {
   id="$1"
-  msg="${2:-pp-flow: auto advanced the card to the next column}"
-  adv="$(pp_todo_val "(todo/cycle $id)")"
-  newstate="$(pp_todo_val "(todo/item/state (todo/item/get $id))")"
+  msg="$2"
+  dest="${3:-}"
+  claimed_state="${4:-}"
+  # Defense-in-depth: if the agent already moved the card off the state it was
+  # claimed in (e.g. it wrote back itself despite the brief), do not advance
+  # again — that was the double-write bug (TODO->DONE then DONE->PARKED).
+  cur="$(pp_todo_val "(todo/item/state (todo/item/get $id))")"
+  if [ -n "$claimed_state" ] && [ -n "$cur" ] && [ "$cur" != "$claimed_state" ]; then
+    # Card already left the claimed column: only post the evidence comment.
+    cmt="$(pp_todo_val "(todo/comment/add $id $(json_str "$msg"))")"
+    echo "pp-flow: card already advanced $claimed_state -> $cur; skipped transition, comment id=$cmt"
+    return 0
+  fi
+  if [ -n "$dest" ]; then
+    adv="$(pp_todo_val "(todo/set-state $id $(json_str "$dest"))")"
+    newstate="$dest"
+  else
+    adv="$(pp_todo_val "(todo/cycle $id)")"
+    newstate="$(pp_todo_val "(todo/item/state (todo/item/get $id))")"
+  fi
   cmt="$(pp_todo_val "(todo/comment/add $id $(json_str "$msg"))")"
   echo "pp-flow: write-back advanced to state=$newstate (event $adv), comment id=$cmt"
+}
+
+# extract an optional DESTINATION: <COL> line from the agent transcript
+agent_destination() {
+  # shellcheck disable=SC2001
+  sed -n 's/^[[:space:]]*DESTINATION:[[:space:]]*\([A-Z0-9_-]\+\)[[:space:]]*$/\1/p' "$1" 2>/dev/null | tail -n1 | tr -d '[:space:]'
 }
 
 # ---- modes -----------------------------------------------------------------------
@@ -155,6 +178,7 @@ case "$MODE" in
   run)
     lease="$(claim)" || exit $?
     echo "pp-flow: claimed $CARD lease=$lease"
+    claimed_state="$(pp_todo_val "(todo/item/state (todo/item/get $CARD))")"
     b="$(brief_of "$(json_str "$CARD")")"
     if [ -z "$b" ]; then
       echo "pp-flow: no such card $CARD after claim" >&2
@@ -181,7 +205,8 @@ case "$MODE" in
       exit "$rc"
     fi
     evid="$(tail -c 1200 "$LOG_FILE" | tr '\n' ' ' | tr -s ' ' | cut -c1-500)"
-    write_back "$(json_str "$CARD")" "executor pid $$: $evid"
+    dest="$(agent_destination "$LOG_FILE")"
+    write_back "$(json_str "$CARD")" "executor pid $$: $evid" "$dest" "$claimed_state"
     echo "pp-flow: write-back complete for $CARD"
     ;;
 esac

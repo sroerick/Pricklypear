@@ -1968,9 +1968,10 @@
                     (todo/list/title lf))))))
             (string-append
               "PRICKLYPEAR EXECUTOR BRIEF — claim/brief protocol (borge/workstreams.borg)\n"
-              "Self-contained task: work the card below on the laptop repo, then write back\n"
-              "to the habitat. Follow the column recipe. Do not promote to prod.\n\n"
-              "== CARD ==\n"
+              "Self-contained task: work the card below on the laptop repo. Follow the column\n"
+              "recipe. Do not promote to prod. YOU DO NOT WRITE BACK — pp-flow owns the card\n"
+              "transition and will move the card one column + post your evidence comment when\n"
+              "you exit 0. Your only job is the work + a clear EVIDENCE section.\n\n== CARD ==\n"
               "  card id:    "
               cid
               "\n  title:      "
@@ -1996,20 +1997,14 @@
               "  build:   eval $(opam env --switch=poohstack --set-switch); dune build\n"
               "  tests:   dune runtest lisp; dune runtest common\n"
               "  spec:    the .borg book is the spec + source of truth; run `borge drift` after spec edits\n\n"
-              "== WRITE-BACK (when the work is DONE; not before) ==\n"
-              "  cd /home/roerick/dev/wyo.tech/pricklypear\n"
-              "  set -a; . ~/.config/pricklypear/env; set +a     # PP_URL / PP_USER / PP_PASS\n"
-              "  scripts/pp-eval.sh -q '(begin (load-library \"todo\") (todo/cycle \""
-              cid
-              "\") (todo/comment/add \""
-              cid
-              "\" \"<evidence: what you did + how verified>\"))'\n"
-              "  todo/cycle advances the card exactly one column and records a todo-event;\n"
-              "  todo/comment/add posts your evidence on the card thread. If the recipe needs\n"
-              "  a different destination (e.g. review FAIL -> back to CODE), set it explicitly:\n"
-              "  scripts/pp-eval.sh -q '(todo/set-state \""
-              cid
-              "\" \"<COLUMN>\")'\n"))))))
+              "== EVIDENCE (what pp-flow will post on your behalf) ==\n"
+              "  End your output with an EVIDENCE block:\n"
+              "  EVIDENCE: <what you did + how you verified it (build/tests/live smoke;\n"
+              "  keep under ~200 chars, will be trimmed to 500 by the driver)>.\n"
+              "  pp-flow moves the card ONE column and posts this as your comment on the\n"
+              "  card thread. If the recipe demands a different destination than ONE\n"
+              "  forward column (e.g. a review FAIL stays/backtracks), write:\n"
+              "  DESTINATION: <COLUMN> — and pp-flow will use that instead."))))))
   "Render card + column recipe + context into ONE self-contained text prompt
      (the executor brief). Includes the card title/state/list/acceptance/
      branch/assignee, the effective column recipe (todo/recipe), repo + build
