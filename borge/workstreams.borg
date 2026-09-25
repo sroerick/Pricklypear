@@ -76,7 +76,7 @@
    card cold' because the card names the deliverable, the target, and the
    done-test.")
   (implements "libs/todo/lib.pp")
-  (status implemented-live)  ;; orchestration task 4 (2026-09-25: acceptance + branch fields)
+  (status implemented-live))  ;; orchestration task 4 (2026-09-25: acceptance + branch fields)
 
  (section column-recipes
   (doc "The workstream list datum carries a `recipes` field: a dict mapping
@@ -103,7 +103,7 @@
    the card's title/acceptance/branch/state), so every list gets actionable
    instructions before anyone configures a per-list override.")
   (implements "libs/todo/lib.pp (todo/recipes-*)" "libs/todo/lib.pp flow/brief")
-  (status implemented-live)  ;; orchestration task 6 (2026-09-27: todo/recipes-* + default family)
+  (status implemented-live))  ;; orchestration task 6 (2026-09-27: todo/recipes-* + default family)
 
  (section claim-brief-protocol
   (doc "THE local executor contract (laptop pi, NOT the image):
@@ -137,7 +137,7 @@
    rollup across streams, 'stale' (open >3d) flags, and links into
    /kanban?list=<id> + card detail. Retires the cron 'workstreams' note; the
    note is replaced by a pointer to the live face.")
-  (implements "libs/workstreams/lib.pp")
+  (implements libs/workstreams/lib.pp)  ;; ATOM path (not a string) so the lib binds as declared in the book manifest
   (status implemented-live)  ;; orchestration task 9 (2026-09-27: /workstreams live face)
   (verify
    (test "each stream shows live counts matching kanban"
@@ -159,5 +159,6 @@
    master's layout and is not merged). Carry the functions, not the file
    layout. Provides assignee (claim) + priority (queue) that this chapter's
    protocol depends on.")
-  (status implemented-live))  ;; orchestration task 1 (2026-09-27: 286360d; kanban half already merged in libs/kanban)
+  ;; orchestration task 1 (2026-09-27: 286360d; kanban half already merged in libs/kanban)
+  (status implemented-live))
 )
