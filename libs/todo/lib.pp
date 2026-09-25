@@ -1324,6 +1324,175 @@
 (define todo/item/title
   (lambda (fields) (as-str (dict-get fields "title"))))
 
+;; ------------------------------------------------------------------
+;; assignment (claim) + priority/queue — ported from gregor's
+;; todo-assignment branch (0f1b9a4 + b7059e6) into master's single
+;; libs/todo/lib.pp. Provides the claim/queue prims the workstreams
+;; orchestration protocol depends on. (The kanban make-card/move-card/
+;; stale + /kanban-review functions from 133b228/89e5ddf already live in
+;; libs/kanban/lib.pp and are not duplicated here.)
+;; ------------------------------------------------------------------
+
+(define todo/item/assign
+  (lambda
+    (id user)
+    "Assign item id to user (empty user clears). Returns id, or () when the item is missing."
+    (let
+      ((row (todo/tree/get "todo-item" (as-str id))))
+      (if
+        (null? row)
+        ()
+        (seq
+          (todo/tree/set-field "todo-item" (as-str id) "assignee" (as-str user))
+          (as-str id))))))
+
+(define todo/item/assignee
+  (lambda
+    (fields)
+    "The assignee field of item fields; empty when absent."
+    (let
+      ((a (dict-get fields "assignee")))
+      (if
+        (null? a)
+        ""
+        (as-str a)))))
+
+(define todo/item/unassign
+  (lambda
+    (id)
+    "Clear item id's assignee."
+    (todo/item/assign id "")))
+
+(define todo/item/for-user
+  (lambda
+    (user)
+    "All items assigned to user, as rows."
+    (let
+      ((u (as-str user)))
+      (list/filter
+        (lambda
+          (row)
+          (string-eq (todo/item/assignee (cdr row)) u))
+        (todo/item/all)))))
+
+(define todo/item/priority
+  (lambda
+    (fields)
+    "The priority field of item fields (P0..P3); empty when absent."
+    (let
+      ((p (dict-get fields "priority")))
+      (if
+        (null? p)
+        ""
+        (as-str p)))))
+
+(define todo/item/set-priority
+  (lambda
+    (id p)
+    "Set item id's priority (P0 highest .. P3, empty clears). Returns id, or () when the item is missing."
+    (let
+      ((row (todo/tree/get "todo-item" (as-str id))))
+      (if
+        (null? row)
+        ()
+        (seq
+          (todo/tree/set-field "todo-item" (as-str id) "priority" (as-str p))
+          (as-str id))))))
+
+(define todo/item/prio-rank
+  (lambda
+    (fields)
+    "Numeric work rank of the priority field: P0=0 .. P3=3, unknown or empty = 4."
+    (let
+      ((p (todo/item/priority fields)))
+      (if
+        (string-eq p "P0")
+        0
+        (if
+          (string-eq p "P1")
+          1
+          (if
+            (string-eq p "P2")
+            2
+            (if
+              (string-eq p "P3")
+              3
+              4)))))))
+
+(define todo/item/prio-pos
+  (lambda
+    (fields)
+    "The position field as a number; 0 when absent or non-numeric."
+    (let
+      ((pos (dict-get fields "position")))
+      (if
+        (null? pos)
+        0
+        (let
+          ((s (as-str pos)))
+          (if
+            (string-eq s "")
+            0
+            (parse-int s)))))))
+
+(define todo/item/prio-le?
+  (lambda
+    (a b)
+    "True when row a sorts before or equal to row b by (priority rank, position, id)."
+    (let
+      ((ra (todo/item/prio-rank (cdr a)))
+        (rb (todo/item/prio-rank (cdr b))))
+      (if
+        (< ra rb)
+        #t
+        (if
+          (> ra rb)
+          #f
+          (let
+            ((pa (todo/item/prio-pos (cdr a)))
+              (pb (todo/item/prio-pos (cdr b))))
+            (if
+              (< pa pb)
+              #t
+              (if
+                (> pa pb)
+                #f
+                (string<=? (car a) (car b))))))))))
+
+(define todo/item/prio-insert
+  (lambda
+    (sorted row)
+    "Insert row into a prio-ordered list (insertion sort step)."
+    (if
+      (null? sorted)
+      (list row)
+      (if
+        (todo/item/prio-le? row (car sorted))
+        (cons row sorted)
+        (cons (car sorted) (todo/item/prio-insert (cdr sorted) row))))))
+
+(define todo/item/prio-sorted
+  (lambda
+    (rows)
+    "Rows ordered by priority rank, then position, then id (insertion sort; no sort prim in-image)."
+    (list/foldl todo/item/prio-insert () rows)))
+
+(define todo/item/queue
+  (lambda
+    (user)
+    "Open items in work order (priority, then position, then id). Empty user = all assignees."
+    (let
+      ((u (as-str user)))
+      (todo/item/prio-sorted
+        (list/filter
+          (lambda
+            (row)
+            (if
+              (string-eq u "")
+              #t
+              (string-eq (todo/item/assignee (cdr row)) u)))
+          (todo/item/active (todo/item/all)))))))
+
 (define todo/items-for
   (lambda
     (lid all-items inbox-id)
