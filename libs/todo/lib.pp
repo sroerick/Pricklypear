@@ -35,6 +35,10 @@
     todo/recipe
     todo/recipe-set
     todo/flow-brief
+    todo/state/columns-for-item
+    todo/state/pipeline-for-item
+    todo/state/next-for-item
+    todo/state/options-for-item
 ))
 
 (define todo/active-items
@@ -77,6 +81,8 @@
             "acceptance"
             ""
             "branch"
+            ""
+            "pipeline"
             ""))))))
 
 (define todo/add-form
@@ -480,15 +486,14 @@
         (null? row)
         ()
         (let
-          ((cur (todo/item-state row))
-            (list-id (todo/item/list-id row)))
+          ((cur (todo/item-state row)))
           (if
             (todo/archived? cur)
             cur
             (todo/set-state
               id
-              (todo/state/next-for-list cur list-id)))))))
-  "Advance item id to its next state; () when missing. Cycles within the\n     item's OWN list's state set (custom columns when present, else the global\n     default) — BORGE-1786336755, so /todos exactly mirrors /kanban.")
+              (todo/state/next-for-item cur id)))))))
+  "Advance item id to its next state; () when missing. Cycles within the\n     item's OWN effective pipeline (own `pipeline` override > list columns >\n     global default) — borge/workstreams.borg pipeline-model, so /todos and\n     /kanban agree and a card on its own pipeline never leaves it.")
 
 (define todo/db/create
   (lambda
@@ -1032,6 +1037,8 @@
             "acceptance"
             ""
             "branch"
+            ""
+            "pipeline"
             ""))))))
 
 (define todo/item/all
@@ -1076,14 +1083,13 @@
         (null? row)
         ()
         (let
-          ((cur (todo/item/state row))
-            (list-id (todo/item/list-id row)))
+          ((cur (todo/item/state row)))
           (if
             (todo/state/archived? cur)
             cur
             (todo/item/set-state
               id
-              (todo/state/next-for-list cur list-id))))))))
+              (todo/state/next-for-item cur id))))))))
 
 (define todo/item/delete
   (lambda (id) (todo/tree/del "todo-item" id)))
@@ -2968,6 +2974,71 @@
       (as-str cur)))
   "Next state after cur within list-id's own state set (custom columns when\n     present, else the global default). Wraps around: last column -> first of\n     that same set.")
 
+(define todo/state/list-has-columns?
+  (lambda
+    (list-id)
+    (let
+      ((lf (get (quote todo-list) (as-str list-id))))
+      (if
+        (null? lf)
+        #f
+        (let
+          ((cols (dict-get lf "columns")))
+          (and
+            (not (null? cols))
+            (not (string-eq (as-str cols) "")))))))
+  "True when the todo-list datum carries its own non-empty `columns` field\n     (i.e. it IS its own pipeline per borge/workstreams.borg pipeline-model).")
+
+(define todo/state/item-pipeline
+  (lambda
+    (item-id)
+    (let
+      ((row (todo/tree/get "todo-item" (as-str item-id))))
+      (if
+        (null? row)
+        (cons "default" todo/state/list)
+        (let
+          ((own (dict-get row "pipeline")))
+          (if
+            (and (not (null? own)) (not (string-eq (as-str own) "")))
+            (cons "own" (json-parse (as-str own)))
+            (let
+              ((list-id (todo/item/list-id row)))
+              (cons
+                (if (todo/state/list-has-columns? list-id) "list" "default")
+                (todo/state/columns-for-list list-id))))))))
+  "Resolve item-id's effective pipeline to (source . columns-list), source in
+     own|list|default. Shared by columns-for-item / pipeline-for-item so the
+     resolution is computed once. borge/workstreams.borg pipeline-model order:
+       a) the item's OWN `pipeline` override, else
+       b) the item's LIST `columns`, else
+       c) the global todo/state/list.")
+
+(define todo/state/columns-for-item
+  (lambda
+    (item-id)
+    (cdr (todo/state/item-pipeline (as-str item-id))))
+  "The effective pipeline (column-state list) for ONE item: its OWN `pipeline`
+     override when present, else its list's columns, else the global default.
+     A card can ride a different pipeline than its list's board.")
+
+(define todo/state/pipeline-for-item
+  (lambda
+    (item-id)
+    (car (todo/state/item-pipeline (as-str item-id))))
+  "Which branch supplied item-id's effective pipeline: 'own | 'list | 'default
+     (resolution order a/b/c of borge/workstreams.borg pipeline-model).")
+
+(define todo/state/next-for-item
+  (lambda
+    (cur item-id)
+    (todo/state/todo-next-in
+      (todo/state/columns-for-item item-id)
+      (as-str cur)))
+  "Next state after cur within item-id's OWN effective pipeline (own override >
+     list columns > global default). Wraps around: last column -> first of that
+     same set, so a card on its own pipeline never leaves it.")
+
 (define todo/state/open?
   (lambda
     (s)
@@ -3014,6 +3085,19 @@
         (todo/state/columns-for-list list-id)
         (list "ARCHIVED"))))
   "HTML options over list-id's own state set PLUS ARCHIVED, with selected\n     marked — the detail <select> for an item in that list. Uses the list's\n     custom columns when present, else the canonical options-all state set.")
+
+(define todo/state/options-for-item
+  (lambda
+    (selected item-id)
+    (todo/state/options-from
+      selected
+      (append
+        (todo/state/columns-for-item item-id)
+        (list "ARCHIVED"))))
+  "HTML options over item-id's OWN effective pipeline PLUS ARCHIVED, with
+     selected marked — the card-detail <select>. Own `pipeline` override >
+     list columns > global default, so a card on its own pipeline offers only
+     its own states (plus ARCHIVED).")
 
 (define todo/state/options-from
   (lambda
@@ -3381,7 +3465,7 @@
                               (html/select
                                 "state"
                                 (html/attr "id" "state")
-                                (todo/state/options-for-list state lid))
+                                (todo/state/options-for-item state id))
                               (html/label (html/attr "for" "due") "Due (YYYY-MM-DD)")
                               (html/text-input
                                 "due"
