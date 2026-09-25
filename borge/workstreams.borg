@@ -86,8 +86,23 @@
    LOGIC-REVIEW and comment what you shipped + how reviewed.' A recipe is the
    bridge between the record and the executor — it IS the oracle step boiled
    down to instructions. The brief fn renders card + column recipe + context
-   (repo path, branch, host, creds ref) into one self-contained prompt.")
-  (implements "libs/todo/lib.pp flow/brief")
+   (repo path, branch, host, creds ref) into one self-contained prompt.
+   IMPLEMENTED (orchestration task 6, ship 2026-09-27): functions live in the
+   todo family as todo/recipes-for-list (the list's EXPLICIT recipes dict as
+   an assoc list), todo/recipe (the EFFECTIVE text for one column: explicit
+   non-empty recipe else default-family else generic fallback), and
+   todo/recipe-set (write one recipe; empty text removes that column's key).
+   NAMING NOTE: the build plan originally named these kanban/recipes-for-list
+   + kanban/recipe-set + kanban/recipe, but libs/kanban is off-limits to the
+   orchestration loop (Do-NOT rule) and master's convention keeps one clean
+   namespace per family file — these operate on the todo-list datum, so they
+   live in the todo family. The built-in default family (todo/recipes-default)
+   covers the shared work-triage taxonomy SPEC / CODE / LOGIC-REVIEW /
+   UI-REVIEW / HUMAN-REVIEW / DONE / PARKED / TODO as self-contained
+   instruction texts (they reference 'the card above' — the brief prepends
+   the card's title/acceptance/branch/state), so every list gets actionable
+   instructions before anyone configures a per-list override.")
+  (implements "libs/todo/lib.pp (todo/recipes-*)" "libs/todo/lib.pp flow/brief")
   (status planned))
 
  (section claim-brief-protocol
