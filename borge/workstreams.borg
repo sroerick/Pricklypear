@@ -161,4 +161,69 @@
    protocol depends on.")
   ;; orchestration task 1 (2026-09-27: 286360d; kanban half already merged in libs/kanban)
   (status implemented-live))
+
+ ;; ---------------------------------------------------------------------------
+ ;; THE PIPELINE MODEL (2026-09-25, roerick) — the unifying status machine
+ ;; ---------------------------------------------------------------------------
+ (section pipeline-model
+  (doc "THE state pipeline is an ORDERED LIST of state names. It is a first-class
+   thing, not a node-kind decision. Any work item (card, note-todo, issue — any
+   tree node) carries a pipeline reference + a current position in it. This is
+   the unification: one concept (item -> pipeline -> position) rendered by every
+   lens, instead of today's two parallel status mechanisms (note/issue `todo`
+   slot, 3 states; card `state` field, 5 states).
+
+   RESOLUTION ORDER for an item's effective pipeline (final column set + the
+   list the cycle/next machine cycles through):
+     a) the item's OWN pipeline override (per-item `pipeline` field) — absent
+        by default;
+     b) else the pipeline of the LIST the item lives in (the list's `columns`
+        field, set via kanban/columns-set / todo/state/columns-for-list) —
+        a workstream's list IS its pipeline today;
+     c) else the GLOBAL default (todo/state/list).
+   This is strictly backward-compatible: today only (b) exists, so cards,
+   issues, and note-todos keep working unchanged; (a) and the cross-kind reads
+   are additive.
+
+   RENDERING CONTRACT (this is what makes 'todos with other pipelines just
+   don't show up under kanban' true as law, not nuance): a columnar face
+   (kanban board, /workstreams) renders, for its chosen pipeline, every item
+   whose effective pipeline MATCHES that pipeline's state set; an item on a
+   different pipeline is not a column — it lands in the face's trailing
+   'other' bucket (kanban/other-bucket already implements exactly this) or its
+   own pipeline's view. Nothing is hidden or lost; items simply live on other
+   pipelines. A pipeline with no item ever on it is still a valid pipeline.
+
+   PIPELINES ARE DATA, not code: a pipeline is the `columns`/`pipeline` field
+   of a list/item (a JSON array of state-name strings); there is no kernel
+   type and no enum to extend. Defining a new pipeline = writing a list. This
+   is why the todo/note/issue identity line can converge on one machine:
+   notes/issues gain richer status simply by referencing a pipeline; cards
+   already have one.
+
+   CONVERGENCE (supersedes work-triage.borg unification-handoff): the card
+   `state` machine (5+ states, per-list columns, events, recipes — everything
+   the orchestration speaks) is canonical. The notes/issues lens reads the SAME
+   machine: an issue or note-todo item is any tree node whose effective
+   pipeline + position resolve; the issue/note faces render that status and
+   the todo faces render notes/issues nodes whose pipeline matches. A quick
+   note-heading todo may keep the outline `todo` 3-state shortcut, but any
+   node that wants the full machine references a pipeline.")
+  (implements "libs/todo/lib.pp todo/state/columns-for-list + todo/state/next-for-list + item pipeline override"
+              "libs/kanban/lib.pp kanban/other-bucket (exists)"
+              "libs/notes/lib.pp issues lens reads pipeline"
+              "libs/workstreams/lib.pp columns read through resolution order")
+  (status planned)
+  (* agent note (|2026-09-25 roerick: 'we should basically describe the state
+     pipeline/status machine as a list. a todo should be able to define its own
+     state pipeline. everything in our todo list and our issues log should use
+     that same pipeline. but there's no reason we couldn't have todos there with
+     other pipelines — if we did that they just wouldn't show up under the
+     kanban view.' This section is that model; the 'other bucket' already
+     exists (kanban/other-bucket).|) *)
+  (verify
+   (test "an item's effective pipeline = own override > list columns > global default"
+         "a card on a non-board pipeline renders in the other bucket, never hidden"
+         "an issue whose node references the work-triage pipeline renders in kanban columns"
+         "a new pipeline is just writing a columns list — no kernel type")))
 )
