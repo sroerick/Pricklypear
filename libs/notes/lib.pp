@@ -1412,7 +1412,7 @@
     (let
       ((tree (notes/issues-fast-tree)))
       (let
-        ((html
+        ((register-html
           (if
             (null? tree)
             ""
@@ -1421,9 +1421,14 @@
                 (html/h2 "Register")
                 (html/ul
                   (html/attr "class" "card")
-                  (notes/issues/nodes-html (outline/kids tree))))))))
-        (seq (notes/cache-put "issues-list" html) "refreshed"))))
-  "JOB (unbudgeted): rebuild the register HTML from the fast snapshot outline and store it")
+                  (notes/issues/nodes-html (outline/kids tree)))))))
+          (cards-html (notes/issues/cards-section)))
+        (seq
+          (notes/cache-put "issues-list" (string-append register-html cards-html))
+          "refreshed"))))
+  "JOB (unbudgeted): rebuild the register HTML (frozen legacy ledger) PLUS the
+  Issue-cards section (todo-items with a kind, through the shared pipeline)
+  from the fast snapshot outline + the todo-item pool, and store it")
 
 (define notes/issues-fast-tree
   (lambda
@@ -1584,6 +1589,27 @@
               "issues-list"
               "notes/issues-cache-refresh")
             (redirect "/issues")))
+        ((string-eq action "card-resolve")
+          (seq
+            (notes/issues/card-resolve (request-param "id"))
+            (notes/cache-request
+              "issues-list"
+              "notes/issues-cache-refresh")
+            (redirect "/issues")))
+        ((string-eq action "card-reopen")
+          (seq
+            (notes/issues/card-reopen (request-param "id"))
+            (notes/cache-request
+              "issues-list"
+              "notes/issues-cache-refresh")
+            (redirect "/issues")))
+        ((string-eq action "card-delete")
+          (seq
+            (notes/issues/card-delete (request-param "id"))
+            (notes/cache-request
+              "issues-list"
+              "notes/issues-cache-refresh")
+            (redirect "/issues")))
         (else (redirect "/issues")))))
   "mutations bump the cache (bounded request) so the next render requests a job refresh")
 
@@ -1681,6 +1707,168 @@
         (list
           (notes/issues/node-html (car nodes))
           (notes/issues/nodes-html (cdr nodes)))))))
+
+(define notes/issues/last
+  (lambda
+    (xs)
+    "The last element of xs (as a string); \"\" when xs is empty."
+    (if
+      (null? xs)
+      ""
+      (if
+        (null? (cdr xs))
+        (as-str (car xs))
+        (notes/issues/last (cdr xs))))))
+
+(define notes/issues/cards
+  (lambda
+    ()
+    "Todo-item rows tagged with an issue kind (kind != \"\") — the /issues
+     convergence: cards carry a kind (BUG/DESIGN/SMELL/CLEANUP) convention and
+     /issues reads them AS ISSUE ROWS through the shared pipeline
+     (borge/workstreams.borg pipeline-model). Archived cards are excluded
+     (archived is closed). The legacy note-ledger stays a frozen archive; this
+     is the live issue face (no corpus migration in this task)."
+    (list/filter
+      (lambda
+        (row)
+        (not
+          (or
+            (todo/state/archived? (todo/item/state (cdr row)))
+            (string-eq (as-str (dict-get (cdr row) "kind")) ""))))
+      (todo/item/all))))
+
+(define notes/issues/card-html
+  (lambda
+    (row)
+    "HTML for one card-as-issue row: kind badge + id + title, its effective
+     pipeline STATE (own override > list columns > global default), and
+     Resolve/Reopen mapped to the pipeline terminator/head (the state machine
+     terminal) so the card never leaves its pipeline."
+    (let*
+      ((id (as-str (car row)))
+        (fields (cdr row))
+        (title (as-str (dict-get fields "title")))
+        (kind (as-str (dict-get fields "kind")))
+        (state (todo/item/state fields))
+        (cols (todo/state/columns-for-item id))
+        (terminal (notes/issues/last cols))
+        (done (string-eq state terminal)))
+      (html/li
+        (html/attr "class" "issue-item")
+        (html/join
+          (list
+            (html/div
+              (html/attr "class" (if done "issue-head done" "issue-head"))
+              (html/join
+                (list
+                  (html/code kind)
+                  " "
+                  (html/code id)
+                  " "
+                  (html/strong title))))
+            (html/p*
+              (html/attr "class" "issue-body")
+              (html/join
+                (list
+                  (html/text "state ")
+                  (html/code state)
+                  (if
+                    (string-eq (todo/state/pipeline-for-item id) "own")
+                    (html/text " · own pipeline")
+                    ""))))
+            (html/div
+              (html/attr "class" "issue-actions")
+              (html/join
+                (list
+                  (html/form
+                    "POST"
+                    "/issues"
+                    ""
+                    (html/join
+                      (list
+                        (html/hidden
+                          "action"
+                          (if done "card-reopen" "card-resolve"))
+                        (html/hidden "id" id)
+                        (html/button
+                          (html/attr "type" "submit")
+                          (html/text (if done "Reopen" "Resolve"))))))
+                  " "
+                  (html/form
+                    "POST"
+                    "/issues"
+                    ""
+                    (html/join
+                      (list
+                        (html/hidden "action" "card-delete")
+                        (html/hidden "id" id)
+                        (html/button
+                          (html/attrs
+                            (list
+                              (html/attr "type" "submit")
+                              (html/attr "class" "secondary")))
+                          (html/text "Del"))))))))))))))
+
+(define notes/issues/cards-html
+  (lambda
+    (rows)
+    "Concatenated card-as-issue HTML for rows."
+    (if
+      (null? rows)
+      ""
+      (html/join
+        (list
+          (notes/issues/card-html (car rows))
+          (notes/issues/cards-html (cdr rows)))))))
+
+(define notes/issues/cards-section
+  (lambda
+    ()
+    "The 'Issue cards' section rendered on /issues: todo-items tagged with a
+     kind, through the shared pipeline. Appended after the frozen legacy
+     ledger register by notes/issues-cache-refresh."
+    (let
+      ((rows (notes/issues/cards)))
+      (html/join
+        (list
+          (html/h2 "Issue cards")
+          (if
+            (null? rows)
+            (html/p*
+              (html/attr "class" "muted")
+              "No cards tagged with a kind (BUG/DESIGN/SMELL/CLEANUP) yet — set a card's kind and it shows here as an issue row through the shared pipeline.")
+            (html/ul
+              (html/attr "class" "card")
+              (notes/issues/cards-html rows))))))))
+
+(define notes/issues/card-resolve
+  (lambda
+    (id)
+    "Move card id to the terminator (last state) of its effective pipeline."
+    (let
+      ((cols (todo/state/columns-for-item (as-str id))))
+      (if
+        (null? cols)
+        (as-str id)
+        (todo/item/set-state (as-str id) (notes/issues/last cols))))))
+
+(define notes/issues/card-reopen
+  (lambda
+    (id)
+    "Move card id back to the head (first state) of its effective pipeline."
+    (let
+      ((cols (todo/state/columns-for-item (as-str id))))
+      (if
+        (null? cols)
+        (as-str id)
+        (todo/item/set-state (as-str id) (as-str (car cols)))))))
+
+(define notes/issues/card-delete
+  (lambda
+    (id)
+    "Delete the todo-item card id (leaves the issue rows entirely)."
+    (todo/item/delete (as-str id))))
 
 (define notes/issues/page
   (lambda

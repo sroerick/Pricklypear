@@ -221,7 +221,9 @@
             "state" (as-str state)
             "due" ""
             "position" "0"
-            "done" "false"))))))
+            "done" "false"
+            "pipeline" ""
+            "kind" ""))))))
 
 ;; ------------------------------------------------------------------
 ;; HTML rendering
@@ -272,8 +274,14 @@
 
 (define kanban/column-html
   (lambda (list-id state columns)
-    "Render one column as a form (drop target) with its cards."
-    (let ((cards (kanban/cards-in list-id state)))
+    "Render one column as a form (drop target) with its cards. Cards that
+     belong in the 'other' bucket (kanban/stray? — own pipeline off the board,
+     or state not a column) are excluded here so an own-pipeline card never
+     renders in a board column; the other bucket shows it (other-bucket uses
+     the same stray? predicate — nothing is hidden or duplicated)."
+    (let ((cards (list/filter
+                   (lambda (row) (not (kanban/stray? columns row)))
+                   (kanban/cards-in list-id state))))
       (let ((count (as-str (length cards))))
         (html/form "POST" "/kanban"
           (html/attrs
@@ -353,13 +361,41 @@
                 (html/attr "class" "kb-add-input"))))
           (html/button (html/attr "type" "submit") "↵"))))))
 
+(define kanban/columns-equal?
+  (lambda (a b)
+    "Element-wise equality of two column-state lists (order + names)."
+    (if (null? a)
+      (null? b)
+      (if (null? b)
+        #f
+        (if (string-eq (as-str (car a)) (as-str (car b)))
+          (kanban/columns-equal? (cdr a) (cdr b))
+          #f)))))
+
+(define kanban/stray?
+  (lambda (columns row)
+    "True when card row belongs in the 'other' bucket of a board whose columns
+     is `columns`: either its state isn't a column, OR the card carries its
+     OWN `pipeline` override that differs from this board's columns
+     (borge/workstreams.borg pipeline-model rendering contract: an item on a
+     different pipeline is never a column of this face and never hidden — it
+     lands in the trailing other bucket)."
+    (let
+      ((state (as-str (dict-get (cdr row) "state")))
+        (own (dict-get (cdr row) "pipeline")))
+      (if
+        (and (not (null? own)) (not (string-eq (as-str own) "")))
+        (not (kanban/columns-equal? columns (json-parse (as-str own))))
+        (not (kanban/in-columns? columns state))))))
+
 (define kanban/other-bucket
   (lambda (list-id columns)
-    "Cards whose state is not in the list's columns, rendered in a trailing bucket."
+    "Cards that belong in the trailing 'other' bucket of a board with columns
+     `columns`: state not a column, or own pipeline != the board's columns."
     (let ((all (todo/items-for-list list-id)))
       (let ((strays (list/filter
                       (lambda (row)
-                        (not (kanban/in-columns? columns (as-str (dict-get (cdr row) "state")))))
+                        (kanban/stray? columns row))
                       all)))
         (if (null? strays)
           ""
@@ -457,11 +493,20 @@ function kbDrop(ev){
 (define kanban/columns-html
   (lambda (list-id cols)
     "Concatenated column HTML for the column list."
+    (kanban/columns-html-at list-id cols cols)))
+
+(define kanban/columns-html-at
+  (lambda (list-id cols full)
+    "Internal: render cols, passing the FULL board column set `full` down to
+     every kanban/column-html so its kanban/stray? test compares each card's
+     own pipeline against the whole board — NOT the shrinking cdr-suffix that
+     the recursion otherwise hands a later column (a card whose own pipeline
+     matches the full board must stay in its column, never be bucketed)."
     (if (null? cols)
       ""
       (string-append
-        (kanban/column-html list-id (as-str (car cols)) cols)
-        (kanban/columns-html list-id (cdr cols))))))
+        (kanban/column-html list-id (as-str (car cols)) full)
+        (kanban/columns-html-at list-id (cdr cols) full)))))
 
 ;; ------------------------------------------------------------------
 ;; POST dispatch
@@ -761,7 +806,11 @@ function kbDrop(ev){
             "position"
             "0"
             "done"
-            "false"))))))
+            "false"
+            "pipeline"
+            ""
+            "kind"
+            ""))))))
 
 ;; (The old 2-arg kanban/move-card that lived here was removed 2026-09-03:
 ;;  it shadowed the 3-arg renumbering move-card above depending on define
