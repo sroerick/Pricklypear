@@ -131,6 +131,37 @@
          "write-back lands an event + comment and advances exactly one column"
          "stale claims are reclaimable")))
 
+  (section autolith-runner
+   (doc "The claim/brief local executor is pluggable via PP_FLOW_PI (default
+     `pi -p`). The AUTOLITH RUNNER (scripts/pp-flow-autolith.sh) is a
+     PP_FLOW_PI adapter that routes one brief to Autolith's headless run-job
+     instead of an interactive pi session, so a pp-flow card can be worked by
+     a detached Lisp agent on the laptop.
+     CONTRACT (pp-flow.sh calls PP_FLOW_PI as `$PI_RUNNER \"<brief text>\"`):
+     on success print the job's terminal summary to stdout as the transcript
+     (pp-flow scrapes the EVIDENCE / DESTINATION lines from it) and exit 0
+     iff the job SUCCEEDED; a run-job crash, a non-SUCCEEDED status, or an
+     unextractable :RESULT exits non-zero so pp-flow releases the claim and
+     does not advance the card.
+     JOB ENVELOPE ((:autolith-job :version 1 :id <str> :role \"executor\"
+     :prompt <brief> :input nil :output-contract (:type :string)
+     :timeout-seconds <n>)) is the autolith native task contract v1; the
+     executor's :RESULT is the string that becomes the transcript.
+     MODEL PINNING (lambda-symbolics/autolith#76): the executor role's
+     :models (\"@auto\") is validated statically, so the real model must be a
+     custom id registered in ~/.config/autolith/init.lisp and pinned per
+     invocation via AUTOLITH_MODEL, not a builtin-only name.
+     ENV: AUTOLITH_MODEL (init.lisp-registered model id), AUTOLITH_BIN
+     (default `autolith`), PP_FLOW_AUTOLITH_PERM (default `sandbox`; `full`
+     only for cards that must touch the live repo), PP_FLOW_AUTOLITH_TIMEOUT
+     (default 1800s).")
+   (implements "scripts/pp-flow-autolith.sh" "scripts/pp-flow.sh (PP_FLOW_PI hook)")
+   (status implemented-live)  ;; autolith runner exercised end-to-end by the orchestration TEST card (2026-09-25)
+   (verify
+    (test "PP_FLOW_PI=scripts/pp-flow-autolith.sh runs a brief and prints the :RESULT transcript on stdout"
+          "a SUCCEEDED job exits 0 and pp-flow scrapes EVIDENCE / DESTINATION from the transcript"
+          "a failed job exits non-zero and pp-flow releases the claim without advancing")))
+
  (section live-face
   (doc "A `/workstreams` route (package workstreams) computed at render time:
    per-workstream column counts (open cards only), 'ready for HUMAN-REVIEW'
