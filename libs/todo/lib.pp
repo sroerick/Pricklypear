@@ -28,8 +28,11 @@
     todo/feed
     todo/item/acceptance
     todo/item/branch
+    todo/item/branch-kind
     todo/item/set-acceptance
     todo/item/set-branch
+    todo/item/set-branch-kind
+    todo/item/set-target
     todo/item/kind
     todo/item/set-kind
     todo/recipes-default
@@ -83,6 +86,8 @@
             "acceptance"
             ""
             "branch"
+            ""
+            "branch_kind"
             ""
             "pipeline"
             ""
@@ -698,7 +703,8 @@
                 ((state (todo/item-state fields)))
                 (let
                   ((acceptance (todo/item/acceptance fields))
-                    (branch (todo/item/branch fields)))
+                    (branch (todo/item/branch fields))
+                    (branch-kind (todo/item/branch-kind fields)))
                   (let
                     ((lid (todo/item-list-id fields)))
                     (html/div
@@ -761,7 +767,18 @@
                                 (html/join
                                   (list
                                     (html/strong "Branch: ")
-                                    (html/code branch))))
+                                    (html/code branch)
+                                    (if
+                                      (string-eq branch "")
+                                      ()
+                                      (html/text
+                                        (string-append
+                                          "  ("
+                                          (if
+                                            (string-eq branch-kind "")
+                                            "domain unset"
+                                            branch-kind)
+                                          ")"))))))
                               (if
                                 (string-eq acceptance "")
                                 ()
@@ -1041,6 +1058,8 @@
             "acceptance"
             ""
             "branch"
+            ""
+            "branch_kind"
             ""
             "pipeline"
             ""
@@ -1590,7 +1609,9 @@
 (define todo/item/branch
   (lambda
     (fields)
-    "The target branch for the work; empty when absent."
+    "The target branch for the work; empty when absent. The NAME alone is
+     ambiguous — pair it with todo/item/branch-kind (git | habitat) per
+     borge/workstreams.borg branch-domain, or set both with set-target."
     (let
       ((b (dict-get fields "branch")))
       (if (null? b) "" (as-str b)))))
@@ -1611,7 +1632,9 @@
 (define todo/item/set-branch
   (lambda
     (id branch)
-    "Set card id's target branch (empty clears). Returns id, or () when the item is missing."
+    "Set card id's target branch (empty clears). Returns id, or () when the
+     item is missing. Does NOT set the domain — an unset domain is ambiguous;
+     prefer todo/item/set-target for scripting."
     (let
       ((row (todo/tree/get "todo-item" (as-str id))))
       (if
@@ -1619,6 +1642,62 @@
         ()
         (seq
           (todo/tree/set-field "todo-item" (as-str id) "branch" (as-str branch))
+          (as-str id))))))
+
+;; branch DOMAIN (branch_kind) — borge/workstreams.borg branch-domain.
+;; Pricklypear has TWO branch systems and `branch` alone is ambiguous:
+;;   "git"     — a git branch in the laptop repo (master, a feature branch);
+;;               the executor commits/pushes there. Repo-side work (.borg,
+;;               OCaml, scripts).
+;;   "habitat" — a Nopales/Postgres branch on the habitat (system/main,
+;;               <user>/personal, <user>/dev); the executor defines/routes/
+;;               promotes there. NEVER a git branch.
+;; An agent given a bare "admin/dev" cannot know which repo/domain to touch
+;; (2026-09-27: a repo-side card was tagged with a habitat branch, and the
+;; executor committed to git master — correct, but only by luck). The brief
+;; renders the domain explicitly and FLAGS an unset one. Content edit via
+;; tree/set-field, NOT a state transition (no todo-event), like branch above.
+(define todo/item/branch-kind
+  (lambda
+    (fields)
+    "The branch DOMAIN of item fields: \"git\" (laptop repo branch) or
+     \"habitat\" (Nopales/Postgres branch); empty when unset — callers must
+     treat empty as AMBIGUOUS, not as a default."
+    (let
+      ((k (dict-get fields "branch_kind")))
+      (if (null? k) "" (as-str k)))))
+
+(define todo/item/set-branch-kind
+  (lambda
+    (id kind)
+    "Set card id's branch domain to \"git\" or \"habitat\" (empty clears).
+     Returns id, or () when the item is missing. Empty is treated as
+     AMBIGUOUS by the brief, not as a default."
+    (let
+      ((row (todo/tree/get "todo-item" (as-str id))))
+      (if
+        (null? row)
+        ()
+        (seq
+          (todo/tree/set-field "todo-item" (as-str id) "branch_kind" (as-str kind))
+          (as-str id))))))
+
+(define todo/item/set-target
+  (lambda
+    (id branch kind)
+    "Set card id's target branch AND its domain in one call — kind must be
+     \"git\" or \"habitat\"; empty branch clears both. Prefer this over
+     set-branch when scripting: a branch without a domain is the ambiguity
+     borge/workstreams.borg branch-domain exists to kill. Returns id, or ()
+     when the item is missing."
+    (let
+      ((row (todo/tree/get "todo-item" (as-str id))))
+      (if
+        (null? row)
+        ()
+        (seq
+          (todo/tree/set-field "todo-item" (as-str id) "branch" (as-str branch))
+          (todo/tree/set-field "todo-item" (as-str id) "branch_kind" (as-str kind))
           (as-str id))))))
 
 ;; kind field — borge/workstreams.borg pipeline-model issues-convergence:
@@ -1996,6 +2075,7 @@
             (list-id (todo/item/list-id fields))
             (acceptance (todo/item/acceptance fields))
             (branch (todo/item/branch fields))
+            (branch-kind (todo/item/branch-kind fields))
             (assignee (todo/item/assignee fields)))
           (let
             ((lname
@@ -2029,12 +2109,40 @@
               "\n  acceptance: "
               (if (string-eq acceptance "") "(none)" acceptance)
               "\n  branch:     "
-              (if (string-eq branch "") "(default)" branch)
+              (if
+                (string-eq branch "")
+                "(none)"
+                (if
+                  (string-eq branch-kind "")
+                  (string-append branch "  [DOMAIN UNSET]")
+                  (string-append branch "  [" branch-kind "]")))
               "\n\n== COLUMN RECIPE ("
               state
               ") ==\n"
               (todo/recipe list-id state)
-              "\n\n== CONTEXT ==\n"
+              "\n\n== BRANCH DOMAIN (read this) ==\n"
+              "  Pricklypear has TWO branch systems; `branch` above names one of them:\n"
+              "  * git     — a git branch in the laptop repo (master, a feature branch).\n"
+              "              Repo-side work: .borg spec, OCaml, scripts. Commit + push there.\n"
+              "  * habitat — a Nopales/Postgres branch ON the habitat (system/main,\n"
+              "              <user>/personal, <user>/dev). Define/route/promote there; it\n"
+              "              is NEVER a git branch and does not exist in the repo.\n"
+              (if
+                (string-eq branch "")
+                "  This card names no branch — work on the repo default and say so in your EVIDENCE.\n"
+                (if
+                  (string-eq branch-kind "")
+                  (string-append
+                    "  DOMAIN UNSET: is \""
+                    branch
+                    "\" a git branch or a habitat branch? Do NOT guess — if the work\n"
+                    "  you are about to do does not make the answer obvious, STOP and post a\n"
+                    "  comment asking, rather than committing to the wrong domain.\n")
+                  (if
+                    (string-eq branch-kind "git")
+                    "  Domain: git — commit to this branch in the laptop repo.\n"
+                    "  Domain: habitat — a Nopales/Postgres branch; do NOT git-commit to it.\n")))
+              "\n== CONTEXT ==\n"
               "  repo:    /home/roerick/dev/wyo.tech/pricklypear\n"
               "  build:   eval $(opam env --switch=poohstack --set-switch); dune build\n"
               "  tests:   dune runtest lisp; dune runtest common\n"
@@ -3479,7 +3587,8 @@
                 ((state (todo/item/state fields)))
                 (let
                   ((acceptance (todo/item/acceptance fields))
-                    (branch (todo/item/branch fields)))
+                    (branch (todo/item/branch fields))
+                    (branch-kind (todo/item/branch-kind fields)))
                   (let
                     ((lid (todo/item/list-id fields)))
                     (html/div
@@ -3542,7 +3651,18 @@
                                 (html/join
                                   (list
                                     (html/strong "Branch: ")
-                                    (html/code branch))))
+                                    (html/code branch)
+                                    (if
+                                      (string-eq branch "")
+                                      ()
+                                      (html/text
+                                        (string-append
+                                          "  ("
+                                          (if
+                                            (string-eq branch-kind "")
+                                            "domain unset"
+                                            branch-kind)
+                                          ")"))))))
                               (if
                                 (string-eq acceptance "")
                                 ()
