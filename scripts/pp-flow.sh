@@ -170,8 +170,7 @@ state_and_brief() {
 # destinations, failure rc).
 ledger_line() { # $1 ts  $2 card  $3 runner  $4 total_s  $5 agent_s  $6 rc  $7 evidence  $8 dest  $9 from  $10 to
   printf '{"ts":"%s","card":"%s","runner":"%s","total_s":%s,"agent_s":%s,"agent_rc":%s,"evidence":"%s","destination":"%s","from_state":"%s","to_state":"%s"}\n' \
-    "$1" "$2" "$(printf '%s' "$3" | tr -d '"\\')" "$4" "$5" "$6" "$7" "$8" "$9" "${10}"
-  >> "$LOG_DIR/runs.jsonl"
+    "$1" "$2" "$(printf '%s' "$3" | tr -d '"\\')" "$4" "$5" "$6" "$7" "$8" "$9" "${10}" >> "$LOG_DIR/runs.jsonl"
 }
 run_summary() { # $1 card  $2 runner  $3 total_s  $4 agent_s  $5 rc  $6 evidence  $7 dest  $8 from  $9 to
   echo "pp-flow: RUN SUMMARY card=$1 runner='$2' total=${3}s agent=${4}s rc=$5 evidence=$6 destination=${7:-none} state=$8->${9:--}"
