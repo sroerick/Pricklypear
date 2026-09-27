@@ -40,11 +40,15 @@ Knobs: `--states "TODO,CODE"`, `--exclude-kinds BUG`, `--max N`,
 the repo). The adapter refuses, in <1s with the accepted values named, a model
 that rejects the executor role's `:reasoning-effort :medium` (the Synthetic
 glm-flash family accepts only low|high|max) — it dies as a cryptic
-`:PROCESS-FAILURE` otherwise. `syn:large:text` is the tested default; the
-provider's own account limits (HTTP 402) are surfaced verbatim in the failure
-line. An agent-named `DESTINATION:` is validated against the card's own column
-set before it is obeyed; an unknown column falls back to the one-column
-advance. Per-run ledger: `.ralph/runs.jsonl` (+ `RUN SUMMARY` lines).
+`:PROCESS-FAILURE` otherwise. `syn:large:text` is the tested default. The
+failure line reports the provider category + message verbatim. NOTE
+(2026-09-27): one run hit a transient Synthetic HTTP 402 (“Subscription access
+is currently blocked…”); immediate retries of the same model+key succeeded and
+direct curl never failed, so that was upstream flakiness — do NOT read a lone
+402 as an exhausted account. An agent-named `DESTINATION:` is validated
+against the card's own column set before it is obeyed; an unknown column falls
+back to the one-column advance. Per-run ledger: `.ralph/runs.jsonl` (+ `RUN
+SUMMARY` lines).
 
 **Single-image v1 habitat is the running system.** Spec is a multi-file
 literate book (chapter `.borg` files + root). `borge report` after the
