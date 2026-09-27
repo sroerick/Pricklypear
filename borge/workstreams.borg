@@ -158,6 +158,47 @@
   (implements "libs/todo/lib.pp")
   (status implemented-live))  ;; orchestration task 4 (2026-09-25: acceptance + branch fields)
 
+ (section branch-domain
+  (doc "A card's `branch` field names a branch in ONE OF TWO branch systems,
+   and a bare branch name is ambiguous:
+     * GIT (branch_kind=\"git\") — a git branch in the laptop repo (master,
+       a feature branch). Repo-side work: .borg spec, OCaml, scripts, tests.
+       The executor commits and pushes there; remote is `wyo`.
+     * HABITAT (branch_kind=\"habitat\") — a Nopales/Postgres branch ON the
+       habitat (system/main, <user>/personal, <user>/dev). The executor
+       define/route/promotes there; it NEVER exists in the git repo and a
+       git-commit to it is meaningless.
+   These are different substrates with different source-of-truth rules
+   (branching: kernel/spec -> git; product Nopales -> PG branches). The
+   INCIDENT that motivated this section (2026-09-27): a repo-side card was
+   tagged `admin/dev` — a HABITAT branch — and the executor committed to git
+   `master`. That was the correct action, but only because the executor knew
+   the card was repo-side; nothing in the card or the brief said so. A card
+   is therefore NOT complete until its branch domain is explicit.
+   RULES:
+   1. `branch` + `branch_kind` ride the todo-item datum; `branch_kind` is
+      \"git\" | \"habitat\" | \"\" (unset). Set both with
+      `todo/item/set-target` (or set-kind then set-branch).
+   2. An UNSET domain is AMBIGUOUS, never a default. The brief renders it as
+      an explicit `[DOMAIN UNSET]` warning plus a standing instruction to
+      STOP AND ASK rather than guess; it does not silently pick a substrate.
+   3. The brief always renders the domain (`branch: master [git]`) and a
+      BRANCH DOMAIN explainer, so an executor picking the card up cold knows
+      which substrate the branch lives in.
+   4. A card whose work is unambiguously repo-side may leave `branch` empty
+      (\"work on the repo default\"); an empty branch is not an error. What is
+      forbidden is an unset domain on a non-empty branch.")
+  (implements "libs/todo/lib.pp todo/item/branch-kind todo/item/set-branch-kind todo/item/set-target"
+              "libs/todo/lib.pp todo/flow-brief (BRANCH DOMAIN block)"
+              "libs/todo/lib.pp todo/detail-html + todo/ui/detail (domain badge)")
+  (status implemented-live)
+  (verify
+   (test "a card with branch but no branch_kind renders [DOMAIN UNSET] + the ask-instead-of-guess instruction in its brief"
+         "a card with branch_kind=git renders branch + [git] + 'commit to this branch in the laptop repo'"
+         "a card with branch_kind=habitat renders [habitat] + 'do NOT git-commit to it'"
+         "a card with no branch renders '(none)' + 'work on the repo default'"
+         "todo/item/set-target writes branch and branch_kind in one call")))
+
  (section column-recipes
   (doc "The workstream list datum carries a `recipes` field: a dict mapping
    COLUMN NAME -> instruction template (text). E.g. CODE: 'you are the
