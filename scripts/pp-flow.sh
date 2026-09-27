@@ -177,6 +177,24 @@ agent_destination() {
   sed -n 's/^[[:space:]]*DESTINATION:[[:space:]]*\([A-Z0-9_-]\+\)[[:space:]]*$/\1/p' "$1" 2>/dev/null | tail -n1 | tr -d '[:space:]'
 }
 
+# extract the last EVIDENCE: line from the agent transcript — the card comment
+# IS this line, verbatim (workstreams claim-brief-protocol write-back step 4;
+# the agent's EVIDENCE block is its contract). A transcript with no EVIDENCE:
+# line degrades to a clear placeholder pointing at the log — never a
+# mid-sentence tail scrape of the transcript.
+agent_evidence() {
+  # The flow-brief template embeds an 'EVIDENCE: <what you did ...>'
+  # instruction line; a transcript that merely echoes the brief (or quotes the
+  # template) must not be mistaken for the agent's evidence — template-shaped
+  # lines (content starting with '<') are filtered before taking the last one.
+  # shellcheck disable=SC2001
+  ev="$(sed -n 's/^[[:space:]]*EVIDENCE:[[:space:]]*\(.*[^[:space:]]\)[[:space:]]*$/\1/p' "$1" 2>/dev/null | grep -v '^[[:space:]]*<' | tail -n1)"
+  case "$ev" in
+    "") echo "(no EVIDENCE: line in the agent transcript — full log: $LOG_FILE)" ;;
+    *)  printf '%s\n' "$ev" | cut -c1-500 ;;
+  esac
+}
+
 # ---- modes -----------------------------------------------------------------------
 LOG_DIR="${PP_FLOW_LOG_DIR:-$ROOT/.ralph}"
 mkdir -p "$LOG_DIR" 2>/dev/null || true
@@ -235,9 +253,11 @@ case "$MODE" in
       echo "pp-flow: agent failed (rc=$rc); card NOT advanced, claim released — fix and re-run" >&2
       exit "$rc"
     fi
-    evid="$(tail -c 1200 "$LOG_FILE" | tr '\n' ' ' | tr -s ' ' | cut -c1-500)"
+    evid="$(agent_evidence "$LOG_FILE")"
     dest="$(agent_destination "$LOG_FILE")"
-    write_back "$(json_str "$CARD")" "executor pid $$: $evid" "$dest" "$claimed_state"
+    # verbatim: the posted comment IS the agent's EVIDENCE line (the claim
+    # lease on the assignee field already carries the executor pid).
+    write_back "$(json_str "$CARD")" "$evid" "$dest" "$claimed_state"
     echo "pp-flow: write-back complete for $CARD"
     ;;
 esac
