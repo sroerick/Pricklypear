@@ -98,5 +98,30 @@ above); that docstring should be corrected too.
        request in one [transaction]\" is stale (same live check).
      - tree-time tombstones carry body=null: deleted heading content is
        not recoverable from tree history; destructive ops that cannot
-       self-restore need validation (now present) or a before-image.")
+       self-restore need validation (now present) or a before-image.
+
+   FOLLOW-ON CLOSED (b4337b5, 2026-09-27). The atomicity item is DONE, and
+   it turned out to be a code bug against a spec that ALREADY required the
+   transaction: notes.pipeline-model MUTATIONS ARE TREE ACTIONS says \"wrap
+   the N affected cards in with-transaction so the reorder is atomic\" and
+   \"RENAME A COLUMN: ... in one with-transaction ... all-or-nothing\", while
+   libs/kanban/lib.pp had ZERO with-transaction calls. Wrapped:
+   notes/tree/save-outline, kanban/move-card, kanban/swap,
+   kanban/rename-column. Safe because nested with-transaction JOINS
+   (store_db.with_dynamic_transaction rides an active tx) and it does roll
+   back a raise (both verified live). Verified end-to-end on dev AND prod:
+   a malformed outline now leaves the note COMPLETELY unchanged where it
+   previously swept every heading, and valid saves still write + sweep.
+
+   STILL OPEN (carry into the next plan pass):
+     - notes.storage SAVE ORDERING CONTRACT now states write-then-sweep +
+       validate-before-destroying + the atomicity wrap; the tree-time
+       DURABILITY RULE and the json-values-alist BODY BOUNDARY are landed.
+       What remains is the notes/doc/upsert-in path ITSELF: it writes the
+       note row and then calls save-outline; each is now internally atomic
+       but the PAIR is not (a failure between them leaves a new note row
+       with the old outline). Wrapping upsert-in as a whole is the same
+       one-line treatment if wanted.
+     - tree-time tombstones still carry body=null (unchanged design); the
+       rule now says not to rely on history for delete recovery.")
 )
