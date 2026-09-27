@@ -38,6 +38,12 @@ let deny_anon name =
        (Pricklypear_lisp.Ast.User_error
           (name ^ ": denied for anonymous", "bad-args")))
 
+(* json-values-alist boundary policy for the fields/body argument of the
+   data prims (create / update / tree/upsert). The policy itself lives in
+   the pure codec (Prims_json.json_body) so it is unit-testable without a
+   DB; this alias keeps the image prim bodies reading naturally. *)
+let json_body = Prims_pure.json_body
+
 (* Per-request identity snapshot (avoids the cotenant race where the
    live t.manifest is mid-swap). Falls back to t.manifest outside HTTP. *)
 let actor ~(t : t) () =

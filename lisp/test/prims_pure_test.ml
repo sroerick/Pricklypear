@@ -424,6 +424,42 @@ let json_alist_tests =
         match parse [ Ast.VStr "{}" ] with
         | Ast.VList [] -> ()
         | v -> Alcotest.failf "{} -> %s" (Reader.pp_value v))
+  ; ( "json_body: VStr passes through unchanged (legacy JSON or plain string)"
+    , `Quick
+    , fun () ->
+        Alcotest.(check string) "json str" "{\"a\":\"b\"}"
+          (Prims_pure.json_body (Ast.VStr "{\"a\":\"b\"}"));
+        Alcotest.(check string) "plain str" "not json at all"
+          (Prims_pure.json_body (Ast.VStr "not json at all")) )
+  ; ( "json_body: alist (dict-set* output) emits as a JSON object"
+    , `Quick
+    , fun () ->
+        (* (json-parse "{\"a\":\"b\"}") then dict-set "c" "d" — the
+           documented mutation idiom's body. This is exactly the value
+           that used to reach tree/upsert and raise bad-args. *)
+        let parsed = parse [ Ast.VStr "{\"a\":\"b\"}" ] in
+        let mutated = Prims_pure.prim_dict_set [ parsed; Ast.VStr "c"; Ast.VStr "d" ] in
+        let out = Prims_pure.json_body mutated in
+        (match Yojson.Safe.from_string out with
+         | `Assoc kvs ->
+             Alcotest.(check (option string)) "kept a" (Some "b")
+               (List.assoc_opt "a" kvs
+                |> Option.map (function `String s -> s | _ -> "<non-string>"));
+             Alcotest.(check (option string)) "added c" (Some "d")
+               (List.assoc_opt "c" kvs
+                |> Option.map (function `String s -> s | _ -> "<non-string>"))
+         | other -> Alcotest.failf "expected object, got %s" (Yojson.Safe.to_string other)) )
+  ; ( "json_body: a hand-built VList emits as a JSON array"
+    , `Quick
+    , fun () ->
+        Alcotest.(check string) "array" "[\"x\",\"y\"]"
+          (Prims_pure.json_body (Ast.VList [ Ast.VStr "x"; Ast.VStr "y" ])) )
+  ; ( "json_body: nested alist round-trips through the body boundary"
+    , `Quick
+    , fun () ->
+        let v = parse [ Ast.VStr "{\"outer\":{\"inner\":[1,2]}}" ] in
+        let out = Prims_pure.json_body v in
+        Alcotest.(check string) "canonical" "{\"outer\":{\"inner\":[1,2]}}" out )
   ]
 
 let () =

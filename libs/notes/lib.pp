@@ -1090,8 +1090,10 @@
       folder)
     (if
       (notes/tree/enabled?)
-      (let
-        ((prev (notes/doc/row slug)))
+      (if
+        (outline/valid? outline)
+        (let
+          ((prev (notes/doc/row slug)))
         (let
           ((uuid (if (null? prev) (random-uuid) (car prev)))
             (oldp (if (null? prev) "" (notes/doc/row-path prev))))
@@ -1131,6 +1133,9 @@
                 0)
               (roam/reindex (as-str slug) outline)
               slug))))
+        (string-append
+          "refused: outline is malformed (every node must be a 5-element list [id title body todo kids], recursively); note not changed: "
+          (as-str slug)))
       (let
         ((row (notes/doc/row slug))
           (fields
@@ -4441,7 +4446,6 @@
   (lambda
     (note-path outline)
     (seq
-      (notes/tree/clear-headings note-path)
       (notes/tree/write-root-body
         note-path
         (outline/body outline))
@@ -4451,8 +4455,26 @@
           (seq (notes/tree/write-heading note-path kid) acc))
         0
         (outline/kids outline))
+      (notes/tree/clear-stale-headings
+        note-path
+        (notes/tree/outline-paths note-path (outline/kids outline)))
       note-path))
-  "Persist a note's outline under its tree path.")
+  "Persist a note's outline under its tree path.
+
+   WRITE-THEN-SWEEP (2026-09-27, after a data-loss incident): this used to
+   clear-headings FIRST — a recursive delete of every heading — and then
+   write the new ones. Any failure in the write half (or in write-root-body
+   above it) left the note with its old content DELETED and nothing put
+   back. Two things made that fire: tree/upsert rejected a structured body
+   (dict-set* over a parsed node returns an alist, json-values-alist), and
+   the clear ran before the rejection was known. Live cost: the shared
+   log/sessions note lost all headings on a doc upsert.
+
+   Now the new headings are upserted first (idempotent, keyed by path and
+   id) and only then are headings NOT in the new outline swept. A failure
+   mid-write leaves the previous outline in place PLUS whatever was written
+   — degraded, never empty. An empty outline still clears the pump: the
+   sweep's keep-list is empty, so every heading under the note goes.")
 
 (define notes/tree/sort-by-name
   (lambda

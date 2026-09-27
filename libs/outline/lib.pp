@@ -746,8 +746,44 @@
 (define outline/valid?
   (lambda
     (n)
-    "True when n is a proper 5-field outline node."
-    (if (null? n) () (if (pair? n) (= (count n) 5) ()))))
+    "True when n is a proper 5-field outline node whose kids are all
+     valid nodes, RECURSIVELY.
+
+     Was: a shallow (count n) = 5 check on the node it was handed. A tree
+     whose ROOT is well-formed but whose CHILD is not (e.g. a 2-element
+     [id title]) passed, and the malformed child only blew up later —
+     inside notes/tree/write-heading, after save-outline had already
+     cleared the note's headings (2026-09-27 incident: improperly formed
+     upserts could destroy a note). Validating the whole tree at the
+     boundary refuses the write before anything is touched."
+    (if
+      (null? n)
+      ()
+      (if
+        (pair? n)
+        (if
+          (= (count n) 5)
+          (outline/valid-kids? (outline/kids n))
+          ())
+        ()))))
+
+(define outline/valid-kids?
+  (lambda
+    (kids)
+    "Every kid of a node is itself a valid outline node."
+    (if
+      (null? kids)
+      #t
+      (if
+        (pair? kids)
+        (if
+          (pair? (car kids))
+          (if
+            (outline/valid? (car kids))
+            (outline/valid-kids? (cdr kids))
+            #f)
+          #f)
+        #f))))
 
 
 (define outline/css
