@@ -405,6 +405,16 @@
          - Dedup-by-sha256 on put (index exists; policy later)
    |))
    )
+   (verify
+    (build "dune build @all")
+    (test "image/test/media_test.ml — put/meta/list/delete + mime reject")
+    (smoke "scripts/dev.sh applies 007; POST /api/media with basic auth stores png; GET /media/<id> returns image/png bytes")
+    (smoke "python3 scripts/pp_media.py put <fixture.png> prints id; get round-trips bytes")
+    (smoke "POST /api/eval still capped at 64 KiB; media route accepts images/pdf up to 5 MiB, audio/* up to 64 MiB")
+    (smoke "POST /api/media audio/mpeg accepted; images still rejected past 5 MiB; audio past 64 MiB rejected with 413")
+    (smoke "GET /media/<id> with Range: bytes=0-99 returns 206 + Content-Range; bytes=10- over a 10-byte blob returns 416")
+    (smoke "<audio controls> card in /media gallery plays an uploaded mp3 and seeks (browser)"))
+  )
 
   (subsection file-lens
    (doc "Personal file sync: path-addressed envelopes OVER the blob store (dropbox-shaped, habitat-shaped)")
@@ -510,15 +520,6 @@
     (smoke "pp_files.py init; push a mixed dir (text + binary); pull into an EMPTY dir — byte-identical trees (cmp)")
     (smoke "change two files on both sides, pull: changed one updates, conflicted one keeps both sides (<path>.ppconflict-<stamp>)")
     (smoke "delete a local file + push: the server row is gone (apply), the blob id remains listable (retention non-goal documented)"))
-   (verify
-    (build "dune build @all")
-    (test "image/test/media_test.ml — put/meta/list/delete + mime reject")
-    (smoke "scripts/dev.sh applies 007; POST /api/media with basic auth stores png; GET /media/<id> returns image/png bytes")
-    (smoke "python3 scripts/pp_media.py put <fixture.png> prints id; get round-trips bytes")
-    (smoke "POST /api/eval still capped at 64 KiB; media route accepts images/pdf up to 5 MiB, audio/* up to 64 MiB")
-    (smoke "POST /api/media audio/mpeg accepted; images still rejected past 5 MiB; audio past 64 MiB rejected with 413")
-    (smoke "GET /media/<id> with Range: bytes=0-99 returns 206 + Content-Range; bytes=10- over a 10-byte blob returns 416")
-    (smoke "<audio controls> card in /media gallery plays an uploaded mp3 and seeks (browser)"))
 
   )
  )
