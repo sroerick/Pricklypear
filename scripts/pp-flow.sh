@@ -105,6 +105,7 @@ json_str() {
 
 card_assignee() { pp_todo_val "(todo/item/assignee (todo/item/get $1))"; }
 brief_of()      { pp_todo_val "(todo/flow-brief $1)"; }
+card_state()    { pp_todo_val "(todo/item/state (todo/item/get $1))"; }
 
 # ---- claim lease ----------------------------------------------------------------
 claim() {
@@ -152,7 +153,7 @@ write_back() {
     echo "pp-flow: card $id not found; not advancing, not commenting" >&2
     return 3
   fi
-  cur="$(pp_todo_val "(todo/item/state (todo/item/get $id))")"
+  cur="$(card_state "$id")"
   # Defense-in-depth: if the agent already moved the card off the state it was
   # claimed in (e.g. it wrote back itself despite the brief), do not advance
   # again — that was the double-write bug (TODO->DONE then DONE->PARKED).
@@ -178,14 +179,19 @@ write_back() {
       adv="$(pp_todo_val "(todo/cycle $id)")"
       newstate="$(pp_todo_val "(todo/item/state (todo/item/get $id))")"
       if [ -z "$newstate" ]; then
-        # 09-27: a card on a list with no columns cycles to "" - the state is
-        # ERASED, not wrapped. Restore the claimed state and refuse the
-        # advance; the evidence comment below still posts (work happened).
-        if [ -n "$claimed_state" ]; then
-          pp_todo_val "(todo/set-state $id $(json_str "$claimed_state"))" >/dev/null
-        fi
-        newstate="$claimed_state"
-        echo "pp-flow: todo/cycle emptied the state (list has no columns?); restored $claimed_state" >&2
+          # 09-27: a card on a list with no columns cycles to "" - the state is
+          # ERASED, not wrapped. Restore the claimed state and refuse the
+          # advance; the evidence comment below still posts (work happened).
+          # Run 3 post-mortem: the restore was a silent no-op because
+          # claimed_state was captured with a bare unquoted card id (unbound
+          # symbol -> "") in every run so far; fixed in the run block.
+          if [ -n "$claimed_state" ]; then
+            pp_todo_val "(todo/set-state $id $(json_str "$claimed_state"))" >/dev/null
+            echo "pp-flow: todo/cycle emptied the state (list has no columns?); restored $claimed_state" >&2
+          else
+            echo "pp-flow: todo/cycle emptied the state (list has no columns?); claimed_state unknown, card NOT restored - fix by hand" >&2
+          fi
+          newstate="$claimed_state"
       fi
     fi
   cmt="$(pp_todo_val "(todo/comment/add $id $(json_str "$msg"))")"
@@ -193,13 +199,20 @@ write_back() {
   echo "pp-flow: write-back advanced to state=$newstate (event $adv), comment id=$cmt; claim released"
 }
 
-# extract an optional DESTINATION: <COL> line from the agent transcript
+# extract an optional DESTINATION: <COL> from the agent transcript
 agent_destination() {
   # OpenBSD sed has no \+ repetition in a BRE (GNU extension): the old
   # pattern never matched on vultr, so a DESTINATION: line was silently
   # ignored and write-back fell back to todo/cycle. Use \{1,\} (09-27).
-  # shellcheck disable=SC2001
-  sed -n 's/^[[:space:]]*DESTINATION:[[:space:]]*\([A-Z0-9_-]\{1,\}\)[[:space:]]*$/\1/p' "$1" 2>/dev/null | tail -n1 | tr -d '[:space:]'
+  d="$(sed -n 's/^[[:space:]]*DESTINATION:[[:space:]]*\([A-Z0-9_-]\{1,\}\)[[:space:]]*$/\1/p' "$1" 2>/dev/null | tail -n1 | tr -d '[:space:]')"
+  if [ -z "$d" ]; then
+    # Run 3: executor-v2 folded DESTINATION onto the end of its one-line
+    # EVIDENCE paragraph (contract says two lines), so the anchored pattern
+    # missed, write-back fell back to todo/cycle, and a column-less list
+    # got its state erased. Accept a trailing "... DESTINATION: <COL>".
+    d="$(sed -n 's/.*[^A-Z0-9_-]DESTINATION:[[:space:]]*\([A-Z0-9_-]\{1,\}\)[[:space:]]*$/\1/p' "$1" 2>/dev/null | tail -n1 | tr -d '[:space:]')"
+  fi
+  printf '%s\n' "$d"
 }
 
 # extract the last EVIDENCE: line from the agent transcript — the card comment
@@ -247,7 +260,7 @@ case "$MODE" in
   run)
     lease="$(claim)" || exit $?
     echo "pp-flow: claimed $CARD lease=$lease"
-    claimed_state="$(pp_todo_val "(todo/item/state (todo/item/get $CARD))")"
+    claimed_state="$(card_state "$(json_str "$CARD")")"
     b="$(brief_of "$(json_str "$CARD")")"
     if [ -z "$b" ]; then
       echo "pp-flow: no such card $CARD after claim" >&2
