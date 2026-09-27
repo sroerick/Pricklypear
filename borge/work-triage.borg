@@ -10,7 +10,17 @@
    (test "every card on the workspace list sits in a named column; TODO holds only unplaced intake")))
 
  (section triage-pass
-  (doc "A triage pass is a read-plan-act loop, run by the triager (gregor) on demand: (1) READ: open cards via find-rows, my open issues via the ledger, staleness via data-history per card. (2) PLAN: place new cards into columns, flag stuck (open >3 days since newest data-history version), match issues to cards, mark cards DONE whose work verifiably shipped (spec/commit/live behavior, cited). (3) ACT: kanban/move-card for placements, notes/issues/resolve for closes, link for new edges, ONE consolidated lobby line with refs at the end (the worklog convention from spec_standup_v2). The pass never moves a card to hide staleness: stuck is flagged in the report, not parked.")
+  (doc "A triage pass is a read-plan-act loop, run by the triager (gregor) on demand: (1) READ: open cards via find-rows, my open issues via the ledger, staleness via data-history per card. (2) PLAN: place new cards into columns, flag stuck (open >3 days since newest data-history version), match issues to cards, mark cards DONE whose work verifiably shipped (spec/commit/live behavior, cited). (3) ACT: kanban/move-card for placements, notes/issues/resolve for closes, link for new edges, ONE consolidated lobby line with the worklog convention from spec_standup_v2. The pass never moves a card to hide staleness: stuck is flagged in the report, not parked.
+
+   STREAM PLACEMENT RULE (workstreams.borg stream-pipelines, 2026-09-27): the
+   pass also picks the STREAM a new card lands in, by kind + blast radius.
+   AUTO list (no human gate, LOGIC-REVIEW PASS closes the card) when kind ∈
+   {BUG, CLEANUP, SMELL, docs} AND no UI surface AND acceptance is
+   machine-checkable AND no schema migration. KERNEL list when non-UI but
+   high-blast-radius (migrations, auth, store, promote-adjacent). FACES
+   (Board) whenever routes/rendering/interaction change. When in doubt,
+   place the MORE gated stream (AUTO < KERNEL < FACES) — the human gate is
+   cheap, an unreviewed prod regression is not.")
   (implements "libs (planned: libs/triage)" "image/lib/prims_data.ml link/out-links")
   (status partial)
   (* agent note (|2026-09-11 phase 1 shipped as plain defines on gregor/personal: triage/list-id, triage/cards (open cards, updated_at DESC), triage/issues (my ledger), triage/stale (data-history age >= 3d), triage/plan (pure planner, returns placements + flags + matches), apply via kanban/move-card + link. Planner is pure: act only after eyeballing the plan.|) *)

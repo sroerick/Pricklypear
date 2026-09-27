@@ -9,6 +9,28 @@
   (2026-09-25: retired — a mirror that reports nothing is worse than no mirror).")
  (status planned)
 
+ (* agent note (|2026-09-26 PLAN PASS (sessions as runs + runners + stream
+    pipelines, roerick discussion): the executor story upgrades from
+    fire-and-forget subprocesses to OBSERVABLE RUNS — with the session IS
+    the run record (roerick, same pass — a separate run datum was drafted
+    then rejected: no data.u.<user>.run.* rows ever exist). (1) SESSIONS AS
+    RUNS: a glochid session carries identity, timestamp, model, history,
+    resumability; card linkage is a header key, status is a terminal marker
+    line, reclaim is FEED INACTIVITY on the card, and the card feed is the
+    habitat-side projection in BOTH residences (glochid posts through the
+    bridge; the native agent posts directly). (2) RUNNERS: glochid is the
+    TARGET executor residence (sessions-persist + the loop on_msg sink give
+    run status and progress comments for free); pi -p and the autolith
+    adapter become fallback PP_FLOW_PI runners, not the direction of
+    travel. (3) STREAM PIPELINES: UI-affecting vs under-the-hood work split
+    into per-stream pipelines — pure list-columns data per the
+    pipeline-model resolution order, only the triage placement rule is new.
+    Spec review basis: local-first.borg/lens/replication review 2026-09-26
+    — glochid has NO lens write path today (agent/lib surface.ml: the
+    lens-backed row is the deferred unification), so glochid posts card
+    comments THROUGH THE BRIDGE (/api/eval); transcripts stay local
+    (.agent/sessions/), never tree rows (2026-09-08 write-cost incident).|) *)
+
  ;; ---------------------------------------------------------------------------
  ;; RELATIONSHIPS (what it is / isn't)
  ;; ---------------------------------------------------------------------------
@@ -20,6 +42,11 @@
    per-column AGENT RECIPES (the instruction template for the work each column
    represents), the CLAIM/BRIEF protocol (how a local pi executor claims a card,
    gets a self-contained brief, works, and writes back a transition + comment),
+   SESSIONS AS RUNS (a glochid session IS the run record: card linkage in
+   the header, a terminal status marker, the card feed as the habitat-side
+   projection), PROGRESS COMMENTS (the agent posts milestone comments
+   mid-run; transitions stay executor-owned), per-stream
+   PIPELINES (UI-affecting vs under-the-hood cards on different column sets),
    the LIVE /workstreams face, and standup v2. Does NOT build an in-image agent
    runtime, does NOT re-spec core todo data model, does NOT touch auth/delegation
    beyond parameter-passing (owner creds or a delegated token).")
@@ -42,6 +69,59 @@
   (verify
    (test "each workstream list carries the same column set as Board"
          "every open board card sits in a named column")))
+
+ (section stream-pipelines
+  (doc "Per-stream pipelines for UI-affecting vs under-the-hood vs
+   fully-mechanical work (2026-09-26 plan pass; AUTO lane added 2026-09-27
+   after the 0fac2ef3 dogfood run showed a pure kernel bug funneled through
+   UI-REVIEW and parked on the human gate). ALREADY SUPPORTED by the
+   pipeline-model resolution order (item override > list columns > global
+   default) — a pipeline is data, so the split is writing lists, not code.
+   THREE streams:
+
+   FACES — pipeline TODO → CODE → UI-REVIEW → HUMAN-REVIEW → DONE. Anything
+   touching routes, rendering, or interaction. The UI-REVIEW recipe demands
+   screenshot + a11y evidence per the agent UI harness
+   (docs/agent-ui-harness.md). The human gate stays: rendered output is the
+   product and only roerick signs off on it.
+
+   KERNEL — pipeline TODO → CODE → LOGIC-REVIEW → HUMAN-REVIEW → DONE.
+   Non-UI but high-blast-radius work: schema migrations, auth, store,
+   promote-adjacent kernel changes. The LOGIC-REVIEW recipe demands dune
+   build + runtest + borge drift evidence. The human gate stays because the
+   failure modes are invisible until prod.
+
+   AUTO — pipeline TODO → CODE → LOGIC-REVIEW → DONE. NO HUMAN-REVIEW
+   column: a LOGIC-REVIEW PASS writes DESTINATION: DONE and pp-flow lands
+   it there; the card closes on agent evidence alone. Qualifies when ALL
+   hold: kind ∈ {BUG, CLEANUP, SMELL, docs}; no UI surface (no route,
+   render, or interaction change); acceptance is machine-checkable (an
+   existing test, smoke script, or eval expression can witness it); no
+   schema migration; no prod promote (pp-flow briefs already forbid
+   promote — the promote script remains the human gate for deploys, which
+   bounds AUTO blast radius to the repo + garden branches). Safety story:
+   the reviewer is structurally independent (each column transition is a
+   separate pp-flow run, so the LOGIC-REVIEW reviewer is a fresh session,
+   never the implementer grading itself), and the CODE recipe's mandatory
+   build/test/drift evidence gates advancement. FAIL-LOOP CAP: if the card
+   thread (todo-events + comments) already shows two LOGIC-REVIEW FAILs for
+   the same defect, the reviewer escalates with DESTINATION: HUMAN-REVIEW
+   instead of looping CODE forever.
+
+   The payoff is PER-STREAM RECIPES (todo/recipe-set per list): FACES gets
+   the UI-REVIEW harness recipe, KERNEL/AUTO get the kernel evidence recipe,
+   and AUTO's LOGIC-REVIEW recipe overrides the default PASS → HUMAN-REVIEW
+   with PASS → DONE. The remaining NEW bit is PLACEMENT: the triage pass
+   (or intake) needs the rule for which stream a new card lands in — a
+   triage-pass addition, not a pipeline change (see work-triage
+   triage-pass).")
+  (implements "libs/todo/lib.pp (columns + recipes — both exist; per-stream config is data)"
+              "work-triage triage pass (placement rule)")
+  (status implemented-live)
+  (verify
+   (test "a faces-stream card, a kernel-stream card, and an auto-stream card resolve DIFFERENT effective pipelines from their lists' columns fields"
+         "the triage pass places a new intake card in the stream its kind calls for"
+         "an AUTO LOGIC-REVIEW PASS moves the card to DONE, not HUMAN-REVIEW (DESTINATION honored by pp-flow)")))
 
  (section card-comments
   (doc "Two new datum types, seeded by the todo lib (deftype on load):
@@ -105,6 +185,41 @@
   (implements "libs/todo/lib.pp (todo/recipes-*)" "libs/todo/lib.pp flow/brief")
   (status implemented-live))  ;; orchestration task 6 (2026-09-27: todo/recipes-* + default family)
 
+ (section session-is-the-run
+  (doc "The RUN RECORD IS THE GLOCHID SESSION — no run datum type. A glochid
+   session (agent.borg sessions-persist: append-only JSONL, header
+   {t:session, id, ts, model}, one msg line per provider message, resumable,
+   /sessions surface) already carries identity, timestamp, model, full
+   history, and resumability — everything a run record was supposed to buy
+   over a scraped pp-flow log. What a session needs to SERVE as the run
+   record: (1) CARD LINKAGE — one key in the session header (card: the
+   item-id); (2) STATUS — one terminal marker line ({t:done, status:
+   succeeded / failed / parked, summary}) appended by the loop driver;
+   'running' is no terminal marker + a file still being written;
+   (3) RECLAIM — the claim lease references the session
+   (glochid:<session-id>@<ts>) and staleness is FEED INACTIVITY (claimed +
+   no comment/event in N minutes), evaluable from any device — pid liveness
+   was the laptop-local hack this retires, and a terminal marker in the
+   session is a definitive 'run over' a pid can never give.
+   THE CARD FEED IS THE HABITAT-SIDE RUN RECORD IN BOTH RESIDENCES: glochid
+   posts progress comments through the bridge (the memory-bridge pattern,
+   /api/eval under the executor's identity); the native in-image agent
+   (agent-native.borg) posts them directly. The transcript stays wherever
+   the loop ran (laptop .agent/sessions/ or the native store) — never tree
+   rows. No data.u.<user>.run.* rows ever exist: no tree-write churn on
+   prod, nothing to prune, no sync story to reason about (comments already
+   replicate). The division of labour: comments are the human-readable
+   progress NARRATIVE, todo-events are column transitions, the session is
+   the machine-readable RUN — and 'session' means the same thing on the
+   laptop and in the image.")
+  (implements "agent/lib/sessions.ml (session header card key + terminal marker, planned)"
+              "scripts/pp-flow.sh (lease references session id, planned)")
+  (status planned)
+  (verify
+   (test "a run's session header carries its card id and the session tail carries a terminal status marker"
+         "the claim lease is glochid:<session-id>@<ts> and reclaim triggers on feed inactivity, not a pid probe"
+         "no run datum type exists; the card feed is the habitat-side record")))
+
  (section claim-brief-protocol
   (doc "THE local executor contract (laptop pi, NOT the image):
    1. CLAIM: the executor (or roerick) sets `assignee` on the card (=claim;
@@ -123,7 +238,22 @@
       the 'ready for roerick' signal; the human gate is a real column
       (HUMAN-REVIEW), never an agent.)
    The claim lease is a pid/ts on the assignee field to prevent double-spawn;
-   a stale lease (>12h) is reclaimable.")
+   a stale lease (>12h) is reclaimable.
+   SESSION-LEASE AMENDMENT (2026-09-26 plan pass): the pid/ts assignee
+   lease becomes a SESSION lease (glochid:<session-id>@<ts>) once runs move
+   to glochid (session-is-the-run) — a session reference is meaningful to
+   any device with the lens, staleness is claimed + no feed activity in N
+   minutes, and the session's terminal marker is the definitive 'run over'
+   the pid probe can never give. PROGRESS COMMENTS: the agent posts
+   milestone todo-comments MID-RUN (recipe instruction: 'post progress
+   comments as you hit milestones via todo/comment/add — but never move the
+   card yourself; the executor script owns transitions'). Comments are safe
+   to open up to the agent because they never touch state (the double-write
+   bug class is transitions-only); the write-back script keeps exclusive
+   ownership of todo/cycle / todo/set-state. In the glochid residence this
+   is the loop's on_msg sink (sessions-persist) hooked to the bridge —
+   turn-boundary summaries post themselves; pi/autolith cannot do this
+   cleanly, which is a reason runs move to glochid (see glochid-runner).")
   (implements "scripts/pp-flow.sh" "libs/todo/lib.pp todo/flow-brief")
   (status implemented-live)  ;; orchestration tasks 7+8 (2026-09-27: todo/flow-brief + scripts/pp-flow.sh)
   (verify
@@ -154,13 +284,56 @@
      ENV: AUTOLITH_MODEL (init.lisp-registered model id), AUTOLITH_BIN
      (default `autolith`), PP_FLOW_AUTOLITH_PERM (default `sandbox`; `full`
      only for cards that must touch the live repo), PP_FLOW_AUTOLITH_TIMEOUT
-     (default 1800s).")
+     (default 1800s).
+     POSITION (2026-09-26 plan pass): with the glochid-runner section, the
+     autolith adapter becomes a FALLBACK PP_FLOW_PI runner, not the
+     direction of travel — glochid is the target executor residence (run
+     status, on_msg progress comments, resumable sessions). This section
+     stays implemented-live and supported until the glochid runner has
+     survived real cards.")
    (implements "scripts/pp-flow-autolith.sh" "scripts/pp-flow.sh (PP_FLOW_PI hook)")
    (status implemented-live)  ;; autolith runner exercised end-to-end by the orchestration TEST card (2026-09-25)
    (verify
     (test "PP_FLOW_PI=scripts/pp-flow-autolith.sh runs a brief and prints the :RESULT transcript on stdout"
           "a SUCCEEDED job exits 0 and pp-flow scrapes EVIDENCE / DESTINATION from the transcript"
           "a failed job exits non-zero and pp-flow releases the claim without advancing")))
+
+ (section glochid-runner
+  (doc "The TARGET executor residence: runs move from fire-and-forget
+   subprocesses (PP_FLOW_PI: `pi -p`, the autolith adapter) into RESIDENT
+   GLOCHID (agent.borg — the local-first harness with sessions-persist, the
+   filmstrip shell, and the habitat bridge). What this buys: the session IS
+   the run record (session-is-the-run — observable, resumable, a session
+   JSONL per run instead of a scraped log file), progress comments fall out
+   of the loop's on_msg sink (posted to the card feed through the bridge),
+   multiple runs execute as fibers in ONE process under the operator's
+   watch, and the /workstreams board can show live status off the card feed.
+   SHAPE: pp-flow's run mode shrinks to claim (lease = glochid:<session-id>
+   @<ts>) -> fetch brief -> submit to resident glochid (localhost endpoint
+   or drop-dir, the glochid-served pattern) -> poll the SESSION's terminal
+   marker -> write-back from terminal status. Glochid never writes tree
+   rows locally (it has no lens write path today and must not grow one for
+   runs — agent/lib surface.ml: 'a lens-backed row is the deferred
+   unification'); everything habitat-side lands via bridge comments.
+   Later, the dispatch loop (poll TODO across workstreams, claim,
+   submit, concurrency cap, park-on-failure) moves INSIDE resident glochid
+   as a plugin — the orchestrator becomes a glochid face, not a ksh daemon.
+   HONEST STATUS (agent.borg): agent-loop is partial (OpenAI-compat provider
+   only, tool registry v0, long unattended turns unproven) — pi runs today
+   because it is mature. SEQUENCING: (1) session header card key + terminal
+   marker + bridge progress comments, (2)
+   on_msg → progress comments, (3) pp-flow --runner glochid dogfooded on
+   cheap cards alongside PP_FLOW_PI, (4) harden the loop for unattended
+   runs (resume-from-JSONL, budget caps, abort), (5) flip the default and
+   move dispatch inside. Do NOT flip the default until the loop has
+   survived real overnight cards.")
+  (implements "agent/lib (run submission via the session seam, planned)"
+              "scripts/pp-flow.sh (--runner glochid, planned)")
+  (status planned)
+  (verify
+   (test "a brief submitted to resident glochid opens a session with the card id in its header, streams progress comments, and ends with a terminal status marker"
+         "a crashed run resumes from its session JSONL"
+         "pp-flow --runner glochid completes a full claim→work→write-back card end to end")))
 
  (section live-face
   (doc "A `/workstreams` route (package workstreams) computed at render time:
