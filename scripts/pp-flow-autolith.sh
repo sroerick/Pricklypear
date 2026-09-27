@@ -75,15 +75,15 @@ tr -d '\n' < "$WORK.out" | awk 'BEGIN{ORS=""}
     i = p + 9;
     while (i <= length(s)) {
       c = substr(s, i, 1);
-      if (c == "\\\\") {
+      if (c == "\\") {
         d = substr(s, i+1, 1);
-        if (d == "n") out = out " ";
-        else if (d == "\\\"") out = out "\"";
-        else if (d == "\\\\") out = out "\\";
+        if (d == "n") out = out "\n";
+        else if (d == "\"") out = out "\"";
+        else if (d == "\\") out = out "\\";
         else out = out d;
         i += 2; continue;
       }
-      if (c == "\"") { print out; exit 0 }
+      if (c == "\"") { print out "\n"; exit 0 }
       out = out c; i++;
     }
     exit 1;
