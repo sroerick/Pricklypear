@@ -20,6 +20,7 @@
  (untracked "docs/chat-ui-redesign.md" "living spec draft pending the chat-ui-p1 merge")
  (untracked "docs/security-review-2026-09.md" "September hardening pass record — living")
  (untracked "docs/plans/rail-trees-v4.md" "ACTIVE make-phase handoff; spec: borge/filmstrip.borg rail-trees-v4")
+ (untracked "docs/plans/workout-gating.md" "ACTIVE make-phase handoff; draft spec for the workout-gating WIP (borge/workout.borg subsections + libs/workout/lib.pp) — spec lands in the chapter on merge")
   (untracked "docs/plans/bumpers-m1-notices.md" "ACTIVE make-phase handoff; spec: borge/bumpers.borg sequencing M1-M6")
  (untracked "archive/" "historical receipts (executed handoffs, deploy notes, proposals, reviews, retired probes); not spec, kept for the trail — see archive/README.md")
 
@@ -375,11 +376,11 @@
   (section bumpers
    (doc "Book chapter — bumpers: the feedback half of agent bowling bumpers. Out-of-band notices on the eval envelope, effect badges everywhere, verify-route dry-run, fragment-by-default glochid fit with declared standalone pages; the layered safety stack whose north star is one-shot features. Construction-side bumpers stay in the habitat design inbox until dogfooded. Full text inlined from borge/bumpers.borg")
    (inline borge/bumpers.borg)
- )
- (section agent-native
-   (doc "Book chapter — agent-native: server-resident agent identities (bot users) that wake on cron, work member-gated data.s rooms, act through the prim seam under their own identity, and push via ntfy; glochid (agent.borg) is the local counterpart. Milestones M1-M5, M1 shipped 2026-09-03. Full text inlined from borge/agent-native.borg")
-   (inline borge/agent-native.borg)
   )
+ (section agent-native
+  (doc "Book chapter — agent-native: server-resident agent identities (bot users) that wake on cron, work member-gated data.s rooms, act through the prim seam under their own identity, and push via ntfy; glochid (agent.borg) is the local counterpart. Milestones M1-M5, M1 shipped 2026-09-03. Full text inlined from borge/agent-native.borg")
+  (inline borge/agent-native.borg)
+ )
  (section local-first
   (doc "Book chapter — a local lens is a branch of the one tree whose root lives on the client (the pad detaches, roots independently, grafts back). Revisits prim-seam's 'no second store' hard-out: a lens is a governed branch with merge semantics, not an uncoordinated copy. Same Prim_call seam, same tree, offline-capable. Full text inlined from borge/local-first.borg")
   (inline borge/local-first.borg)
