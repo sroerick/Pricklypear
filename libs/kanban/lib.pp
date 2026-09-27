@@ -89,9 +89,15 @@
   (lambda (id target-state target-index)
     "Move card id to target-state at target-index (0-based; clamps to end).
      Renumbers the old and new columns so no two cards share a position.
-     Runs inside the caller's transaction: /api/eval wraps each request in
-     one (nested with-transaction raises begin_work), and page handlers
-     that need atomicity wrap their own. i-kanban-move-card 2026-09-03."
+     NOT ATOMIC ON ITS OWN: it is a sequence of tree/upsert writes and
+     each autocommits. /api/eval does NOT wrap a request in a transaction
+     (verified 2026-09-27: a write followed by a raising form persists and
+     still reports ok:false), so a caller that needs the renumber to be
+     all-or-nothing must wrap the call itself:
+       (with-transaction (lambda () (kanban/move-card ...)))
+     Bare callers (kanban/handle-post) leave a mid-sequence failure with
+     renumbered-but-duplicated positions, not lost cards. i-kanban-move-card
+     2026-09-03. Stale-transaction claim corrected 2026-09-27."
     (let ((fields (get (quote todo-item) id)))
       (if (null? fields)
         "no such card"
@@ -121,8 +127,9 @@
 
 (define kanban/swap
   (lambda (id1 id2)
-    "Swap the position fields of two cards (same column). Runs inside the
-     caller's transaction (see kanban/move-card note)."
+    "Swap the position fields of two cards (same column). NOT ATOMIC on
+     its own — each tree/upsert autocommits; wrap in with-transaction when
+     the two writes must land together (see kanban/move-card note)."
     (let ((f1 (get (quote todo-item) id1)))
       (if (null? f1)
         "no such card"
@@ -171,8 +178,9 @@
 (define kanban/rename-column
   (lambda (list-id old-name new-name)
     "Rename a column: update the list's columns AND cascade-rename the state
-     field of every card in that column. Runs inside the caller's
-     transaction (see kanban/move-card note)."
+     field of every card in that column. NOT ATOMIC on its own — each write
+     autocommits; wrap in with-transaction when the columns write and the
+     cascade must land together (see kanban/move-card note)."
     (let ((cols (kanban/columns-for-list list-id)))
       (let ((renamed (kanban/replace-named cols (as-str old-name) (as-str new-name))))
         (seq
