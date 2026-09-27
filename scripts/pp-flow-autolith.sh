@@ -32,6 +32,7 @@ BRIEF="${1:-}"
 AUTOLITH_BIN="${AUTOLITH_BIN:-autolith}"
 PERM="${PP_FLOW_AUTOLITH_PERM:-sandbox}"
 TIMEOUT="${PP_FLOW_AUTOLITH_TIMEOUT:-3000}"
+ROLE="${PP_FLOW_AUTOLITH_ROLE:-executor}"
 JOB_ID="pp-flow-$(date +%s)-$$"
 WORK="$(mktemp -t ppflow-al.XXXXXX)"
 trap 'rm -f "$WORK.job" "$WORK.out" "$WORK.err"' EXIT
@@ -80,8 +81,8 @@ esc() {
     { gsub(/\\/, "\\\\"); gsub(/"/, "\\\""); gsub(/\t/, "\\t"); print $0 }'
 }
 
-printf '(:autolith-job\n :version 1\n :id "%s"\n :role "executor"\n :prompt "%s"\n :input nil\n :output-contract (:type :string)\n :timeout-seconds %s)\n' \
-  "$JOB_ID" "$(esc "$BRIEF")" "$TIMEOUT" > "$WORK.job"
+printf '(:autolith-job\n :version 1\n :id "%s"\n :role "%s"\n :prompt "%s"\n :input nil\n :output-contract (:type :string)\n :timeout-seconds %s)\n' \
+  "$JOB_ID" "$ROLE" "$(esc "$BRIEF")" "$TIMEOUT" > "$WORK.job"
 
 # stderr (SBCL redefinition warnings) is captured, not passed through: pp-flow
 # merges 2>&1 into the transcript it scrapes for evidence, and the warning spam
