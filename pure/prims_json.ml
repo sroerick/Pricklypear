@@ -301,6 +301,35 @@ let prim_json_emit args =
   | [ v ] -> VStr (Yojson.Safe.to_string (value_to_json v))
   | _ -> raise (Interp_error (User_error ("json-emit needs 1 value", "bad-args")))
 
+(** Body/fields argument policy for the data prims (create / update /
+    tree/upsert) at the json-values-alist boundary.
+
+    [json_body ?ctx v]: a VStr passes through UNCHANGED — it may be legacy
+    JSON or a plain string, and those prims have always accepted both. Any
+    other value is a STRUCTURED body (the alist json-parse/dict-set* return,
+    or a hand-built VList/VPair tree) and serializes with the shared emit
+    codec ([value_to_json]), where an alist becomes a JSON object.
+
+    Why this exists: json-values-alist made parsed objects walkable ALISTS,
+    so the documented mutation idiom — tree/get + dict-set* + tree/upsert —
+    produces an alist, not a JSON string. The prims kept matching on VStr
+    only, so that idiom raised bad-args. One case was not noise:
+    notes/tree/save-outline cleared a note's headings and THEN died on the
+    rejected body, so each notes save emptied the note (2026-09-27 live
+    incident). The policy lives here so it is unit-testable without a DB. *)
+let json_body ?(ctx = "json") (v : value) : string =
+  match v with
+  | VStr s -> s
+  | _ ->
+      (try Yojson.Safe.to_string (value_to_json v)
+       with exn ->
+         raise
+           (Interp_error
+              (User_error
+                 ( ctx ^ " needs a JSON string or a structured body (got "
+                   ^ Pricklypear_lisp.Reader.pp_value v ^ ")",
+                   "bad-args" ))))
+
 (* (read-string s) -> quoted value tree. Same reader as load-string / the
    REPL, then quote_to_value — NO eval. Pair with (function-ast name):
    both yield walkable s-expr data. Clojure-style twin of load-string.

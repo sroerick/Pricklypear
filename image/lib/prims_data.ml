@@ -40,8 +40,15 @@ let register (t : t) (tbl : Primitives.t) : unit =
       if uname = "anonymous" then deny_anon "create"
       else
         match args with
-        | [ Pricklypear_lisp.Ast.VStr type_name;
-            Pricklypear_lisp.Ast.VStr fields_json ] ->
+        | [ type_v; fields_v ] ->
+            (* json-values-alist: a structured fields value (alist from
+               json-parse/dict-set*, or any VList body) serializes at the
+               boundary exactly like tree/upsert's body — the documented
+               dict-set* mutation idiom must not be a string-only trap. *)
+            let type_name =
+              Prims_common.coerce_str ~ctx:"create type" type_v
+            in
+            let fields_json = Prims_db_common.json_body ~ctx:"create" fields_v in
             (* Attribute to the per-request identity, not the live manifest
                (which can be mid-swap under the cotenant race). *)
             Crud.create t.store
@@ -57,9 +64,13 @@ let register (t : t) (tbl : Primitives.t) : unit =
       if uname = "anonymous" then deny_anon "update"
       else
         match args with
-        | [ Pricklypear_lisp.Ast.VStr type_name;
-            Pricklypear_lisp.Ast.VStr id;
-            Pricklypear_lisp.Ast.VStr fields_json ] ->
+        | [ type_v; id_v; fields_v ] ->
+            (* See create: structured fields serialize at the boundary. *)
+            let type_name =
+              Prims_common.coerce_str ~ctx:"update type" type_v
+            in
+            let id = Prims_common.coerce_str ~ctx:"update id" id_v in
+            let fields_json = Prims_db_common.json_body ~ctx:"update" fields_v in
             Crud.update_guarded t.store ~type_name ~id ~fields_json ~caller:uname
         | _ ->
             ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("update", "bad args (need type, id, fields)", "bad-args"))))));
@@ -500,12 +511,27 @@ let register (t : t) (tbl : Primitives.t) : unit =
       let uname = actor () in
       if uname = "anonymous" then deny_anon "tree/upsert"
       else
+        (* json-values-alist: the documented mutation idiom is
+           tree/get + dict-set* + tree/upsert, and dict-set* over a
+           parsed body returns an ALIST, not a JSON string. Accept a
+           structured body (alist/VList/VPair) and serialize it here —
+           the same polymorphism dict-get/set/keys already have. A VStr
+           body keeps the legacy path (it may be JSON or a plain
+           string). Path/kind/type ride coerce_str so symbols work.
+           (Live bug 2026-09-27: notes/tree/save-outline passed
+           dict-set output straight through, tree/upsert raised
+           bad-args AFTER clear-headings had deleted every heading —
+           the note was emptied on every save.) *)
         match args with
-        | [ Pricklypear_lisp.Ast.VStr path
-          ; Pricklypear_lisp.Ast.VStr kind
-          ; Pricklypear_lisp.Ast.VStr type_name
-          ; Pricklypear_lisp.Ast.VStr body_json
-          ] ->
+        | [ path_v; kind_v; type_v; body_v ] ->
+            let path = Prims_common.coerce_str ~ctx:"tree/upsert path" path_v in
+            let kind = Prims_common.coerce_str ~ctx:"tree/upsert kind" kind_v in
+            let type_name =
+              Prims_common.coerce_str ~ctx:"tree/upsert type" type_v
+            in
+            let body_json =
+              Prims_db_common.json_body ~ctx:"tree/upsert" body_v
+            in
             Crud.tree_upsert t.store ~path ~kind ~type_name ~body_json
               ~author:uname
         | _ ->
