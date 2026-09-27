@@ -2382,7 +2382,17 @@
             (todo/list/find-default-in (cdr xs))))))))
 
 (define todo/list/get
-  (lambda (id) (todo/tree/get "todo-list" id)))
+  (lambda
+    (id)
+    (let
+      ((lid (as-str id)))
+      (if
+        (string-eq lid "")
+        (let
+          ((inbox (todo/list/find-default)))
+          (if (null? inbox) (list) (cdr inbox)))
+        (todo/tree/get "todo-list" lid))))
+  "empty list-id resolves the DEFAULT INBOX (fields) instead of asking tree/get for `data.u.<user>.todo-list.` — uuid_label \"\" yields an empty ltree label and PG answers 42601 (reproduced live). find-default is a read (no create side-effect); todo/page already ensure-inbox's, so the default exists on any rendered page. No default list yet -> ().")
 
 (define todo/list/nav-li
   (lambda
@@ -3205,9 +3215,12 @@
 (define todo/tree/get
   (lambda
     (t id)
-    (let
-      ((n (tree/get (node-path t (as-str id)))))
-      (if (null? n) (list) (dict-get n "body")))))
+    (if
+      (string-eq (as-str id) "")
+      (list)
+      (let
+        ((n (tree/get (node-path t (as-str id)))))
+        (if (null? n) (list) (dict-get n "body"))))))
 
 (define todo/tree/insert-by-created
   (lambda
