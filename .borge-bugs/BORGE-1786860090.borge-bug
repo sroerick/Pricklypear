@@ -1,0 +1,75 @@
+(borge-bug (id "BORGE-1786860090")
+  (title "prod notes/tree/write-root-body stale: notes/doc/upsert empties outline kids (let* fix committed but not deployed)")
+  (status closed)
+  (created 2026-08-16)
+  (filed-by roerick)
+  (doc (|## Summary
+
+`notes/tree/write-root-body` on the live habitat is the stale pre-fix version (parallel `let`):
+
+  (let ((n (notes/tree/parse cur)) (b (notes/tree/body n))) ...)   ;; b refs n -> unbound: n
+
+The `let*` fix IS committed in git (HEAD:libs/notes/lib.pp has it, with a comment: "parallel let ... threw unbound: n (broke notes/doc/upsert write path)"), but prod's deployed libs/notes/lib.pp is old, so load_library / reseed-package re-load the BUGGY code.
+
+## Impact (data loss)
+
+notes/tree/save-outline runs (seq (clear-headings ...) (write-root-body ...) (foldl write-heading ...)). clear-headings DELETES all kid nodes first, then write-root-body throws unbound: n — so kids are gone before the error and write-heading never runs. ANY notes/doc/upsert on a note that has kids empties it.
+
+Reproduced: the live agents note (slug agents) was emptied to ["root","Agents (living AGENTS.md)","","",[]] this session (93 nodes -> 0). Restored from a captured copy via the clear-headings + write-heading bypass (skipping write-root-body).
+
+This ALSO breaks the new /issues workflow end-to-end: notes/issues/add -> notes/doc/upsert -> same bug. Browser /issues, scripts/file-issue.sh, and (notes/issues/add ...) all destroy existing log/issues entries then error on current prod.
+
+## Why reseed didn't fix it
+
+reseed_package sets seed_additive <- false (clobber) and calls load_library, which reads from the filesystem (PP_LIBS_DIR / libs/<pkg>/lib.pp, image/lib/loader.ml). Prod's file is stale, so reseed re-writes the buggy version. (define) after load_library fixes the live env for that call only; the next load_library clobbers it back. (unbind) is refused on system/main (and define is no-op against an existing inherited binding within the same call as load_library).
+
+## Fix (needs server access / redeploy)
+
+1. Update prod's libs/notes/lib.pp from git HEAD (deploy / git pull).
+2. Restart the image (so boot load_library picks up the fixed file).
+3. (reseed-package "notes") on system/main to refresh stored defs.
+4. Verify: (function-source "notes/tree/write-root-body
+
+;; ---------------------------------------------------------------
+;; RESOLUTION 2026-09-27
+;; ---------------------------------------------------------------
+;; Both parts of this bug are resolved.
+;;
+;; (1) THE TRIGGER (write-root-body throwing unbound: n from a parallel
+;;     let) was fixed in git by 8622096 on 2026-08-15 and IS deployed:
+;;     prod's bound notes/tree/write-root-body reads
+;;       (let* ((n (notes/tree/parse cur)) (b (notes/tree/body n))) ...)
+;;     and /usr/local/libexec/pricklypear/current/libs/notes/lib.pp carries
+;;     the let* forms. reseed-package no longer reloads the buggy code,
+;;     because the RELEASE file it reads is no longer stale.
+;;
+;; (2) THE DESTRUCTIVE ORDERING this report also identified
+;;     (\"notes/tree/save-outline runs (seq (clear-headings ...)
+;;      (write-root-body ...) ...). clear-headings DELETES all kid nodes
+;;      first ... so kids are gone before the error\") was NOT fixed in
+;;     August — only the trigger was. Nine weeks later the SAME note was
+;;     emptied again by the SAME ordering, with a different trigger (the
+;;     alist body-boundary rejection, BORGE-1790535211). save-outline is
+;;     now write-then-sweep AND atomic (b4337b5), so a failure in the write
+;;     half leaves the previous outline intact instead of an empty note.
+;;     See BORGE-1790546246 for what remains.
+;;
+;; CLOSED on (1) since that was this bug's stated subject and it is
+;; verifiably fixed and deployed; (2) is closed by b4337b5 and its
+;; remainder is tracked in BORGE-1790546246.
+;;
+;; LESSON (worth carrying into future triage): this report named a
+;; destructive STRUCTURE alongside its immediate trigger. Fixing the
+;; trigger closed the repro without closing the hazard, and because the
+;; ordering half was never split out into its own issue, nothing recorded
+;; that a note-destroying sequence was still live. When a report contains a
+;; delete-then-do shape, split the STRUCTURE into its own issue at
+;; triage time; do not let a fixed trigger imply the structure is safe.
+") shows let*; notes/doc/upsert on a test note preserves kids.
+
+After this, /issues works and the agents note is safe to edit again.
+
+## Caveat until redeploy
+
+The restored agents note is durable as long as nothing calls notes/doc/upsert on it (e.g. outline-UI set-body, /issues-style add). Any such edit will re-empty it until the fix is deployed.|))
+)
