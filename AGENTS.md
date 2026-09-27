@@ -21,6 +21,31 @@ via the brief protocol; no agents in the prod image). List deletion is allowed
 retired 2026-09-25 after a 365→9 list cleanup (snapshot
 `backups/pre-cleanup-20260925-005600.json`).
 
+**Unattended executor loop (2026-09-27).** `scripts/pp-flow.sh --drain
+[list-id] [N]` picks its own work (queue order, TODO/CODE, unleased) and runs
+each card as a separate `--run` subprocess — that separation is what keeps an
+AUTO-lane LOGIC-REVIEW reviewer independent of the implementer. The runner for
+headless runs is the Autolith adapter, pinned to Synthetic:
+
+```sh
+set -a; . ~/.config/pricklypear/env; set +a
+export PP_FLOW_PI="$PWD/scripts/pp-flow-autolith.sh"
+export AUTOLITH_MODEL=syn:large:text        # default; the adapter assumes it
+scripts/pp-flow.sh --drain 6f625d8c-fb5f-485c-b5c7-f2f4c41772cc --states TODO --max 1
+```
+
+Knobs: `--states "TODO,CODE"`, `--exclude-kinds BUG`, `--max N`,
+`PP_FLOW_DRAIN_CONTINUE=1` (don't stop on the first failure), `--force`
+(reclaim a live lease), `PP_FLOW_AUTOLITH_PERM=full` (cards that must touch
+the repo). The adapter refuses, in <1s with the accepted values named, a model
+that rejects the executor role's `:reasoning-effort :medium` (the Synthetic
+glm-flash family accepts only low|high|max) — it dies as a cryptic
+`:PROCESS-FAILURE` otherwise. `syn:large:text` is the tested default; the
+provider's own account limits (HTTP 402) are surfaced verbatim in the failure
+line. An agent-named `DESTINATION:` is validated against the card's own column
+set before it is obeyed; an unknown column falls back to the one-column
+advance. Per-run ledger: `.ralph/runs.jsonl` (+ `RUN SUMMARY` lines).
+
 **Single-image v1 habitat is the running system.** Spec is a multi-file
 literate book (chapter `.borg` files + root). `borge report` after the
 habitat-book reconcile is roughly **268 implemented / 53 planned /

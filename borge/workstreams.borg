@@ -294,12 +294,40 @@
    ownership of todo/cycle / todo/set-state. In the glochid residence this
    is the loop's on_msg sink (sessions-persist) hooked to the bridge —
    turn-boundary summaries post themselves; pi/autolith cannot do this
-   cleanly, which is a reason runs move to glochid (see glochid-runner).")
+   cleanly, which is a reason runs move to glochid (see glochid-runner).
+   UNATTENDED DRAIN (2026-09-27, the autonomy half): every run above needs a
+   human to NAME a card, so 'let gregor/the habitat run it' still meant a
+   person in the loop. `pp-flow.sh --drain [list-id] [N]` removes that: it
+   picks its own work — queue order (priority, then position, then id, via
+   todo/item/queue), filtered to ACTIONABLE columns (--states, default
+   TODO,CODE), unleased cards only (assignee empty), minus excluded kinds
+   (--exclude-kinds, e.g. BUG). Each card executes as a SEPARATE
+   `--run` subprocess on purpose: that preserves the AUTO lane's safety
+   property (each column transition is an independent run, so a LOGIC-REVIEW
+   reviewer is never the session that implemented the change) — collapsing
+   the loop into one process would destroy it. A failed card STOPS the drain
+   by default (PP_FLOW_DRAIN_CONTINUE=1 to press on), because consecutive
+   failures usually share a root cause (a provider outage, a broken build)
+   and pressing on just burns leases; the exit code is the failure count so a
+   scheduler can alert. The loop is still a SCHEDULER around pp-flow, not an
+   in-image agent runtime (single-image: no agents in prod) — cron/gregor
+   invokes it; the habitat stays the record + queue.
+   DESTINATION VALIDATION (2026-09-27): an agent-named DESTINATION is
+   AGENT-AUTHORED TEXT and is now validated against the card's actual column
+   set (todo/state/columns-for-list for the card's own list) before
+   write_back honors it; an unknown or unverifiable column falls back to the
+   safe one-column advance and says so on stderr. This matters most on the
+   AUTO lane, where a wrong DESTINATION either resurrects the human gate or
+   writes a state the list does not define.")
   (implements "scripts/pp-flow.sh" "libs/todo/lib.pp todo/flow-brief")
   (status implemented-live)  ;; orchestration tasks 7+8 (2026-09-27: todo/flow-brief + scripts/pp-flow.sh)
   (verify
    (test "executor claim → brief contains title+acceptance+column recipe"
          "write-back lands an event + comment and advances exactly one column"
+         "--drain picks a claimable TODO card with no human named card and advances it one column"
+         "--drain skips leased cards, non-actionable columns, and excluded kinds"
+         "an agent DESTINATION outside the card's column set is refused and the one-column advance is used"
+         "a failed card stops the drain unless PP_FLOW_DRAIN_CONTINUE=1"
          "stale claims are reclaimable")))
 
   (section autolith-runner
@@ -322,22 +350,51 @@
      :models (\"@auto\") is validated statically, so the real model must be a
      custom id registered in ~/.config/autolith/init.lisp and pinned per
      invocation via AUTOLITH_MODEL, not a builtin-only name.
-     ENV: AUTOLITH_MODEL (init.lisp-registered model id), AUTOLITH_BIN
-     (default `autolith`), PP_FLOW_AUTOLITH_PERM (default `sandbox`; `full`
-     only for cards that must touch the live repo), PP_FLOW_AUTOLITH_TIMEOUT
-     (default 1800s).
+     ENV: AUTOLITH_MODEL (init.lisp-registered model id; the adapter defaults
+     it to `syn:large:text`, the Synthetic provider, for unattended/gregor
+     runs — an explicit env value still wins), AUTOLITH_BIN (default
+     `autolith`), PP_FLOW_AUTOLITH_PERM (default `sandbox`; `full` only for
+     cards that must touch the live repo), PP_FLOW_AUTOLITH_TIMEOUT (default
+     3000s; raised from 1800 after a real card hit that wall).
+     EFFORT PREFLIGHT (2026-09-27): the role file pins :reasoning-effort
+     :medium and run-job validates the ROLE's effort against the pinned model
+     BEFORE any provider call; the role value beats
+     AUTOLITH_REASONING_EFFORT (verified live). A model that rejects medium
+     (Synthetic glm-flash declares low|high|max only) can therefore never run
+     through this role, so the adapter refuses it up front with an actionable
+     message (exit 2) instead of burning a ~35s :PROCESS-FAILURE and the
+     card's lease. PP_FLOW_AUTOLITH_IGNORE_EFFORT=1 attempts anyway.
+     STRUCTURED-SUMMARY BRIDGES (2026-09-27): the brief asks for literal
+     `EVIDENCE:` / `DESTINATION: <COL>` lines, but a structured-summary model
+     emits a JSON object instead. The adapter bridges BOTH: it emits a
+     labeled EVIDENCE line carrying the summary when none is present, and a
+     `DESTINATION:` line when the summary carries a JSON-shaped
+     `"destination"` and no literal one. Without the destination bridge an
+     AUTO LOGIC-REVIEW PASS that meant DONE was silently advanced one column
+     into HUMAN-REVIEW — resurrecting the very human gate the AUTO lane
+     exists to remove (observed live on card 1f010ba9).
+     FAILURE DIAGNOSTICS (2026-09-27): the :FAILURE category + message are
+     extracted with two independent sed passes; the previous single-pass
+     pattern returned empty on a real :PROCESS-FAILURE (pretty-printed output
+     puts a newline between :CATEGORY and its keyword), so every failure
+     diagnostic read `failure=unknown`.
      POSITION (2026-09-26 plan pass): with the glochid-runner section, the
      autolith adapter becomes a FALLBACK PP_FLOW_PI runner, not the
      direction of travel — glochid is the target executor residence (run
      status, on_msg progress comments, resumable sessions). This section
      stays implemented-live and supported until the glochid runner has
-     survived real cards.")
+     survived real cards. NOTE (2026-09-27): it is nevertheless the DEFAULT
+     runner for unattended `--drain` loops — the declared fallback is what
+     runs headless today, which is exactly why the hardening above matters.")
    (implements "scripts/pp-flow-autolith.sh" "scripts/pp-flow.sh (PP_FLOW_PI hook)")
    (status implemented-live)  ;; autolith runner exercised end-to-end by the orchestration TEST card (2026-09-25)
    (verify
     (test "PP_FLOW_PI=scripts/pp-flow-autolith.sh runs a brief and prints the :RESULT transcript on stdout"
           "a SUCCEEDED job exits 0 and pp-flow scrapes EVIDENCE / DESTINATION from the transcript"
-          "a failed job exits non-zero and pp-flow releases the claim without advancing")))
+          "a failed job exits non-zero and pp-flow releases the claim without advancing"
+          "a JSON destination: DONE summary yields a literal DESTINATION line (an AUTO PASS closes the card)"
+          "a model rejecting the role's :reasoning-effort is refused in <1s with the accepted values named"
+          "a :PROCESS-FAILURE diagnostic names the category and message, not `unknown`")))
 
  (section glochid-runner
   (doc "The TARGET executor residence: runs move from fire-and-forget
