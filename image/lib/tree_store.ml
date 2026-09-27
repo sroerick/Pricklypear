@@ -1156,38 +1156,54 @@ let get_by_uuid (conn : Store_db.conn) ~(uuid : string) : node option =
 (** Find hierarchical nodes where body->>field = value (e.g. slug).
     [prefix] restricts hits to an ltree subtree ("" = whole store).
     The tree/find-by prim passes the caller's garden root by default
-    (i-1788348645); internal callers (slug uniqueness) keep "". *)
+    (i-1788348645); internal callers (slug uniqueness) keep "".
+
+    The body FIELD is inlined into the path literal ('{body,<field>}')
+    after validation, never passed as a parameter: a parameterized
+    payload #>> ARRAY['body',$n] key defeats the migration-010 partial
+    expression indexes and forces a seq scan + detoast of tree_nodes on
+    every call (card 872d8066, i-1788348654). Only identifier-shaped
+    fields [A-Za-z0-9_]+ are supported; anything else returns [] —
+    in-tree callers (slug, uuid) and the find-by prim's documented use
+    are identifier-shaped. The VALUE stays a bound parameter. *)
+let valid_body_field (field : string) : bool =
+  let ok c =
+    (c >= 'a' && c <= 'z')
+    || (c >= 'A' && c <= 'Z')
+    || (c >= '0' && c <= '9')
+    || c = '_'
+  in
+  String.length field > 0 && String.for_all ok field
+
 let find_by_body_field (conn : Store_db.conn) ~(kind : string option)
     ~(field : string) ~(value : string) ?(prefix : string = "")
     ?(limit : int = 50) () : node list =
   if prefix <> "" && not (valid_path prefix) then []
+  else if not (valid_body_field field) then []
   else
     let scoped = prefix <> "" in
-    (* Placeholders: the kind match consumes $1..$base, an optional scope
-       filter takes $base+1, and LIMIT always comes last. *)
-    let base = match kind with Some _ -> 3 | None -> 2 in
+    (* Placeholders: kind/value consume $1..$base, an optional scope
+       filter takes $base+1, and LIMIT always comes last. The field is
+       already validated and inlined above. *)
+    let base = match kind with Some _ -> 2 | None -> 1 in
     let scope_i = base + 1 in
     let limit_i = if scoped then base + 2 else base + 1 in
+    let body_path = Printf.sprintf "{body,%s}" field in
     let sql =
       (match kind with
        | Some _ ->
            "SELECT " ^ select_cols ^ " FROM tree_nodes "
-           ^ "WHERE kind = $1 AND payload #>> ARRAY['body',$2] = $3 "
+           ^ "WHERE kind = $1 AND payload #>> '" ^ body_path ^ "' = $2 "
        | None ->
            "SELECT " ^ select_cols ^ " FROM tree_nodes "
-           ^ "WHERE payload #>> ARRAY['body',$1] = $2 ")
+           ^ "WHERE payload #>> '" ^ body_path ^ "' = $1 ")
       ^ (if scoped then Printf.sprintf "AND path <@ $%d::ltree " scope_i else "")
       ^ Printf.sprintf "ORDER BY path::text ASC LIMIT $%d" limit_i
     in
     let head =
       match kind with
-      | Some k ->
-          [ Pgx.Value.of_string k
-          ; Pgx.Value.of_string field
-          ; Pgx.Value.of_string value
-          ]
-      | None ->
-          [ Pgx.Value.of_string field; Pgx.Value.of_string value ]
+      | Some k -> [ Pgx.Value.of_string k; Pgx.Value.of_string value ]
+      | None -> [ Pgx.Value.of_string value ]
     in
     let tail =
       (if scoped then [ Pgx.Value.of_string prefix ] else [])
