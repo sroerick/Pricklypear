@@ -30,7 +30,7 @@ BRIEF="${1:-}"
 
 AUTOLITH_BIN="${AUTOLITH_BIN:-autolith}"
 PERM="${PP_FLOW_AUTOLITH_PERM:-sandbox}"
-TIMEOUT="${PP_FLOW_AUTOLITH_TIMEOUT:-1800}"
+TIMEOUT="${PP_FLOW_AUTOLITH_TIMEOUT:-3000}"
 JOB_ID="pp-flow-$(date +%s)-$$"
 WORK="$(mktemp -t ppflow-al.XXXXXX)"
 trap 'rm -f "$WORK.job" "$WORK.out" "$WORK.err"' EXIT
