@@ -1,0 +1,71 @@
+(borge-bug (id "BORGE-1790535211")
+  (title "json-values-alist verify misses the body boundary: tree/upsert + create/update kept VStr-only matching, so the documented tree/get + dict-set* + tree/upsert idiom raised bad-args (and notes/tree/save-outline, destructive-first, emptied a note before dying)")
+  (status fixed-pending-promote)
+  (created 2026-09-27)
+  (filed-by roerick)
+  (doc "SPEC GAP (lisp-interpreter.json-values-alist). The subsection's
+   verify stanzas lock the codecs (json round-trip) and dict-* behaviour
+   \"diet-get/dict-set/dict-keys accept alist AND legacy VStr JSON input\")
+   and the call-site migration it names (lookbook, filmstrip). It does
+   NOT require the *consumers of those mutated values* to accept them:
+   the data prims (tree/upsert, create, update) kept matching
+   [VStr; VStr; VStr; VStr] exactly, so an alist body raised
+   'need path kind type body-json'. That is the mutation idiom the
+   notes chapter documents at borge/notes.borg (tree/get + dict-set* +
+   tree/upsert at the same path) — the spec asserted an idiom its own
+   implementation rejected. verify must assert the BODY BOUNDARY, not
+   just the codec: a parsed-and-mutated node round-trips through
+   tree/upsert/create/update.
+
+   REAL-WORLD COST (2026-09-27, live prod). notes/tree/save-outline ran
+   clear-headings (recursive delete of every heading) BEFORE writing the
+   replacement and BEFORE any validation, so when write-root-body raised
+   bad-args the note's headings were already deleted and never restored.
+   One agent read-modify-upsert of the shared log/sessions doc left the
+   note present but empty. Tree-time tombstones carry body=null, so the
+   deleted heading content is not recoverable from tree_versions either.
+
+   FIX (commit e1dc01c, this tree):
+     - Prims_json.json_body: one body-boundary policy — VStr passes
+       through, any structured value serializes via the shared emit
+       codec; tree/upsert/create/update all use it (path/kind/type via
+       coerce_str).
+     - notes/tree/save-outline is now WRITE-THEN-SWEEP: upsert the new
+       headings first, then clear-stale-headings removes only headings
+       absent from the new outline (that helper already existed, unused).
+       A mid-write failure now degrades, never empties.
+     - outline/valid? is recursive (it only checked (count n) = 5 on the
+       root, so a malformed CHILD passed and reached write-heading) and
+       notes/doc/upsert-in refuses before any write.
+     - 4 regression cases in lisp/test/prims_pure_test.ml pin the
+       boundary policy.
+
+   SPEC TO LAND ON THE NEXT PLAN PASS:
+     - json-values-alist.verify gains: \"a structured (alist) body is
+       accepted by tree/upsert / create / update; the legacy VStr body
+       path is unchanged\"
+     - the notes outline-save subsection states the ORDERING contract:
+       an outline save must not delete content it cannot replace
+       (write-then-sweep), and malformed outlines are refused before any
+       destructive write
+     - consider a durability rule for tree-time: a destructive op that
+       cannot restore from its own history (tombstones carry no body)
+       must be recoverable by the caller or guarded by validation.
+FOLLOW-ON (verified on the dev image, same session): an eval that WRITES and
+then raises does NOT roll back — (begin (notes/doc/upsert-in ...) (unbound-fn))
+persists the write and still returns {\"ok\":false}. So the multi-step
+save-outline sequence is non-atomic: each tree write autocommits. The
+write-then-sweep order makes that degrade instead of destroy, but a partial
+save is still possible (some headings written, sweep not run). Two options
+for the next pass: (a) wrap notes/tree/save-outline in (with-transaction
+(lambda () ...)) — with_dynamic_transaction joins an outer tx, so it is safe
+under an existing one, and a budget/exception failure would roll back the
+whole save instead of half-applying; (b) leave it and rely on write-then-sweep.
+Worth deciding explicitly in the spec, since the notes chapter documents an
+idiom (tree/get + dict-set* + tree/upsert) but says nothing about atomicity of
+the outline save. NOTE: the kanban/move-card docstring claims \"/api/eval wraps
+each request in one [transaction], and page handlers that need atomicity wrap
+their own\" — the first half is NOT true as of the eio-floor refactor (verified
+above); that docstring should be corrected too.
+")
+)
