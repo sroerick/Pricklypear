@@ -174,10 +174,20 @@ write_back() {
   if [ -n "$dest" ]; then
     adv="$(pp_todo_val "(todo/set-state $id $(json_str "$dest"))")"
     newstate="$dest"
-  else
-    adv="$(pp_todo_val "(todo/cycle $id)")"
-    newstate="$(pp_todo_val "(todo/item/state (todo/item/get $id))")"
-  fi
+    else
+      adv="$(pp_todo_val "(todo/cycle $id)")"
+      newstate="$(pp_todo_val "(todo/item/state (todo/item/get $id))")"
+      if [ -z "$newstate" ]; then
+        # 09-27: a card on a list with no columns cycles to "" - the state is
+        # ERASED, not wrapped. Restore the claimed state and refuse the
+        # advance; the evidence comment below still posts (work happened).
+        if [ -n "$claimed_state" ]; then
+          pp_todo_val "(todo/set-state $id $(json_str "$claimed_state"))" >/dev/null
+        fi
+        newstate="$claimed_state"
+        echo "pp-flow: todo/cycle emptied the state (list has no columns?); restored $claimed_state" >&2
+      fi
+    fi
   cmt="$(pp_todo_val "(todo/comment/add $id $(json_str "$msg"))")"
   release_lease "$id"
   echo "pp-flow: write-back advanced to state=$newstate (event $adv), comment id=$cmt; claim released"
@@ -185,8 +195,11 @@ write_back() {
 
 # extract an optional DESTINATION: <COL> line from the agent transcript
 agent_destination() {
+  # OpenBSD sed has no \+ repetition in a BRE (GNU extension): the old
+  # pattern never matched on vultr, so a DESTINATION: line was silently
+  # ignored and write-back fell back to todo/cycle. Use \{1,\} (09-27).
   # shellcheck disable=SC2001
-  sed -n 's/^[[:space:]]*DESTINATION:[[:space:]]*\([A-Z0-9_-]\+\)[[:space:]]*$/\1/p' "$1" 2>/dev/null | tail -n1 | tr -d '[:space:]'
+  sed -n 's/^[[:space:]]*DESTINATION:[[:space:]]*\([A-Z0-9_-]\{1,\}\)[[:space:]]*$/\1/p' "$1" 2>/dev/null | tail -n1 | tr -d '[:space:]'
 }
 
 # extract the last EVIDENCE: line from the agent transcript — the card comment
