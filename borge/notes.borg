@@ -1231,12 +1231,38 @@
          Smart views: everything, from-notes, default Inbox.
          /todos nav + body; cycle state; create list; add item.
          No dual-copy of note todos until promote (later).
+
+         DEFAULT-LIST RESOLUTION; EMPTY list-id NEVER REACHES
+         node-path (2026-09-26). todo/list/get with an empty
+         list-id (a missing or blank ?list= reaching the
+         handler, or a caller passing "") must resolve the
+         DEFAULT INBOX, not crash: uuid_label "" yields an
+         empty ltree label (data.u.<user>.todo-list.) and
+         Postgres answers 42601 (reproduced live pre-fix).
+         Contract: todo/list/get short-circuits the empty id to
+         todo/list/find-default (read-only — NO ensure-inbox
+         create side-effect; the default list exists on any
+         rendered page because todo/page ensure-inbox's) and
+         returns that list's fields; when no default list
+         exists it returns () rather than minting one. A
+         non-empty id goes through todo/tree/get unchanged, so
+         the resolved body is identical either way. The generic
+         datum accessor todo/tree/get guards the empty id to
+         () for EVERY type, so no other datum kind can hit the
+         same ltree crash via todo/get-item / todo/get-list or
+         future callers. Other list accessors keep their
+         meaning: todo/get-list stays a plain (possibly-empty)
+         tree read; only todo/list/get performs default
+         resolution.
     |))
    )
    (verify
     (smoke "/todos everything + from-notes + inbox")
     (smoke "cycle note TODO write-back")
-    (smoke "create list and add item"))
+    (smoke "create list and add item")
+    (smoke "todo/list/get with empty id returns the is_default list's fields, identical body to todo/list/get <that id>; no 42601")
+    (smoke "todo/list/get with empty id when no default list exists returns () and does NOT create an Inbox")
+    (smoke "todo/tree/get with empty id returns () for any type (no Postgres ltree error)"))
 
   )
   (subsection kanban
