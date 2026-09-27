@@ -111,104 +111,6 @@
           (outline/kids (notes/get-outline n))))))
   "Top-level outline headings of one doc, each a leaf to the doc view.")
 
-(define notes/cache-fresh?
-  (lambda
-    (fields ttl)
-    (if
-      (null? fields)
-      #f
-      (let
-        ((ts (dict-get fields "ts")))
-        (if
-          (null? ts)
-          #f
-          (let
-            ((age (- (now) (parse-int (as-str ts)))))
-            (if (> age ttl) #f #t))))))
-  "whether the cache is within ttl seconds")
-
-(define notes/cache-get
-  (lambda
-    (fields)
-    (let
-      ((v (dict-get fields "html")))
-      (if (null? v) "" (as-str v))))
-  "cached html from a row fields")
-
-(define notes/cache-put
-  (lambda
-    (key html)
-    (let
-      ((row (notes/cache-row key))
-        (fields
-          (dict-set*
-            "{}"
-            (list
-              "key"
-              key
-              "ts"
-              (as-str (now))
-              "req"
-              (as-str (now))
-              "html"
-              html))))
-      (seq
-        (if
-          (null? row)
-          (create (quote notes-cache) fields)
-          (update (quote notes-cache) (car row) fields))
-        "stored")))
-  "upsert one cache row (create or update by key)")
-
-(define notes/cache-request
-  (lambda
-    (key job)
-    (let
-      ((row (notes/cache-row key)))
-      (let
-        ((fields (if (null? row) (list) (cdr row))))
-        (let
-          ((req
-            (if
-              (null? fields)
-              0
-              (let
-                ((r (dict-get fields "req")))
-                (if (null? r) 0 (parse-int (as-str r)))))))
-          (if
-            (> (- (now) req) 10)
-            (seq
-              (if
-                (null? row)
-                (create
-                  (quote notes-cache)
-                  (dict-set*
-                    "{}"
-                    (list
-                      "key"
-                      key
-                      "req"
-                      (as-str (now))
-                      "ts"
-                      "0"
-                      "html"
-                      "")))
-                (update
-                  (quote notes-cache)
-                  (car row)
-                  (dict-set* (cdr row) (list "req" (as-str (now))))))
-              (submit-job job "null"))
-            "already-requested")))))
-  "ask the UNBUDGETED jobs runner to refresh; bounded to one request/10s so renders never compute inline")
-
-(define notes/cache-row
-  (lambda
-    (key)
-    (let
-      ((rs (find-rows (quote notes-cache) "key" key 1)))
-      (if (null? rs) (list) (car rs))))
-  "cache row for key (or ())")
-
 (define notes/capture
   (lambda
     (title body)
@@ -1403,29 +1305,24 @@
       (notes/list)))
   "All visible (non-hidden) notes for the index.")
 
-(define notes/issues-cache-refresh
+(define notes/issues/register-html
   (lambda
     ()
     (let
       ((tree (notes/issues-fast-tree)))
-      (let
-        ((register-html
-            (if
-              (null? tree)
-              ""
-              (html/join
-                (list
-                  (html/h2 "Register")
-                  (html/ul
-                    (html/attr "class" "card")
-                    (notes/issues/nodes-html (outline/kids tree)))))))
-          (cards-html (notes/issues/cards-section)))
-        (seq
-          (notes/cache-put
-            "issues-list"
-            (string-append register-html cards-html))
-          "refreshed"))))
-  "JOB (unbudgeted): rebuild the register HTML (frozen legacy ledger) PLUS the\n  Issue-cards section (todo-items with a kind, through the shared pipeline)\n  from the fast snapshot outline + the todo-item pool, and store it")
+      (if
+        (null? tree)
+        ""
+        (html/join
+          (list
+            (html/h2 "Register")
+            (html/ul
+              (html/attr "class" "card")
+              (notes/issues/nodes-html (outline/kids tree))))))))
+  "The frozen legacy ledger register, rendered LIVE from the issues
+     outline (one tree/find-by + one snapshot fold). Was stored as cached
+     HTML by notes/issues-cache-refresh (deleted with the notes-cache
+     apparatus — borge/notes.outline-read-path).")
 
 (define notes/issues-fast-tree
   (lambda
@@ -1743,7 +1640,7 @@
             (html/ul
               (html/attr "class" "card")
               (notes/issues/cards-html rows)))))))
-  "The 'Issue cards' section rendered on /issues: todo-items tagged with a\n     kind, through the shared pipeline. Appended after the frozen legacy\n     ledger register by notes/issues-cache-refresh.")
+  "The 'Issue cards' section rendered on /issues: todo-items tagged with a\n     kind, through the shared pipeline. Rendered inline after the frozen legacy\n     ledger register (the cache row it used to ride is deleted —\n     borge/notes.outline-read-path).")
 
 (define notes/issues/delete
   (lambda
@@ -1829,54 +1726,34 @@
               (request-param "kind")
               (request-param "title")
               (request-param "body"))
-            (notes/cache-request
-              "issues-list"
-              "notes/issues-cache-refresh")
             (redirect "/issues")))
         ((string-eq action "issue-resolve")
           (seq
             (notes/issues/resolve (request-param "id"))
-            (notes/cache-request
-              "issues-list"
-              "notes/issues-cache-refresh")
             (redirect "/issues")))
         ((string-eq action "issue-reopen")
           (seq
             (notes/issues/reopen (request-param "id"))
-            (notes/cache-request
-              "issues-list"
-              "notes/issues-cache-refresh")
             (redirect "/issues")))
         ((string-eq action "issue-delete")
           (seq
             (notes/issues/delete (request-param "id"))
-            (notes/cache-request
-              "issues-list"
-              "notes/issues-cache-refresh")
             (redirect "/issues")))
         ((string-eq action "card-resolve")
           (seq
             (notes/issues/card-resolve (request-param "id"))
-            (notes/cache-request
-              "issues-list"
-              "notes/issues-cache-refresh")
             (redirect "/issues")))
         ((string-eq action "card-reopen")
           (seq
             (notes/issues/card-reopen (request-param "id"))
-            (notes/cache-request
-              "issues-list"
-              "notes/issues-cache-refresh")
             (redirect "/issues")))
         ((string-eq action "card-delete")
           (seq
             (notes/issues/card-delete (request-param "id"))
-            (notes/cache-request
-              "issues-list"
-              "notes/issues-cache-refresh")
             (redirect "/issues")))
         (else (redirect "/issues")))))
-  "mutations bump the cache (bounded request) so the next render requests a job refresh")
+  "mutations redirect; the next GET renders the register + cards LIVE
+     from the store (borge/notes.outline-read-path)")
 
 (define notes/issues/kind-of
   (lambda
@@ -1913,24 +1790,16 @@
   (lambda
     ()
     (let
-      ((row (notes/cache-row "issues-list")))
-      (let
-        ((fields (if (null? row) (list) (cdr row))))
-        (let
-          ((html
-            (if
-              (notes/cache-fresh? fields 300)
-              (notes/cache-get fields)
-              (seq
-                (notes/cache-request
-                  "issues-list"
-                  "notes/issues-cache-refresh")
-                (notes/cache-get fields)))))
-          (if
-            (string-eq html "")
-            (html/p* (html/attr "class" "muted") "No issues yet.")
-            html)))))
-  "register HTML from the cache row; refresh requested when stale (was: 155-query walk per render, 3-250s)")
+      ((html (string-append
+               (notes/issues/register-html)
+               (notes/issues/cards-section))))
+      (if
+        (string-eq html "")
+        (html/p* (html/attr "class" "muted") "No issues yet.")
+        html)))
+  "register (frozen legacy ledger) + issue cards, rendered LIVE from the
+     store on every request (borge/notes.outline-read-path: was a cached
+     HTML row refreshed by an unbudgeted job, staleness by design)")
 
 (define notes/issues/node-html
   (lambda
