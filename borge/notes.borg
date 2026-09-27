@@ -1001,6 +1001,66 @@
    )
   )
 
+  (subsection outline-read-path
+   (doc "Single-doc outline reads fold ONE subtree snapshot in Nopales as the LIVE path (never the per-node recursive walk); the /issues register renders inline from live data and the notes-cache HTML apparatus is deleted")
+   (status implemented)
+   (* agent note (|2026-12 make record: notes/tree/heading-kids IS the one-snapshot fold now (recursive walk deleted, obituary in its docstring); heading-kids-snap folded into it; notes/issues-fast-tree rides the same binding. /issues: notes/issues/register-html (extracted from the refresh job) + cards-section render INLINE from live data; notes/cache-fresh?/get/put/request/row + notes/issues-cache-refresh DELETED; handle-post just redirects (next GET renders live). notes-cache type rows on the habitat are inert leftovers for a habitat-side cleanup. MEASURED on the dev image (seeded 156-heading note, then deleted): notes/doc/get = 105ms wall / 223k ticks (budget.ml default is 400k — the spec's '100k' was stale; the old walk was 155 queries + ~380k ticks job-only), /issues = 7ms avg / 6 db hits per /timing, zero cache rows, zero job submissions. The '155-query walk per render' docstring trail is gone from list-html too. todo/notes-cache-* untouched — the surviving SWR consumer per the spec.|) *)
+   (implements libs/notes/lib.pp image/lib/tree_store.ml)
+   (verify
+    (smoke "GET /issues renders with zero notes-cache rows read or written; the notes/cache-* and notes/issues-cache-refresh bindings are deleted from the image")
+    (smoke "(notes/doc/get \"log/issues\") completes inline within the 400k route budget (budget.ml default_limit; measured 223k ticks / 105ms on a 156-heading note)")
+    (smoke "notes/tree/load-outline issues exactly ONE subtree read per doc load (query count via /timing), never one per heading")
+    (smoke "budget-scale stress suite still green; a 150+-heading note opens inline")
+    (smoke "the todo notes-block cross-tree scrape is the ONLY surviving consumer of the job-refresh pattern"))
+   (details
+    (doc (|
+         PROBLEM (the incident chain this closes):
+           Reading one document paid N+1: notes/tree/heading-kids
+           recursed one tree/list query PER HEADING NODE — 155
+           queries for the 156-node issues register (minutes on a
+           degraded DB; the 2026-09-14 promote-gate floor, where even
+           the 'cheap' notes/doc/row probe cost 40s live). The
+           one-snapshot fix (heading-kids-snap: ONE tree/list + flat
+           fold) existed but was quarantined in the jobs runner
+           because the fold burned ~380k ticks — dominated by the
+           VStr-JSON boundary tax, not the walk. With the live path
+           unaffordable, /issues served TTL-keyed CACHED HTML built
+           by notes/issues-cache-refresh on the unbudgeted jobs
+           runner: stale by design, one data_rows write per expiry,
+           presentation changes masked by the cached blob.
+
+         TARGET:
+           1. notes/tree/load-outline folds ONE tree/list subtree
+              snapshot (the heading-kids-snap shape) as the LIVE read
+              path. Dependency: lisp-interpreter.json-values-alist
+              brings the fold under the route budget; the recursive
+              heading-kids is DELETED, not kept as a fallback.
+           2. /issues renders the register + cards inline from live
+              data on every request. DELETE notes/cache-fresh?,
+              notes/cache-get, notes/cache-put, notes/cache-request,
+              notes/cache-row, notes/issues-cache-refresh, and the
+              notes-cache type rows they maintained. The deletion IS
+              the acceptance test: if the register cannot render
+              inline, the read path is not fixed.
+           3. The jobs-runner stale-while-revalidate pattern SURVIVES
+              only for genuinely external/slow aggregation (the todo
+              cross-tree scrape), keyed on data change (gen-now
+              stamp; the image branch_status stamp-cache precedent),
+              never TTL alone.
+
+         NON-GOALS:
+           - Raising default_limit to fit the fold (budget-scale: the
+             budget is a safety net; the boundary tax was the bug)
+           - Moving the single-doc outline fold into OCaml
+             (tree/note-index-full stays for the index/scrape path;
+             the Nopales walk must be viable on its own — walkable
+             data is the point of json-values-alist)
+           - Gen-keyed fragment caching for /issues (unnecessary once
+             the read is one query + one fold)
+    |))
+   )
+  )
+
   (subsection agent-access
    (doc "Agents use notes via eval — no separate notes HTTP API")
    (status implemented)
