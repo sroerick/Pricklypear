@@ -1,6 +1,6 @@
 (borge-bug (id "BORGE-1790535211")
   (title "json-values-alist verify misses the body boundary: tree/upsert + create/update kept VStr-only matching, so the documented tree/get + dict-set* + tree/upsert idiom raised bad-args (and notes/tree/save-outline, destructive-first, emptied a note before dying)")
-  (status fixed-pending-promote)
+  (status closed)
   (created 2026-09-27)
   (filed-by roerick)
   (doc "SPEC GAP (lisp-interpreter.json-values-alist). The subsection's
@@ -67,5 +67,36 @@ the outline save. NOTE: the kanban/move-card docstring claims \"/api/eval wraps
 each request in one [transaction], and page handlers that need atomicity wrap
 their own\" — the first half is NOT true as of the eio-floor refactor (verified
 above); that docstring should be corrected too.
-")
+
+
+   RESOLUTION (2026-09-27, closed). Fixed on master e1dc01c, bug file
+   committed 7e0a5be, deployed and VERIFIED live: prod serves release
+   7e0a5be155b5 (boot_epoch 1790535780) and on that release, on the
+   production habitat: (a) a structured (alist) body is accepted by
+   tree/upsert — a scratch-doc append via tree/get + dict-set* +
+   tree/upsert succeeded; (b) outline/valid? returns false for a
+   malformed CHILD node; (c) notes/tree/save-outline's bound body is
+   write-root-body -> write-heading fold -> clear-stale-headings (the
+   write-then-sweep order); (d) an end-to-end scratch note went create ->
+   two headings -> sweep to one -> malformed upsert refused with the
+   surviving heading intact. Tests: four new json_body cases in
+   lisp/test/prims_pure_test.ml (71 green in prims_pure); dune runtest
+   lisp common green. agent/test rail-trees fails identically on HEAD
+   (pre-existing, recorded in the json-values-alist agent note).
+
+   STILL OPEN (do not lose these in the close):
+     - the three spec-text items above (verify body boundary; the notes
+       outline-save ORDERING contract; a tree-time durability rule) are
+       NOT yet written into the .borg book — this bug tracks the gap and
+       closing it does not land them. Carry them into the next plan pass.
+     - save-outline is still NON-ATOMIC: a raising eval does not roll
+       back (verified live on the dev image), so a mid-sequence failure
+       can half-apply. write-then-sweep makes that degrade rather than
+       destroy. Wrap in (with-transaction ...) if full atomicity is
+       wanted.
+     - kanban/move-card's docstring claim that \"/api/eval wraps each
+       request in one [transaction]\" is stale (same live check).
+     - tree-time tombstones carry body=null: deleted heading content is
+       not recoverable from tree history; destructive ops that cannot
+       self-restore need validation (now present) or a before-image.")
 )
