@@ -373,6 +373,22 @@
      AUTO LOGIC-REVIEW PASS that meant DONE was silently advanced one column
      into HUMAN-REVIEW — resurrecting the very human gate the AUTO lane
      exists to remove (observed live on card 1f010ba9).
+     TRANSIENT-RETRY POLICY (2026-09-27): a transient provider fault must not
+     fail an unattended card — a lone Synthetic HTTP 402 ("Subscription access
+     is currently blocked…") cleared on the very next attempt, while direct
+     curl never failed. The adapter retries ONLY what can clear by itself:
+     :PROVIDER-FAILURE whose message names HTTP 402/408/409/425/429 or 5xx,
+     plus a run-job crash that wrote no job result at all (the recovery-image
+     hiccup from early battle tests). Everything else is TERMINAL and runs
+     exactly once — :PROCESS-FAILURE (the effort mismatch is deterministic),
+     :INVALID-*, :UNKNOWN-ROLE, :ARTIFACT-FAILURE, :RUNTIME-UNAVAILABLE, and a
+     :PROVIDER-FAILURE naming a non-transient status (400/401/403/404/422).
+     :TIMED-OUT is terminal deliberately: the job burned its whole wall clock,
+     so an immediate retry is the same coin flip for the same cost. Backoff is
+     exponential (10s doubling, capped 300s) with a default budget of 2 retries
+     (PP_FLOW_AUTOLITH_RETRIES / PP_FLOW_AUTOLITH_RETRY_BASE). Retrying is
+     SAFE for the card: no job was SUCCEEDED, so nothing was written back and
+     the lease is still held by this invocation — the retry cannot double-work.
      FAILURE DIAGNOSTICS (2026-09-27): the :FAILURE category + message are
      extracted with two independent sed passes; the previous single-pass
      pattern returned empty on a real :PROCESS-FAILURE (pretty-printed output
@@ -394,6 +410,9 @@
           "a failed job exits non-zero and pp-flow releases the claim without advancing"
           "a JSON destination: DONE summary yields a literal DESTINATION line (an AUTO PASS closes the card)"
           "a model rejecting the role's :reasoning-effort is refused in <1s with the accepted values named"
+          "a transient HTTP 402 provider fault is retried and a later attempt SUCCEEDS (one card run)"
+          "a persistent transient fault exhausts the budget and still exits non-zero"
+          "a deterministic failure (:PROCESS-FAILURE, or a 401/403/404) is attempted EXACTLY once"
           "a :PROCESS-FAILURE diagnostic names the category and message, not `unknown`")))
 
  (section glochid-runner

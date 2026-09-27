@@ -27,6 +27,11 @@
 #   PP_FLOW_AUTOLITH_PERM  run-job permission mode (default: sandbox; use
 #                    full only for cards that must touch the real repo)
 #   PP_FLOW_AUTOLITH_FAILDIR  failure-archive dir (default: $PWD/.ralph/failures)
+#   PP_FLOW_AUTOLITH_RETRIES  retries after a TRANSIENT provider fault
+#                    (default 2). Deterministic failures never retry — see the
+#                    retry policy block below.
+#   PP_FLOW_AUTOLITH_RETRY_BASE  backoff seconds, doubled per attempt
+#                    (default 10; capped at 300).
 #
 # This adapter is the DEFAULT executor runner for unattended pp-flow loops
 # (see pp-flow.sh --drain): `pi -p` remains the interactive default, but a cron/
@@ -54,7 +59,8 @@ AUTOLITH_BIN="${AUTOLITH_BIN:-autolith}"
 PERM="${PP_FLOW_AUTOLITH_PERM:-sandbox}"
 TIMEOUT="${PP_FLOW_AUTOLITH_TIMEOUT:-3000}"
 ROLE="${PP_FLOW_AUTOLITH_ROLE:-executor}"
-JOB_ID="pp-flow-$(date +%s)-$$"
+# JOB_ID is assigned per attempt (see the retry loop); this is the initial value.
+JOB_ID="pp-flow-$(date +%s)-$$-0"
 WORK="$(mktemp -t ppflow-al.XXXXXX)"
 trap 'rm -f "$WORK.job" "$WORK.out" "$WORK.err"' EXIT
 # On failure, archive everything a post-mortem needs before the EXIT trap
@@ -121,41 +127,57 @@ case "$AUTOLITH_MODEL" in
   *) : ;;
 esac
 
-printf '(:autolith-job\n :version 1\n :id "%s"\n :role "%s"\n :prompt "%s"\n :input nil\n :output-contract (:type :string)\n :timeout-seconds %s)\n' \
-  "$JOB_ID" "$ROLE" "$(esc "$BRIEF")" "$TIMEOUT" > "$WORK.job"
+# ---- retry policy (autonomy hardening, 2026-09-27) --------------------- -
+# A transient provider fault must not fail an unattended card: one run got an
+# HTTP 402 from Synthetic ("Subscription access is currently blocked…") that
+# cleared on the very next attempt, while direct curl to the same endpoint
+# never failed. But a DETERMINISTIC failure (the executor role's
+# :reasoning-effort disagreeing with the model, a malformed job envelope) must
+# NEVER be retried — it would burn the card's lease N times over for the same
+# guaranteed failure. So the retry is driven by the machine-readable :CATEGORY
+# plus the HTTP status in the message, not by "it failed".
+#
+# RETRYABLE: :PROVIDER-FAILURE whose message names a transient HTTP status
+#   (402/408/409/425/429/5xx), or a run-job crash that wrote no job result at
+#   all (the recovery-image hiccup seen in early battle tests — that is an
+#   autolith/infra fault, not an answer about the work).
+# TERMINAL: everything else — :PROCESS-FAILURE, :INVALID-*, :UNKNOWN-ROLE,
+#   :ARTIFACT-FAILURE, :RUNTIME-UNAVAILABLE, :TIMED-OUT, and any
+#   :PROVIDER-FAILURE naming a non-transient status (400/401/403/404/422).
+#   Note :TIMED-OUT is terminal on purpose: the job burned its whole wall
+#   clock, so retrying it immediately is the same coin flip for the same cost.
+RETRIES="${PP_FLOW_AUTOLITH_RETRIES:-2}"
+RETRY_BASE="${PP_FLOW_AUTOLITH_RETRY_BASE:-10}"
+case "$RETRIES" in ''|*[!0-9]*) RETRIES=2 ;; esac
+case "$RETRY_BASE" in ''|*[!0-9]*) RETRY_BASE=10 ;; esac
+# $1 = attempt number (distinguishes job ids across attempts)
+attempt() {
+  JOB_ID="pp-flow-$(date +%s)-$$-$1"
+  printf '(:autolith-job\n :version 1\n :id "%s"\n :role "%s"\n :prompt "%s"\n :input nil\n :output-contract (:type :string)\n :timeout-seconds %s)\n' \
+    "$JOB_ID" "$ROLE" "$(esc "$BRIEF")" "$TIMEOUT" > "$WORK.job"
 
-T0=$(date +%s)
-# stderr (SBCL redefinition warnings) is captured, not passed through: pp-flow
-# merges 2>&1 into the transcript it scrapes for evidence, and the warning spam
-# would drown the executor summary. Diagnostics surface only on failure.
-# NOTE (battle-tested 09-27, both laptops): run-job exits 1 even when it wrote
-# a well-formed job result (e.g. :STATUS :TIMED-OUT — its recovery image then
-# also exits 1). A written result sexp is definitive regardless of exit code,
-# so the result file decides; only a missing/unparseable result is a crash.
-if ! "$AUTOLITH_BIN" run-job --immutable --input "$WORK.job" --output "$WORK.out" --permissions "$PERM" 2>"$WORK.err"; then
-  if [ ! -s "$WORK.out" ] || ! tr -d '\n' < "$WORK.out" | grep -q ':STATUS'; then
-    archive_failure "crashed"
-    echo "pp-flow-autolith: run-job crashed with no job result after $(( $(date +%s) - T0 ))s (job=$JOB_ID model=${AUTOLITH_MODEL:-default})" >&2
-    head -c 2000 "$WORK.err" >&2
-    exit 1
+  : > "$WORK.out"; : > "$WORK.err"
+  T0=$(date +%s)
+  CRASHED=0
+  # stderr (SBCL redefinition warnings) is captured, not passed through: pp-flow
+  # merges 2>&1 into the transcript it scrapes for evidence, and the warning spam
+  # would drown the executor summary. Diagnostics surface only on failure.
+  # NOTE (battle-tested 09-27, both laptops): run-job exits 1 even when it wrote
+  # a well-formed job result (e.g. :STATUS :TIMED-OUT — its recovery image then
+  # also exits 1). A written result sexp is definitive regardless of exit code,
+  # so the result file decides; only a missing/unparseable result is a crash.
+  if ! "$AUTOLITH_BIN" run-job --immutable --input "$WORK.job" --output "$WORK.out" --permissions "$PERM" 2>"$WORK.err"; then
+    if [ ! -s "$WORK.out" ] || ! tr -d '\n' < "$WORK.out" | grep -q ':STATUS'; then
+      CRASHED=1
+    else
+      echo "pp-flow-autolith: run-job exited non-zero but wrote a job result; honoring it" >&2
+    fi
   fi
-  echo "pp-flow-autolith: run-job exited non-zero but wrote a job result; honoring it" >&2
-fi
-T1=$(date +%s); ELAPSED=$(( T1 - T0 ))
+  ELAPSED=$(( $(date +%s) - T0 ))
 
-# job result is a sexp; pull :STATUS and :RESULT with awk field-scan
-status="$(tr -d '\n' < "$WORK.out" | sed -n 's/.*:STATUS \(:[A-Z-]*\).*/\1/p')"
+  status=""
+  [ "$CRASHED" -eq 0 ] && status="$(tr -d '\n' < "$WORK.out" | sed -n 's/.*:STATUS \(:[A-Z-]*\).*/\1/p')"
 
-# OBSERVABILITY: the job result carries trace id + token usage + timestamps;
-# one stderr diagnostic line per job (pp-flow captures stderr into the run
-# log, so this lands in .ralph/flow-*.log too).
-trace="$(tr -d '\n' < "$WORK.out" | sed -n 's/.*:TRACE-ID[[:space:]]*"\([^"]*\)".*/\1/p')"
-intok="$(tr -d '\n' < "$WORK.out" | sed -n 's/.*:INPUT-TOKENS[[:space:]]*\([0-9]*\).*/\1/p')"
-outtok="$(tr -d '\n' < "$WORK.out" | sed -n 's/.*:OUTPUT-TOKENS[[:space:]]*\([0-9]*\).*/\1/p')"
-reqs="$(tr -d '\n' < "$WORK.out" | sed -n 's/.*:PROVIDER-REQUESTS[[:space:]]*\([0-9]*\).*/\1/p')"
-echo "pp-flow-autolith: job=$JOB_ID status=$status model=${AUTOLITH_MODEL:-default} role=$ROLE perm=$PERM elapsed=${ELAPSED}s trace=$trace tokens_in=$intok tokens_out=$outtok provider_requests=$reqs" >&2
-
-if [ "$status" != ":SUCCEEDED" ]; then
   # Failure extraction is TWO sed passes, deliberately: the output is pretty-
   # printed and a newline can land between :CATEGORY and its keyword, so after
   # tr -d '\n' the single-pass pattern ':CATEGORY :X .* :MESSAGE "..."' is
@@ -164,13 +186,64 @@ if [ "$status" != ":SUCCEEDED" ]; then
   # message independently and concatenate. :MESSAGE may contain escaped quotes
   # ("model \"x\""); the [^"]* run stops at the first and is truncated, which
   # is fine — the message is a diagnostic, not data.
-  fcat="$(tr -d '\n' < "$WORK.out" | sed -n 's/.*:CATEGORY[[:space:]]*\(:[A-Za-z-]*\).*/\1/p' | head -1)"
-  fmsg="$(tr -d '\n' < "$WORK.out" | sed -n 's/.*:MESSAGE[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+  fcat=""; fmsg=""
+  if [ -s "$WORK.out" ]; then
+    fcat="$(tr -d '\n' < "$WORK.out" | sed -n 's/.*:CATEGORY[[:space:]]*\(:[A-Za-z-]*\).*/\1/p' | head -1)"
+    fmsg="$(tr -d '\n' < "$WORK.out" | sed -n 's/.*:MESSAGE[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+  fi
   failure="${fcat}${fmsg:+ $fmsg}"
-  echo "pp-flow-autolith: job status $status (elapsed=${ELAPSED}s, trace=$trace, failure=${failure:-unknown})" >&2
-  archive_failure "$status"
+
+  trace="$(tr -d '\n' < "$WORK.out" 2>/dev/null | sed -n 's/.*:TRACE-ID[[:space:]]*"\([^"]*\)".*/\1/p')"
+  intok="$(tr -d '\n' < "$WORK.out" 2>/dev/null | sed -n 's/.*:INPUT-TOKENS[[:space:]]*\([0-9]*\).*/\1/p')"
+  outtok="$(tr -d '\n' < "$WORK.out" 2>/dev/null | sed -n 's/.*:OUTPUT-TOKENS[[:space:]]*\([0-9]*\).*/\1/p')"
+  reqs="$(tr -d '\n' < "$WORK.out" 2>/dev/null | sed -n 's/.*:PROVIDER-REQUESTS[[:space:]]*\([0-9]*\).*/\1/p')"
+}
+
+# Is the LAST attempt worth retrying? Echo "yes"/"no".
+transient_failure() {
+  if [ "$CRASHED" -eq 1 ]; then printf 'yes\n'; return; fi
+  case "$fcat" in
+    :PROVIDER-FAILURE)
+      # transient only when the message names a status that can clear by itself
+      case "$fmsg" in
+        *"HTTP 402"*|*"HTTP 408"*|*"HTTP 409"*|*"HTTP 425"*|*"HTTP 429"*) printf 'yes\n' ;;
+        *"HTTP 500"*|*"HTTP 502"*|*"HTTP 503"*|*"HTTP 504"*|*"HTTP 599"*)     printf 'yes\n' ;;
+        *"HTTP 5"[0-9][0-9]*)                                                    printf 'yes\n' ;;
+        *)                                                                        printf 'no\n' ;;
+      esac ;;
+    *) printf 'no\n' ;;
+  esac
+}
+
+attempt=0
+while : ; do
+  attempt=$(( attempt + 1 ))
+  attempt "$attempt"
+  echo "pp-flow-autolith: job=$JOB_ID status=${status:-<crashed>} model=${AUTOLITH_MODEL:-default} role=$ROLE perm=$PERM elapsed=${ELAPSED}s trace=$trace tokens_in=$intok tokens_out=$outtok provider_requests=$reqs attempt=$attempt/$(( RETRIES + 1 ))" >&2
+  [ "$status" = ":SUCCEEDED" ] && break
+  retryable="$(transient_failure)"
+  [ "$retryable" = "yes" ] || break
+  if [ "$attempt" -gt "$RETRIES" ]; then
+    echo "pp-flow-autolith: retry budget exhausted ($attempt attempt(s))" >&2
+    break
+  fi
+  # exponential backoff, capped: 10s, 20s, 40s…
+  delay=$(( RETRY_BASE * (1 << (attempt - 1)) ))
+  [ "$delay" -gt 300 ] && delay=300
+  echo "pp-flow-autolith: transient failure (${failure:-crashed}); retrying in ${delay}s (attempt $(( attempt + 1 ))/$(( RETRIES + 1 )))" >&2
+  sleep "$delay"
+done
+
+if [ "$status" != ":SUCCEEDED" ]; then
+  echo "pp-flow-autolith: job status ${status:-<crashed>} (elapsed=${ELAPSED}s, trace=$trace, failure=${failure:-unknown})" >&2
+  archive_failure "${status:-crashed}"
   # bounded excerpt, not a full dump: enough to see WHY, never megabytes
-  tr -d '\n' < "$WORK.out" | head -c 2000 >&2; echo >&2
+  if [ "$CRASHED" -eq 1 ]; then
+    head -c 2000 "$WORK.err" >&2
+  else
+    tr -d '\n' < "$WORK.out" | head -c 2000 >&2
+  fi
+  echo >&2
   exit 1
 fi
 

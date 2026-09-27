@@ -45,7 +45,13 @@ failure line reports the provider category + message verbatim. NOTE
 (2026-09-27): one run hit a transient Synthetic HTTP 402 (“Subscription access
 is currently blocked…”); immediate retries of the same model+key succeeded and
 direct curl never failed, so that was upstream flakiness — do NOT read a lone
-402 as an exhausted account. An agent-named `DESTINATION:` is validated
+402 as an exhausted account. The adapter now RETRIES exactly that class of
+fault (HTTP 402/408/409/425/429/5xx, plus a run-job crash with no result):
+2 attempts by default, 10s backoff doubling to a 300s cap
+(`PP_FLOW_AUTOLITH_RETRIES`, `PP_FLOW_AUTOLITH_RETRY_BASE`). Deterministic
+failures — `:PROCESS-FAILURE`, `:INVALID-*`, `:TIMED-OUT`, a 401/403/404 — run
+exactly ONCE, so a retry can never burn a card's lease repeatedly on the same
+guaranteed failure. An agent-named `DESTINATION:` is validated
 against the card's own column set before it is obeyed; an unknown column falls
 back to the one-column advance. Per-run ledger: `.ralph/runs.jsonl` (+ `RUN
 SUMMARY` lines).
