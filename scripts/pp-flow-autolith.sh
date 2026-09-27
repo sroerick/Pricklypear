@@ -46,20 +46,41 @@ esc() {
 printf '(:autolith-job\n :version 1\n :id "%s"\n :role "executor"\n :prompt "%s"\n :input nil\n :output-contract (:type :string)\n :timeout-seconds %s)\n' \
   "$JOB_ID" "$(esc "$BRIEF")" "$TIMEOUT" > "$WORK.job"
 
+T0=$(date +%s)
 # stderr (SBCL redefinition warnings) is captured, not passed through: pp-flow
 # merges 2>&1 into the transcript it scrapes for evidence, and the warning spam
 # would drown the executor summary. Diagnostics surface only on failure.
+# NOTE (battle-tested 09-27): run-job exits 1 even when it wrote a well-formed
+# job result (e.g. :STATUS :TIMED-OUT) — its recovery image then also exits 1.
+# A written result sexp is definitive regardless of exit code, so the result
+# file decides; only a missing/unparseable result is a real crash.
 if ! "$AUTOLITH_BIN" run-job --immutable --input "$WORK.job" --output "$WORK.out" --permissions "$PERM" 2>"$WORK.err"; then
-  echo "pp-flow-autolith: run-job crashed" >&2
-  cat "$WORK.err" >&2
-  exit 1
+  if [ ! -s "$WORK.out" ] || ! tr -d '\n' < "$WORK.out" | grep -q ':STATUS'; then
+    echo "pp-flow-autolith: run-job crashed with no job result after $(( $(date +%s) - T0 ))s (job=$JOB_ID model=${AUTOLITH_MODEL:-default})" >&2
+    head -c 2000 "$WORK.err" >&2
+    exit 1
+  fi
+  echo "pp-flow-autolith: run-job exited non-zero but wrote a job result; honoring it" >&2
 fi
+T1=$(date +%s); ELAPSED=$(( T1 - T0 ))
 
 # job result is a sexp; pull :STATUS and :RESULT with awk field-scan
 status="$(tr -d '\n' < "$WORK.out" | sed -n 's/.*:STATUS \(:[A-Z-]*\).*/\1/p')"
+
+# OBSERVABILITY: the job result carries trace id + token usage + timestamps;
+# one stderr diagnostic line per job (pp-flow captures stderr into the run
+# log, so this lands in .ralph/flow-*.log too).
+trace="$(tr -d '\n' < "$WORK.out" | sed -n 's/.*:TRACE-ID[[:space:]]*"\([^"]*\)".*/\1/p')"
+intok="$(tr -d '\n' < "$WORK.out" | sed -n 's/.*:INPUT-TOKENS[[:space:]]*\([0-9]*\).*/\1/p')"
+outtok="$(tr -d '\n' < "$WORK.out" | sed -n 's/.*:OUTPUT-TOKENS[[:space:]]*\([0-9]*\).*/\1/p')"
+reqs="$(tr -d '\n' < "$WORK.out" | sed -n 's/.*:PROVIDER-REQUESTS[[:space:]]*\([0-9]*\).*/\1/p')"
+echo "pp-flow-autolith: job=$JOB_ID status=$status model=${AUTOLITH_MODEL:-default} perm=$PERM elapsed=${ELAPSED}s trace=$trace tokens_in=$intok tokens_out=$outtok provider_requests=$reqs" >&2
+
 if [ "$status" != ":SUCCEEDED" ]; then
-  echo "pp-flow-autolith: job status $status" >&2
-  cat "$WORK.out" >&2
+  failure="$(tr -d '\n' < "$WORK.out" | sed -n 's/.*:CATEGORY \(:[A-Z-]*\).*:MESSAGE "\([^"]*\)".*/\1 \2/p')"
+  echo "pp-flow-autolith: job status $status (elapsed=${ELAPSED}s, trace=$trace, failure=${failure:-unknown})" >&2
+  # bounded excerpt, not a full dump: enough to see WHY, never megabytes
+  tr -d '\n' < "$WORK.out" | head -c 2000 >&2; echo >&2
   exit 1
 fi
 
@@ -67,7 +88,7 @@ fi
 # Awk escaped-string scanner: find :RESULT ", then walk to the closing
 # unescaped quote, unescaping \" \\ \n as we go (pp-flow scrapes this for
 # EVIDENCE / DESTINATION lines).
-tr -d '\n' < "$WORK.out" | awk 'BEGIN{ORS=""}
+result="$(tr -d '\n' < "$WORK.out" | awk 'BEGIN{ORS=""}
   { s = s $0 }
   END{
     p = index(s, ":RESULT \"");
@@ -75,11 +96,12 @@ tr -d '\n' < "$WORK.out" | awk 'BEGIN{ORS=""}
     i = p + 9;
     while (i <= length(s)) {
       c = substr(s, i, 1);
-      if (c == "\\\\") {
+      if (c == "\\") {
         d = substr(s, i+1, 1);
-        if (d == "n") out = out " ";
-        else if (d == "\\\"") out = out "\"";
-        else if (d == "\\\\") out = out "\\";
+        if (d == "n") out = out "\n";
+        else if (d == "t") out = out "\t";
+        else if (d == "\"") out = out "\"";
+        else if (d == "\\") out = out "\\";
         else out = out d;
         i += 2; continue;
       }
@@ -87,7 +109,19 @@ tr -d '\n' < "$WORK.out" | awk 'BEGIN{ORS=""}
       out = out c; i++;
     }
     exit 1;
-  }'
+  }')"
 rc=$?
 [ $rc -eq 0 ] || { echo "pp-flow-autolith: could not extract :RESULT from job output" >&2; exit 1; }
+printf '%s\n' "$result"
+# EVIDENCE CONTRACT BRIDGE: the :RESULT is the executor's curated terminal
+# summary, but flash-tier models do not reliably emit the brief's literal
+# 'EVIDENCE:' line - without it pp-flow posts the empty placeholder and the
+# card comment loses the actual work product. If the summary carries no
+# EVIDENCE: line, emit a transparently-labeled bridge line (marked as ours,
+# never as if the agent wrote the prefix) carrying the summary, capped.
+case "$result" in
+  *EVIDENCE:*) : ;;
+  *) printf 'EVIDENCE: (autolith bridge: executor terminal summary had no EVIDENCE: line) %s\n' \
+       "$(printf '%s' "$result" | tr '\n' ' ' | sed 's/  */ /g' | cut -c1-400)" ;;
+esac
 exit 0
