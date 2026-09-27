@@ -294,10 +294,143 @@ let catalog_tests =
           true )
   ]
 
+(* ---- json-values-alist (lisp-interpreter.json-values-alist) -------
+   Objects decode to ALISTS (VList of VPair (VStr k, v)); the dict
+   prims are polymorphic over alist | legacy VStr JSON; json-emit is
+   the exact inverse. The old behavior (Assoc re-serialized back to a
+   VStr) is the regression being locked out. *)
+let parse = Prims_pure.prim_json_parse
+let emit = Prims_pure.prim_json_emit
+
+let alist_kvs what v =
+  match v with
+  | Ast.VList xs when xs <> [] ->
+      List.map
+        (fun p ->
+          match p with
+          | Ast.VPair (Ast.VStr k, x) -> (k, x)
+          | other ->
+              Alcotest.failf "%s: non-alist element %s" what
+                (Reader.pp_value other))
+        xs
+  | v -> Alcotest.failf "%s: expected non-empty alist, got %s" what (Reader.pp_value v)
+
+let emit_str what v =
+  match emit [ v ] with
+  | Ast.VStr s -> s
+  | v -> Alcotest.failf "%s: emit returned %s" what (Reader.pp_value v)
+
+let json_alist_tests =
+  [ ( "object decodes to alist, not VStr JSON"
+    , `Quick
+    , fun () ->
+        let v = parse [ Ast.VStr "{\"id\":\"x1\",\"title\":\"Notes\"}" ] in
+        let kvs = alist_kvs "object" v in
+        Alcotest.(check string) "key order" "id" (fst (List.nth kvs 0));
+        Alcotest.(check string) "id value" "x1"
+          (match snd (List.nth kvs 0) with Ast.VStr s -> s | v -> Alcotest.failf "got %s" (Reader.pp_value v));
+        Alcotest.(check string) "title value" "Notes"
+          (match snd (List.nth kvs 1) with Ast.VStr s -> s | v -> Alcotest.failf "got %s" (Reader.pp_value v)) )
+  ; ( "nested objects decode recursively to alists"
+    , `Quick
+    , fun () ->
+        let v = parse [ Ast.VStr "{\"body\":{\"slug\":\"a\"}}" ] in
+        let kvs = alist_kvs "outer" v in
+        (match snd (List.nth kvs 0) with
+         | Ast.VStr _ -> Alcotest.fail "nested object still a VStr — boundary tax regression"
+         | Ast.VList _ -> ()
+         | v -> Alcotest.failf "nested object decoded to %s" (Reader.pp_value v)) )
+  ; ( "arrays decode to VList of values (unchanged)"
+    , `Quick
+    , fun () ->
+        let v = parse [ Ast.VStr "[\"a\",{\"k\":1}]" ] in
+        match v with
+        | Ast.VList [ Ast.VStr "a"; second ] ->
+            (match second with
+             | Ast.VList [ Ast.VPair (Ast.VStr "k", Ast.VInt n) ] ->
+                 Alcotest.(check int64) "k" 1L n
+             | v -> Alcotest.failf "elem %s" (Reader.pp_value v))
+        | v -> Alcotest.failf "array decoded to %s" (Reader.pp_value v))
+  ; ( "emit of alist round-trips to the object"
+    , `Quick
+    , fun () ->
+        let src = "{\"id\":\"x1\",\"nested\":{\"a\":true},\"arr\":[1,2]}" in
+        Alcotest.(check string) "round-trip"
+          "{\"id\":\"x1\",\"nested\":{\"a\":true},\"arr\":[1,2]}"
+          (emit_str "parsed" (parse [ Ast.VStr src ])) )
+  ; ( "emit of alist-shaped VList is an object"
+    , `Quick
+    , fun () ->
+        let alist =
+          Ast.VList
+            [ Ast.VPair (Ast.VStr "a", Ast.VStr "1")
+            ; Ast.VPair (Ast.VStr "b", Ast.VInt 2L) ]
+        in
+        Alcotest.(check string) "object" "{\"a\":\"1\",\"b\":2}" (emit_str "alist" alist) )
+  ; ( "dotted pair keeps the list wire form"
+    , `Quick
+    , fun () ->
+        Alcotest.(check string) "wire" "[1,2]"
+          (Yojson.Safe.to_string (Prims_pure.value_to_json (Ast.VPair (Ast.VInt 1L, Ast.VInt 2L)))) )
+  ; ( "dict-get on alist returns the cdr as-is"
+    , `Quick
+    , fun () ->
+        let node = parse [ Ast.VStr "{\"title\":\"Register\",\"body\":{\"slug\":\"log\"}}" ] in
+        (match Prims_pure.prim_dict_get [ node; Ast.VStr "title" ] with
+         | Ast.VStr "Register" -> ()
+         | v -> Alcotest.failf "title %s" (Reader.pp_value v));
+        (match Prims_pure.prim_dict_get [ node; Ast.VStr "body" ] with
+         | Ast.VStr _ -> Alcotest.fail "body should be an alist, not VStr JSON"
+         | Ast.VList _ -> ()
+         | v -> Alcotest.failf "body %s" (Reader.pp_value v));
+        match Prims_pure.prim_dict_get [ node; Ast.VStr "missing" ] with
+        | Ast.VNil -> ()
+        | v -> Alcotest.failf "missing %s" (Reader.pp_value v) )
+  ; ( "dict-get on legacy VStr JSON unchanged"
+    , `Quick
+    , fun () ->
+        (match Prims_pure.prim_dict_get
+                 [ Ast.VStr "{\"name\":\"ada\"}"; Ast.VStr "name" ] with
+         | Ast.VStr "ada" -> ()
+         | v -> Alcotest.failf "legacy %s" (Reader.pp_value v)) )
+  ; ( "dict-keys on alist returns the keys"
+    , `Quick
+    , fun () ->
+        let node = parse [ Ast.VStr "{\"a\":1,\"b\":2}" ] in
+        (match Prims_pure.prim_dict_keys [ node ] with
+         | Ast.VList [ Ast.VStr "a"; Ast.VStr "b" ] -> ()
+         | v -> Alcotest.failf "keys %s" (Reader.pp_value v)) )
+  ; ( "dict-set on alist conses/replaces and stays an alist"
+    , `Quick
+    , fun () ->
+        let node = parse [ Ast.VStr "{\"a\":\"1\"}" ] in
+        let out = Prims_pure.prim_dict_set [ node; Ast.VStr "b"; Ast.VStr "2" ] in
+        (match out with
+         | Ast.VList [ Ast.VPair (Ast.VStr "b", Ast.VInt 2L); _ ] -> ()
+         | v -> Alcotest.failf "set %s" (Reader.pp_value v));
+        (* emit gives the object back — "2" rode as a JSON number, the
+           legacy dict-set value policy (numbers detected, emitted numeric) *)
+        Alcotest.(check string) "emit" "{\"b\":2,\"a\":\"1\"}" (emit_str "set" out) )
+  ; ( "assoc is the idiomatic accessor on parsed nodes"
+    , `Quick
+    , fun () ->
+        let node = parse [ Ast.VStr "{\"slug\":\"log/issues\"}" ] in
+        match node with
+        | Ast.VList [ Ast.VPair (Ast.VStr "slug", Ast.VStr "log/issues") ] -> ()
+        | v -> Alcotest.failf "assoc shape %s" (Reader.pp_value v) )
+  ; ( "empty object decodes to empty list (accepted edge)"
+    , `Quick
+    , fun () ->
+        match parse [ Ast.VStr "{}" ] with
+        | Ast.VList [] -> ()
+        | v -> Alcotest.failf "{} -> %s" (Reader.pp_value v))
+  ]
+
 let () =
   Alcotest.run "prims_pure"
     [ ("entities", entity_tests @ [ nbsp_regression ])
     ; ("quotient-remainder", quotient_tests)
     ; ("list-policy", list_policy_tests)
     ; ("coercion-policy", coercion_tests)
+    ; ("json-alist", json_alist_tests)
     ; ("catalog", catalog_tests) ]

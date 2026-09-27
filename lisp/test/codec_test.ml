@@ -63,8 +63,26 @@ let round_trip_tests =
         Alcotest.(check string)
           "pair list wire form" (Reader.pp_value (Ast.VList [ Ast.VInt 1L; Ast.VInt 2L ]))
           (Reader.pp_value back) )
-  ; value_round_trips "JSON-shaped VStr stays structured"
-      (Ast.VStr "{\"a\":1,\"b\":[true,false]}")
+  ; ( "value round-trip: JSON-shaped VStr lifts to structured (json-values-alist)"
+    , `Quick
+    , fun () ->
+        (* The {/[ heuristic lifts a JSON-shaped VStr to its STRUCTURED
+           wire form, and json_to_value decodes objects to alists — so
+           the string comes back as its alist, not as the original VStr.
+           Data is preserved; the wrapper is not (a VStr is text, an
+           alist is a document). Producers that need text keep quotes.) *)
+        let src = Ast.VStr "{\"a\":1,\"b\":[true,false]}" in
+        let j = Prims_pure.value_to_json src in
+        let back = Prims_pure.json_to_value j in
+        (match back with
+         | Ast.VList
+             [ Ast.VPair (Ast.VStr "a", Ast.VInt 1L)
+             ; Ast.VPair
+                 (Ast.VStr "b", Ast.VList [ Ast.VBool true; Ast.VBool false ]) ] ->
+             ()
+         | other ->
+             Alcotest.failf "expected structured alist, got %s"
+               (Reader.pp_value other)) )
   ]
 
 (* Non-round-trippable values: VLambda/VPrim/VMacro serialize to a

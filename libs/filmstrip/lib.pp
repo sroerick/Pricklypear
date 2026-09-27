@@ -2650,17 +2650,22 @@ passes through verbatim as %xx -- never throw inside a renderer).")
   "The root row (id title levelfn) matching id, or the empty list.")
 
 (define filmstrip/tree-node-li
-  (lambda (root-id n)
-    (let*
-      ((label (as-str (dict-get n "label")))
-        (kind (as-str (dict-get n "kind")))
-        (path (as-str (dict-get n "node")))
-        (open (let ((o (dict-get n "open"))) (if (null? o) "" (as-str o))))
-        (verbs (let ((raw (dict-get n "verbs")))
-                 (if (null? raw)
-                     (list)
-                     (let ((s (as-str raw)))
-                       (if (string-eq s "") (list) (json-parse s))))))
+  (lambda (root-id n0)
+    (let* ((n (if (string? n0) (json-parse n0) n0))
+      ;; json-values-alist: the node rides as an ALIST (parsed eager
+      ;; kids) or legacy JSON text — dict-get answers both. Structured
+      ;; fields (verbs, kids) arrive as native lists on alists and as
+      ;; JSON text on legacy rows.
+      (label (as-str (dict-get n "label")))
+      (kind (as-str (dict-get n "kind")))
+      (path (as-str (dict-get n "node")))
+      (open (let ((o (dict-get n "open"))) (if (null? o) "" (as-str o))))
+      (verbs (let ((raw (dict-get n "verbs")))
+               (if (null? raw)
+                   (list)
+                   (if (string? raw)
+                       (if (string-eq raw "") (list) (json-parse raw))
+                       raw))))
         (is-dir (string-eq kind "dir"))
         ;; EAGER MODE (rail-trees-v4 amendment): a dir node MAY carry
         ;; "kids" -- a JSON string of its walked child level. The fold
@@ -2668,7 +2673,10 @@ passes through verbatim as %xx -- never throw inside a renderer).")
         ;; absent/empty kids keeps the lazy level GET exactly as v4
         ;; shipped it. Whether to pre-walk is the HOST's threshold
         ;; decision -- the lib only renders what it is handed.
-        (kids (let ((k (dict-get n "kids"))) (if (null? k) "" (as-str k))))
+        (kids (let ((k (dict-get n "kids")))
+                (if (null? k)
+                    ""
+                    (if (string? k) k (json-emit k)))))
         (eager (and is-dir (not (string-eq kids ""))))
         ;; DEFAULT-EXPANDED dirs (host policy, not lib state): a node
         ;; carrying "expand":"true" renders its <details> already OPEN.
@@ -2725,6 +2733,15 @@ passes through verbatim as %xx -- never throw inside a renderer).")
               (if (string-eq g (as-str (car v)))
                   (filmstrip/act-glyph (as-str (car v)))
                   g))))
+        (verb-vals
+          (lambda (v)
+            ;; The vals element rides the row array STRUCTURED (the
+            ;; json-emit {/[ heuristic keeps the vals object intact), so
+            ;; under json-values-alist json-parse hands back an ALIST —
+            ;; re-emit it as the hx-vals JSON text. Legacy rows carry the
+            ;; text directly.
+            (let ((raw (car (cdr (cdr v)))))
+              (if (string? raw) raw (json-emit raw)))))
         (verb-btn
           (lambda (v ?act)
             (html/tag
@@ -2742,7 +2759,7 @@ passes through verbatim as %xx -- never throw inside a renderer).")
                   ;; the verb (the shelf subtree bug).
                   (html/attr "hx-trigger" "click")
                   (html/attr "hx-post" (as-str (car (cdr v))))
-                  (html/attr "hx-vals" (as-str (car (cdr (cdr v)))))
+                  (html/attr "hx-vals" (verb-vals v))
                   (html/attr "hx-target" "#fs-sink")
                   (html/attr "hx-swap" "innerHTML")))
               (html/text (verb-glyph-or v)))))
