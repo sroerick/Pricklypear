@@ -89,60 +89,62 @@
   (lambda (id target-state target-index)
     "Move card id to target-state at target-index (0-based; clamps to end).
      Renumbers the old and new columns so no two cards share a position.
-     NOT ATOMIC ON ITS OWN: it is a sequence of tree/upsert writes and
-     each autocommits. /api/eval does NOT wrap a request in a transaction
-     (verified 2026-09-27: a write followed by a raising form persists and
-     still reports ok:false), so a caller that needs the renumber to be
-     all-or-nothing must wrap the call itself:
-       (with-transaction (lambda () (kanban/move-card ...)))
-     Bare callers (kanban/handle-post) leave a mid-sequence failure with
-     renumbered-but-duplicated positions, not lost cards. i-kanban-move-card
-     2026-09-03. Stale-transaction claim corrected 2026-09-27."
-    (let ((fields (get (quote todo-item) id)))
-      (if (null? fields)
-        "no such card"
-        (let ((old-state (as-str (dict-get fields "state")))
-              (list-id (as-str (dict-get fields "list_id"))))
-          (let ((all (todo/items-for-list list-id)))
-            (let ((without (kanban/remove-id all id)))
-              (if (string-eq old-state target-state)
-                (let ((col (list/filter
-                             (lambda (row)
-                               (string-eq (as-str (dict-get (cdr row) "state")) old-state))
-                             without)))
-                  (let ((reordered (kanban/insert-at col (cons id fields) target-index)))
-                    (kanban/renumber reordered old-state)))
-                (let ((old-col (list/filter
+     ATOMIC: the whole move runs in ONE with-transaction, so the renumber
+     is all-or-nothing and no two cards share a position mid-drop
+     (notes.pipeline-model MUTATIONS ARE TREE ACTIONS requires this for
+     REORDER WITHIN A COLUMN; this function is its live implementation).
+     Nested with-transaction JOINS (store_db.with_dynamic_transaction rides
+     an active tx instead of raising), so a caller that already wrapped is
+     still correct. i-kanban-move-card 2026-09-03; wrapped 2026-09-27."
+    (with-transaction
+      (lambda ()
+        (let ((fields (get (quote todo-item) id)))
+          (if (null? fields)
+            "no such card"
+            (let ((old-state (as-str (dict-get fields "state")))
+                  (list-id (as-str (dict-get fields "list_id"))))
+              (let ((all (todo/items-for-list list-id)))
+                (let ((without (kanban/remove-id all id)))
+                  (if (string-eq old-state target-state)
+                    (let ((col (list/filter
                                  (lambda (row)
                                    (string-eq (as-str (dict-get (cdr row) "state")) old-state))
                                  without)))
-                  (let ((new-col (list/filter
-                                   (lambda (row)
-                                     (string-eq (as-str (dict-get (cdr row) "state")) target-state))
-                                   without)))
-                    (let ((reordered (kanban/insert-at new-col (cons id fields) target-index)))
-                      (seq
-                        (kanban/renumber old-col old-state)
-                        (kanban/renumber reordered target-state)))))))))))))
+                      (let ((reordered (kanban/insert-at col (cons id fields) target-index)))
+                        (kanban/renumber reordered old-state)))
+                    (let ((old-col (list/filter
+                                     (lambda (row)
+                                       (string-eq (as-str (dict-get (cdr row) "state")) old-state))
+                                     without)))
+                      (let ((new-col (list/filter
+                                       (lambda (row)
+                                         (string-eq (as-str (dict-get (cdr row) "state")) target-state))
+                                       without)))
+                        (let ((reordered (kanban/insert-at new-col (cons id fields) target-index)))
+                          (seq
+                            (kanban/renumber old-col old-state)
+                            (kanban/renumber reordered target-state)))))))))))))))
 
 (define kanban/swap
   (lambda (id1 id2)
-    "Swap the position fields of two cards (same column). NOT ATOMIC on
-     its own — each tree/upsert autocommits; wrap in with-transaction when
-     the two writes must land together (see kanban/move-card note)."
-    (let ((f1 (get (quote todo-item) id1)))
-      (if (null? f1)
-        "no such card"
-        (let ((f2 (get (quote todo-item) id2)))
-          (if (null? f2)
+    "Swap the position fields of two cards (same column). ATOMIC: both
+     writes land together or neither does (one with-transaction; nested
+     wraps join)."
+    (with-transaction
+      (lambda ()
+        (let ((f1 (get (quote todo-item) id1)))
+          (if (null? f1)
             "no such card"
-            (let ((p1 (as-str (dict-get f1 "position")))
-                  (p2 (as-str (dict-get f2 "position"))))
-              (seq
-                (tree/upsert (node-path (quote todo-item) id1) "datum" "todo-item"
-                  (dict-set* f1 (list "position" p2)))
-                (tree/upsert (node-path (quote todo-item) id2) "datum" "todo-item"
-                  (dict-set* f2 (list "position" p1)))))))))))
+            (let ((f2 (get (quote todo-item) id2)))
+              (if (null? f2)
+                "no such card"
+                (let ((p1 (as-str (dict-get f1 "position")))
+                      (p2 (as-str (dict-get f2 "position"))))
+                  (seq
+                    (tree/upsert (node-path (quote todo-item) id1) "datum" "todo-item"
+                      (dict-set* f1 (list "position" p2)))
+                    (tree/upsert (node-path (quote todo-item) id2) "datum" "todo-item"
+                      (dict-set* f2 (list "position" p1)))))))))))))
 
 (define kanban/index-of
   (lambda (cards id i)
@@ -178,14 +180,16 @@
 (define kanban/rename-column
   (lambda (list-id old-name new-name)
     "Rename a column: update the list's columns AND cascade-rename the state
-     field of every card in that column. NOT ATOMIC on its own — each write
-     autocommits; wrap in with-transaction when the columns write and the
-     cascade must land together (see kanban/move-card note)."
-    (let ((cols (kanban/columns-for-list list-id)))
-      (let ((renamed (kanban/replace-named cols (as-str old-name) (as-str new-name))))
-        (seq
-          (kanban/columns-set list-id renamed)
-          (kanban/cascade-rename-state list-id (as-str old-name) (as-str new-name)))))))
+     field of every card in that column. ATOMIC: list + cards are
+     all-or-nothing (notes.pipeline-model RENAME A COLUMN requires one
+     with-transaction; nested wraps join)."
+    (with-transaction
+      (lambda ()
+        (let ((cols (kanban/columns-for-list list-id)))
+          (let ((renamed (kanban/replace-named cols (as-str old-name) (as-str new-name))))
+            (seq
+              (kanban/columns-set list-id renamed)
+              (kanban/cascade-rename-state list-id (as-str old-name) (as-str new-name)))))))))
 
 (define kanban/replace-named
   (lambda (cols old-name new-name)
