@@ -4451,36 +4451,50 @@
 (define notes/tree/save-outline
   (lambda
     (note-path outline)
-    (seq
-      (notes/tree/write-root-body
-        note-path
-        (outline/body outline))
-      (list/foldl
-        (lambda
-          (acc kid)
-          (seq (notes/tree/write-heading note-path kid) acc))
-        0
-        (outline/kids outline))
-      (notes/tree/clear-stale-headings
-        note-path
-        (notes/tree/outline-paths note-path (outline/kids outline)))
-      note-path))
+    (with-transaction
+      (lambda
+        ()
+        (seq
+          (notes/tree/write-root-body
+            note-path
+            (outline/body outline))
+          (list/foldl
+            (lambda
+              (acc kid)
+              (seq (notes/tree/write-heading note-path kid) acc))
+            0
+            (outline/kids outline))
+          (notes/tree/clear-stale-headings
+            note-path
+            (notes/tree/outline-paths note-path (outline/kids outline)))
+          note-path))))
   "Persist a note's outline under its tree path.
 
-   WRITE-THEN-SWEEP (2026-09-27, after a data-loss incident): this used to
-   clear-headings FIRST — a recursive delete of every heading — and then
-   write the new ones. Any failure in the write half (or in write-root-body
-   above it) left the note with its old content DELETED and nothing put
-   back. Two things made that fire: tree/upsert rejected a structured body
-   (dict-set* over a parsed node returns an alist, json-values-alist), and
-   the clear ran before the rejection was known. Live cost: the shared
-   log/sessions note lost all headings on a doc upsert.
+   WRITE-THEN-SWEEP + ATOMIC (2026-09-27, after a data-loss incident).
+   This used to clear-headings FIRST — a recursive delete of every heading —
+   and then write the new ones, so any failure in the write half (or in
+   write-root-body above it) left the note with its old content DELETED and
+   nothing put back. Two things made that fire: tree/upsert rejected a
+   structured body (dict-set* over a parsed node returns an alist,
+   json-values-alist), and the clear ran before the rejection was known.
+   Live cost: the shared log/sessions note lost all headings on a doc upsert.
 
-   Now the new headings are upserted first (idempotent, keyed by path and
-   id) and only then are headings NOT in the new outline swept. A failure
-   mid-write leaves the previous outline in place PLUS whatever was written
-   — degraded, never empty. An empty outline still clears the pump: the
-   sweep's keep-list is empty, so every heading under the note goes.")
+   Both required guarantees of notes.storage SAVE ORDERING CONTRACT:
+     1. ORDER — new headings are upserted first (idempotent, keyed by path
+        and id), then headings NOT in the new outline are swept. A failure
+        mid-write leaves the previous outline in place PLUS whatever was
+        written — degraded, never empty.
+     2. ATOMICITY — the whole sequence runs in ONE with-transaction, so a
+        raise anywhere rolls the save back entirely and the old outline is
+        intact. /api/eval does NOT wrap a request in a transaction
+        (verified live 2026-09-27), so this wrap is what makes the save
+        all-or-nothing. Nested with-transaction JOINS
+        (store_db.with_dynamic_transaction rides an active tx instead of
+        raising), so callers that already wrapped (notes/refile, dabar)
+        stay correct.
+
+   An empty outline still clears the note: the sweep's keep-list is empty,
+   so every heading under the note goes.")
 
 (define notes/tree/sort-by-name
   (lambda
