@@ -222,6 +222,8 @@
     (smoke "second upsert same slug updates in place (idempotent)")
     (smoke "folder path nesting depth > 1 via tree list")
     (smoke "outline headings persist as heading children under note path")
+    (smoke "SAVE ORDER: with headings a,b,c present and an accepted save of a,b — a and b survive with new content and c is swept; save order is write-then-sweep, so a failure mid-write leaves the OLD headings in place, never an empty note")
+    (smoke "malformed outline is REFUSED before any write: an outline whose CHILD is not a 5-element [id title body todo kids] node at any depth leaves the note's existing headings untouched (outline/valid? is recursive; notes/doc/upsert-in returns a 'refused' string)")
     (smoke "rename/move note keeps uuid; links still resolve")
     (build "dune build image"))
 
@@ -268,6 +270,46 @@
            Save v1 may whole-replace heading children under note.h
            in one transaction; fine-grained op→tree/move is a
            tighten pass, not a blocker.
+
+           SAVE ORDERING CONTRACT (2026-09-27; a live incident made
+           this a rule, not an implementation choice):
+             notes/tree/save-outline is WRITE-THEN-SWEEP. It writes
+             the new root body and upserts the new headings FIRST,
+             then removes only the headings absent from the new
+             outline (clear-stale-headings keyed by the new outline's
+             path set). It must NOT clear-headings first: clearing
+             runs a recursive tree/delete over every heading, and any
+             failure in the write half then leaves the note EMPTY —
+             the previous content was already deleted and nothing put
+             it back. This is what happened: the body-boundary
+             rejection above raised inside write-root-body after
+             clear-headings had committed, and a shared note lost
+             every heading on a save.
+             Consequence of the order: a mid-write failure DEGRADES
+             (old outline plus whatever was written), never empties.
+             An empty outline still clears the note: the keep-set is
+             empty, so the sweep removes every heading.
+
+           VALIDATE BEFORE DESTROYING: notes/doc/upsert-in refuses a
+           malformed outline BEFORE any write and returns
+           'refused: outline is malformed …; note not changed' — a
+           caller that persists a shape it cannot write gets a
+           refusal, never a half-applied save. outline/valid? checks
+           the node AND its kids RECURSIVELY (a well-formed root with
+           a malformed child passed the old shallow (count n) = 5
+           test and only blew up inside write-heading, after the
+           damage). Both layers are required: the guard stops bad
+           input, the order contains whatever the guard misses.
+
+           ATOMICITY (honest gap, 2026-09-27): the save sequence is
+           NOT atomic — /api/eval does NOT roll back a raising eval
+           (verified live: a write followed by an unbound symbol
+           persists and still reports ok:false), so each tree write
+           autocommits. Write-then-sweep makes partial failure
+           non-destructive; wrapping save-outline in
+           (with-transaction (lambda () …)) would make it atomic
+           (with_dynamic_transaction joins an outer tx, so it is safe
+           beneath an existing one) and is the intended tighten.
 
          FAÇADE — ONE, not two (HARD RULE):
            notes/doc/* is the SOLE note persistence façade. Every

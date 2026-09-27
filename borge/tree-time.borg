@@ -196,6 +196,41 @@
           tombstone. A tombstone row IS the head-shaped mirror's
           delete signal (mirror rows DROP; the history row remains).
 
+          DURABILITY RULE — WHAT HISTORY CANNOT GIVE BACK
+          (2026-09-27; stated after a live data-loss incident):
+            The generation axis is a before-image system for WRITES:
+            every write APPENDS its new payload, so the prior state is
+            the previous gen of the same path, and (undo path [n]) /
+            (gen-read path gen) restore it by writing again. A
+            DELETION is recoverable the same way — the last non-
+            tombstone gen of that path still holds the body.
+
+            What is NOT recoverable is a deletion where NO live gen of
+            the deleted path was ever written through the versioned
+            path. The tombstone deliberately carries body:null, so the
+            tombstone row itself is never a before-image; recovery
+            depends entirely on an earlier gen existing for that exact
+            path. CONSEQUENCE: a destructive operation must not rely
+            on history for content whose latest state was only ever
+            reachable through a DIFFERENT path than the one being
+            deleted (a rename/move followed by a delete is the sharp
+            case), and a subtree delete (tree/delete path recursive)
+            tombstones each descendant path — recovery needs every one
+            of those paths to have had its own live gen.
+
+            THEREFORE, for any write path that DELETES before it can
+            re-create (replace-style saves):
+              1. VALIDATE first — refuse input the write half cannot
+                 persist, before the first destructive call.
+              2. WRITE-THEN-SWEEP — never delete content that the
+                 replacement has not yet been written; sweep only what
+                 is genuinely absent from the new shape.
+              3. Do not treat history as the safety net. It is an
+                 audit + undo surface for writes, not a recycle bin
+                 for deletes whose paths never carried a live gen.
+            The notes outline save is the reference consumer of this
+            rule (notes.storage OUTLINE LOAD/SAVE).
+
           SUBTREE HASH: hash is over the canonical body (as today);
           the chapter's content-addressing note stays deferred — this
           column is the diff-first-prune comparison key, not a Merkle
@@ -300,6 +335,7 @@
      (smoke "(gen-read path gen) returns the node body at gen as version JSON — absolute data./b. paths AND relative logical suffixes crossed through the branch lens chain (closest-wins); nil when unversioned")
      (smoke "(gen-diff path ga gb) returns 'same' when both leaves hash-identical, else a {path,a,b,same,delta} node-granular diff (shallow body key walk on mismatch)")
      (smoke "(undo path [n]) restores the value at head-n as a NEW write at head+1 (restore-by-write: the restore itself is versioned + redoable) for the datum path class")
+     (smoke "DURABILITY: a delete is recoverable from the last non-tombstone gen of the SAME path (tombstone bodies are null by design, so the tombstone itself is not a before-image); a replace-style save validates before it deletes and writes before it sweeps, so it never depends on history to undo its own destructive step — notes.storage OUTLINE LOAD/SAVE is the reference consumer")
      (smoke "(tree/get path :gen N) resolves the node at that gen (versioned read); omitted = live head")
      (smoke "image/test/reads_as_of_gen_test: tree/get :gen reads-as-of; gen-read absolute path at head + as-of; gen-diff node-granular + self-diff 'same'; undo restore-by-write + redo + n-step deep"))
     (details

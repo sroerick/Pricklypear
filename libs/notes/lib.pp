@@ -1672,13 +1672,19 @@
         (notes/doc/upsert
           "log/issues"
           "log/issues"
-          "log/issues"
-          (notes/empty-outline "log/issues")
+          (notes/doc/empty-outline "log/issues")
           "log"
           "issue"
           "")
         (car found))))
-  "ensure the register exists via ONE find-by (was: full doc/get walk, 100-300s under DB degradation)")
+  "ensure the register exists via ONE find-by (was: full doc/get walk, 100-300s under DB degradation).
+     Arity fix 2026-09-27: this call passed EIGHT args to the six-arg
+     notes/doc/upsert (a duplicated slug and a stray \"\") and would have
+     raised 'arity mismatch' the first time the register had to be created
+     from scratch — latent, because the register already exists on every
+     live habitat. tags/kind/day now match notes/issues/upsert, the
+     register's other writer ('log' / 'issue' / ''), so a fresh register
+     is shaped identically to a repaired one.")
 
 (define notes/issues/form
   (lambda

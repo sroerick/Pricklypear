@@ -1085,7 +1085,9 @@
     (test "json round-trip: (json-emit (json-parse s)) == canonical s for objects, arrays, scalars, nested mixes")
     (test "dict-get/dict-set/dict-keys accept alist AND legacy VStr JSON input — both shapes, same answers")
     (test "(assoc \"k\" (json-parse s)) hits on object input; assoc is the idiomatic accessor on parsed values")
+    (test "BODY BOUNDARY: a structured body (the alist json-parse/dict-set* return) is accepted by tree/upsert, create and update; the legacy VStr body keeps its exact prior meaning. One policy, Prims_json.json_body: VStr passes through, any other value serializes with value_to_json (an alist becomes an object). The path/kind/type arguments coerce through coerce_str like the rest of the string family.")
     (smoke "a Nopales fold over json-parsed tree nodes (assoc, no dict-get-on-strings) runs the 156-node issues register fold under the 100k route budget")
+    (smoke "the documented mutation idiom — tree/get + dict-set* + tree/upsert at the same path (notes.storage OUTLINE LOAD/SAVE; notes.pipeline-model MUTATIONS ARE TREE ACTIONS) — round-trips: the mutated alist is written by the SAME call shape the spec prints")
     (smoke "existing .pp call sites of (dict-get (json-parse s) k) keep working unmodified"))
    (details
     (doc (|
@@ -1129,6 +1131,41 @@
            assoc. Detection: a VList of VPair (VStr . _) is an
            alist; ambiguity with a user list of string-keyed pairs
            is accepted (same answer either way).
+
+         BODY BOUNDARY — THE CONSUMER HALF OF THE SAME RULE
+         (2026-09-27; this is the half whose absence cost data):
+           Polymorphic accessors are not enough. If json-parse and
+           dict-set* produce ALISTS, then every prim that ACCEPTS a
+           body/fields argument must accept an alist too — otherwise
+           the idiom the book prints in two chapters
+           (tree/get + dict-set* + tree/upsert, notes.storage
+           OUTLINE LOAD/SAVE and notes.pipeline-model MUTATIONS ARE
+           TREE ACTIONS) is an expression the implementation
+           REJECTS. tree/upsert, create and update each matched
+           [VStr; …] exactly and answered 'need path kind type
+           body-json' for a perfectly well-formed alist.
+
+           THE RULE: a data prim's body/fields argument takes a VStr
+           (legacy JSON, or a plain string where the prim always
+           accepted one) OR a structured value, serialized at the
+           boundary by ONE shared helper (Prims_json.json_body =
+           VStr passes through, anything else value_to_json). A new
+           body-taking prim inherits it; a new body-taking prim that
+           matches VStr only is the bug this stanza exists to
+           prevent.
+
+           WHY THIS IS A SPEC ITEM AND NOT JUST A FIX: the verify
+           above the fix pinned the codecs and the dict-* surface but
+           never the consumers, so the suite was green while the
+           documented idiom raised. Verify asserts the BOUNDARY, not
+           only the codec.
+
+           RELATED DURABILITY RULE (see tree-time.durability): a
+           write path that DELETES before it can replace must not be
+           reachable while its replacement can still fail — the
+           notes outline save was destructive-first and emptied a
+           note when the rejected body raised (notes.storage OUTLINE
+           LOAD/SAVE now states the contract).
 
          json-emit: alists emit as JSON objects (inverse of the new
            decode); VPair/VList wire rules unchanged. The VStr {/[
