@@ -1055,9 +1055,11 @@
                            structural equality, alist lookup.
            prims_string  — concat/join/slice/search/replace/case/compare,
                            split, percent-encoding, date parsing.
-           prims_json    — JSON <-> value codecs, dict-* prims over VStr
-                           JSON (dict-get/dict-set/dict-keys — no new
-                           value type, v1 choice), read-string bridge.
+           prims_json    — JSON <-> value codecs: objects decode to
+                           ALISTS (subsection json-values-alist, which
+                           supersedes the v1 re-serialize-to-VStr
+                           choice), dict-* prims polymorphic over
+                           alist | legacy VStr JSON, read-string bridge.
            prims_html    — render-html/status/redirect sentinels, HTML
                            escape/decode, wiki-link + bible rendering,
                            prose/render tokens, xml-parse, hx helpers.
@@ -1070,6 +1072,75 @@
                            proxy rims share, plus the curl -D header blob
                            parser. prim-seam.server-endpoint owns the
                            ENDPOINT this codec serves.
+    |))
+   )
+  )
+  (subsection json-values-alist
+   (doc "JSON objects decode to ALISTS (VList of VPair key . value), not re-serialized VStr JSON: parsed data crosses the prim boundary walkable, dict-* prims go polymorphic, and the parse/re-serialize/re-extract boundary tax dies")
+   (status implemented)
+   (* agent note (|2026-12 make record: prims_json.ml carries it — json_to_value `Assoc case decodes to alists, is_alist/alist_of predicates, value_to_json's guarded VList clause emits objects (dotted pairs keep the list wire form, codec_test updated), dict-get/set/keys polymorphic over alist | legacy VStr JSON. lisp/test/prims_pure_test.ml json-alist group (12 cases) + codec_test round-trip updated. The VStr-as-object re-serialization is dead: the parse→re-emit→re-extract tax was measured at ~2430 ticks/node on the 156-node issues fold; the fold now runs 223k ticks total (within the 400k route budget, budget.ml default_limit) — notes.outline-read-path made the live read path possible. Call-site migration was TWO shapes: libs/lookbook/lib.pp (the one package fed end-to-end by json-parse — lb/val/lb/field-list/lb/html-attrs/lb/attr-sum shape-agnostic + lb/attr-text re-emits structured attr values) and libs/filmstrip/lib.pp tree-node-li (node normalization + verb-vals re-emit; kids native-or-text). The 156-node single-doc read measured 105ms wall / 223k ticks on the dev image. agent surfaces suite green (move-to-desktop + keyboard-shortcuts regressions from the double-structured vals convention fixed in the same pass; rail-trees fails identically on HEAD — pre-existing).|) *)
+   (implements pure/prims_json.ml lisp/lib/ast.ml)
+   (verify
+    (build "dune build @all")
+    (test "json round-trip: (json-emit (json-parse s)) == canonical s for objects, arrays, scalars, nested mixes")
+    (test "dict-get/dict-set/dict-keys accept alist AND legacy VStr JSON input — both shapes, same answers")
+    (test "(assoc \"k\" (json-parse s)) hits on object input; assoc is the idiomatic accessor on parsed values")
+    (smoke "a Nopales fold over json-parsed tree nodes (assoc, no dict-get-on-strings) runs the 156-node issues register fold under the 100k route budget")
+    (smoke "existing .pp call sites of (dict-get (json-parse s) k) keep working unmodified"))
+   (details
+    (doc (|
+         DECISION (supersedes the iteration-14 note in prims_json):
+           json_to_value's `Assoc case re-serialized the object back
+           to a VStr (\"don't introduce a new VDict value type yet\").
+           That made json-parse self-defeating for objects: parse in
+           OCaml, re-emit the same JSON as a string, then every
+           dict-get re-finds the memoized parse and re-stringifies
+           the leaf. The boundary tax — parse → re-serialize →
+           re-extract, per node per field — is what pushed the notes
+           outline fold to ~380k ticks and the live read path into
+           the unbudgeted jobs runner (notes.outline-read-path).
+
+           Still NO VDict value type. Objects decode to ALISTS:
+             `Assoc kvs -> VList [VPair (VStr k, json_to_value v); …]
+           Alists are the Lisp-native assoc structure: assoc (already
+           a prim) is the idiomatic accessor, quote and match see real
+           structure, and nothing ripples through ast.ml / reader.ml /
+           eval.ml. If alist walks ever profile hot, a VDict (Hashtbl)
+           may land LATER behind the same dict-* surface — optimization
+           behind the abstraction, never instead of it.
+
+         BOUNDARY RULE (applies to every prim; tree reads first):
+           A prim hands PARSED VALUES across the boundary, never
+           strings that force the caller to re-parse. Data that is
+           not walkable in Nopales did not cross. Follow-on slice:
+           tree/list, tree/get, tree/children-of, tree/subtree and
+           the lens-* variants (one-tree.tree-read-prims surface)
+           return node values with the body as an alist, so call
+           sites drop their per-node json-parse entirely. The node
+           JSON string shape stays available where a raw string is
+           genuinely wanted (export, vault dumps).
+
+         DICT PRIMS GO POLYMORPHIC (compat):
+           dict-get on an alist is an assoc walk returning the cdr;
+           dict-set conses/replaces the pair; dict-keys maps car.
+           Legacy VStr JSON input keeps the parse_cached path
+           forever — every existing (dict-get (json-parse s) k)
+           call site keeps working unmodified. New code prefers
+           assoc. Detection: a VList of VPair (VStr . _) is an
+           alist; ambiguity with a user list of string-keyed pairs
+           is accepted (same answer either way).
+
+         json-emit: alists emit as JSON objects (inverse of the new
+           decode); VPair/VList wire rules unchanged. The VStr {/[
+           re-parse heuristic in value_to_json stays for LEGACY
+           strings only; new code never relies on it — a VStr is
+           text, an alist is a document.
+
+         UNCHANGED: the /api/eval wire envelope (pure/wire_codec.ml,
+           tagged value format) is a separate codec and does not move.
+           The content-keyed parse memo (memo_json_tbl/memo_val_tbl)
+           stays but matters less: the hot path stops re-parsing
+           because values stay parsed.
     |))
    )
   )

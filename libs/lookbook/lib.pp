@@ -62,32 +62,56 @@
   "A declared element: {\"t\":\"el\",\"tag\":T,\"attrs\":{..},\n\"kids\":[kid ...]}. attrs rides flat (k v ...) pairs, kids a list of\nkid wrappers (ui/text or nested ui/elm dicts). Composite elements\ncall other elements and pass their returned dicts as kids.")
 
 ;; ---- projector helpers ----
+;; json-values-alist: a parsed ui-value is an ALIST (nested objects are
+;; native lists, not JSON texts). The helpers below accept BOTH shapes:
+;; legacy VStr JSON (producers still store text) and native alists.
 (define lb/get
   (lambda (d k)
     (let ((v (dict-get d k))) (if (null? v) "" (as-str v))))
-  "Text at key k; null renders as \"\" (the bind/field pattern).")
+  "Text at key k; null renders as \"\" (the bind/field pattern). ONLY
+for string leaves (t/tag/v); structured fields go through lb/val.")
+
+(define lb/val
+  (lambda (d k)
+    (let ((v (dict-get d k))) (if (null? v) "" v)))
+  "Raw value at key k; null renders as \"\". Structured fields (attrs,
+kids) arrive as alists under json-values-alist, as JSON text in legacy
+rows.")
 
 (define lb/field-list
   (lambda (d k)
-    (let ((v (dict-get d k)))
+    (let ((v (lb/val d k)))
       (if (null? v)
           (list)
-          (if (string-eq (as-str v) "")
-              (list)
-              (json-parse (as-str v))))))
-  "The JSON array text at key k -> a list (object items arrive as
-their own dict texts).")
+          (if (string? v)
+              (if (string-eq v "") (list) (json-parse v))
+              v))))
+  "List at key k: native VList (json-values-alist) returned as-is,
+legacy JSON array text parsed; object items arrive as alists.")
+
+(define lb/attr-text
+  (lambda (d k)
+    (let ((v (dict-get d k)))
+      (if (null? v)
+          ""
+          (if (string? v) v (json-emit v)))))
+  "Attr value as text: strings ride verbatim; structured values (an
+hx-vals JSON object rides the wire structured through the emit
+heuristic, so json-parse hands back an alist) re-emit as JSON text —
+the exact text the legacy VStr path produced.")
 
 (define lb/html-attrs
-  (lambda (json)
-    (if (string-eq json "")
+  (lambda (attrs)
+    (if (null? attrs)
         ""
-        (html/attrs
-          (list/map
-            (lambda (k) (html/attr k (lb/get json k)))
-            (dict-keys json)))))
-  "PROJECTION helper: attrs JSON object -> rendered attrs string (keys
-ship in dict-keys order).")
+        (if (string? attrs)
+            (if (string-eq attrs "") "" (lb/html-attrs (json-parse attrs)))
+            (html/attrs
+              (list/map
+                (lambda (k) (html/attr k (lb/attr-text attrs k)))
+                (dict-keys attrs))))))
+  "PROJECTION helper: attrs (alist or legacy JSON object text) ->
+rendered attrs string (keys ship in dict-keys order).")
 
 (define lb/kid-html
   (lambda (kid)
@@ -105,7 +129,7 @@ ship in dict-keys order).")
           ((kids (lb/field-list w "kids")))
           (html/tag
             (lb/get w "tag")
-            (lb/html-attrs (lb/get w "attrs"))
+            (lb/html-attrs (lb/val w "attrs"))
             (if (null? kids)
                 ""
                 (html/join (list/map lb/kid-html kids)))))))
@@ -124,15 +148,18 @@ markup.")
   "Two-space indent accumulator.")
 
 (define lb/attr-sum
-  (lambda (json)
-    (if (string-eq json "")
+  (lambda (attrs)
+    (if (null? attrs)
         ""
-        (list/foldl
-          (lambda (acc k)
-            (string-append acc " " k "=\"" (lb/get json k) "\""))
-          ""
-          (dict-keys json))))
-  "One-line attr summary: k=\"v\" per key (dict-keys order).")
+        (if (string? attrs)
+            (if (string-eq attrs "") "" (lb/attr-sum (json-parse attrs)))
+            (list/foldl
+              (lambda (acc k)
+                (string-append acc " " k "=\"" (lb/attr-text attrs k) "\""))
+              ""
+              (dict-keys attrs)))))
+  "One-line attr summary: k=\"v\" per key (dict-keys order); alist or
+legacy JSON object text.")
 
 (define lookbook/text
   (lambda (w depth)
@@ -143,7 +170,7 @@ markup.")
              (string-append
                (lb/pad depth "")
                (lb/get w "tag")
-               (lb/attr-sum (lb/get w "attrs"))
+               (lb/attr-sum (lb/val w "attrs"))
                "\n"))))
       (if (string-eq (lb/get w "t") "text")
           body
