@@ -30,7 +30,10 @@
 #
 # Claim lease: the card's assignee is set to `executor:<pid>@<epoch>`. A lease
 # is reclaimable when its pid is dead OR it is older than 12h (43200s);
-# otherwise --run refuses to double-spawn unless --force.
+# otherwise --run refuses to double-spawn unless --force. The lease is
+# RELEASED (assignee cleared) on every exit path once the agent is done —
+# success write-back, skipped/terminal write-back, or agent failure — so a
+# finished card never lingers looking claimed.
 set -u
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
@@ -130,6 +133,12 @@ claim() {
   echo "$lease"
 }
 
+# Release the claim lease (clear the assignee). The lease exists to prevent
+# double-spawn WHILE the agent runs, not to mark ownership afterward: a run
+# that ends but leaves executor:<pid>@<ts> on the card makes it look claimed
+# until the 12h stale window passes. Called on every write-back exit path.
+release_lease() { pp_todo_raw "(todo/item/unassign $1)" >/dev/null; }
+
 # ---- write-back: advance one column + post an evidence comment -------------------
 write_back() {
   id="$1"
@@ -150,6 +159,7 @@ write_back() {
   if [ -n "$claimed_state" ] && [ -n "$cur" ] && [ "$cur" != "$claimed_state" ]; then
     # Card already left the claimed column: only post the evidence comment.
     cmt="$(pp_todo_val "(todo/comment/add $id $(json_str "$msg"))")"
+    release_lease "$id"
     echo "pp-flow: card already advanced $claimed_state -> $cur; skipped transition, comment id=$cmt"
     return 0
   fi
@@ -157,6 +167,7 @@ write_back() {
     DONE|PARKED|CANCELLED|ARCHIVED)
       # todo/cycle WRAPS at the end of the column set - advancing here would
       # resurrect a closed card back to TODO.
+      release_lease "$id"
       echo "pp-flow: card $id is terminal ($cur); not advancing" >&2
       return 3 ;;
   esac
@@ -168,7 +179,8 @@ write_back() {
     newstate="$(pp_todo_val "(todo/item/state (todo/item/get $id))")"
   fi
   cmt="$(pp_todo_val "(todo/comment/add $id $(json_str "$msg"))")"
-  echo "pp-flow: write-back advanced to state=$newstate (event $adv), comment id=$cmt"
+  release_lease "$id"
+  echo "pp-flow: write-back advanced to state=$newstate (event $adv), comment id=$cmt; claim released"
 }
 
 # extract an optional DESTINATION: <COL> line from the agent transcript
@@ -255,8 +267,9 @@ case "$MODE" in
     fi
     evid="$(agent_evidence "$LOG_FILE")"
     dest="$(agent_destination "$LOG_FILE")"
-    # verbatim: the posted comment IS the agent's EVIDENCE line (the claim
-    # lease on the assignee field already carries the executor pid).
+    # verbatim: the posted comment IS the agent's EVIDENCE line. The claim
+    # lease is released inside write_back on every exit path (see above), so
+    # a successfully written-back card ends with an empty assignee.
     write_back "$(json_str "$CARD")" "$evid" "$dest" "$claimed_state"
     echo "pp-flow: write-back complete for $CARD"
     ;;
