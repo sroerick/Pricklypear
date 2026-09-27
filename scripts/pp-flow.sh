@@ -140,27 +140,69 @@ claim() {
 # until the 12h stale window passes. Called on every write-back exit path.
 release_lease() { pp_todo_raw "(todo/item/unassign $1)" >/dev/null; }
 
+# ---- batched eval helpers ---------------------------------------------------------
+# Every habitat round trip costs ~1-2.5s (Basic-auth argon2 + wire), so the
+# driver batches reads/writes into single (begin ...) evals wherever the
+# decision logic stays in the shell. Field separator is "|"; every field is a
+# uuid, a STATE token, or "ok"/"missing" — none can contain the separator.
+# ONE eval: exists + current state of a card.
+card_state_probe() { pp_todo_val "(begin (load-library \"todo\") (if (null? (todo/item/get $1)) (string-append \"missing\") (string-append \"ok|\" (as-str (todo/item/state (todo/item/get $1))))))"; }
+# ONE eval: advance one column + evidence comment + release lease. Returns
+# "event|comment|state" (state read AFTER the cycle, same eval). The lease
+# release rides IN the batch: a write-back that forgets it resurrects the
+# stale-lease bug this script already fixed once (card ac7ddff9, 09-27).
+advance_batch() { pp_todo_val "(begin (load-library \"todo\") (string-append (as-str (todo/cycle $1)) \"|\" (as-str (todo/comment/add $1 $2)) \"|\" (as-str (todo/item/state (todo/item/get $1))) \"|\" (as-str (todo/item/unassign $1))))"; }
+# ONE eval: set explicit destination + evidence comment + release lease.
+dest_batch() { pp_todo_val "(begin (load-library \"todo\") (string-append (as-str (todo/set-state $1 $3)) \"|\" (as-str (todo/comment/add $1 $2)) \"|\" \"$3\" \"|\" (as-str (todo/item/unassign $1))))"; }
+# ONE eval: evidence comment + release lease (card already left its claimed column).
+comment_batch() { pp_todo_val "(begin (load-library \"todo\") (string-append (as-str (todo/comment/add $1 $2)) \"|\" (as-str (todo/item/unassign $1))))"; }
+# ONE eval: state + brief together (state is a short token; the run marker
+# below is randomly generated so card content can never contain it).
+state_and_brief() {
+  MARK="PPCUT${RANDOM}${RANDOM}PPCUT"
+  pp_todo_val "(begin (load-library \"todo\") (string-append (as-str (todo/item/state (todo/item/get $1))) \"\\n$MARK\\n\" (as-str (todo/flow-brief $1))))" | awk -v m="$MARK" 'BEGIN{rs=1} rs==1{ if (index($0,m)==1) {rs=0; sub("^"m"\\n","")} else print; next } {print}'
+}
+
+# ---- run ledger + summary (observability) ---------------------------------------
+# One JSON line per run-mode completion (success AND failure) in
+# .ralph/runs.jsonl, plus a human RUN SUMMARY block — the efficiency/quality
+# trend surface for scheduled automation (durations, evidence presence,
+# destinations, failure rc).
+ledger_line() { # $1 ts  $2 card  $3 runner  $4 total_s  $5 agent_s  $6 rc  $7 evidence  $8 dest  $9 from  $10 to
+  printf '{"ts":"%s","card":"%s","runner":"%s","total_s":%s,"agent_s":%s,"agent_rc":%s,"evidence":"%s","destination":"%s","from_state":"%s","to_state":"%s"}\n' \
+    "$1" "$2" "$(printf '%s' "$3" | tr -d '"\\')" "$4" "$5" "$6" "$7" "$8" "$9" "${10}"
+  >> "$LOG_DIR/runs.jsonl"
+}
+run_summary() { # $1 card  $2 runner  $3 total_s  $4 agent_s  $5 rc  $6 evidence  $7 dest  $8 from  $9 to
+  echo "pp-flow: RUN SUMMARY card=$1 runner='$2' total=${3}s agent=${4}s rc=$5 evidence=$6 destination=${7:-none} state=$8->${9:--}"
+}
+
 # ---- write-back: advance one column + post an evidence comment -------------------
 write_back() {
   id="$1"
   msg="${2:-pp-flow: auto advanced the card to the next column}"
   dest="${3:-}"
   claimed_state="${4:-}"
-  # Existence first: a missing card reports state TODO (default), and
-  # todo/comment/add happily orphans a comment on it (verified live 09-25).
-  exists="$(pp_todo_val "(if (null? (todo/item/get $id)) \"missing\" \"ok\")")"
-  if [ "$exists" != "ok" ]; then
-    echo "pp-flow: card $id not found; not advancing, not commenting" >&2
-    return 3
-  fi
-  cur="$(card_state "$id")"
+  # ONE round trip: existence + current state. Existence first: a missing
+  # card reports state TODO (default), and todo/comment/add happily orphans
+  # a comment on it (verified live 09-25).
+  probe="$(card_state_probe "$id")"
+  case "$probe" in
+    "missing")
+      echo "pp-flow: card $id not found; not advancing, not commenting" >&2
+      return 3 ;;
+    "ok|"*) cur="${probe#ok|}" ;;
+    *)
+      echo "pp-flow: unexpected state probe '$probe' for $id; not advancing" >&2
+      return 3 ;;
+  esac
   # Defense-in-depth: if the agent already moved the card off the state it was
   # claimed in (e.g. it wrote back itself despite the brief), do not advance
   # again — that was the double-write bug (TODO->DONE then DONE->PARKED).
   if [ -n "$claimed_state" ] && [ -n "$cur" ] && [ "$cur" != "$claimed_state" ]; then
     # Card already left the claimed column: only post the evidence comment.
-    cmt="$(pp_todo_val "(todo/comment/add $id $(json_str "$msg"))")"
-    release_lease "$id"
+    res="$(comment_batch "$id" "$(json_str "$msg")")"
+    cmt="$(printf '%s' "$res" | awk -F'|' '{print $1}')"
     echo "pp-flow: card already advanced $claimed_state -> $cur; skipped transition, comment id=$cmt"
     return 0
   fi
@@ -172,45 +214,52 @@ write_back() {
       echo "pp-flow: card $id is terminal ($cur); not advancing" >&2
       return 3 ;;
   esac
+  # ONE round trip for the whole write set (transition + comment + lease
+  # release); returns "event|comment|state|unassign".
   if [ -n "$dest" ]; then
-    adv="$(pp_todo_val "(todo/set-state $id $(json_str "$dest"))")"
-    newstate="$dest"
+    res="$(dest_batch "$id" "$(json_str "$msg")" "$(json_str "$dest")")"
+  else
+    res="$(advance_batch "$id" "$(json_str "$msg")")"
+  fi
+  if [ -z "$res" ]; then
+    # Batch write failed mid-flight (card vanished, write denied, eval error):
+    # fall back to the defensive single calls so the lease is never left behind.
+    echo "pp-flow: batched write-back returned nothing; falling back to single calls" >&2
+    release_lease "$id"
+    return 4
+  fi
+  adv="$(printf '%s' "$res" | awk -F'|' '{print $1}')"
+  cmt="$(printf '%s' "$res" | awk -F'|' '{print $2}')"
+  newstate="$(printf '%s' "$res" | awk -F'|' '{print $3}')"
+  if [ -z "$newstate" ]; then
+    # 09-27 (gregor, run 3): a card on a list with no columns cycles to "" —
+    # the state is ERASED, not wrapped. Restore the claimed state and refuse
+    # the advance; the evidence comment above still posts (work happened).
+    if [ -n "$claimed_state" ]; then
+      pp_todo_val "(todo/set-state $id $(json_str "$claimed_state"))" >/dev/null
+      echo "pp-flow: write emptied the state (list has no columns?); restored $claimed_state" >&2
     else
-      adv="$(pp_todo_val "(todo/cycle $id)")"
-      newstate="$(pp_todo_val "(todo/item/state (todo/item/get $id))")"
-      if [ -z "$newstate" ]; then
-          # 09-27: a card on a list with no columns cycles to "" - the state is
-          # ERASED, not wrapped. Restore the claimed state and refuse the
-          # advance; the evidence comment below still posts (work happened).
-          # Run 3 post-mortem: the restore was a silent no-op because
-          # claimed_state was captured with a bare unquoted card id (unbound
-          # symbol -> "") in every run so far; fixed in the run block.
-          if [ -n "$claimed_state" ]; then
-            pp_todo_val "(todo/set-state $id $(json_str "$claimed_state"))" >/dev/null
-            echo "pp-flow: todo/cycle emptied the state (list has no columns?); restored $claimed_state" >&2
-          else
-            echo "pp-flow: todo/cycle emptied the state (list has no columns?); claimed_state unknown, card NOT restored - fix by hand" >&2
-          fi
-          newstate="$claimed_state"
-      fi
+      echo "pp-flow: write emptied the state (list has no columns?); claimed_state unknown, card NOT restored - fix by hand" >&2
     fi
-  cmt="$(pp_todo_val "(todo/comment/add $id $(json_str "$msg"))")"
-  release_lease "$id"
-  echo "pp-flow: write-back advanced to state=$newstate (event $adv), comment id=$cmt; claim released"
+    newstate="$claimed_state"
+  fi
+  echo "pp-flow: write-back advanced to state=$newstate (event $adv), comment id=$cmt; claim released (in-batch)"
 }
 
-# extract an optional DESTINATION: <COL> from the agent transcript
+# extract an optional DESTINATION: <COL> from the agent transcript.
+# Three-tier match (battle-tested 09-27, laptop + vultr): the anchored
+# line-start form (OpenBSD sed: \{1,\}, not the GNU \+ extension) wins; then
+# a trailing "... DESTINATION: <COL>" (executor-v2 folds it onto its one-line
+# EVIDENCE paragraph); then the LAST mention anywhere (a reviewer wrote
+# 'FAIL -> DESTINATION: CODE.' mid-sentence, card ac7ddff9) — in a terminal
+# summary the final mention is the operative verdict.
 agent_destination() {
-  # OpenBSD sed has no \+ repetition in a BRE (GNU extension): the old
-  # pattern never matched on vultr, so a DESTINATION: line was silently
-  # ignored and write-back fell back to todo/cycle. Use \{1,\} (09-27).
   d="$(sed -n 's/^[[:space:]]*DESTINATION:[[:space:]]*\([A-Z0-9_-]\{1,\}\)[[:space:]]*$/\1/p' "$1" 2>/dev/null | tail -n1 | tr -d '[:space:]')"
   if [ -z "$d" ]; then
-    # Run 3: executor-v2 folded DESTINATION onto the end of its one-line
-    # EVIDENCE paragraph (contract says two lines), so the anchored pattern
-    # missed, write-back fell back to todo/cycle, and a column-less list
-    # got its state erased. Accept a trailing "... DESTINATION: <COL>".
     d="$(sed -n 's/.*[^A-Z0-9_-]DESTINATION:[[:space:]]*\([A-Z0-9_-]\{1,\}\)[[:space:]]*$/\1/p' "$1" 2>/dev/null | tail -n1 | tr -d '[:space:]')"
+  fi
+  if [ -z "$d" ]; then
+    d="$(grep -o 'DESTINATION:[[:space:]]*[A-Z][A-Z0-9_-]*' "$1" 2>/dev/null | tail -n1 | sed 's/.*:[[:space:]]*//')"
   fi
   printf '%s\n' "$d"
 }
@@ -258,10 +307,15 @@ case "$MODE" in
     exit 0
     ;;
   run)
+    T0=$(date +%s)
     lease="$(claim)" || exit $?
     echo "pp-flow: claimed $CARD lease=$lease"
-    claimed_state="$(card_state "$(json_str "$CARD")")"
-    b="$(brief_of "$(json_str "$CARD")")"
+    # ONE round trip for claimed state + brief (split on a random marker line
+    # card content can never contain). The state rides first so the
+    # double-write defense gets a real baseline (gregor run-3 fix).
+    sb="$(state_and_brief "$(json_str "$CARD")")"
+    claimed_state="$(printf '%s\n' "$sb" | sed -n '1p')"
+    b="$(printf '%s\n' "$sb" | sed -n "2,\$p")"
     if [ -z "$b" ]; then
       echo "pp-flow: no such card $CARD after claim" >&2
       exit 1
@@ -272,6 +326,7 @@ case "$MODE" in
     PI_RUNNER="${PP_FLOW_PI:-pi -p}"
     LOG_FILE="$LOG_DIR/flow-$SHORT.log"
     echo "pp-flow: running agent ($PI_RUNNER) on $CARD ..." >&2
+    A0=$(date +%s)
     if [ "$PI_RUNNER" = "true" ]; then
       # explicit test stub: record the brief as the 'transcript', succeed
       cp "$BRIEF_FILE" "$LOG_FILE"
@@ -285,18 +340,36 @@ case "$MODE" in
       $PI_RUNNER "$(cat "$BRIEF_FILE")" > "$LOG_FILE" 2>&1
       rc=$?
     fi
-    echo "pp-flow: agent rc=$rc; transcript -> $LOG_FILE" >&2
-    if [ "$rc" -ne 0 ]; then
-      pp_todo_raw "(todo/item/unassign $(json_str "$CARD"))" >/dev/null
-      echo "pp-flow: agent failed (rc=$rc); card NOT advanced, claim released — fix and re-run" >&2
-      exit "$rc"
-    fi
+    A1=$(date +%s); AGENT_S=$(( A1 - A0 ))
+    echo "pp-flow: agent rc=$rc (${AGENT_S}s); transcript -> $LOG_FILE" >&2
     evid="$(agent_evidence "$LOG_FILE")"
     dest="$(agent_destination "$LOG_FILE")"
+    if [ "$rc" -ne 0 ]; then
+      # OBSERVABILITY: a failed run used to vanish (claim released, no card
+      # trace). Post a failure comment so the card feed shows every run.
+      tailtxt="$(tail -c 300 "$LOG_FILE" 2>/dev/null | tr -d '\r' | tr '\n' ' ' | tr -d '\033' | tr -d '"\\')"
+      fmsg="pp-flow: agent FAILED rc=$rc (runner: $PI_RUNNER, ${AGENT_S}s). Log: $LOG_FILE. Tail: $tailtxt"
+      pp_todo_raw "(begin (load-library \"todo\") (todo/comment/add $(json_str "$CARD") $(json_str "$fmsg")) (todo/item/unassign $(json_str "$CARD")))" >/dev/null
+      T1=$(date +%s)
+      ledger_line "$(date -u +%FT%TZ)" "$CARD" "$PI_RUNNER" "$(( T1 - T0 ))" "$AGENT_S" "$rc" "no" "" "$claimed_state" ""
+      run_summary "$CARD" "$PI_RUNNER" "$(( T1 - T0 ))" "$AGENT_S" "$rc" "no" "" "$claimed_state" ""
+      echo "pp-flow: agent failed (rc=$rc); card NOT advanced, failure comment posted, claim released — fix and re-run" >&2
+      exit "$rc"
+    fi
+    case "$evid" in
+      "("*")") EVFLAG=no ;;  # the placeholder, not real evidence
+      *) EVFLAG=yes ;;
+    esac
     # verbatim: the posted comment IS the agent's EVIDENCE line. The claim
-    # lease is released inside write_back on every exit path (see above), so
+    # lease is released inside write_back on every exit path (in-batch), so
     # a successfully written-back card ends with an empty assignee.
     write_back "$(json_str "$CARD")" "$evid" "$dest" "$claimed_state"
+    wbrc=$?
+    final_state="$(card_state "$(json_str "$CARD")")"
+    T1=$(date +%s)
+    ledger_line "$(date -u +%FT%TZ)" "$CARD" "$PI_RUNNER" "$(( T1 - T0 ))" "$AGENT_S" "$rc" "$EVFLAG" "$dest" "$claimed_state" "$final_state"
+    run_summary "$CARD" "$PI_RUNNER" "$(( T1 - T0 ))" "$AGENT_S" "$rc" "$EVFLAG" "$dest" "$claimed_state" "$final_state"
     echo "pp-flow: write-back complete for $CARD"
+    [ "$wbrc" -eq 0 ] || exit "$wbrc"
     ;;
 esac
