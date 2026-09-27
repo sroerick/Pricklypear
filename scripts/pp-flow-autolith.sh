@@ -91,6 +91,7 @@ if ! "$AUTOLITH_BIN" run-job --immutable --input "$WORK.job" --output "$WORK.out
   echo "pp-flow-autolith: run-job crashed" >&2
   cat "$WORK.err" >&2
   exit 1
+fi
 
 # job result is a sexp; pull :STATUS and :RESULT with awk field-scan
 status="$(tr -d '\n' < "$WORK.out" | sed -n 's/.*:STATUS \(:[A-Z-]*\).*/\1/p')"
@@ -99,6 +100,7 @@ if [ "$status" != ":SUCCEEDED" ]; then
   echo "pp-flow-autolith: job status $status" >&2
   cat "$WORK.out" >&2
   exit 1
+fi
 
 # terminal summary (the executor's output contract) on stdout as transcript.
 # Awk escaped-string scanner: find :RESULT ", then walk to the closing
