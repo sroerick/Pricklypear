@@ -310,19 +310,70 @@
         (rows (quote chat-room) 50))))
   "Find a chat-room row by room-id (scan up to 50).")
 
+;; (chat/epoch->iso "1788811922") -> "2026-09-07 20:12" (UTC). civil-from-days
+;; (Hinnant) in pure Nopales: / truncates, remainder is C-style, read-string
+;; parses the digit string. Verified by hand against 1788811922 (i-1790569346).
+(define chat/epoch->iso
+  (lambda (s)
+    (let* ((sec (read-string s))
+           (days (floor (/ sec 86400)))
+           (rem (remainder sec 86400))
+           (hh (floor (/ rem 3600)))
+           (mm (floor (/ (remainder rem 3600) 60)))
+           (z (+ days 719468))
+           (era (floor (/ z 146097)))
+           (doe (- z (* era 146097)))
+           (yoe-num (- (+ doe (floor (/ doe 36524)))
+                       (+ (floor (/ doe 1460))
+                          (if (>= doe 146096) 1 0))))
+           (yoe (floor (/ yoe-num 365)))
+           (y (+ yoe (* era 400)))
+           (doy (- doe (+ (* 365 yoe) (floor (/ yoe 4)) (- (floor (/ yoe 100))))))
+           (mp (floor (/ (+ (* 5 doy) 2) 153)))
+           (d (+ (- doy (floor (/ (+ (* 153 mp) 2) 5))) 1))
+           (m (+ mp (if (< mp 10) 3 -9)))
+           (y2 (+ y (if (<= m 2) 1 0))))
+      (string-append
+        (chat/pad4 y2) "-" (chat/pad2 m) "-" (chat/pad2 d)
+        " " (chat/pad2 hh) ":" (chat/pad2 mm)))))
+
+(define chat/pad4
+  (lambda (n)
+    (let ((s (as-str (floor n))))
+      (string-append
+        (if (< (string-length s) 4) (substring "0000" 0 (- 4 (string-length s))) "")
+        s))))
+
+(define chat/pad2
+  (lambda (n)
+    (let ((s (as-str (floor n))))
+      (if (< (string-length s) 2)
+          (string-append "0" s)
+          s))))
+
 (define chat/fmt-ts
   (lambda
     (ts)
     (let
       ((s (as-str ts)))
-      (if
-        (< (string-length s) 16)
-        s
-        (string-append
-          (substring s 0 10)
-          " "
-          (substring s 11 5)))))
-  "created_at ISO stamp -> short YYYY-MM-DD HH:MM display; blank passthrough. Nopales substring is (s pos len) — OCaml String.sub convention.")
+      (cond
+        ;; empty: never a blank meta line — say so instead (i-1790569346)
+        ((string=? s "") "unknown")
+        ;; 10-digit epoch seconds (historical agent writer): a clean integer
+        ;; round-trips through read-string; anything else falls through.
+        ((and (= (string-length s) 10)
+              (guard (lambda (e) #f)
+                (string=? (as-str (read-string s)) s)))
+         (chat/epoch->iso s))
+        ;; ISO-8601 (>= 16 chars): current display slice
+        ((>= (string-length s) 16)
+         (string-append
+           (substring s 0 10)
+           " "
+           (substring s 11 5)))
+        ;; anything else: passthrough (honest, short)
+        (else s))))
+  "created_at stamp -> short YYYY-MM-DD HH:MM display. TOTAL (i-1790569346): epoch seconds convert to UTC display, empty renders 'unknown' (never a blank meta line, never a raw epoch), ISO slices as before. Nopales substring is (s pos len) — OCaml String.sub convention.")
 
 
 (define chat/history

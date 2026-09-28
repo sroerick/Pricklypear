@@ -511,7 +511,7 @@
                                         "body"
                                         (agent/clamp reply 3900)
                                         "created_at"
-                                        (as-str (now))
+                                        (chat/timestamp)
                                         "wake_id"
                                         wid)))))
                                 (seq
