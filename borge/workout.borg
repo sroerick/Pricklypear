@@ -429,5 +429,60 @@
    (verify
     (smoke "(load-library \"food\") defines food/* helpers; food/add-template logs a meal row keyed by day-type + meal"))
   )
+
+  (subsection program-state-and-gates
+   (doc "Spec docs/plans/workout-gating.md. Outcome-driven programs (KSF C&J, run/walk, SCT core, Quicksilver stretch) cannot pre-materialize calendars: the next session is a pure function of stored program state + date. Two additive types: workout-program-state (one ACTIVE row per program; new writes supersede, history preserved) and workout-gate (the asserted-gate ledger: checkpoints passed, soreness flags, range-ownership — derived gates are NEVER stored, they recompute from journal facts at capture). workout/suggest generates today's session on demand (pure, idempotent); workout/session-complete evaluates gates and turns the state over; workout/gate-status summarizes cursor + ledger for agents. Nested lists are not legal dict values — summaries render as strings (see gates-summary). Toy program \"toy\" (advance after every 3 completions) proves the loop end-to-end via pp_eval. Calendar untouched — ksk1 keeps its scheduler.")
+   (status implemented)
+   (implements libs/workout/lib.pp)
+   (verify
+    (build "dune build @all")
+    (smoke "(load-library \"workout\") defines workout-program-state + workout-gate and machinery fns")
+    (smoke "suggest toy renders the fresh-session doc; 3 completed toy sessions turn state over to level 2 in gate-status")
+    (smoke "abandoned sessions do not advance derived gates")
+    (smoke "workout/gate-assert records ledger rows; gate-status renders them as a summary string"))
+
+  (subsection ksf
+   (doc "Kettlebells StrongFirst C&J (Pavel) built on the gating machinery. Plan A: single-bell long-cycle both days, sets every 30s (weak arm on top of the minute), rep ladder CJ -> CJC -> CJCJ -> CJCJC -> CJCJCJ. A cleared session (Duration fact >= 30 min) advances one +clean/+jerk step; the ladder end hands off to Plan B; 6 short sessions in a row flip to Plan B (RM-retest doctrine). Plan B: cleans day / jerks day (Fri = C, Sun = J under the 2-day variant), sets of 3 -> 4 -> 5 per 30s capped at P5. Clock rail: every 8 completed sessions a 2-session deload (one bell lighter, -4kg/-9lb) holds the pattern. workout/ksf-configure after the LC RM test (weaker arm 6-12RM; targets men 40% BW / women 30% BW max 24kg). Started sessions carry today's suggestion doc so deload/pattern flags ride into gates. Get-ups are side dishes: v1 users log them as facts (LC C&J L/R split + Duration are the recognized exercises).")
+   (status implemented)
+   (implements libs/workout/lib.pp)
+   (verify
+    (smoke "ksf-configure seeds state; suggest renders LCCJ docs on Fri/Sun, OFF otherwise; Plan B suggests C on Fri and J on Sun")
+    (smoke "cleared sessions advance CJ -> CJC -> ... -> CJCJCJ -> handoff to Plan B at P3")
+    (smoke "stall: six short sessions flip phase A to Plan B with retest note")
+    (smoke "deload rail: since_deload >= 8 starts deload_left=2; deload sessions suggest bell -4kg, hold pattern, decrement deload_left")
+    (smoke "home start card creates ksf sessions carrying today's suggestion doc"))
+  )
+
+  (subsection run5k
+   (doc "Run-to-5K walk/run builder on the gating machinery. Week table (18 weeks): Friday = ratio session (shifting jog:walk ratio in a fixed box), Sunday = long session (box grows 20 to ~45 min, w18 = RACE). Deload weeks are table-encoded repeats. Gates: each completed session ticks in_week; after 2 the week turns over - unless a sore gate was asserted mid-week, which repeats the week. Sore asserts are consumed via a monotonic ledger marker (sore_mark) so a mid-week flag survives the intervening session's eval. Talk test (conversational) is the intensity ceiling; maps to workout/gate-assert for the human flow.")
+   (status implemented)
+   (implements libs/workout/lib.pp)
+   (verify
+    (smoke "run5k-configure seeds week 1; suggest renders A goal Fri, B goal Sun, OFF otherwise")
+    (smoke "clean week of 2 completions advances the week; week 5 Sunday renders 60/60/9")
+    (smoke "mid-week sore assert repeats the week exactly once (marker consumed on the decision)")
+    (smoke "home start card creates run5k sessions carrying today's goal doc"))
+  )
+  (subsection sct
+   (doc "Systematic Core Training (Geoff Neupert) on the gating machinery. Three sequential phase sub-cursors - stability (12 session columns) -> strength (9) -> power (12) - driven by the session tables (dead bug columns, hollow hold seconds, leg-raise reps, tuck/L-sit hold seconds, hanging reps, ground holds, kickstand->SL deadlifts). Friday = floor work, Sunday = floor + supported/hanging (bar + 16-32kg bells available, hanging selectable straightaway); ground-based enters at strength S7; power = Sunday carry blocks (24kg / 2x24kg, rotating suitcase -> rack -> overhead -> bottoms-up -> farmers -> double rack -> double overhead, minutes 7 -> 10, RPE waves 7/8/9). Micro-dose on OFF days (breathing + dead bugs + neck drills; submax floor set in strength phase) - the daily practice, never the progressing surface. Session columns advance on every completed sct session, capped at the phase benchmark column; promotion is EXPLICIT: benchmark day renders benchmark_due, then (workout/sct-promote) asserts the ledger (stability-exit / strength-exit) and moves the phase.")
+   (status implemented)
+   (implements libs/workout/lib.pp)
+   (verify
+    (smoke "sct-configure seeds stability s1; suggest renders session-table content per phase and day")
+    (smoke "12 completed sessions cap at the benchmark column; suggest marks benchmark_due")
+    (smoke "sct-promote asserts stability-exit / strength-exit and moves the phase")
+    (smoke "OFF days render the daily micro-dose (stability menu; submax extra in strength phase)"))
+  )
+  (subsection stretch
+   (doc "Quicksilver leapfrog on the gating machinery. Cycle A advances the Front Split (light: reverse hamstring + kneeling lunge prying; medium: pulses+holds to 10/30s; heavy: extended isometric) while the Loaded Straddle holds at Cossack pulses; Cycle B flips. Rhythm rail: Sunday = advancing slot (Pulses+Holds, or Extended Isometric on alternating Sundays once the range is owned - upgrade-only iso_unlocked), Wednesday = medium maintenance slot, everything else prying only. Promotion: own-the-range asserts unlock the iso tool (monotonic ledger marker); (workout/stretch-flip) is explicit when the advancing goal is achieved. Journaling is sparse by design - Sunday/Wednesday slots journaled, daily prying is day-activity. Scene family: all four sct/ksf/run5k/stretch programs + the natively-seeded ksk1-3 live in one journal with shared volume queries (LC C&J, Snatch L/R, Dead Bug reps, Duration minutes ...).")
+   (status implemented)
+   (implements libs/workout/lib.pp)
+   (verify
+    (smoke "stretch-configure seeds cycle A; suggest renders Front Split pulses on Sunday (extended iso only after own-the-range), Cossack maintenance on Wednesday, light prying otherwise")
+    (smoke "own-the-range asserts unlock iso_upgrade-only (never downgrades)")
+    (smoke "stretch-flip asserts cycle-achieved and swaps the leapfrog cycle; cycle B suggests Straddle advancement on Sunday")
+    (smoke "home start card creates stretch sessions carrying the slot doc"))
+  )
+  )
  )
 )
