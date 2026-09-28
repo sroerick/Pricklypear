@@ -299,7 +299,7 @@ write_back() {
     "missing")
       echo "pp-flow: card $id not found; not advancing, not commenting" >&2
       return 3 ;;
-    "ok|"*) cur="${probe#ok|}" ;;
+    "ok|"*) cur="$(printf '%s' "$probe" | cut -d'|' -f2-)" ;;  # ksh #strip: | is pattern alternation, ${probe#ok|} no-ops (turn-4 09-27)
     *)
       echo "pp-flow: unexpected state probe '$probe' for $id; not advancing" >&2
       return 3 ;;
