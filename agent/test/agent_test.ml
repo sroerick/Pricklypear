@@ -411,7 +411,10 @@ let test_route_table_register_and_render ~rt () =
        {|(route/dispatch "chat/render" "GET" "/chat")|})
 
 (** route/dispatch binds a thin request context so query-param /
-    request-method / hx-request? resolve inside the handler. *)
+    request-method / hx-request? resolve inside the handler. HX-Request
+    rides HEADERS, not params (hypermedia-harness request-runner) — a
+    handler must see hx=false when it is only in params, or the whole
+    fragment-vs-page split is meaningless. *)
 let test_route_table_thin_context ~rt () =
   ignore (Runtime.eval_string ~rt
     {|(define (qtest)
@@ -419,8 +422,14 @@ let test_route_table_thin_context ~rt () =
          (query-param "x") "|"
          (if (hx-request?) "hx" "nohx")))|});
   ignore (Runtime.eval_string ~rt {|(route "/q" "qtest")|});
-  Alcotest.check pp_value_testable "thin context resolves"
+  Alcotest.check pp_value_testable "thin context resolves (hx in headers)"
     (Ast.VStr "POST|42|hx")
+    (Runtime.eval_string ~rt
+       {|(route/dispatch "qtest" "POST" "/q"
+           (list (cons "x" "42"))
+           (list (cons "hx-request" "true")))|});
+  Alcotest.check pp_value_testable "params alone do NOT imply hx-request"
+    (Ast.VStr "POST|42|nohx")
     (Runtime.eval_string ~rt
        {|(route/dispatch "qtest" "POST" "/q"
            (list (cons "x" "42") (cons "hx-request" "true")))|})
@@ -498,7 +507,29 @@ let test_libs_hyper_on_agent ~rt () =
           "#out")|});
   Alcotest.check pp_value_testable "stream keeps source"
     (Ast.VStr "old")
-    (Runtime.eval_string ~rt {|(hyper/text pg "#out")|})
+    (Runtime.eval_string ~rt {|(hyper/text pg "#out")|});
+  (* REGRESSION (fragment-vs-page): the click loop must send HX-Request as a
+     HEADER. When hyper/do-swap instead stuffed it into the params alist,
+     hx-request? read false and a handler with distinct fragment/page
+     branches returned its WHOLE-PAGE branch, which soup/swap! then spliced
+     into the target. The "clicker" handler above renders the same markup on
+     both branches, so it could never catch this. This pair CAN: the page
+     carries a button targeting /branchy, and branchy answers a bare
+     fragment under hx and a marked full page without it. *)
+  ignore (Runtime.eval_string ~rt
+    {|(define (branchy)
+       (if (hx-request?)
+           (render-html "<b>fragment</b>")
+           (render-html "<html><body><b>page</b></body></html>")))|});
+  ignore (Runtime.eval_string ~rt {|(route "/branchy" "branchy")|});
+  ignore (Runtime.eval_string ~rt
+    {|(define (branchy/page)
+       (render-html "<div><button id=bb hx-get=/branchy hx-target=#bout>go</button><div id=bout>old</div></div>"))|});
+  ignore (Runtime.eval_string ~rt {|(route "/branchy/page" "branchy/page")|});
+  Alcotest.check pp_value_testable "click takes the fragment branch"
+    (Ast.VStr "fragment")
+    (Runtime.eval_string ~rt
+       {|(hyper/text (hyper/click (hyper/visit "/branchy/page") "#bb" (list)) "#bout")|})
 
 (** surfaces: the chat + code pages are Nopales route-table handlers
     (rendered via libs/html), redefinable live; a consumed turn's captured
