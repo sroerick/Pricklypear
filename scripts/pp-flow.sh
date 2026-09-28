@@ -194,11 +194,17 @@ advance_batch() { pp_todo_val "(begin (load-library \"todo\") (string-append (as
 dest_batch() { pp_todo_val "(begin (load-library \"todo\") (string-append (as-str (todo/set-state $1 $3)) \"|\" (as-str (todo/comment/add $1 $2)) \"|\" (as-str $3) \"|\" (as-str (todo/item/unassign $1))))"; }
 # ONE eval: evidence comment + release lease (card already left its claimed column).
 comment_batch() { pp_todo_val "(begin (load-library \"todo\") (string-append (as-str (todo/comment/add $1 $2)) \"|\" (as-str (todo/item/unassign $1))))"; }
-# ONE eval: state + brief together (state is a short token; the run marker
-# below is randomly generated so card content can never contain it).
-state_and_brief() {
+# ONE eval: state + brief + the card's valid columns together. The state is a
+# short token; the run marker below is randomly generated so card content can
+# never contain it. COLUMNS ride along because the destination validation needs
+# them and a separate probe cost a whole extra round trip on every run that
+# names a destination (found by the card 88a92237 AUTO-lane run: 6 -> 7 round
+# trips). Same eval, same cost as before — the columns come free with the read.
+# Output layout: <state>\n<MARK>\n<brief>\n<MARK>\n<cols>
+COLSEP="PPCUTCOLS${RANDOM}${RANDOM}PPCUT"
+state_brief_cols() {
   MARK="PPCUT${RANDOM}${RANDOM}PPCUT"
-  pp_todo_val "(begin (load-library \"todo\") (string-append (as-str (todo/item/state (todo/item/get $1))) \"\\n$MARK\\n\" (as-str (todo/flow-brief $1))))" | awk -v m="$MARK" 'BEGIN{rs=1} rs==1{ if (index($0,m)==1) {rs=0; sub("^"m"\\n","")} else print; next } {print}'
+  pp_todo_val "(begin (load-library \"todo\") (let ((it (todo/item/get $1))) (string-append (as-str (todo/item/state it)) \"\\n$MARK\\n\" (as-str (todo/flow-brief $1)) \"\\n$COLSEP\\n\" (list/foldl (lambda (a c) (string-append a \",\" (as-str c))) \"\" (todo/state/columns-for-list (as-str (todo/item/list-id it)))))))"
 }
 
 # ONE eval: pick the next claimable card for an unattended drain loop.
@@ -379,31 +385,21 @@ agent_destination() {
 # agent to name the column it wants (an AUTO LOGIC-REVIEW PASS names DONE to
 # skip the human gate), but that is agent-authored text: a hallucinated or
 # typo'd column would be written verbatim by todo/set-state, silently moving a
-# card into a state its list does not define. ONE eval fetches the item's own
-# list columns (the pipeline that governs the card). ok -> echo the column;
-# ok-bad -> echo EMPTY plus a warning, so the caller falls back to the normal
-# one-column advance (the safe default) instead of obeying bad input. A probe
-# failure (missing card / eval error) is treated the same way: never honor an
-# unvalidated destination.
-valid_destination() { # $1 card-id-expr  $2 candidate
-  cand="$2"
+# card into a state its list does not define. The columns were already read by
+# state_brief_cols (folded into the claim-time eval), so this is PURE SHELL —
+# no extra round trip. An earlier revision probed the habitat here, which cost
+# a whole extra /api/eval on every run naming a destination (the 6 -> 7
+# regression card 88a92237's CODE and LOGIC-REVIEW passes both caught).
+# $1 candidate column  $2 the card's columns as ",A,B,C"
+valid_destination() {
+  cand="$1"
+  cols="$2"
   [ -n "$cand" ] || return 0
-  probe="$(pp_todo_val "(begin (load-library \"todo\") (let ((it (todo/item/get $1))) (if (null? it) (string-append \"missing\") (string-append \"ok|\" (as-str (todo/item/state it)) \"|\" (list/foldl (lambda (a c) (string-append a \",\" (as-str c))) \"\" (todo/state/columns-for-list (as-str (todo/item/list-id it))))))))")"
-  case "$probe" in
-    ok"|"*)
-      cols="${probe#ok|}"; cols="${cols#*|}"
-      # cols is ",TODO,CODE,..."; exact match on a comma-delimited token
-      case ",$cols," in
-        *",$cand,"*) printf '%s\n' "$cand"; return 0 ;;
-      esac
-      echo "pp-flow: agent DESTINATION '$cand' is not a column of this card's list ($cols); ignoring it and advancing one column" >&2
-      return 0
-      ;;
-    *)
-      echo "pp-flow: could not verify DESTINATION '$cand' (probe='$probe'); ignoring it and advancing one column" >&2
-      return 0
-      ;;
+  case ",$cols," in
+    *",$cand,"*) printf '%s\n' "$cand"; return 0 ;;
   esac
+  echo "pp-flow: agent DESTINATION '$cand' is not a column of this card's list ($cols); ignoring it and advancing one column" >&2
+  return 0
 }
 
 # extract the last EVIDENCE: line from the agent transcript — the card comment
@@ -508,18 +504,37 @@ case "$MODE" in
     T0=$(date +%s)
     lease="$(claim)" || exit $?
     echo "pp-flow: claimed $CARD lease=$lease"
-    # ONE round trip for claimed state + brief (split on a random marker line
-    # card content can never contain). The state rides first so the
-    # double-write defense gets a real baseline (gregor run-3 fix).
-    sb="$(state_and_brief "$(json_str "$CARD")")"
+    # ONE round trip for claimed state + brief + columns. The state rides
+    # first so the double-write defense gets a real baseline (gregor run-3
+    # fix); the columns ride last so valid_destination can check the agent's
+    # named column WITHOUT a second habitat probe (see state_brief_cols).
+    sb="$(state_brief_cols "$(json_str "$CARD")")"
     claimed_state="$(printf '%s\n' "$sb" | sed -n '1p')"
-    b="$(printf '%s\n' "$sb" | sed -n "2,\$p")"
+    # strip the trailing COLSEP + columns off the end, leaving the brief
+    card_cols="$(printf '%s\n' "$sb" | awk -v sep="$COLSEP" 'f{print;next} $0==sep{f=1}')"
+    b="$(printf '%s\n' "$sb" | awk -v sep="$COLSEP" '$0==sep{exit} {print}' | sed -n '3,$p')"
     if [ -z "$b" ]; then
       echo "pp-flow: no such card $CARD after claim" >&2
       exit 1
     fi
     BRIEF_FILE="$LOG_DIR/flow-$SHORT.brief.md"
     printf '%s\n' "$b" > "$BRIEF_FILE"
+    # TERMINAL CONTRACT, appended by the DRIVER (autonomy hardening,
+    # 2026-09-27): the per-column recipe already asks for a verdict, but a
+    # reviewer answered the question and never rendered one (card 88a92237),
+    # so the card advanced with no decision. The recipe is card CONTENT (lives
+    # in the list datum, editable, and a fresh list may not have one at all);
+    # putting the last word HERE makes the contract structural for every
+    # column and every list, including ones with no recipe configured. It is
+    # phrased as a hard requirement and names the exact machine-read shape.
+    case "$claimed_state" in
+      *REVIEW*)
+        printf '\n== MANDATORY VERDICT (driver contract) ==\nYour run returns a STRUCTURED object: the fields `verdict` (= PASS | FAIL |\nESCALATE) and `evidence` are REQUIRED — a response without them is REJECTED\nby the provider and the review is treated as aborted.\n  verdict: PASS      = the work meets its acceptance criteria (name the target\n                       column in `destination` when the recipe calls for one,\n                       e.g. DONE on the AUTO lane or HUMAN-REVIEW elsewhere)\n  verdict: FAIL      = set destination: CODE and say exactly what to fix\n  verdict: ESCALATE  = repeat failure / needs a human: destination:\n                       HUMAN-REVIEW, explain why\n`evidence` = what you checked AND how (the command you ran and its result).\nDo NOT answer the review without rendering a verdict.\n' >> "$BRIEF_FILE"
+        ;;
+      *)
+        printf '\n== MANDATORY RESULT FIELDS (driver contract) ==\nYour run returns a STRUCTURED object: `verdict` and `evidence` are REQUIRED\nfields (a response without them is REJECTED by the provider).\n  verdict:   PASS for completed work, FAIL when it does not meet the criteria,\n             ESCALATE when a human is needed.\n  destination: the target column, when this column recipe names one.\n  evidence:  what you did AND how you verified it (command + result).\n' >> "$BRIEF_FILE"
+        ;;
+    esac
     echo "pp-flow: brief -> $BRIEF_FILE"
     PI_RUNNER="${PP_FLOW_PI:-pi -p}"
     LOG_FILE="$LOG_DIR/flow-$SHORT.log"
@@ -545,7 +560,30 @@ case "$MODE" in
     # Never obey an unvalidated column: the agent names the destination, but
     # the card's real pipeline has the final say (an AUTO PASS naming DONE is
     # honored; a hallucinated column falls back to the one-column advance).
-    dest="$(valid_destination "$(json_str "$CARD")" "$dest")"
+    dest="$(valid_destination "$dest" "$card_cols")"
+    # NO-VERDICT DETECTION (autonomy hardening, 2026-09-27): a REVIEW column's
+    # whole contract is a VERDICT (PASS -> DESTINATION, FAIL -> DESTINATION),
+    # but a structured-summary model can answer the review question and simply
+    # never render one. Observed live on the AUTO lane (card 88a92237): the
+    # LOGIC-REVIEW reviewer produced a thorough, correct analysis — and no
+    # verdict — so the card advanced one column and parked in HUMAN-REVIEW,
+    # indistinguishable from a deliberate escalation. Silent ambiguity is the
+    # dangerous part in an unattended loop, so name it: a review that rendered
+    # no destination gets a clearly-marked comment and a stderr warning. The
+    # advance is still the conservative one-column step (for a stream WITH a
+    # human gate that is the correct review->human handoff; for AUTO the card
+    # lands in HUMAN-REVIEW, i.e. it fails SAFE toward a human rather than
+    # closing a card on a verdict that was never given).
+    noverdict=0
+    case "$claimed_state" in
+      *REVIEW*)
+        if [ -z "$dest" ]; then
+          noverdict=1
+          echo "pp-flow: WARNING review column '$claimed_state' rendered NO verdict (no DESTINATION line); advancing one column conservatively rather than closing" >&2
+          evid="pp-flow: [NO VERDICT RENDERED — the reviewer did not name a DESTINATION. Advanced one column conservatively; read the summary below and re-run if a decision is needed.] $evid"
+        fi
+        ;;
+    esac
     if [ "$rc" -ne 0 ]; then
       # OBSERVABILITY: a failed run used to vanish (claim released, no card
       # trace). Post a failure comment so the card feed shows every run.
@@ -569,8 +607,14 @@ case "$MODE" in
     wbrc=$?
     final_state="$(card_state "$(json_str "$CARD")")"
     T1=$(date +%s)
+    # NOTE: test the VALUE, not ${noverdict:+...} — noverdict is initialized to
+    # 0, and "0" is a non-empty string, so a :+ expansion flagged EVERY run as
+    # no-verdict (caught by the post-change regression run: a plain TODO->CODE
+    # reported "destination= (no-verdict)").
+    nodest="$dest"
+    [ "$noverdict" = 1 ] && nodest="(no-verdict)"
     ledger_line "$(date -u +%FT%TZ)" "$CARD" "$PI_RUNNER" "$(( T1 - T0 ))" "$AGENT_S" "$rc" "$EVFLAG" "$dest" "$claimed_state" "$final_state"
-    run_summary "$CARD" "$PI_RUNNER" "$(( T1 - T0 ))" "$AGENT_S" "$rc" "$EVFLAG" "$dest" "$claimed_state" "$final_state"
+    run_summary "$CARD" "$PI_RUNNER" "$(( T1 - T0 ))" "$AGENT_S" "$rc" "$EVFLAG" "$nodest" "$claimed_state" "$final_state"
     echo "pp-flow: write-back complete for $CARD"
     [ "$wbrc" -eq 0 ] || exit "$wbrc"
     ;;
