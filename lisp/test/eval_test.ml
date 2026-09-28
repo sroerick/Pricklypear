@@ -441,6 +441,44 @@ let eval_tests = [
       with Ast.Interp_error _ -> true
     in
     Alcotest.(check bool) "arity mismatch raises" true raised);
+  (* i-1790560913: HOF special forms reify in VALUE position. The env
+     binds them as VPrim values (image session does; tests bind the same
+     way) and apply_step dispatches the five by name. *)
+  ("eval: apply is a first-class value", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    Env.define env "apply" (Ast.VPrim "apply");
+    (* bare env: bind a 2-arg prim instead of assuming + *)
+    Eval.register_prim prims "add2"
+      (fun args -> match args with
+         | [ Ast.VInt a; Ast.VInt b ] -> Ast.VInt (Int64.add a b)
+         | _ -> Ast.VNil);
+    Env.define env "add2" (Ast.VPrim "add2");
+    let got = (Eval.eval_string ~prims env
+      "(begin (define f apply) (f (lambda (a b) (add2 a b)) '(1 2)))") in
+    Alcotest.(check string) "apply reified and callable" "3"
+      (Reader.pp_value got));
+  ("eval: list/map first-class", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    Env.define env "list/map" (Ast.VPrim "list/map");
+    Eval.register_prim prims "sq"
+      (fun args -> match args with
+         | [ Ast.VInt a ] -> Ast.VInt (Int64.mul a a)
+         | _ -> Ast.VNil);
+    Env.define env "sq" (Ast.VPrim "sq");
+    let got = (Eval.eval_string ~prims env
+      "(begin (define m list/map) (m (lambda (x) (sq x)) '(1 2 3)))") in
+    Alcotest.(check string) "map via value" "(1 4 9)"
+      (Reader.pp_value got));
+  ("eval: apply passes through a HOF", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    Env.define env "apply" (Ast.VPrim "apply");
+    let got = (Eval.eval_string ~prims env
+      "(begin (define cw (lambda (g) (g (lambda (a b) b) '(7 3)))) (cw apply))") in
+    Alcotest.(check string) "apply passed as argument" "3"
+      (Reader.pp_value got));
   ("eval: optional param omitted", `Quick, fun () ->
     let prims = Eval.make_prim_table () in
     let env = Env.create () in
