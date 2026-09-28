@@ -46,6 +46,26 @@
     todo/state/options-for-item
 ))
 
+;; Declare the card-thread datum types as BARE top-level deftype forms
+;; (the edit/suno/upsets convention) — deliberately NOT as a call to
+;; todo/comments-init!.
+;;
+;; WHY (prod 2026-09-27): a top-level CALL is unsafe in a seed package.
+;; libs/todo/lib.pp is 3000+ lines and loads under the boot-seed skip,
+;; which skips every define whose name already exists on system/main.
+;; A tail-position (todo/comments-init!) therefore depends on both
+;;   (a) every earlier form evaluating — one reader error anywhere above
+;;       aborts the package mid-file (rb's unbalanced paren did exactly
+;;       that: the load died at form 102 and the deftypes never landed,
+;;       so every card write raised `unbound: todo/comments-init!`), and
+;;   (b) the seed NOT skipping the define three lines above it, which is
+;;       false on any warm branch (`form 2 failed: unbound`).
+;; deftype is an allowed top-level head, is never skipped, needs no
+;; sibling binding, and a non-admin load degrades to a soft "denied"
+;; string instead of aborting. Placed FIRST so nothing can precede it.
+(deftype 'todo-comment 'item_id 'body)
+(deftype 'todo-event 'item_id 'from_state 'to_state)
+
 (define todo/active-items
   (lambda
     (items)
@@ -1907,8 +1927,11 @@
         (lambda (n) (todo/datum/feed-entry "event" n))
         (todo/event/list item)))))
 
-;; seed the datum types on load (idempotent; no-ops when already present)
-(todo/comments-init!)
+;; NOTE (2026-09-27): the two deftype forms run at the TOP of this file —
+;; see the comment there. They are deliberately NOT called here as
+;; (todo/comments-init!): a tail call executes only when every earlier
+;; form evaluated AND is not boot-seed-skipped, so one reader error
+;; anywhere above silently skipped the declarations (prod 2026-09-27).
 
 ;; ------------------------------------------------------------------
 ;; column recipes (workstreams.borg column-recipes) — the bridge between
