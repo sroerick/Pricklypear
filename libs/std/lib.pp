@@ -9,6 +9,7 @@
     list/foldl
     list/range
     list/take
+    list-ref
     map
     filter
     foldl
@@ -74,6 +75,15 @@
   (lambda (n)
     (list/range-acc n (list)))
   "List of integers 0 .. n-1.")
+
+;; (list-ref xs i) — the HISTORICAL name for nth (kernel prim). The old
+;; libs/_root alias was vault-deleted in 612a4e6 (2026-09-06) but a leaked
+;; pin kept main serving it; astro (11), rb (11) and calendar (1) call it
+;; (i-1790560893). This is the INTENTIONAL vault definition: a clean
+;; reseed/bootstrap must seed the alias, not strand the 23 call sites.
+(define list-ref nth
+  "list-ref is nth: the i-th element of xs (0-based). Intentional alias —
+libs/_root's historical name, still called by astro/rb/calendar.")
 
 (define list/range-acc
   (lambda (n acc)

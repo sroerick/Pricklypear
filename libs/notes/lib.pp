@@ -1156,6 +1156,41 @@
           slug))))
   "Insert or update a note into a given folder.")
 
+;; (notes/doc/get-dict slug) — dict view of doc/get: {id,slug,title,outline,
+;; tags,kind,day,folder}, outline as a JSON array string (json-emit). Stops
+;; callers car/cdr-laddering the positional tuple (Board card b0863753).
+(define notes/doc/get-dict
+  (lambda (slug)
+    (let* ((row (notes/doc/get slug)))
+      (if (null? row)
+          ()
+          (let* ((d0 (dict-set "{}" "id" (as-str (nth row 0))))
+                 (d1 (dict-set d0 "slug" (as-str (nth row 1))))
+                 (d2 (dict-set d1 "title" (as-str (nth row 2))))
+                 (d3 (dict-set d2 "outline" (json-emit (nth row 3))))
+                 (d4 (dict-set d3 "tags" (as-str (nth row 4))))
+                 (d5 (dict-set d4 "kind" (as-str (nth row 5))))
+                 (d6 (dict-set d5 "day" (as-str (nth row 6)))))
+            (dict-set d6 "folder" (as-str (nth row 7))))))))
+
+;; (notes/doc/append-node slug node-slug title body) — ONE call read-modify-
+;; upsert: append a top-level heading to the note's outline (or create the
+;; note when missing). Covers log/sessions-style registers (Board b0863753).
+;; The outline arg is the ROOT node [id title body todo kids]; append goes
+;; into its kids. Day rides now-iso on create.
+(define notes/doc/append-node
+  (lambda (slug node-slug title body)
+    (let* ((node (list (as-str node-slug) (as-str title) (as-str body) "" (list)))
+           (row (notes/doc/get slug)))
+      (if (null? row)
+          (notes/doc/upsert slug (as-str title)
+                            (list "root" (as-str title) "" "" (list node))
+                            "" "" (substring (now-iso) 0 10))
+          (let* ((root (nth row 3))
+                 (new-root (outline/set-kids root (append (outline/kids root) (list node)))))
+            (notes/doc/upsert (as-str (nth row 1)) (as-str (nth row 2)) new-root
+                              (as-str (nth row 4)) (as-str (nth row 5)) (as-str (nth row 6))))))))
+
 (define notes/edit-form
   (lambda
     (slug outline)
