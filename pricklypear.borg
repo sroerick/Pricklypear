@@ -529,6 +529,19 @@
         from borge/workstreams.borg.")
   (inline borge/workstreams.borg)
  )
+ (section security
+  (doc "Book chapter — security doctrine across three horizons:
+        LOW (the concrete capability/auth/data boundaries and the
+        September-2026 hardening receipt), MID (the agent-era threat
+        model: untrusted content, injection-to-effect, budgets as a
+        security property, countermeasure vs retaliation), HIGH
+        (attacker abundance, partition, issuer-gated identity,
+        redundant residence, signing, exit, the cactus doctrine).
+        Owns the threat model and the laws; each mechanism it names
+        is owned by its own chapter. Full text inlined from
+        borge/security.borg.")
+  (inline borge/security.borg)
+ )
  (section habitat-book
   (doc "Book chapter — the spec IS the book: borg chapters rendered
         to paper (borge) and to the habitat (Nopales `book` package),
