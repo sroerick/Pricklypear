@@ -60,6 +60,51 @@ let url_host (url : string) : string =
      | _ -> authority)
   else cut_at authority ':'
 
+(* Port portion of a URL for the --resolve pin: explicit :port after the
+   host (after ']' for bracketed IPv6), else the scheme default (https
+   443, anything else 80). Same parse discipline as url_host. *)
+let url_port (url : string) : string option =
+  let cut_at s c =
+    match String.index_opt s c with
+    | Some i -> String.sub s 0 i
+    | None -> s
+  in
+  let rec after_scheme i =
+    if i + 3 > String.length url then None
+    else if url.[i] = ':' && url.[i + 1] = '/' && url.[i + 2] = '/' then
+      Some (i + 3)
+    else after_scheme (i + 1)
+  in
+  let rest =
+    match after_scheme 0 with
+    | Some i -> String.sub url i (String.length url - i)
+    | None -> url
+  in
+  let authority = cut_at (cut_at (cut_at rest '/') '?') '#' in
+  let authority =
+    match String.rindex_opt authority '@' with
+    | Some i -> String.sub authority (i + 1) (String.length authority - i - 1)
+    | None -> authority
+  in
+  let explicit =
+    if String.length authority >= 2 && authority.[0] = '[' then
+      (* bracketed IPv6 literal, optional :port after ']' *)
+      (match String.index_opt authority ']' with
+       | Some i when i + 1 < String.length authority && authority.[i + 1] = ':' ->
+           Some (String.sub authority (i + 2) (String.length authority - i - 2))
+       | _ -> None)
+    else
+      (match String.index_opt authority ':' with
+       | Some i -> Some (String.sub authority (i + 1) (String.length authority - i - 1))
+       | None -> None)
+  in
+  match explicit with
+  | Some p when p <> "" -> Some p
+  | _ ->
+      let s = String.lowercase_ascii url in
+      if String.length s >= 8 && String.sub s 0 8 = "https://" then Some "443"
+      else Some "80"
+
 (* Loopback / private / link-local space, v4 and v6. *)
 let private_subnets : Ipaddr.Prefix.t list =
   List.map Ipaddr.Prefix.of_string_exn
@@ -78,24 +123,41 @@ let addr_is_private (addr : Unix.inet_addr) : bool =
   | Ok ip -> List.exists (Ipaddr.Prefix.mem ip) private_subnets
   | Error _ -> true (* unparseable: fail closed *)
 
-(* True when the URL's host resolves into private space. Resolution
-   failure is NOT a block: curl surfaces it as its own transient. *)
-let egress_blocked (url : string) : bool =
+(** Validate the URL's host against the private-space blocklist and return
+    the pin for curl: (host, ip, blocked). i-1788670187: the old shape was
+    resolve-then-curl — the guard resolved the host, checked the addresses,
+    and curl RE-RESOLVED independently at fetch time, so a rebinding DNS
+    answer (TTL 0) walked straight past the blocklist. Now the guard returns
+    the address it validated and the caller pins it into curl via
+    --resolve host:port:ip, so the fetch uses the SAME address the check
+    saw. [blocked] is true when ANY resolved address is private (fail
+    closed on unparseable, as before). Unresolvable hosts yield
+    blocked=false with no pin (""): curl surfaces resolution failure as
+    its own transient, and there is nothing to pin. None when the URL has
+    no host (relative/odd) — caller skips both gate and pin. *)
+let egress_pin (url : string) : (string * string * bool) option =
   let host = url_host url in
-  host <> ""
-  && (match
-        (try
-           Unix.getaddrinfo host "80" [ Unix.AI_SOCKTYPE Unix.SOCK_STREAM ]
-         with _ -> [])
-      with
-      | [] -> false
-      | addrs ->
-          List.exists
+  if host = "" then None
+  else
+    let addrs =
+      (try Unix.getaddrinfo host "80" [ Unix.AI_SOCKTYPE Unix.SOCK_STREAM ]
+       with _ -> [])
+    in
+    match addrs with
+    | [] -> Some (host, "", false)
+    | _ ->
+        let parsed =
+          List.filter_map
             (fun ai ->
-               match ai.Unix.ai_addr with
-               | Unix.ADDR_INET (a, _) -> addr_is_private a
-               | Unix.ADDR_UNIX _ -> true)
-            addrs)
+              match ai.Unix.ai_addr with
+              | Unix.ADDR_INET (a, _) ->
+                  Some (Unix.string_of_inet_addr a, addr_is_private a)
+              | Unix.ADDR_UNIX _ -> Some ("", true))
+            addrs
+        in
+        let blocked = List.exists snd parsed in
+        let ip = fst (List.hd parsed) in
+        Some (host, ip, blocked)
 
 (* Shared outbound-HTTP engine behind http-get (borge/image.borg
    primitives-layer) and http-post (borge/image.borg outbound-http).
@@ -133,21 +195,35 @@ let do_http (name : string)
      (DB, admin faces, cloud metadata). Opt-out: env
      PP_NET_EGRESS_UNRESTRICTED=1.
 
-     KNOWN RESIDUAL (documented, accepted): only the URL's initial host
-     is resolved here — curl -L follows redirects itself, so a public
-     URL that 3xx-redirects to a private address can still bounce past
-     this blocklist. Closing it needs a local proxy or curl metadata
-     hooks; out of scope for this fix. *)
-  (match Sys.getenv_opt "PP_NET_EGRESS_UNRESTRICTED" with
-   | Some "1" -> ()
-   | _ ->
-       if egress_blocked url then
-         raise
-           (Interp_error
-              (Prim_error
-                 ( name
-                 , "blocked: target host resolves to a private/loopback/link-local address (egress restricted)"
-                 , "denied" ))));
+     TOCTOU CLOSED (i-1788670187): the validated address is PINNED into
+     curl via --resolve host:port:ip, so the fetch cannot re-resolve to a
+     different (private) address between the check and the connection.
+
+     KNOWN RESIDUAL (documented, accepted): curl -L follows redirects
+     itself — a public URL that 3xx-redirects to a NEW hostname re-resolves
+     unpinned and can still bounce past this blocklist. The pin covers the
+     initial request only. Closing the redirect path needs a local proxy
+     or curl metadata hooks; unchanged scope. *)
+  let resolve_pin =
+    match Sys.getenv_opt "PP_NET_EGRESS_UNRESTRICTED" with
+    | Some "1" -> None
+    | _ ->
+        (match egress_pin url with
+         | None -> None
+         | Some (host, ip, blocked) ->
+             if blocked then
+               raise
+                 (Interp_error
+                    (Prim_error
+                       ( name
+                       , "blocked: target host resolves to a private/loopback/link-local address (egress restricted)"
+                       , "denied" )));
+             (match ip with
+              | "" -> None
+              | ip ->
+                  let port = match url_port url with Some p -> p | None -> "80" in
+                  Some (Printf.sprintf "%s:%s:%s" host port ip)))
+  in
   let hdr_tmp = ref "" and body_tmp = ref "" and req_tmp = ref "" in
   (* Fun.protect keeps hdr/body/req temp files off disk on every path,
      including exceptions from temp creation, curl and parsing. *)
@@ -173,9 +249,15 @@ let do_http (name : string)
                 (shell_quote !req_tmp)
           | None -> ""
         in
+        let pin_arg =
+          match resolve_pin with
+          | Some pin -> "--resolve " ^ shell_quote pin
+          | None -> ""
+        in
         let cmd =
           Printf.sprintf
-            "curl -sS -L --max-redirs 5 -D %s -o %s --max-time %d %s %s %s 2>&1"
+            "curl -sS -L --max-redirs 5 %s -D %s -o %s --max-time %d %s %s %s 2>&1"
+            pin_arg
             (shell_quote !hdr_tmp)
             (shell_quote !body_tmp)
             (max 1 (timeout / 1000))

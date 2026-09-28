@@ -384,7 +384,18 @@ let verify_password (store : Store.t) ~(username : string)
      returns None immediately with no DB work. Only ever engages after
      recorded failures, so ordinary correct logins are never blocked. *)
   let throttle_key = String.lowercase_ascii username in
-  if not (Auth_throttle.admit throttle_key (Auth_throttle.now ())) then None
+  let now = Auth_throttle.now () in
+  (* Per-IP gate (i-1787970741): keyed by the request source IP when known.
+     Both gates must admit; an IP sweep across many usernames hits the IP
+     bucket even though no single username does. Empty ip = no IP bucket
+     (the username gate still applies). *)
+  let ip_ok =
+    match source_ip with
+    | Some ip when String.trim ip <> "" ->
+        Auth_throttle.admit_ip (String.trim ip) now
+    | _ -> true
+  in
+  if not (Auth_throttle.admit throttle_key now) || not ip_ok then None
   else
     (* tmp/eval-fast-path: cached positive verify (i-1787300749) — no
        argon2, no DB, no log on hit. *)
@@ -405,6 +416,10 @@ let verify_password (store : Store.t) ~(username : string)
         in
         let () =
           Auth_throttle.record_failure throttle_key (Auth_throttle.now ());
+          (match source_ip with
+           | Some ip when String.trim ip <> "" ->
+               Auth_throttle.record_failure_ip (String.trim ip) (Auth_throttle.now ())
+           | _ -> ());
           log_auth store ~kind:"password" ~success:false ?source_ip ()
         in
         None
@@ -412,6 +427,10 @@ let verify_password (store : Store.t) ~(username : string)
         if Auth_password.verify_password ~stored password then
           let () =
             Auth_throttle.clear throttle_key;
+            (match source_ip with
+             | Some ip when String.trim ip <> "" ->
+                 Auth_throttle.clear_ip (String.trim ip)
+             | _ -> ());
             verify_cache_put key user;
             log_auth store ~user_id:user.id ~kind:"password" ~success:true
               ?source_ip ()
@@ -446,6 +465,10 @@ let verify_password (store : Store.t) ~(username : string)
         else
           let () =
             Auth_throttle.record_failure throttle_key (Auth_throttle.now ());
+            (match source_ip with
+             | Some ip when String.trim ip <> "" ->
+                 Auth_throttle.record_failure_ip (String.trim ip) (Auth_throttle.now ())
+             | _ -> ());
             log_auth store ~user_id:user.id ~kind:"password" ~success:false
               ?source_ip ()
           in

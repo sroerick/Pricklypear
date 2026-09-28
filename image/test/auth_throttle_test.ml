@@ -101,6 +101,55 @@ let table_bounded () =
   check_bool "evicted key admits" true (T.admit "t-flood-0" 1001.0);
   check_bool "fresh key admits" true (T.admit "t-flood-fresh" 1001.0)
 
+(* --- per-IP gate (i-1787970741 second half): same machinery, own bucket
+   space keyed by source IP, independent of the username table. *)
+
+let record_n_ip key n =
+  for i = 0 to n - 1 do
+    T.record_failure_ip key (1.0 +. float_of_int i)
+  done
+
+let ip_gate_engages_backoff () =
+  let key = "ip-threshold" in
+  check_bool "clean ip admits" true (T.admit_ip key 0.0);
+  record_n_ip key maxf;
+  check_bool "locked ip at threshold" false (T.admit_ip key 20.0);
+  check_bool "other ips unaffected" true (T.admit_ip "ip-other" 20.0);
+  check_bool "username gate independent of ip lock" true
+    (T.admit "some-user" 20.0)
+
+let ip_backoff_doubles_and_expires () =
+  let key = "ip-double" in
+  record_n_ip key (maxf + 1);
+  (* 11 failures, last at t=11 -> first lockout doubles base: 60s -> 71. *)
+  check_bool "1 past threshold: doubled base backoff" false (T.admit_ip key 61.0);
+  check_bool "admitted at 71" true (T.admit_ip key 71.0);
+  (* A further failure now (t=71) -> 12 in window -> 120s from t=71. *)
+  T.record_failure_ip key 71.0;
+  check_bool "12th failure locks 120s" false (T.admit_ip key 190.0);
+  (* Once the burst slides out of the 900s window the key frees. *)
+  check_bool "expired ip failures free the key" true (T.admit_ip key 975.0)
+
+let ip_clear_resets () =
+  let key = "ip-clear" in
+  record_n_ip key maxf;
+  check_bool "locked before clear" false (T.admit_ip key 20.0);
+  T.clear_ip key;
+  check_bool "admitted after clear" true (T.admit_ip key 20.0)
+
+let both_gates_compose () =
+  (* The verify_password policy: admit requires BOTH gates. Simulate the
+     composition the caller does: a username under its threshold but an
+     IP past its own = the attempt is denied by the ip half. *)
+  let user = "compose-user" and ip = "compose-ip" in
+  T.record_failure user 1.0;
+  record_n_ip ip maxf;
+  let both_admit = T.admit user 20.0 && T.admit_ip ip 20.0 in
+  check_bool "ip gate denies despite clean username" false both_admit;
+  T.clear_ip ip;
+  check_bool "both admit after ip clear" true
+    (T.admit user 20.0 && T.admit_ip ip 20.0)
+
 let () =
   pin_env ();
   Alcotest.run "auth_throttle"
@@ -112,4 +161,8 @@ let () =
           ("backoff capped at 900s", `Quick, backoff_capped);
           ("sliding window expires", `Quick, sliding_window_expires);
           ("clear resets", `Quick, clear_resets);
-          ("table bounded at 4096", `Quick, table_bounded) ]) ]
+          ("table bounded at 4096", `Quick, table_bounded);
+          ("ip gate engages backoff", `Quick, ip_gate_engages_backoff);
+          ("ip backoff doubles and expires", `Quick, ip_backoff_doubles_and_expires);
+          ("ip clear resets", `Quick, ip_clear_resets);
+          ("both gates compose", `Quick, both_gates_compose) ]) ]

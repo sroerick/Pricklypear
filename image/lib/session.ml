@@ -2223,7 +2223,24 @@ let call_handler (t : t) ?request (handler_name : string)
                ~file:(not (Ops_incidents.is_expected_runtime_error exn))
                ~context:[("handler", handler_name)]
                msg;
-             (Handler_error msg))
+             (* i-1787971008: the CLIENT-facing message must not carry raw
+                exception text. Controlled surface (Interp_error / Reader
+                _error — the interpreter's own error values, including
+                handler-deliberate (error "...") prims) passes through so
+                handler UX keeps its messages. Everything else (PG/pgx
+                errors, Match_failure, Nopales exceptions from OCaml
+                land) is an UNCONTROLLED exn: full detail stays in the
+                ops incident above; the client gets a generic line. The
+                raw-exn 500 path in http.ml is already generic — this
+                closes the same leak for the Handler_error render sites. *)
+             let client_msg =
+               match exn with
+               | Pricklypear_lisp.Ast.Interp_error _
+               | Pricklypear_lisp.Reader.Reader_error _ -> msg
+               | _ -> "handler error (correlated in the ops log)"
+               
+             in
+             (Handler_error client_msg))
       in
       if is_public_handler () then begin
         public_gate_result :=
