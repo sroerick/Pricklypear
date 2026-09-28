@@ -254,6 +254,13 @@ let rehydrate (t : t) : unit =
       Pricklypear_lisp.Env.define t.eval_state.env name
         (Pricklypear_lisp.Ast.VPrim name))
     t.kernel_catalog;
+  (* First-class HOF special forms (i-1790560913) — same env-only bind as
+     session make; checkout rehydrate must not lose them. *)
+  List.iter
+    (fun n ->
+      Pricklypear_lisp.Env.define t.eval_state.env n
+        (Pricklypear_lisp.Ast.VPrim n))
+    [ "apply"; "list/map"; "list/filter"; "list/foldl"; "list/foldr" ];
   Pricklypear_lisp.Env.define t.eval_state.env "load-string"
     (Pricklypear_lisp.Ast.VPrim "load-string");
   Pricklypear_lisp.Env.define t.eval_state.env "eval-string"
@@ -1683,6 +1690,13 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
     (fun name _ ->
       Pricklypear_lisp.Env.define env name (Pricklypear_lisp.Ast.VPrim name))
     prim_table;
+  (* First-class HOF special forms (i-1790560913): value position reifies
+     them as VPrim values; Eval.apply_step dispatches the five by name.
+     NOT in the prim table (head position stays the special form) — this
+     is env-only, so the bulk catalog loop above misses them. *)
+  List.iter
+    (fun n -> Pricklypear_lisp.Env.define env n (Pricklypear_lisp.Ast.VPrim n))
+    [ "apply"; "list/map"; "list/filter"; "list/foldl"; "list/foldr" ];
   (* lisp-interpreter.math: pi is a bound value, not a zero-arg prim. *)
   Pricklypear_lisp.Env.define env "pi" (Pricklypear_lisp.Ast.VFloat Float.pi);
   Primitives.register prim_table "load-string"

@@ -1056,6 +1056,49 @@ and apply_step
         (Interp_error
            (User_error
               ("macro must be applied by name (not as first-class apply)", "bad-args")))
+  | VPrim name when
+      name = "apply"
+      || name = "list/map"
+      || name = "list/filter"
+      || name = "list/foldl"
+      || name = "list/foldr" ->
+      (* First-class HOF special forms (i-1790560913): these five names are
+         special forms in HEAD position; in VALUE position they reify as
+         [VPrim] values (session.ml env-binds them) and dispatch HERE with
+         already-evaluated args. Same semantics as the special-form arms
+         above (one eval step, closures and prims both work). Control forms
+         (cond/and/or/if/...) stay head-position-only: their lazy
+         short-circuit semantics have no coherent eager first-class
+         reading, and the core-freeze doc notes that. *)
+      (match name, args with
+        | "apply", [ f; VList xs ] ->
+            Done (apply ~budget ~prims f xs)
+        | "apply", [ _; _ ] ->
+            raise
+              (Interp_error
+                 (User_error ("apply needs (f args-list)", "bad-args")))
+        | "list/map", [ f; VList xs ] ->
+            Done (VList (List.map (fun x -> apply ~budget ~prims f [ x ]) xs))
+        | "list/filter", [ p; VList xs ] ->
+            Done
+              (VList
+                 (List.filter
+                    (fun x -> truthy (apply ~budget ~prims p [ x ]))
+                    xs))
+        | "list/foldl", [ f; init; VList xs ] ->
+            Done
+              (List.fold_left
+                 (fun acc x -> apply ~budget ~prims f [ acc; x ])
+                 init xs)
+        | "list/foldr", [ f; init; VList xs ] ->
+            Done
+              (List.fold_left
+                 (fun acc x -> apply ~budget ~prims f [ x; acc ])
+                 init (List.rev xs))
+        | _, _ ->
+            raise
+              (Interp_error
+                 (User_error (name ^ ": argument must be a list", "bad-args"))))
   | VPrim name ->
       let _ = prims in
       (* prim_calls counted at App/Prim call sites *)
