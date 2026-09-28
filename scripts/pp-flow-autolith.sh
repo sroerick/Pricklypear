@@ -310,6 +310,7 @@ rc=$?
 # the model gets a validated object. Mapping: evidence -> EVIDENCE:;
 # destination (or the verdict's implied column) -> DESTINATION:. Verdict PASS
 # with no destination falls back to the column recipe default by staying empty.
+structured=0
 if [ $rc -ne 0 ] || [ -z "$result" ]; then
   if tr -d '\n' < "$WORK.out" | grep -q ':RESULT[[:space:]]*(:OBJECT'; then
     flat="$(tr -d '\n' < "$WORK.out")"
@@ -318,23 +319,31 @@ if [ $rc -ne 0 ] || [ -z "$result" ]; then
     overdict="$(printf '%s' "$flat" | sed -n 's/.*("verdict"[[:space:]]*"\([^"]*\)").*/\1/p')"
     result="$oev"
     rc=0
-    [ -n "$odest" ] && result="$result\nDESTINATION: $odest"
+    structured=1
     echo "pp-flow-autolith: structured verdict=${overdict:-none} destination=${odest:-none}" >&2
   fi
 fi
 [ $rc -eq 0 ] || { echo "pp-flow-autolith: could not extract :RESULT from job output" >&2; exit 1; }
 printf '%s\n' "$result"
-# EVIDENCE CONTRACT BRIDGE: the :RESULT is the executor's curated terminal
-# summary, but flash-tier models do not reliably emit the brief's literal
-# 'EVIDENCE:' line - without it pp-flow posts the empty placeholder and the
-# card comment loses the actual work product. If the summary carries no
-# EVIDENCE: line, emit a transparently-labeled bridge line (marked as ours,
-# never as if the agent wrote the prefix) carrying the summary, capped.
-case "$result" in
-  *EVIDENCE:*) : ;;
-  *) printf 'EVIDENCE: (autolith bridge: executor terminal summary had no EVIDENCE: line) %s\n' \
-       "$(printf '%s' "$result" | tr '\n' ' ' | sed 's/  */ /g' | cut -c1-400)" ;;
-esac
+# EVIDENCE CONTRACT BRIDGE. Structured path: the evidence came from the
+# validated :OBJECT fields, so label it plainly (never the 'missing EVIDENCE'
+# placeholder — card 0a0b995f showed the placeholder prefixing REAL evidence,
+# and the glued literal \n leaked into the posted comment) and keep
+# DESTINATION on its own line so pp-flow scrapes both. Literal path:
+# flash-tier models do not reliably emit the brief's 'EVIDENCE:' line, so
+# bridge it transparently, marked as ours, capped.
+if [ "${structured:-0}" = 1 ]; then
+  if [ -n "$result" ]; then
+    printf 'EVIDENCE: %s\n' "$(printf '%b' "$result" | tr '\n' ' ' | sed 's/  */ /g' | cut -c1-400)"
+  fi
+  [ -n "$odest" ] && printf 'DESTINATION: %s\n' "$odest"
+else
+  case "$result" in
+    *EVIDENCE:*) : ;;
+    *) printf 'EVIDENCE: (autolith bridge: executor terminal summary had no EVIDENCE: line) %s\n' \
+         "$(printf '%s' "$result" | tr '\n' ' ' | sed 's/  */ /g' | cut -c1-400)" ;;
+  esac
+fi
 # DESTINATION CONTRACT BRIDGE (autonomy hardening, 2026-09-27): the brief asks
 # for a literal 'DESTINATION: <COL>' line, but a structured-summary model puts
 # the verdict in JSON instead ({"destination":"DONE"}). pp-flow's parser only
@@ -348,6 +357,7 @@ esac
 # Only '[A-Z][A-Z0-9_-]*' destinations are emitted — the same shape pp-flow's
 # own parser accepts — and pp-flow validates it against the card's real column
 # set before acting, so a hallucinated column is refused there, not obeyed here.
+if [ "${structured:-0}" = 0 ]; then
 case "$result" in
   *DESTINATION:*) : ;;
   *)
@@ -359,4 +369,5 @@ case "$result" in
     fi
     ;;
 esac
+fi
 exit 0
