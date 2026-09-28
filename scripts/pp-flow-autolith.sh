@@ -153,8 +153,32 @@ case "$RETRY_BASE" in ''|*[!0-9]*) RETRY_BASE=10 ;; esac
 # $1 = attempt number (distinguishes job ids across attempts)
 attempt() {
   JOB_ID="pp-flow-$(date +%s)-$$-$1"
-  printf '(:autolith-job\n :version 1\n :id "%s"\n :role "%s"\n :prompt "%s"\n :input nil\n :output-contract (:type :string)\n :timeout-seconds %s)\n' \
-    "$JOB_ID" "$ROLE" "$(esc "$BRIEF")" "$TIMEOUT" > "$WORK.job"
+  # OUTPUT CONTRACT (2026-09-27): a STRING contract lets the model answer a
+  # review analytically and never render a verdict (observed twice on card
+  # 88a92237 — thorough analysis, no DESTINATION, card parked in HUMAN-REVIEW).
+  # Appending a terminal instruction to the brief did NOT fix it. A JSON-SCHEMA
+  # contract does, because the provider VALIDATES the object before returning it:
+  # verdict + evidence are REQUIRED, so an answer with no verdict fails closed
+  # as :INVALID-OUTPUT instead of silently becoming an un-actionable review.
+  # PP_FLOW_AUTOLITH_CONTRACT=string restores the old free-text behavior for
+  # runners/models without structured output support (NOTE: syn:large:text
+  # answers plain text fine but 402s on structured output; use gpt-oss-120b,
+  # DeepSeek-V4.1-Flash or GLM-4.7-Flash for the schema contract).
+  if [ "${PP_FLOW_AUTOLITH_CONTRACT:-schema}" = "string" ]; then
+    printf '(:autolith-job\n :version 1\n :id "%s"\n :role "%s"\n :prompt "%s"\n :input nil\n :output-contract (:type :string)\n :timeout-seconds %s)\n' \
+      "$JOB_ID" "$ROLE" "$(esc "$BRIEF")" "$TIMEOUT" > "$WORK.job"
+  else
+    # NOTE: the native output-contract subset accepts ONLY :type, scalar :enum,
+    # :properties/:required/:additional-properties and array bounds — a
+    # :description is REJECTED as :INVALID-CONTRACT "The property is not part
+    # of the native output contract" (verified live). Keep the semantic hints
+    # in the PROMPT/brief instead; 'destination' is deliberately OPTIONAL (a
+    # PASS on a list whose recipe means "advance one column" legitimately names
+    # none), so an empty string is a valid answer and additional-properties
+    # stays open for models that add fields.
+    printf '(:autolith-job\n :version 1\n :id "%s"\n :role "%s"\n :prompt "%s"\n :input nil\n :output-contract (:type :object :properties (("verdict" (:type :string :enum ("PASS" "FAIL" "ESCALATE"))) ("destination" (:type :string)) ("evidence" (:type :string))) :required ("verdict" "evidence") :additional-properties t)\n :timeout-seconds %s)\n' \
+      "$JOB_ID" "$ROLE" "$(esc "$BRIEF")" "$TIMEOUT" > "$WORK.job"
+  fi
 
   : > "$WORK.out"; : > "$WORK.err"
   T0=$(date +%s)
@@ -274,6 +298,27 @@ result="$(tr -d '\n' < "$WORK.out" | awk 'BEGIN{ORS=""}
     exit 1;
   }')"
 rc=$?
+# STRUCTURED RESULT (2026-09-27): with the default schema contract the :RESULT
+# is a portable tagged object, e.g.
+#   (:OBJECT ("evidence" "...") ("destination" "DONE") ("verdict" "PASS"))
+# not a string. The string scanner above cannot read it (no quotes directly
+# after :RESULT), so translate it into the literal EVIDENCE/DESTINATION lines
+# pp-flow already parses — keeping ONE contract at the pp-flow boundary while
+# the model gets a validated object. Mapping: evidence -> EVIDENCE:;
+# destination (or the verdict's implied column) -> DESTINATION:. Verdict PASS
+# with no destination falls back to the column recipe default by staying empty.
+if [ $rc -ne 0 ] || [ -z "$result" ]; then
+  if tr -d '\n' < "$WORK.out" | grep -q ':RESULT[[:space:]]*(:OBJECT'; then
+    flat="$(tr -d '\n' < "$WORK.out")"
+    oev="$(printf '%s' "$flat" | sed -n 's/.*("evidence"[[:space:]]*"\([^"]*\)").*/\1/p')"
+    odest="$(printf '%s' "$flat" | sed -n 's/.*("destination"[[:space:]]*"\([^"]*\)").*/\1/p')"
+    overdict="$(printf '%s' "$flat" | sed -n 's/.*("verdict"[[:space:]]*"\([^"]*\)").*/\1/p')"
+    result="$oev"
+    rc=0
+    [ -n "$odest" ] && result="$result\nDESTINATION: $odest"
+    echo "pp-flow-autolith: structured verdict=${overdict:-none} destination=${odest:-none}" >&2
+  fi
+fi
 [ $rc -eq 0 ] || { echo "pp-flow-autolith: could not extract :RESULT from job output" >&2; exit 1; }
 printf '%s\n' "$result"
 # EVIDENCE CONTRACT BRIDGE: the :RESULT is the executor's curated terminal

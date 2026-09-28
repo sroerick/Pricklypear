@@ -373,6 +373,43 @@
      AUTO LOGIC-REVIEW PASS that meant DONE was silently advanced one column
      into HUMAN-REVIEW — resurrecting the very human gate the AUTO lane
      exists to remove (observed live on card 1f010ba9).
+     VERDICT ENFORCEMENT (2026-09-27, found by running the AUTO lane end to
+     end): a REVIEW column's whole contract is a VERDICT, but with the original
+     free-text output contract a reviewer answered the review question and never
+     rendered one — twice (card 88a92237, real model). pp-flow advanced a column
+     anyway, so \"forgot to answer\" was indistinguishable from a deliberate
+     escalation: an unattended AUTO card parked in HUMAN-REVIEW on a verdict
+     that was never given. Three changes:
+       (1) the adapter's default output contract is now a JSON-SCHEMA object
+           requiring `verdict` (PASS|FAIL|ESCALATE) and `evidence`, with
+           `destination` optional. The provider VALIDATES it, so a verdict-less
+           answer fails closed as :INVALID-OUTPUT instead of arriving as
+           un-actionable prose. The adapter translates the object back into the
+           literal EVIDENCE:/DESTINATION: lines pp-flow already parses, keeping
+           ONE contract at the pp-flow boundary.
+           PP_FLOW_AUTOLITH_CONTRACT=string restores free text. NOTE: the
+           native schema subset accepts only :type/:enum/:properties/:required/
+           :additional-properties and array bounds — a :description is rejected
+           as :INVALID-CONTRACT, so semantic hints belong in the prompt.
+       (2) a review that still renders NO verdict gets a clearly-marked card
+           comment and a stderr warning; the advance stays the conservative
+           one-column step, so the failure mode is now VISIBLE rather than
+           silent (on a stream with a human gate that step is the correct
+           review->human handoff; on AUTO it fails SAFE toward a human instead
+           of closing a card on a verdict that was never given).
+       (3) the driver appends a mandatory-result-fields block to every brief.
+           Appending prose alone did NOT fix this (the trust boundary is the
+           provider's validation, not the prompt) — but it is kept because it
+           tells a compliant model how to use the structured fields.
+     HONEST LIMIT (2026-09-27): a LONG, open-ended review can exhaust a smaller
+     model before it submits — observed as :PROVIDER-FAILURE \"Child stopped
+     without calling yield.submit.\" after 390s / 23 provider requests. That is
+     treated as terminal (it is not a transient transport fault), so the card is
+     left in REVIEW with a failure comment. The schema mechanism itself is
+     verified working on bounded reviews (verdict=PASS, destination=DONE,
+     translated and honored). Raising reliability for long reviews — a stronger
+     model for review columns, or narrowing review acceptance so the reviewer
+     has a bounded job — is OPEN.
      TRANSIENT-RETRY POLICY (2026-09-27): a transient provider fault must not
      fail an unattended card — a lone Synthetic HTTP 402 ("Subscription access
      is currently blocked…") cleared on the very next attempt, while direct
