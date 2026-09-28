@@ -15,6 +15,10 @@
 #   pp-flow.sh --write-back <card-id> [msg]     # advance one column + post evidence comment
 #   pp-flow.sh --drain [list-id] [N]            # UNATTENDED: pick + run N claimable cards
 #                                               #   (default 1; --max N; --states "TODO,CODE")
+#   pp-flow.sh --walk <card-id> [--walk-max N]  # drive ONE card through ALL its gates
+#                                               #   (TODO->CODE->...->HUMAN-REVIEW/DONE),
+#                                               #   each gate a separate run. Stops on a
+#                                               #   revisited column (a FAIL bounce-back).
 #   pp-flow.sh --help
 #
 # Automatable/loop knobs (--drain):
@@ -22,6 +26,8 @@
 #   --exclude-kinds "BUG"    skip cards whose `kind` is listed
 #   --max N                  at most N cards this invocation
 #   PP_FLOW_DRAIN_CONTINUE=1 don't stop on the first failed card
+# --walk budget:
+#   --walk-max N             at most N gates this walk (default 6)
 # The default runner for unattended loops is the autolith adapter:
 #   PP_FLOW_PI=scripts/pp-flow-autolith.sh AUTOLITH_MODEL=syn:large:text \
 #     scripts/pp-flow.sh --drain
@@ -73,6 +79,7 @@ DRAIN_LIST=""      # --drain [list-id]: pick work automatically (queue-driven lo
 DRAIN_MAX=""       # --drain N: at most N cards this invocation
 DRAIN_STATES=""    # --drain-states "A,B": actionable columns (default TODO,CODE)
 DRAIN_EXCLUDE=""   # --drain-exclude "kind1,kind2"
+WALK_MAX=""        # --walk-max N: gate budget for --walk (default 6)
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -93,6 +100,8 @@ while [ "$#" -gt 0 ]; do
     --max) DRAIN_MAX="${2:-}"; shift 2 ;;
     --states) DRAIN_STATES="${2:-}"; shift 2 ;;
     --exclude-kinds) DRAIN_EXCLUDE="${2:-}"; shift 2 ;;
+    --walk) MODE="walk"; shift ;;
+    --walk-max) WALK_MAX="${2:-}"; shift 2 ;;
     --force) FORCE=1; shift ;;
     --url) URL="${2:-$URL}"; shift 2 ;;
     --user) AUSER="${2:-$AUSER}"; shift 2 ;;
@@ -108,7 +117,8 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-# --drain does not require a card; every other mode does.
+# --drain and --walk do not require a card; every other mode does.
+# (--walk DOES: it walks exactly one named card through its gates.)
 if [ -z "$CARD" ] && [ "$MODE" != "drain" ]; then
   echo "pp-flow: missing card id (see --help)" >&2
   exit 2
@@ -499,6 +509,64 @@ case "$MODE" in
     echo "pp-flow: drain: ran=$ran failed=$failed" >&2
     [ "$failed" -gt 125 ] && failed=125
     exit "$failed"
+    ;;
+  walk)
+    # --walk: drive ONE named card forward through ITS gates until it reaches
+    # a terminal/human state, an already-visited column (a loop), or the gate
+    # budget. This is the missing half of the card lifecycle: --drain picks
+    # work ACROSS the board by state, so it cannot be aimed at one card — a
+    # queued TODO would win the pick first. --walk is how you actually take a
+    # card through TODO -> CODE -> LOGIC-REVIEW -> UI-REVIEW -> HUMAN-REVIEW
+    # in one command.
+    #
+    # Each gate is a SEPARATE `--run` subprocess for the same reason the drain
+    # does it (borge/workstreams.borg stream-pipelines): the LOGIC-REVIEW
+    # reviewer is then never the session that implemented the change. Sharing
+    # one process would collapse the structural independence the AUTO lane's
+    # safety story rests on.
+    #
+    # The loop is bounded by BOTH a gate budget and a VISITED set. The visited
+    # set is what catches a FAIL ping-pong (CODE -> LOGIC-REVIEW -> CODE -> ...):
+    # without it, --walk-max would just burn N runs rediscovering the same
+    # defect instead of handing the card to a human.
+    wmax="${WALK_MAX:-6}"
+    case "$wmax" in ''|*[!0-9]*) wmax=6 ;; esac
+    echo "pp-flow: walk card=$CARD max=$wmax (each gate is a separate run)" >&2
+    visited=""
+    wg=0
+    walk_failed=0
+    while [ "$wg" -lt "$wmax" ]; do
+      wg=$(( wg + 1 ))
+      wstate="$(card_state "$(json_str "$CARD")")"
+      if [ -z "$wstate" ]; then
+        echo "pp-flow: walk: card $CARD not found" >&2
+        walk_failed=1
+        break
+      fi
+      case "$wstate" in
+        DONE|PARKED|CANCELLED|ARCHIVED|HUMAN-REVIEW)
+          echo "pp-flow: walk: reached $wstate — handing off (no further gates)" >&2
+          break ;;
+      esac
+      case " $visited " in
+        *" $wstate "*)
+          echo "pp-flow: walk: $wstate already visited this walk — a review bounced back, stopping for a human (not burning more runs on the same defect)" >&2
+          break ;;
+      esac
+      visited="$visited $wstate"
+      echo "pp-flow: walk: gate $wg/$wmax at column $wstate" >&2
+      "$0" --run "$CARD" --url "$URL" --user "$AUSER" --password "$APASS"
+      wrc=$?
+      if [ "$wrc" -ne 0 ]; then
+        echo "pp-flow: walk: card $CARD failed at gate $wg (column $wstate, rc=$wrc)" >&2
+        walk_failed=1
+        break
+      fi
+    done
+    wfinal="$(card_state "$(json_str "$CARD")")"
+    echo "pp-flow: walk: done — card=$CARD gates_run=$wg final=$wfinal visited='$visited'" >&2
+    [ "$walk_failed" -eq 0 ] || exit "$wrc"
+    exit 0
     ;;
   run)
     T0=$(date +%s)
