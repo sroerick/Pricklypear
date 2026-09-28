@@ -49,6 +49,10 @@ __pycache__/
 lisp/bin/read_test.ml
 
 # agent / design-session debris (never re-commit)
+
+# pp-flow scratch briefs/logs when PP_FLOW_LOG_DIR points at the repo
+# (default is .ralph/, already ignored above)
+tmp_log/
 .ralph/
 .borge-bugs/
 *.bak

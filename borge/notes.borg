@@ -239,10 +239,20 @@
          rows fallback is retired.
 
          PATH GRAMMAR (hierarchical; not data.<type>.<uuid>):
-           data.note.u.<user>.…                 — user garden root
-           data.note.u.<user>.<folder>…         — folder (kind=folder)
-           data.note.u.<user>.….<slug>          — note leaf (kind=note)
-           data.note.u.<user>.….<slug>.h.<nid>  — outline heading
+         TARGET (data.u.<user>.note.* — see notes-path-migration; the
+         migration is PLANNED, so the legacy form below is what the
+         store still emits today):
+            data.u.<user>.note…                 — user garden root
+            data.u.<user>.note.<folder>…         — folder (kind=folder)
+            data.u.<user>.note….<slug>          — note leaf (kind=note)
+            data.u.<user>.note….<slug>.h.<nid>  — outline heading
+                                                   (kind=heading)
+         LEGACY (CURRENT — tree_store.ml note_path_root; prod rows are
+         still here, e.g. data.note.u.admin.garden.…):
+            data.note.u.<user>.…                 — user garden root
+            data.note.u.<user>.<folder>…         — folder (kind=folder)
+            data.note.u.<user>.….<slug>          — note leaf (kind=note)
+            data.note.u.<user>.….<slug>.h.<nid>  — outline heading
                                                    (kind=heading)
 
          Readable slug labels: [a-z0-9-]+ only (ltree-safe). Type
@@ -1321,6 +1331,51 @@
    )
   )
 
+(subsection notes-path-migration
+  (doc "Migrate the notes path grammar from legacy data.note.u.<user>.* to
+   the unified data.u.<user>.note.*")
+  (status planned)
+  (implements "image/lib/tree_store.ml note_path_root (still emits the legacy form)")
+  (details
+   (doc (|
+        WHY: notes are the ONE hierarchy still keyed data.note.u.<user>.*,
+        a grammar of their own predating the unified datum placement
+        (data.u.<user>.<type>.<id>). Every other user-owned type already
+        rides data.u, so the notes root is the last path family with a
+        bespoke shape — and it costs a special case in every prefix walk
+        (tree/garden-root, the /data lens list, http_tree's excluded
+        segments, replication units). Moving notes under
+        data.u.<user>.note.* makes ONE user-garden prefix cover code-free
+        content: `data.u.<user>.` alone would then be the complete garden.
+
+        CURRENT STATE (verified 2026-09-28): NOT migrated. tree_store.ml
+        still builds the root with Printf.sprintf "data.note.u.%s", and
+        prod's live tree still holds every note under that prefix (e.g.
+        data.note.u.admin.garden.…). This stanza is the contract for the
+        make task; the one-tree NOTES HIERARCHY block carries BOTH
+        grammars with the legacy one marked current.
+
+        SCOPE (one migration, no behavior change):
+          - tree_store.ml: note_path_root emits data.u.<user>.note;
+          - a SQL migration re-roots existing rows (path text replace
+            data.note.u.<user>. -> data.u.<user>.note.) across the ltree
+            subtree, INCLUDING the .h.<nid> heading descendants, in ONE
+            transaction, additively version-gated like every other
+            migration (never applied by the image);
+          - legacy-grammar reads keep working for one release so an
+            in-flight row is not orphaned, then the compatibility shim is
+            deleted (obituary in spec/notes DECISIONS);
+          - the prefix-specific special cases in tree/garden-root,
+            http_tree's excluded-segment list and the lens/replication
+            walks are collapsed to the single data.u.<user>. prefix.
+
+        RISK: path is the note IDENTITY (heading paths embed the parent
+        slug chain; note-link edges and outline children are ltree
+        descendants). A partial rewrite orphans headings — the migration
+        must assert subtree counts before/after and be all-or-nothing.
+        This is the notes.storage SAVE ORDERING lesson applied to bulk
+        storage: validate, then write once, never leave a half-moved tree.
+        |))))
   (subsection unified-todos
    (doc "Basecamp lists + org node todos; unified /todos with smart views")
    (status implemented)

@@ -158,9 +158,16 @@
            one shared pile — see the migration note in
            branching-interaction.)
            NOTES HIERARCHY (notes.storage — NOT kind=datum):
+           CURRENT (legacy grammar; tree_store.ml note_path_root still
+           emits it and prod rows still use it):
              folder   data.note.u.<user>.<folder-segs…>
              note     data.note.u.<user>.….<slug>
              heading  data.note.u.<user>.….<slug>.h.<nid>
+           TARGET (unified datum placement; PLANNED migration —
+           notes.notes-path-migration):
+             folder   data.u.<user>.note.<folder-segs…>
+             note     data.u.<user>.note.<slug>
+             heading  data.u.<user>.note.<slug>.h.<nid>
              Reverse-mirror ignores non-datum kinds; hierarchical
              notes must never be written as kind=datum. The notes
              garden keyed data by USER (u.<user>) from the start —
