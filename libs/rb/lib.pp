@@ -1471,23 +1471,30 @@
 
 ;; Per-recipe label copy: (recipe-name . (style product sub tagline copy art)).
 ;; Port of rb repo data/labels/*.txt; add new batches/recipes here.
+;; NOTE (2026-09-27): the art ids are INLINE string literals, not
+;; rb/label-art-* references. This is a VALUE define, so its body runs at
+;; define time; under the additive boot-seed skip an existing sibling
+;; (rb/label-art-bottle) is NOT evaluated and NOT bound in the seed env,
+;; so referencing it here raised `unbound` on every warm boot that
+;; changed label-specs (the rb/plan-config class, seed_sources_test S8).
+;; The named rb/label-art-* defines stay for call-time uses.
 (define rb/label-specs
   (list
     (cons "Experimental Root Beer 004: 1896 edition"
       (list "two-col" "Old Fashioned Root Beer" ""
         "Just What The Doctor Ordered"
         "Did you know you've never had real Root Beer? The United States government made real Root Beer illegal in 1960. Sassafras, a medicinal herb with a centuries long history of curing what ails you, was made illegal. But don't worry! Aspartame is just fine. Rork's is a delicious beverage fortified with traditional healing herbs. It's smooth and creamy, with a hint of those Real Deal Herbs. Drink once a day for detox effects, or before bedtime for a wonderful sleep."
-        rb/label-art-bottle))
+        "/media/0f37dec5-22d2-4a31-9595-e0fae2eb4ebd"))
     (cons "Happy Ginger Ginger Beer"
       (list "kawaii" "HAPPY" "GINGER"
         "Put a Smile on Your Face"
         "Rork's Happy Ginger Beer is filled with delicious Ginger Bug, powerful antioxidants, and soothing anti-inflammatories. One taste will leave you smiling from ear to ear. The ginger is spicy enough to linger on your tongue leaving you ready for another sip. And another. And another. These life-giving probiotics grow naturally in the Cody air. They're not freaky lab bacteria engineered by venture capitalists. We use Organic Cane Sugar, not (alleged) carcinogens like Aspartame. It's refreshing, delicious, and can't be used for birth control like Stevia (look it up). Enjoy over ice, flip flops and sunglasses optional."
-        rb/label-art-happy))
+        "/media/58777bf7-9eea-4588-94e3-1dc353d412bf"))
     (cons "Ginger Bug Lemonade"
       (list "two-col" "Ginger Bug Lemonade" ""
         "Squeeze the Day"
         "Real lemonade is a lost art. Two centuries ago the punch houses made oleo saccharum — sugar massaged into lemon peels until the fruit surrenders its oils. That fragrant gold was the soul of any respectable punch, and it is the soul of ours. We build it the old way, then let the ginger bug liven it with fine Wyoming fizz. Sunshine, saved for a cloudy day. Shake gently; share generously."
-        rb/label-art-logo))))
+        "/media/01797c15-d526-48a4-b261-d60e55c3fc6d"))))
 
 (define (rb/label-ingredients name)
   "Ingredient names for a recipe, dot-joined (vintage style line)."
@@ -1808,7 +1815,7 @@
               rot sheets batch date
               bleed
               (not (string-eq cal ""))
-              (string-eq frame "1")))))))))
+              (string-eq frame "1"))))))))
 
 (define (rb/label-page-html name batch date)
   "Single-label page: the naked 4x3in design (print = one label)."

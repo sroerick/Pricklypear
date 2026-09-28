@@ -94,6 +94,24 @@ let load_package_src (root : string) (pkg : string) : string =
   | Ok src -> src
   | Error e -> failwith ("seed_sources_test: " ^ e)
 
+(* Parse one seedable package's lib.pp, naming the package on a reader
+   error. An UNBALANCED source (the rb class that aborted prod's todo
+   seed on 2026-09-27) makes read_all raise; the first reader error in a
+   package aborts the WHOLE seed, silently skipping every later form
+   (including top-level deftype/route calls). Naming the package here is
+   the highest-signal failure these static checks can report. *)
+let read_package_forms root pkg =
+  let src = load_package_src root pkg in
+  try
+    Pricklypear_lisp.Reader.read_all
+      (Pricklypear_image_lib.Loader.strip_line_comments src)
+  with Pricklypear_lisp.Reader.Reader_error (m, l, c) ->
+    failwith
+      (Printf.sprintf
+         "package %s lib.pp does not PARSE (seed aborts mid-file, skipping \
+          every later form and its top-level calls): reader: %s (%d:%d)"
+         pkg m l c)
+
 (* S1: no seedable package binds a kernel special-form name. *)
 let test_no_kernel_form_defines () =
   let root = find_libs_dir () in
@@ -313,11 +331,7 @@ let test_no_bare_top_level_forms () =
   let offenders =
     seedable_packages root
     |> List.map (fun pkg ->
-           let src = load_package_src root pkg in
-           let forms =
-             Pricklypear_lisp.Reader.read_all
-               (Pricklypear_image_lib.Loader.strip_line_comments src)
-           in
+           let forms = read_package_forms root pkg in
            let bad =
              List.filter
                (fun form ->
@@ -390,12 +404,8 @@ let test_no_define_time_sibling_calls () =
   let offenders =
     seedable_packages root
     |> List.map (fun pkg ->
-           let src = load_package_src root pkg in
-           let forms =
-             Pricklypear_lisp.Reader.read_all
-               (Pricklypear_image_lib.Loader.strip_line_comments src)
-           in
-           let binds = top_level_binds src in
+           let forms = read_package_forms root pkg in
+           let binds = top_level_binds (load_package_src root pkg) in
            let bad =
              List.filter_map
                (fun form ->
@@ -437,6 +447,25 @@ let test_no_define_time_sibling_calls () =
                           name ^ " -> " ^ String.concat ", " refs)
                         bad))
                xs) )
+
+(* S7/S8 parse each seedable lib.pp; an UNBALANCED source (the rb
+   class that took prod todo down on 2026-09-27) makes read_all raise
+   Reader_error. Name the package instead of letting an opaque
+   exception escape — the first reader error in a package aborts the
+   whole seed, so this is the highest-signal failure these tests can
+   report. *)
+let read_package_forms root pkg =
+  let src = load_package_src root pkg in
+  try
+    Pricklypear_lisp.Reader.read_all
+      (Pricklypear_image_lib.Loader.strip_line_comments src)
+  with Pricklypear_lisp.Reader.Reader_error (m, l, c) ->
+    failwith
+      (Printf.sprintf
+         "package %s lib.pp does not PARSE (seed would abort mid-file, \
+          skipping every later form and its top-level calls): reader: %s \
+          (%d:%d)"
+         pkg m l c)
 
 let () =
   Alcotest.run "pricklypear-seed-sources"
