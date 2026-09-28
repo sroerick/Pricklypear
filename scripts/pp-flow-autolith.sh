@@ -161,9 +161,12 @@ attempt() {
   # verdict + evidence are REQUIRED, so an answer with no verdict fails closed
   # as :INVALID-OUTPUT instead of silently becoming an un-actionable review.
   # PP_FLOW_AUTOLITH_CONTRACT=string restores the old free-text behavior for
-  # runners/models without structured output support (NOTE: syn:large:text
-  # answers plain text fine but 402s on structured output; use gpt-oss-120b,
-  # DeepSeek-V4.1-Flash or GLM-4.7-Flash for the schema contract).
+  # runners/models without structured output support. MEASURED (2026-09-27, 2
+  # runs each): syn:large:text, gpt-oss-120b and DeepSeek-V4.1-Flash all
+  # SUCCEED with BOTH contracts; GLM-4.7-Flash returned no result in that
+  # probe window. An earlier single-shot read suggested syn:large:text could
+  # not do structured output — that was wrong: the failures were the same
+  # intermittent upstream HTTP 402, which the retry policy now absorbs.
   if [ "${PP_FLOW_AUTOLITH_CONTRACT:-schema}" = "string" ]; then
     printf '(:autolith-job\n :version 1\n :id "%s"\n :role "%s"\n :prompt "%s"\n :input nil\n :output-contract (:type :string)\n :timeout-seconds %s)\n' \
       "$JOB_ID" "$ROLE" "$(esc "$BRIEF")" "$TIMEOUT" > "$WORK.job"
