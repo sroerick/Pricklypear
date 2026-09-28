@@ -290,10 +290,20 @@ def call, the composed value nests as kids (the reusability proof).")
 projections).")
 
 ;; ---- inventory seam (like filmstrip/apps: host vocabulary) ----
-(define lookbook/elements
+;; base-elements is the lib's own seed inventory, stable across reloads.
+;; lookbook/elements is the SEAM: a host (or a package registering its own
+;; vocabulary) redefines it, appending to lookbook/base-elements. Neither
+;; side may capture the other at load time -- a reload that snapshots the
+;; composite would bind the seam to itself (cyclic thunk force).
+(define lookbook/base-elements
   (lambda () (list "ui/button" "ui/badge" "ui/card"))
-  "Names of declared lookbook ui elements. HOST SEAM: hosts redefine
-to surface their own elements; an entry without a <name>/examples
+  "The lib's seed ui element names (stable; the seam appends to this).")
+
+(define lookbook/elements
+  (lambda () (lookbook/base-elements))
+  "Names of declared lookbook ui elements. HOST SEAM: hosts (or packages
+registering their own vocabulary) redefine to (append
+(lookbook/base-elements) NEW-NAMES); an entry without a <name>/examples
 card answers the pane's no-card message, never an error.")
 
 ;; ---- CARD validation (lib side stays guard-free and host-free: the

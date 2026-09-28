@@ -139,60 +139,36 @@
             (html/ul "" (html/join (list/map chat/dm-list-li xs))))))))
   "Render the DM list page with start-DM form.")
 
+(define chat/dm-kids
+  (lambda
+    (peer)
+    "Declared kid values for a DM transcript: one ui/bubble per message, or
+     a muted placeholder when the thread is empty."
+    (let
+      ((xs (chat/history (chat/dm peer))))
+      (if
+        (null? xs)
+        (list
+          (ui/elm
+            "p"
+            (list "class" "muted")
+            (list (ui/text "No messages yet."))))
+        (list/map chat/bubble xs))))
+  "DM transcript kid values.")
+
 (define chat/dm-main-html
   (lambda
     (peer)
-    (html/div
-      (html/attr "id" "dm-main")
-      (html/join
-        (list
-          (html/div
-            (html/attr "class" "card")
-            (html/form
-              "POST"
-              (string-append "/chat/dm?peer=" peer)
-              (html/attrs
-                (list
-                  (html/attr
-                    "hx-post"
-                    (string-append "/chat/dm?peer=" peer))
-                  (html/attr "hx-target" "#dm-main")
-                  (html/attr "hx-swap" "innerHTML")
-                  (html/attr
-                    "hx-on::after-request"
-                    "if(event.detail.successful){this.reset()}")))
-              (html/join
-                (list
-                  (html/hidden "peer" peer)
-                  (html/label (html/attr "for" "dm-body") "Message")
-                  (html/textarea
-                    "body"
-                    (html/attrs
-                      (list
-                        (html/attr "id" "dm-body")
-                        (html/attr "rows" "2")
-                        (html/attr "required" "required")
-                        (html/attr "maxlength" "4000")))
-                    "")
-                  (html/button (html/attr "type" "submit") "Send")))))
-          (chat/dm-messages-html peer)))))
+    "Render the DM main area: the declared chatpage shell (transcript grows,
+     composer row inside) projected to html. The log id is dm-main-log (the
+     POST swap target)."
+    (lookbook/html
+      (ui/chatpage
+        "dm-main"
+        ""
+        (string-append "/chat/dm?peer=" peer)
+        (chat/dm-kids peer))))
   "Render the DM main area with message form and history.")
-
-(define chat/dm-messages-html
-  (lambda
-    (peer)
-    (let
-      ((rid (chat/dm peer))
-        (xs (chat/history (chat/dm peer))))
-      (html/div
-        (html/attr "id" "dm-messages")
-        (if
-          (null? xs)
-          (html/p* (html/attr "class" "muted") "No messages yet.")
-          (html/ul
-            (html/attr "class" "chat-list")
-            (html/join (list/map chat/msg-li xs)))))))
-  "Render DM message history for a peer.")
 
 (define chat/dm-page
   (lambda
@@ -208,7 +184,7 @@
             (chat/say-dm peer (request-param "body"))
             (if
               (hx-request?)
-              (render-html (chat/dm-main-html peer))
+                (render-html (chat/kids-html (chat/dm-kids peer)))
               (redirect (string-append "/chat/dm?peer=" peer))))
           (html/page
             (list
@@ -348,37 +324,6 @@
           (substring s 11 5)))))
   "created_at ISO stamp -> short YYYY-MM-DD HH:MM display; blank passthrough. Nopales substring is (s pos len) — OCaml String.sub convention.")
 
-(define chat/form-html
-  (lambda
-    ()
-    (html/div
-      (html/attr "class" "card")
-      (html/form
-        "POST"
-        "/chat"
-        (html/attrs
-          (list
-            (html/attr "hx-post" "/chat")
-            (html/attr "hx-target" "#chat-main")
-            (html/attr "hx-swap" "innerHTML")
-            (html/attr
-              "hx-on::after-request"
-              "if(event.detail.successful){this.reset()}")))
-        (html/join
-          (list
-            (html/label (html/attr "for" "chat-body") "Message")
-            (html/textarea
-              "body"
-              (html/attrs
-                (list
-                  (html/attr "id" "chat-body")
-                  (html/attr "rows" "2")
-                  (html/attr "required" "required")
-                  (html/attr "placeholder" "Hello from the lobby…")
-                  (html/attr "maxlength" "4000")))
-              "")
-            (html/button (html/attr "type" "submit") "Send"))))))
-  "Render the lobby message form with htmx submit.")
 
 (define chat/history
   (lambda
@@ -407,14 +352,11 @@
 (define chat/main-html
   (lambda
     ()
-    (html/div
-      (html/attr "id" "chat-main")
-      (html/join
-        (list
-          (chat/form-html)
-          (html/h2 "Lobby")
-          (chat/messages-html)))))
-  "Render the chat main area: form plus lobby messages.")
+    (lookbook/html
+      (ui/chatpage "chat-main" "/chat/partial" "/chat" (chat/log-kids))))
+  "Render the chat main area: the declared chatpage shell (transcript grows,
+     composer row inside) projected to html. The log id is chat-main-log
+     (the POST/partial swap target).")
 
 (define chat/member?
   (lambda
@@ -433,27 +375,6 @@
       "\"]"))
   "Build a 2-member JSON array string for a DM room.")
 
-(define chat/messages-html
-  (lambda
-    ()
-    (let
-      ((xs (chat/lobby)))
-      (html/div
-        (html/attrs
-          (list
-            (html/attr "id" "chat-messages")
-            (html/attr "hx-get" "/chat/partial")
-            (html/attr "hx-trigger" "every 4s")
-            (html/attr "hx-swap" "innerHTML")))
-        (if
-          (null? xs)
-          (html/p*
-            (html/attr "class" "muted")
-            "Say hi to the box.")
-          (html/ul
-            (html/attr "class" "chat-list")
-            (html/join (list/map chat/msg-li xs)))))))
-  "Render lobby messages with auto-refresh htmx polling.")
 
 (define chat/msg-body
   (lambda (fields) (as-str (dict-get fields "body")))
@@ -463,27 +384,6 @@
   (lambda (fields) (as-str (dict-get fields "from")))
   "Extract from field from a message fields dict.")
 
-(define chat/msg-li
-  (lambda
-    (row)
-    (let
-      ((f (chat/row-fields row)))
-      (html/li
-        (html/attr "class" "card chat-msg")
-        (html/join
-          (list
-            (html/p*
-              ""
-              (html/join
-                (list
-                  (html/strong (chat/msg-from f))
-                  (html/span
-                    (html/attr "class" "muted")
-                    (string-append
-                      " · "
-                      (chat/fmt-ts (dict-get f "created_at")))))))
-            (html/p (html/text (chat/msg-body f))))))))
-  "Render a chat message as an HTML list item (from · timestamp · body).")
 
 (define chat/msg-room
   (lambda (fields) (as-str (dict-get fields "room_id")))
@@ -501,7 +401,7 @@
         (chat/say (request-param "body"))
         (if
           (hx-request?)
-          (render-html (chat/main-html))
+          (render-html (chat/kids-html (chat/log-kids)))
           (redirect "/chat")))
       (html/page
         (list
@@ -513,23 +413,16 @@
               (as-str (whoami))
               "."))
           (chat/main-html)))))
-  "Chat lobby route handler: GET renders page, POST sends message.")
+  "Chat lobby route handler: GET renders the page; POST sends a message and,
+     under the HX-Request HEADER, answers the TRANSCRIPT FRAGMENT that swaps
+     into #chat-main-log (a non-htmx POST redirects).")
 
 (define chat/partial
   (lambda
     ()
-    (render-html
-      (let
-        ((xs (chat/lobby)))
-        (if
-          (null? xs)
-          (html/p*
-            (html/attr "class" "muted")
-            "Say hi to the box.")
-          (html/ul
-            (html/attr "class" "chat-list")
-            (html/join (list/map chat/msg-li xs)))))))
-  "Render lobby messages as an htmx partial for polling.")
+    (render-html (chat/kids-html (chat/log-kids))))
+  "Render lobby transcript content as an htmx partial for polling (swaps
+     #chat-main-log).")
 
 (define chat/room-id-of
   (lambda (fields) (as-str (dict-get fields "room_id")))
@@ -622,3 +515,292 @@
 (define chat/users
   (lambda () (list-usernames))
   "List all usernames on the image.")
+
+;; ------------------------------------------------------------------
+;; chat UI vocabulary -- DECLARED lookbook values. Each element is a
+;; ui/elm value composed by def call; lookbook/html is the ONE markup
+;; site. Layout intent (row|column, size fit|grow(n)) is DECLARED through
+;; the pads helpers (borge/pads.borg), never implied by a class name.
+;; Spec: borge/filmstrip.borg (lookbook stanza).
+;; ------------------------------------------------------------------
+
+(define chat/box
+  (lambda
+    (kind size class style-suffix extra)
+    "Declared box attrs: class + the pads box style for kind+size (the
+     DECLARED layout intent), style-suffix appended (scroll/height
+     behavior), then extra pairs."
+    (append
+      (list
+        "class" class
+        "style" (string-append
+                  (pads/box-style kind (list (cons 'size size)))
+                  style-suffix))
+      extra))
+  "Attr pairs for one declared box.")
+
+(define chat/bubble
+  (lambda
+    (row)
+    "One ui/bubble value from a chat-message row: kind user when the row is
+     yours, llm otherwise (agent identities read as llm); meta is author +
+     short timestamp; text is the body."
+    (let*
+      ((f (chat/row-fields row))
+       (from (chat/msg-from f)))
+      (ui/bubble
+        (if (string-eq from (as-str (whoami))) "user" "llm")
+        (string-append from " · " (chat/fmt-ts (dict-get f "created_at")))
+        (chat/msg-body f))))
+  "One message row -> a declared ui/bubble value.")
+
+(define chat/css
+  (lambda
+    ()
+    (css/sheet
+      (list
+        (css/rule ".chatpage" (list "max-height" "72vh" "gap" ".5rem"))
+        (css/rule ".chat-log" (list "padding" ".5rem"))
+        (css/rule ".chat-composer" (list "gap" ".5rem" "align-items" "flex-end"))
+        (css/rule ".chat-composer textarea" (list "resize" "vertical"))
+        (css/rule
+          ".bubble"
+          (list "background" "var(--panel)" "border-radius" "6px"
+                "padding" ".35rem .6rem" "margin" ".35rem 0"))
+        (css/rule ".bubble.user" (list "border-left" "3px solid var(--ok)"))
+        (css/rule ".bubble.llm" (list "border-left" "3px solid var(--link)"))
+        (css/rule ".bubble-meta" (list "font-size" ".8rem" "color" "var(--muted)"))
+        (css/rule ".bubble-body" (list "white-space" "pre-wrap")))))
+  "Chat paint (borge/filmstrip lookbook): the structural layout is DECLARED
+   on the elements through the pads size grammar; this sheet carries paint
+   only.")
+
+(define chat/kid
+  (lambda
+    (x)
+    "One declared kid: a ui-value (JSON object text) passes through, a bare
+     string becomes a text kid, nil becomes empty text."
+    (cond
+      ((null? x) (ui/text ""))
+      ((string? x) (if (string-starts-with? x "{") x (ui/text x)))
+      (else (ui/text (as-str x)))))
+  "One kid param -> a kid wrapper.")
+
+(define chat/kid-list
+  (lambda
+    (body)
+    "Normalize a transcript body to a list of kid wrappers: a list passes
+     through (each item a declared ui-value), a bare string wraps as ONE text
+     kid (so a lookbook variant with scalar params still projects), nil is
+     empty."
+    (cond
+      ((null? body) (list))
+      ((pair? body) body)
+      ((string? body)
+       (if (string-starts-with? body "{") (list body) (list (ui/text body))))
+      (else (list (ui/text (as-str body))))))
+  "A kids param -> a list of kid wrappers.")
+
+(define chat/kids-html
+  (lambda
+    (kids)
+    (html/join (list/map lookbook/html kids)))
+  "Declared transcript kids -> one html fragment (the ONE markup site for
+   transcript content).")
+
+(define chat/lb-elements
+  (list "ui/bubble" "ui/chat-log" "ui/chat-composer" "ui/chatpage")
+  "This host's declared chat vocabulary (literal list, NOT a snapshot of
+   lookbook/elements: a captured snapshot would make lookbook/elements
+   refer to itself after a reload -> cyclic thunk force).")
+
+(define chat/log-kids
+  (lambda
+    ()
+    "Declared kid values for the lobby transcript: one ui/bubble per
+     message, or a muted placeholder when the lobby is empty."
+    (let
+      ((xs (chat/lobby)))
+      (if
+        (null? xs)
+        (list
+          (ui/elm "p" (list "class" "muted") (list (ui/text "Say hi to the box."))))
+        (list/map chat/bubble xs))))
+  "Lobby transcript kid values.")
+
+(define lookbook/elements
+  (lambda
+    ()
+    (append (lookbook/base-elements) chat/lb-elements))
+  "HOST SEAM (libs/lookbook): the habitat's declared ui inventory = the lib
+   seeds (lookbook/base-elements) + this host's chat vocabulary. Appends to
+   the base def at CALL time, never a load-time snapshot. Requires lookbook
+   to load BEFORE chat (seed order, image/lib/boot_seed.ml).")
+
+(define ui/bubble
+  (lambda
+    (kind meta text)
+    "One chat bubble: kind (user|llm|tool) rides the class, meta is the
+     author/time line, text is the body. A declared ui/elm value -- kids
+     composed, never markup."
+    (ui/elm
+      "div"
+      (list "class" (string-append "bubble " kind))
+      (list
+        (ui/elm "div" (list "class" "bubble-meta") (list (ui/text meta)))
+        (ui/elm "div" (list "class" "bubble-body") (list (ui/text text))))))
+  "One declared message bubble.")
+
+(define ui/bubble/examples
+  (lambda
+    ()
+    (lb/obj
+      (list
+        "name" "ui/bubble"
+        "doc" "One chat bubble: kind (user|llm|tool) class, meta author/time line, text body."
+        "file" "libs/chat/lib.pp"
+        "formals" (json-emit (list "kind" "meta" "text"))
+        "variants"
+        (json-emit
+          (list
+            (lb/obj
+              (list "kind" "user" "meta" "alice · 09-27 12:00" "text" "hello lobby"))
+            (lb/obj
+              (list "kind" "llm" "meta" "agent-prickle · 09-27 12:01" "text" "acknowledged"))))
+        "source"
+        "(ui/bubble kind meta text) ->\n  (ui/elm \"div\"\n    (list \"class\" (string-append \"bubble \" kind))\n    (list (ui/elm \"div\" (list \"class\" \"bubble-meta\") (list (ui/text meta)))\n          (ui/elm \"div\" (list \"class\" \"bubble-body\") (list (ui/text text)))))"))
+    )
+  "The ui/bubble card.")
+
+(define ui/chat-composer
+  (lambda
+    (action target)
+    "The composer row INSIDE the chat shell: a text input that GROWS across
+     the row (pads size grow; fit height overriding the generic shell
+     textarea min-height) and a send button that FITS. Posts action and swaps
+     the transcript fragment into target."
+    (ui/elm
+      "form"
+      (chat/box
+        'row '(fit) "chat-composer" ""
+        (list
+          "method" "post"
+          "action" action
+          "hx-post" action
+          "hx-target" target
+          "hx-swap" "innerHTML"
+          "hx-on::after-request" "if(event.detail.successful){this.reset()}"))
+      (list
+        (ui/elm
+          "textarea"
+          (list
+            "name" "body"
+            "class" "chat-input"
+            "rows" "1"
+            "required" "required"
+            "placeholder" "Write a message…"
+            "maxlength" "4000"
+            "style" (string-append (pads/size-css '(grow 1)) ";min-height:2.5rem"))
+          (list))
+        (ui/elm "button" (list "type" "submit" "class" "chat-send") (list (ui/text "Send"))))))
+  "One declared composer row.")
+
+(define ui/chat-composer/examples
+  (lambda
+    ()
+    (lb/obj
+      (list
+        "name" "ui/chat-composer"
+        "doc" "The input row INSIDE the chat shell: a growing text input + a fitting send button, posting action and swapping target."
+        "file" "libs/chat/lib.pp"
+        "formals" (json-emit (list "action" "target"))
+        "variants"
+        (json-emit
+          (list
+            (lb/obj (list "action" "/chat" "target" "#chat-main-log"))))
+        "source"
+        "(ui/chat-composer action target) ->\n  (ui/elm \"form\"\n    (chat/box 'row '(fit) \"chat-composer\" \"\"\n      (list \"method\" \"post\" \"hx-post\" action \"hx-target\" target ...))\n    (list (ui/elm \"textarea\" (list \"name\" \"body\" \"style\" \"flex:1;min-height:2.5rem\" ...) (list))\n          (ui/elm \"button\" (list \"type\" \"submit\") (list (ui/text \"Send\")))))"))
+    )
+  "The ui/chat-composer card.")
+
+(define ui/chat-log
+  (lambda
+    (id poll body)
+    "The transcript region (the htmx swap target): a scrollable column that
+     GROWS to fill the chat shell (pads size grow). poll is the htmx poll
+     route (\"\" disables). body is a list of declared kid values or a scalar
+     (the lookbook-variant dwim)."
+    (ui/elm
+      "div"
+      (append
+        (chat/box
+          'column '(grow 1) "chat-log" ";min-height:0;overflow-y:auto"
+          (list "id" id))
+        (if
+          (string-eq poll "")
+          (list)
+          (list "hx-get" poll "hx-trigger" "every 4s" "hx-swap" "innerHTML")))
+      (chat/kid-list body)))
+  "One declared transcript region.")
+
+(define ui/chat-log/examples
+  (lambda
+    ()
+    (lb/obj
+      (list
+        "name" "ui/chat-log"
+        "doc" "The transcript region (swap target): a column that grows to fill the chat shell and scrolls. poll = htmx poll route (\"\" disables)."
+        "file" "libs/chat/lib.pp"
+        "formals" (json-emit (list "id" "poll" "body"))
+        "variants"
+        (json-emit
+          (list
+            (lb/obj (list "id" "chat-main-log" "poll" "/chat/partial" "body" "Say hi to the box."))))
+        "source"
+        "(ui/chat-log id poll body) ->\n  (ui/elm \"div\"\n    (chat/box 'column '(grow 1) \"chat-log\" \";min-height:0;overflow-y:auto\"\n      (list \"id\" id \"hx-get\" poll \"hx-trigger\" \"every 4s\" \"hx-swap\" \"innerHTML\"))\n    (chat/kid-list body))"))
+    )
+  "The ui/chat-log card.")
+
+(define ui/chatpage
+  (lambda
+    (id poll action body)
+    "The chat column shell: the transcript log GROWS, the composer is a row
+     FIT inside it (pads layout intent; borge/pads.borg). Composes
+     ui/chat-log + ui/chat-composer by def call. The log id is <id>-log (the
+     swap target)."
+    (let
+      ((log-id (string-append id "-log")))
+      (ui/elm
+        "div"
+        (chat/box 'column '(grow 1) "chatpage" ";min-height:0" (list "id" id))
+        (list
+          (ui/chat-log log-id poll body)
+          (ui/chat-composer action (string-append "#" log-id))))))
+  "One declared chat column shell.")
+
+(define ui/chatpage/examples
+  (lambda
+    ()
+    (lb/obj
+      (list
+        "name" "ui/chatpage"
+        "doc" "The chat column shell: transcript grows (ui/chat-log), composer is a row inside it (ui/chat-composer). Composed by def call."
+        "file" "libs/chat/lib.pp"
+        "formals" (json-emit (list "id" "poll" "action" "body"))
+        "variants"
+        (json-emit
+          (list
+            (lb/obj
+              (list "id" "chat-main" "poll" "/chat/partial" "action" "/chat" "body" "Say hi to the box."))))
+        "source"
+        "(ui/chatpage id poll action body) ->\n  (ui/elm \"div\"\n    (chat/box 'column '(grow 1) \"chatpage\" \"\" (list \"id\" id))\n    (list (ui/chat-log (string-append id \"-log\") poll body)\n          (ui/chat-composer action (string-append \"#\" id \"-log\"))))"))
+    )
+  "The ui/chatpage card.")
+
+;; ---- routes (the vault had lost these; a fresh image must serve /chat).
+;; GET /chat -> chat/page; the POST is answered by the same handler, which
+;; returns the TRANSCRIPT FRAGMENT under the HX-Request header. The poll and
+;; DM endpoints are the other two faces.
+(route "/chat" "chat/page")
+(route "/chat/partial" "chat/partial")
+(route "/chat/dm" "chat/dm-page")

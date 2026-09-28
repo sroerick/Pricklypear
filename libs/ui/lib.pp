@@ -47,6 +47,7 @@
             (css/use (ui/theme-mobile))
             (css/use (ui/theme-nav))
             (css/use notes/tree-css)
+            (css/use (chat/css))
             (css/use (theme/extra))))))))
 
 (define ui/home

@@ -54,6 +54,8 @@ let seed_package_priority : string list =
      like /partials/notes-search never seed (notes.search-modal). *)
   (* theme before ui: default theme/* tokens exist before ui/css first runs. *)
   [ "std"; "theme"; "weather"; "ui"; "layout"; "welcome"; "ai"; "css"; "html"
+  ; "lookbook" (* before chat: libs/chat redefines lookbook/elements against
+                  the captured lib seeds, so lookbook must load first. *)
   ; "outline"; "structed"; "notes"; "signup"; "todo"; "contacts"
   ; "plan"; "chat"; "bookmarks"; "calendar"; "workout"; "flashcards"
   ; "bible"; "dabar"; "bi"; "ref"; "verify" ]
