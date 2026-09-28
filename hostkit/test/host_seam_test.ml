@@ -63,8 +63,13 @@ let test_route_dispatch () =
   in
   Alcotest.check pp_value "dispatch renders + binds request context"
     (Ast.VStr "<h1>hi GET</h1>") v;
-  (* hx-request? resolves from BOTH headers and params (hyper/do-swap
-     passes the header in params; the HTTP gate in headers). *)
+  (* HX-Request is a HEADER — one meaning on every host
+     (hypermedia-harness request-runner: `route/dispatch handler method
+     path [params] [headers] [body]`; hyper/do-swap sends it in headers).
+     This test previously asserted params ALSO implied hx-request, which
+     encoded a libs/hyper bug (do-swap put the header in the params
+     alist) as if it were contract; that is why only the image host was
+     visibly broken. params must NOT imply the fragment branch. *)
   ignore (eval_test t {|(define (hx) (if (hx-request?) "hx" "no"))|});
   let v2 =
     Host_seam.dispatch_route ~rt:t ~handler:"hx" ~method_:"GET" ~path:"/hx"
@@ -75,7 +80,8 @@ let test_route_dispatch () =
     Host_seam.dispatch_route ~rt:t ~handler:"hx" ~method_:"GET" ~path:"/hx"
       ~params:[ ("hx-request", "true") ] ~headers:[] ~body:""
   in
-  Alcotest.check pp_value "hx-request? from params" (Ast.VStr "hx") v3
+  Alcotest.check pp_value "hx-request? ignores params (headers only)"
+    (Ast.VStr "no") v3
 
 let test_dispatch_unbound_handler () =
   let t = make_seam () in

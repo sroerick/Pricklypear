@@ -377,20 +377,9 @@ let register_route_prims (t : t) : unit =
   add_prim t "request-params" request_params;
   let hx_request_p _args =
     let r = require_request t in
-    (* hyper/do-swap passes hx-request in the PARAMS alist; the HTTP
-       gate passes it in HEADERS. Check both so libs/hyper works the same
-       way it does on the image. *)
-    let from_headers =
-      match List.assoc_opt "hx-request" r.headers with
-      | Some v when v <> "" && v <> "false" -> true
-      | _ -> false
-    in
-    let from_params =
-      match List.assoc_opt "hx-request" r.params with
-      | Some v when v <> "" && v <> "false" -> true
-      | _ -> false
-    in
-    VBool (from_headers || from_params)
+    match List.assoc_opt "hx-request" r.headers with
+    | Some v when v <> "" && v <> "false" -> VBool true
+    | _ -> VBool false
   in
   add_prim t "hx-request?" hx_request_p;
   (* (session/last-turn-parts) -> VList of part alists captured from the

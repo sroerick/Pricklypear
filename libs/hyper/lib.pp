@@ -141,8 +141,17 @@
       (if (null? handler)
           (error (string-append "unsupported-feature: no route for " path))
           (begin
+            ;; HX-Request rides HEADERS, never params (hypermedia-harness
+            ;; request-runner: `route/dispatch handler method path [params]
+            ;; [headers] [body]`). It was being stuffed into the params alist,
+            ;; so hx-request? read false and every fragment handler took its
+            ;; NON-htmx branch — returning a whole-page redirect (e.g.
+            ;; "__redirect__:/chat") that soup/swap! then spliced into the
+            ;; target as text. The swap loop only appeared to work when a
+            ;; handler happened to render the same markup on both branches.
             (let* ((fragment-html (route/dispatch handler verb path
-                                    (cons (cons "hx-request" "true") all-params)))
+                                    all-params
+                                    (list (cons "hx-request" "true"))))
                    (new-page (soup/page-copy page))
                    (target (if (null? target-raw) elt
                                (let ((ts (soup/select new-page target-raw)))
