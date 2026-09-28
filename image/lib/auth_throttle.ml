@@ -53,6 +53,13 @@ type state = {
 
 let table : (string, state) Hashtbl.t = Hashtbl.create 64
 
+(** Per-IP table (i-1787970741 second half): a credential-stuffing sweep
+    across MANY usernames defeats per-username throttling — each key stays
+    under max_failures while the source IP hammers. Same machinery, same
+    bounds, own bucket space keyed by the request source IP. Both gates
+    must admit (username AND ip); a success clears both. *)
+let ip_table : (string, state) Hashtbl.t = Hashtbl.create 64
+
 (** Wall clock in seconds; exposed so callers share one time source. *)
 let now () : float = Unix.gettimeofday ()
 
@@ -135,3 +142,67 @@ let admit (key : string) (now : float) : bool =
 
 (** Forget [key] entirely — a successful login clears the throttle. *)
 let clear (key : string) : unit = Hashtbl.remove table key
+
+(* --- per-IP variants: the SAME machinery over [ip_table]. The core
+   admit/record/evict logic is duplicated by parameterization below —
+   extracting it into a [tbl -> ...] core kept the public surface of the
+   module unchanged for the existing callers. *)
+
+let evict_on (tbl : (string, state) Hashtbl.t) now =
+  let window = window_secs () in
+  let dead =
+    Hashtbl.fold
+      (fun k st acc ->
+        let kept = prune ~window now st.failures in
+        st.failures <- kept;
+        if kept = [] then k :: acc else acc)
+      tbl []
+  in
+  List.iter (Hashtbl.remove tbl) dead;
+  if Hashtbl.length tbl >= max_entries then begin
+    let oldest =
+      Hashtbl.fold
+        (fun k st acc ->
+          let t = match st.failures with t :: _ -> t | [] -> 0.0 in
+          match acc with
+          | None -> Some (k, t)
+          | Some (_, t0) -> if t < t0 then Some (k, t) else acc)
+        tbl None
+    in
+    match oldest with Some (k, _) -> Hashtbl.remove tbl k | None -> ()
+  end
+
+let state_of_on (tbl : (string, state) Hashtbl.t) ~now key =
+  match Hashtbl.find_opt tbl key with
+  | Some st -> st
+  | None ->
+      if Hashtbl.length tbl >= max_entries then evict_on tbl now;
+      let st = { failures = [] } in
+      Hashtbl.add tbl key st;
+      st
+
+(** Record a failed login from source ip [key] at time [now]. *)
+let record_failure_ip (key : string) (now : float) : unit =
+  let window = window_secs () in
+  let st = state_of_on ip_table ~now key in
+  st.failures <- now :: prune ~window now st.failures
+
+(** May source ip [key] attempt a login at time [now]? Same window +
+    escalating-backoff rule as the username gate. Empty/absent ip keys
+    are ignored by the caller (no bucket). *)
+let admit_ip (key : string) (now : float) : bool =
+  match Hashtbl.find_opt ip_table key with
+  | None -> true
+  | Some st ->
+      let window = window_secs () in
+      let kept = prune ~window now st.failures in
+      st.failures <- kept;
+      let n = List.length kept in
+      let maxf = max_failures () in
+      if n < maxf then true
+      else
+        let backoff = backoff_for (backoff_base ()) (n - maxf) in
+        now >= (List.hd kept) +. backoff
+
+(** Forget source ip [key] — a successful login clears the IP bucket too. *)
+let clear_ip (key : string) : unit = Hashtbl.remove ip_table key
