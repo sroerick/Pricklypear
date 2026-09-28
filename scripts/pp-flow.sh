@@ -44,6 +44,8 @@
 #   PP_FLOW_PI — the pi runner (default: `pi -p`); set to e.g. `true` to stub
 #                the agent for tests:  PP_FLOW_PI=true ./scripts/pp-flow.sh --run <id>
 #   PP_FLOW_LOG_DIR — where run logs + brief files go (default <repo>/.ralph)
+#   PP_FLOW_CONTEXT_FILE — file whose lines REPLACE the brief's == CONTEXT ==
+#     block (box-local repo/build/test truth, e.g. on vultr); unset = template
 #
 # Claim lease: the card's assignee is set to `executor:<pid>@<epoch>`. A lease
 # is reclaimable when its pid is dead OR it is older than 12h (43200s);
@@ -584,6 +586,21 @@ case "$MODE" in
     if [ -z "$b" ]; then
       echo "pp-flow: no such card $CARD after claim" >&2
       exit 1
+    fi
+    # MACHINE-LOCAL CONTEXT OVERRIDE (vultr, 2026-09-28): the flow-brief
+    # template hardcodes roerick's laptop for == CONTEXT == (repo path, opam
+    # switch). An executor on THIS box cannot build there. PP_FLOW_CONTEXT_FILE
+    # (set by the caller) replaces that block's lines with box-local truth;
+    # unset renders the template verbatim, so the laptop path is unchanged.
+    if [ -n "${PP_FLOW_CONTEXT_FILE:-}" ] && [ -r "$PP_FLOW_CONTEXT_FILE" ]; then
+      # shellcheck disable=SC2016
+      b="$(printf '%s\n' "$b" | awk -v ctxfile="$PP_FLOW_CONTEXT_FILE" '
+        /^== CONTEXT ==$/ { print; inctx=1
+          while ((getline line < ctxfile) > 0) print line
+          close(ctxfile); next }
+        inctx && /^== EVIDENCE / { inctx=0 }
+        !inctx { print }')"
+      echo "pp-flow: CONTEXT overridden from $PP_FLOW_CONTEXT_FILE" >&2
     fi
     BRIEF_FILE="$LOG_DIR/flow-$SHORT.brief.md"
     printf '%s\n' "$b" > "$BRIEF_FILE"
