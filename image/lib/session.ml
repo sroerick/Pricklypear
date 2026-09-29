@@ -1285,7 +1285,37 @@ and load_library (t : t) (name : string) : (string, string) result =
       t.ui_shell.suppress_refresh_on_define <- prev_suppress;
       t.eval_state.load_skip_names <- prev_skip)
     (fun () ->
+      (* branching.package-updates ("load-library on non-main: warn that
+         it pins the package"): the release file is eval'd ONTO the
+         current branch, so a stale libs/<pkg>/lib.pp silently reverts
+         in-flight branch pins — the rb dec-2 hazard, hit for real by
+         repair scripts on prod (log/issues i-1790493758). Reseed and the
+         boot seed do not warn: reseed runs inside with_branch
+         system_main_id, and the additive seed sets seed_additive.
+         Keyed on the STORE branch (current_branch_id), not the manifest,
+         so the with_branch rebind is honored. *)
+      let warn_nonmain =
+        (not t.seed_additive)
+        && Store.current_branch_id t.store <> Store.system_main_id
+      in
+      let () =
+        if warn_nonmain then
+          Printf.eprintf "[load-library] %s onto non-main branch %s (pin warning)\n%!"
+            name t.manifest.branch_name
+      in
       let r = Loader.load_library ~eval_form:(eval_form t) name in
+      let r =
+        match r with
+        | Ok msg when warn_nonmain ->
+            Ok
+              (Printf.sprintf
+                 "%s\nWARNING: loaded onto non-main branch '%s' — bodies that differ \
+                  from the parent chain now PIN this branch (the release file \
+                  overwrites live work). Shared changes: define then promote; \
+                  git → main is (reseed-package \"%s\")."
+                 msg t.manifest.branch_name name)
+        | r -> r
+      in
       let () =
         if not prev_suppress then begin
           bust_ui_shell_cache t;

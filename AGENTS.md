@@ -134,8 +134,14 @@ defines persist). Details: notes doc `agents` → "Perf batch + incident
    Local: `http://127.0.0.1:18080/agent.txt`
 2. Those documents explain **how to build a REPL client**: HTTP Basic + `POST /api/eval` with JSON `{"expr":"…"}`, plus curl/Python examples and discovery prims.
 3. After auth, read the **living playbook** on the habitat:
-   `(load-library "notes")` then `(notes/doc/get "agents")`.
+   `(notes/doc/get "agents")` (package names bind lazily — no load step).
 4. Explore selectively: `(list-packages)` → `(describe "todo")` → `(apropos-docs "todo/")` → `(function-doc "…")`.
+
+**`load-library` is a deploy tool, not a session step.** Package
+functions bind LAZILY from the branch chain — call them directly.
+`(load-library "pkg")` re-evals the RELEASE file onto the current
+branch (warns + pins on non-main — i-1790493758); never in repair
+scripts or route handlers (rb dec-2).
 
 ### Live `agents` note (edit this — it is the habitat AGENTS)
 
@@ -145,7 +151,6 @@ something durable about how to work the habitat (workflows, promote/
 seed policy, package gotchas, UI contracts).
 
 ```lisp
-(load-library "notes")
 (notes/doc/get "agents")   ; (id slug title outline tags kind day)
 ;; Upsert signature: (notes/doc/upsert slug title outline tags kind day)
 ;; Prefer edit via browser /notes?slug=agents or read-modify-upsert:
@@ -208,9 +213,7 @@ export PP_EVAL="${PP_EVAL:-$HOME/dev/wyo.tech/pricklypear/_build/default/cli/bin
 curl -sS "$PP_URL/agent.txt" | head
 "$PP_EVAL" -j '(whoami)'
 "$PP_EVAL" -j '(list-packages)'
-"$PP_EVAL" -j '(load-library "todo")'
 "$PP_EVAL" -j '(describe "todo")'
-"$PP_EVAL" -j '(load-library "notes")'
 "$PP_EVAL" -j '(notes/doc/get "agents")'
 ```
 
