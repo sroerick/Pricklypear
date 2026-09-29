@@ -285,6 +285,7 @@ let prim_summary (name : string) : string =
   | "append" -> "concatenate lists"
   | "reverse" -> "reverse list"
   | "nth" -> "nth element of list (0-based)"
+  | "list-ref" -> "alias of nth: i-th element of list (0-based)"
   | "str" -> "value to string"
   | "as-str" -> "plain string coerce (no quotes)"
   | "type-of" -> "runtime type tag"
