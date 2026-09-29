@@ -1355,14 +1355,19 @@
         ""
         (html/join
           (list
-            (html/h2 "Register")
+            (html/h2 "Archive (legacy ledger — no longer written)")
             (html/ul
               (html/attr "class" "card")
               (notes/issues/nodes-html (outline/kids tree))))))))
   "The frozen legacy ledger register, rendered LIVE from the issues
-     outline (one tree/find-by + one snapshot fold). Was stored as cached
-     HTML by notes/issues-cache-refresh (deleted with the notes-cache
-     apparatus — borge/notes.outline-read-path).")
+     outline (one tree/find-by + one snapshot fold). ARCHIVE since
+     single-object issues (roerick 2026-09-28): notes/issues/add no
+     longer appends here — new issues are kind-tagged Board cards.
+     NOT rendered on /issues any more: the fold alone blew the route
+     budget (2026-09-28, even behind ?archive=1) — the ledger stays
+     readable at /notes?slug=log/issues, and register-html remains for
+     API/cleanup callers (its per-row resolve/reopen/delete reconcile
+     the row AND its linked card — pre-convergence twins).")
 
 (define notes/issues-fast-tree
   (lambda
@@ -1393,23 +1398,45 @@
   (lambda
     (kind title body)
     (let*
-      ((np (notes/tree/note-path "" "log/issues"))
-        (full-title
+      ((full-title
           (string-append
             (as-str kind)
             ": "
             (notes/issues/title-or-kind kind title)))
-        (nid (notes/issues/node-id (list))))
+        (cid
+          (as-str
+            (todo/item/add
+              (notes/issues/board-list-id)
+              full-title))))
       (seq
-        (notes/issues/ensure)
-        (notes/node/upsert np nid full-title (as-str body) "")
-        (notes/issues/card-create
-          nid
-          (as-str kind)
-          full-title
-          (as-str body))
-        nid)))
-  "Add an issue to log/issues (single per-node write) AND create its\n   kind-tagged Board card (linked via the card's issue_id field) — the\n   issues<->cards convergence. Returns the new ledger node id. Resolve/\n   reopen/delete on either face reconcile both.")
+        (todo/tree/save
+          "todo-item"
+          cid
+          (dict-set*
+            (todo/item/get cid)
+            (list
+              "kind"
+              (as-str kind)
+              "notes"
+              (as-str body))))
+        cid)))
+  "File an issue: ONE object — a kind-tagged todo-item card on the shared
+     Board (single-object issues, roerick 2026-09-28). The CARD id is the
+     issue id now; resolve/reopen/delete ride the card pipeline directly
+     (card-resolve/card-reopen/card-delete).
+
+     OBITUARY (what/why): this used to DUAL-WRITE — a log/issues ledger
+     heading node AND a Board card linked back via the card's issue_id
+     field — two stored objects for one logical issue, reconciled by every
+     writer (add/resolve/reopen/delete each touched both faces; sync
+     existed to repair drift). The sync tax was real: a ghost-card resync
+     bug, and board visibility needs ONE object per issue. The typed
+     todo-item tree node IS the issue (borge/one-tree.borg typed-nodes);
+     the ledger was the pre-convergence relic. The register on /issues is
+     now a FROZEN ARCHIVE: legacy rows keep resolve/reopen/delete so the
+     archive can be cleaned up, but nothing appends to it. Old issue ids
+     (i-<ts>-<uuid>) referenced in historical comments keep resolving
+     against the archive.")
 
 (define notes/issues/board-list-id
   (lambda
@@ -1441,7 +1468,13 @@
               " · "
               (html/a "/notes?slug=log/issues" "Raw note"))))
         (notes/issues/form)
-        (notes/issues/list-html)))))
+        (notes/issues/cards-section)
+        (html/p*
+          (html/attr "class" "muted")
+          (html/join
+            (list
+              (html/a "/notes?slug=log/issues" "Legacy archive")
+              " (pre-convergence ledger — frozen; cleanup via notes/issues/resolve|delete on the ledger id)")))))))
 
 (define notes/issues/card-create
   (lambda
@@ -1505,14 +1538,28 @@
 
 (define notes/issues/card-html
   (lambda
-    (row)
+    (row cols-map)
     (let*
       ((id (as-str (car row)))
         (fields (cdr row))
         (title (as-str (dict-get fields "title")))
         (kind (as-str (dict-get fields "kind")))
         (state (todo/item/state fields))
-        (cols (todo/state/columns-for-item id))
+        (own-pipe
+          (not (string-eq (as-str (dict-get fields "pipeline")) "")))
+        (lid (as-str (dict-get fields "list_id")))
+        (hit
+          (list/filter
+            (lambda (e) (string-eq (car e) lid))
+            cols-map))
+        (cols
+          (if
+            own-pipe
+            (todo/state/columns-for-item id)
+            (if
+              (null? hit)
+              (todo/state/columns-for-item id)
+              (cdr (car hit)))))
         (terminal (notes/issues/last cols))
         (done (string-eq state terminal)))
       (html/li
@@ -1537,7 +1584,7 @@
                   (html/text "state ")
                   (html/code state)
                   (if
-                    (string-eq (todo/state/pipeline-for-item id) "own")
+                    own-pipe
                     (html/text " · own pipeline")
                     ""))))
             (html/div
@@ -1652,17 +1699,50 @@
       (todo/item/all)))
   "Todo-item rows tagged with an issue kind (kind != \"\") — the /issues\n     convergence: cards carry a kind (BUG/DESIGN/SMELL/CLEANUP) convention and\n     /issues reads them AS ISSUE ROWS through the shared pipeline\n     (borge/workstreams.borg pipeline-model). Archived cards are excluded\n     (archived is closed). The legacy note-ledger stays a frozen archive; this\n     is the live issue face (no corpus migration in this task).")
 
+(define notes/issues/cols-map
+  (lambda
+    (rows)
+    (if
+      (null? rows)
+      (list)
+      (let*
+        ((lid (as-str (dict-get (cdr (car rows)) "list_id")))
+          (rest (notes/issues/cols-map (cdr rows)))
+          (have
+            (list/filter
+              (lambda (e) (string-eq (car e) lid))
+              rest)))
+        (if
+          (null? have)
+          (cons
+            (cons lid (todo/state/columns-for-list lid))
+            rest)
+          rest))))
+  "Assoc list (list-id . columns) for a card row set — ONE
+     todo/state/columns-for-list call per DISTINCT list (borge
+     workstreams pipeline-model resolution b: list columns). Replaces the
+     per-row columns-for-item DB call that made /issues render ~76 round
+     trips for 38 rows (46s, route-budget 500 — 2026-09-28). Cards with
+     their OWN pipeline field still resolve per-item (rare; the row says
+     so for free).")
+
 (define notes/issues/cards-html
   (lambda
     (rows)
+    (notes/issues/cards-html* rows (notes/issues/cols-map rows)))
+  "Concatenated card-as-issue HTML for rows (columns memoized per list).")
+
+(define notes/issues/cards-html*
+  (lambda
+    (rows cols-map)
     (if
       (null? rows)
       ""
       (html/join
         (list
-          (notes/issues/card-html (car rows))
-          (notes/issues/cards-html (cdr rows))))))
-  "Concatenated card-as-issue HTML for rows.")
+          (notes/issues/card-html (car rows) cols-map)
+          (notes/issues/cards-html* (cdr rows) cols-map)))))
+  "Fold helper: card-html over rows with the shared columns memo.")
 
 (define notes/issues/cards-section
   (lambda
@@ -1671,16 +1751,16 @@
       ((rows (notes/issues/cards)))
       (html/join
         (list
-          (html/h2 "Issue cards")
+          (html/h2 "Issues")
           (if
             (null? rows)
             (html/p*
               (html/attr "class" "muted")
-              "No cards tagged with a kind (BUG/DESIGN/SMELL/CLEANUP) yet — set a card's kind and it shows here as an issue row through the shared pipeline.")
+              "No open issues — file one above; it becomes a kind-tagged card on the shared Board.")
             (html/ul
               (html/attr "class" "card")
               (notes/issues/cards-html rows)))))))
-  "The 'Issue cards' section rendered on /issues: todo-items tagged with a\n     kind, through the shared pipeline. Rendered inline after the frozen legacy\n     ledger register (the cache row it used to ride is deleted —\n     borge/notes.outline-read-path).")
+  "THE live issue face (single-object issues): todo-items tagged with a\n     kind, through the shared pipeline. Primary section of /issues; the\n     legacy ledger register renders BELOW as the archive.")
 
 (define notes/issues/delete
   (lambda
@@ -1835,17 +1915,12 @@
 (define notes/issues/list-html
   (lambda
     ()
-    (let
-      ((html (string-append
-               (notes/issues/register-html)
-               (notes/issues/cards-section))))
-      (if
-        (string-eq html "")
-        (html/p* (html/attr "class" "muted") "No issues yet.")
-        html)))
-  "register (frozen legacy ledger) + issue cards, rendered LIVE from the
-     store on every request (borge/notes.outline-read-path: was a cached
-     HTML row refreshed by an unbudgeted job, staleness by design)")
+    (notes/issues/cards-section))
+  "THE live issue list: kind-tagged cards through the shared pipeline
+     (single-object issues). The legacy ledger archive is NOT here —
+     notes/issues/body gates it behind /issues?archive=1 because the
+     register fold blew the route budget (2026-09-28: /issues 500'd on
+     budget exceeded with the register inline). API/compat surface.")
 
 (define notes/issues/node-html
   (lambda
@@ -1938,7 +2013,7 @@
           (null? card)
           ""
           (notes/issues/card-reopen (notes/issues/card-id card))))))
-  "Reopen ledger issue id AND its linked card (card -> pipeline head).")
+  "Reopen ledger issue id AND its linked card (card -> pipeline head).\n     LEGACY ENTRY POINT (archive rows): see resolve's obituary —\n     single-object issues reopen via card-reopen on the card id.")
 
 (define notes/issues/resolve
   (lambda
@@ -1951,7 +2026,7 @@
           (null? card)
           ""
           (notes/issues/card-resolve (notes/issues/card-id card))))))
-  "Resolve ledger issue id AND its linked card (card -> pipeline terminal).\n     Both faces stay consistent; safe when the issue has no card.")
+  "Resolve ledger issue id AND its linked card (card -> pipeline terminal).\n     Both faces stay consistent; safe when the issue has no card. LEGACY\n     ENTRY POINT (archive rows): single-object issues resolve via\n     card-resolve on the card id; this ledger-id path remains for\n     pre-convergence rows whose register forms still render.")
 
 (define notes/issues/set-todo
   (lambda
@@ -1981,7 +2056,7 @@
                   (k)
                   (not (string-eq (as-str (outline/todo k)) "DONE")))
                 kids)))))))
-  "Backfill the convergence: Board cards for OPEN ledger issues missing\n     them (kind = heading prefix, notes = ledger body), and cards resolved\n     for ledger issues already DONE. Idempotent — re-running creates\n     nothing. Returns (created . total-open-after).")
+  "Backfill the convergence: Board cards for OPEN ledger issues missing\n     them (kind = heading prefix, notes = ledger body), and cards resolved\n     for ledger issues already DONE. Idempotent — re-running creates\n     nothing. Returns (created . total-open-after). SINCE single-object\n     issues (roerick 2026-09-28) this is the ONE-TIME promotion path for\n     pre-convergence ledger rows + the legacy reconciler; nothing writes\n     new ledger rows anymore.")
 
 (define notes/issues/sync-kids
   (lambda
