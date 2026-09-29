@@ -103,6 +103,9 @@ let catalog :
   ; ("str", prim_str); ("as-str", prim_as_str)
   ; ("append", prim_append); ("reverse", prim_reverse)
   ; ("sort", prim_sort); ("nth", prim_nth)
+  ; ("list-ref", prim_nth)  (* historical alias of nth (i-1790560893);
+                               kernel-owned so reseed of std's vault alias
+                               can't hit the redefine-kernel-prim guard *)
   ; ("hx-get", prim_hx_get); ("hx-post", prim_hx_post)
   ; ("err/shape", prim_err_shape)
   ; ("count", prim_count); ("length", prim_length)

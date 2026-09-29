@@ -76,14 +76,16 @@
     (list/range-acc n (list)))
   "List of integers 0 .. n-1.")
 
-;; (list-ref xs i) — the HISTORICAL name for nth (kernel prim). The old
-;; libs/_root alias was vault-deleted in 612a4e6 (2026-09-06) but a leaked
-;; pin kept main serving it; astro (11), rb (11) and calendar (1) call it
-;; (i-1790560893). This is the INTENTIONAL vault definition: a clean
-;; reseed/bootstrap must seed the alias, not strand the 23 call sites.
-(define list-ref nth
-  "list-ref is nth: the i-th element of xs (0-based). Intentional alias —
-libs/_root's historical name, still called by astro/rb/calendar.")
+;; (list-ref xs i) — the HISTORICAL name for nth, still called by
+;; astro (11), rb (11) and calendar (1) (i-1790560893). OBITUARY: this
+;; file used to carry a vault alias (define list-ref nth …, f6c2d8f) so
+;; clean bootstraps would seed it — but on any main where the name is
+;; already prim-bound the define trips the redefine-kernel-prim guard
+;; and aborts (reseed-package "std" died at form 3, 2026-09-29, issue
+;; card 6bd8f701). The alias now lives IN THE KERNEL: pure/prims_pure.ml
+;; registers ("list-ref", prim_nth), so fresh bootstraps and existing
+;; mains both resolve it as a prim and this vault must NOT redefine it.
+;; Kept in the export list: the name is part of std's public surface.
 
 (define list/range-acc
   (lambda (n acc)

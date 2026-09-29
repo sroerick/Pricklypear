@@ -147,7 +147,7 @@ let pure_prims = [
   "random"; "random-seed";
   "="; "<"; ">"; "<="; ">="; "not";
   "list"; "car"; "cdr"; "cons"; "null?"; "pair?"; "count";
-  "append"; "reverse"; "nth";
+  "append"; "reverse"; "nth"; "list-ref";
   "string-append"; "string-join"; "str"; "type-of"; "as-str";
   "symbol?"; "string?"; "symbol=?"; "symbol->string"; "string->symbol";
   "string-eq"; "string-trim"; "string-length"; "substring"; "string-contains?";
