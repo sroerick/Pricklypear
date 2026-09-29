@@ -44,19 +44,19 @@ let first_calls =
   [ "(whoami)"
   ; "(current-branch)"
   ; "(list-packages)"
-  ; "(load-library \"notes\")"
   ; "(notes/doc/get \"agents\")"
-  ; "(load-library \"todo\")"
   ; "(describe \"todo\")"
   ; "(apropos-docs \"todo/item\")"
   ; "(function-doc \"todo/item/add\")"
-  ; "(load-library \"bible\")"
-  ; "(bible/chapter \"John\" 3)"
+  ; "(count (todo/list))"
   ]
 
 let rules =
   [ "One Lisp expression per POST /api/eval unless you own multi-step state yourself."
-  ; "Load libraries before calling package functions: (load-library \"todo\")."
+  ; "Package functions bind LAZILY from your branch chain — call them "
+    ^ "directly, no (load-library) needed. load-library is a DEPLOY tool: "
+    ^ "it re-evals the release file onto your current branch (warns + pins "
+    ^ "on non-main). Never use it in repair scripts or route handlers."
   ; "Prefer a personal branch before defining things: (checkout \"USER/personal\")."
   ; "Two function kinds: DATA builders take explicit args and work from /api/eval \
      (e.g. bible/chapter, bible/chapter-html with book/chapter); HTTP HANDLERS \
@@ -68,9 +68,9 @@ let rules =
   ; "Dotted rest params (a . b) are NOT supported; use fixed-arity params."
   ; "File product issues as notes in the inbox when you cannot fix OCaml; \
      do not invent REST for filing."
-  ; "After (load-library \"notes\"), read the live agents note: \
-     (notes/doc/get \"agents\"). It is the habitat AGENTS.md — edit it \
-     with notes/doc/upsert when agent guidance should change."
+  ; "Read the live agents note: (notes/doc/get \"agents\"). It is the "
+    ^ "habitat AGENTS.md — edit it with notes/doc/upsert when agent "
+    ^ "guidance should change."
   ; "Discover selectively — do not dump all bindings into context: \
      (list-packages), (describe \"pkg\"), (package-bindings \"pkg\"), \
      (package-exports \"pkg\"), (apropos-docs \"pat\"), (function-doc name)."
@@ -141,8 +141,7 @@ let agent_json ?(base_url : string option = None) () : Yojson.Safe.t =
                   [ ("slug", `String "agents")
                   ; ( "how"
                     , `String
-                        "(load-library \"notes\") then \
-                         (notes/doc/get \"agents\"). Living AGENTS.md \
+                        "(notes/doc/get \"agents\") — living AGENTS.md \
                          for this habitat; agents may notes/doc/upsert it."
                     )
                   ; ("browser_path", `String "/notes?slug=agents")
@@ -419,7 +418,7 @@ let agent_markdown ?(base_url : string option = None) () : string =
     ; "1. DATA / builders — take explicit arguments; safe from /api/eval:"
     ; "     (bible/chapter \"John\" 3)"
     ; "     (bible/chapter-html \"John\" 3 ())"
-    ; "     (todo/list) after (load-library \"todo\")"
+    ; "     (todo/list)"
     ; "2. HTTP HANDLERS — read (request-method)/(request-param ...);"
     ; "     from /api/eval they return: no active request"
     ; "     Examples: bible/chapter-reader, todo/page, notes/page, */page."
@@ -432,7 +431,6 @@ let agent_markdown ?(base_url : string option = None) () : string =
     ; "Expand one package or name at a time:"
     ; ""
     ; "  (list-packages)"
-    ; "  (load-library \"todo\")"
     ; "  (describe \"todo\")              ; package summary + shallow exports"
     ; "  (package-exports \"todo\")       ; shallow pkg/local names"
     ; "  (package-bindings \"todo\")      ; ALL names under todo/ (any depth)"
@@ -478,12 +476,15 @@ let agent_markdown ?(base_url : string option = None) () : string =
     ; "  (string-eq (symbol->string (car form)) \"lambda\") is OK if needed."
     ; "CRUD still accepts 'type-name (symbols coerced at the DB boundary)."
     ; ""
-    ; "## Application libraries (load-library)"
+    ; "## Application libraries"
     ; ""
     ; "- std, ui, layout, welcome — shell / HTML helpers"
     ; "- todo, notes, outline, plan, contacts, bookmarks, chat"
     ; "- calendar, flashcards, bible, dabar, weather, signup, ai"
-    ; "Cold image after restart: (load-library \"NAME\") before calling."
+    ; "Names bind lazily from your branch chain — no load step."
+    ; "(load-library \"pkg\") is the deploy/repair tool: it re-evals the "
+    ^ "RELEASE file onto the CURRENT branch and warns on non-main (it "
+    ^ "pins bodies that differ). Never in repair scripts or handlers."
     ; ""
     ; "## Live agents note (habitat AGENTS.md)"
     ; ""

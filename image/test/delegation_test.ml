@@ -38,22 +38,29 @@ let point_pp_libs_dir () : unit =
   in
   up 0 (Sys.getcwd ())
 
-let make_session ~delegated =
+let make_session_on ~branch_id ~branch_name ~delegated =
   let store =
     Pricklypear_image_lib.Store.make
       ~cfg:(Pricklypear_image_lib.Store.config_from_env ())
-      ~branch_id:main_id ()
+      ~branch_id
+      ()
   in
   let manifest =
     Pricklypear_common.Manifest.make
-      ~user_id:"tester" ~username:"tester" ~branch_id:main_id
-      ~branch_name:"tester/personal"
+      ~user_id:"tester" ~username:"tester" ~branch_id
+      ~branch_name
       ~boot_mode:Pricklypear_common.Manifest.Boot_on_connect
       ~image_version:"test" ()
   in
   let t = S.make ~manifest ~store () in
   t.delegated <- delegated;
   t
+
+(* Existing call sites: default branch (main_id / tester/personal — the
+   manifest lies about the branch on purpose; W2 pins that shape). *)
+let make_session ~delegated =
+  make_session_on ~branch_id:main_id ~branch_name:"tester/personal"
+    ~delegated
 
 let rec contains_sub s sub =
   String.length s >= String.length sub
@@ -169,6 +176,43 @@ let test_delegated_attach_producer () =
   Alcotest.(check bool) "admin NOT inherited" false t.is_admin ;
   Alcotest.(check bool) "branch locked" true t.agent_branch_lock
 
+(* branching.package-updates W1: load-library on a NON-MAIN branch warns
+   that it pins the package (i-1790493758: repair scripts loaded the
+   release file onto a shared branch and silently reverted in-flight
+   pins). No DB: delegated session, seeded package, env-only load — the
+   D2 shape, on a non-main store branch. *)
+let test_nonmain_load_warns () =
+  point_pp_libs_dir ();
+  let t =
+    make_session_on
+      ~branch_id:"00000000-0000-0000-0000-000000000002"
+      ~branch_name:"tester/personal" ~delegated:true
+  in
+  match S.load_library t "std" with
+  | Ok msg ->
+      Alcotest.(check bool) "warning present" true
+        (contains_seq msg "WARNING");
+      Alcotest.(check bool) "warning names non-main" true
+        (contains_seq msg "non-main");
+      Alcotest.(check bool) "warning names the branch" true
+        (contains_seq msg "tester/personal");
+      Alcotest.(check bool) "load summary still present" true
+        (contains_seq msg "loaded ")
+  | Error e -> Alcotest.fail ("std failed to load on non-main: " ^ e)
+
+(* W2: system/main loads stay silent. Keyed on the STORE branch, not the
+   manifest — the manifest here still says tester/personal while the
+   store sits on main, exactly the reseed/with_branch shape (and boot
+   seed additionally holds seed_additive). *)
+let test_main_load_no_warning () =
+  point_pp_libs_dir ();
+  let t = make_session ~delegated:true in
+  match S.load_library t "std" with
+  | Ok msg ->
+      Alcotest.(check bool) "no warning on main" true
+        (not (contains_seq msg "WARNING"))
+  | Error e -> Alcotest.fail ("std failed to load on main: " ^ e)
+
 (* D7: a plain (self) attach resets provenance — actor cleared, admin
    as given, no lock. Attach twice to prove re-attach (cookie +
    delegated interleave) cannot leave stale actor behind. *)
@@ -201,4 +245,8 @@ let () =
             `Quick test_delegated_attach_producer
         ; Alcotest.test_case "self attach resets provenance" `Quick
             test_self_attach_clears_actor
+        ; Alcotest.test_case "non-main load-library warns (pin hazard)" `Quick
+            (fun () -> in_eio test_nonmain_load_warns)
+        ; Alcotest.test_case "system/main load-library stays silent" `Quick
+            (fun () -> in_eio test_main_load_no_warning)
         ] ) ]
