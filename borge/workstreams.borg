@@ -104,7 +104,7 @@
    promise this chapter must keep.")
   (implements "migrations/029_data_spaces.sql" "migrations/030_open_spaces.sql"
               "libs/todo/lib.pp (space adoption + ensure)")
-  (status planned)
+  (status implemented-live)
   (verify
    (test "todo-list/todo-item/todo-comment/todo-event are admitted to the open `todo` space"
          "two distinct identities each see every card and every list the other created"
@@ -236,7 +236,7 @@
    forward motion set `columns`.")
   (implements "libs/todo/lib.pp todo/state/list"
               "libs/todo/lib.pp todo/state/todo-next-in (cycle order)")
-  (status planned)
+  (status implemented-live)
   (verify
    (test "todo/state/list equals TODO SPEC CODE LOGIC-REVIEW UI-REVIEW HUMAN-REVIEW DONE PARKED"
          "a card on a columns-less list can be set to every work-triage state and stays in that list's pipeline (no other-bucket)"
@@ -331,7 +331,7 @@
               "libs/todo/lib.pp todo/item/set-state (origin write-back)"
               "libs/notes/lib.pp (unpromoted section + back-links)"
               "libs/kanban/lib.pp ('from-notes' as a card filter)")
-  (status planned)
+  (status implemented-live)
   (verify
    (test "setting a node's todo keyword writes only that node (no card, no space row) and does not publish it"
          "todo/promote-node creates ONE shared card whose origin_ref is <slug>#<nid>, and re-promoting returns that same card"

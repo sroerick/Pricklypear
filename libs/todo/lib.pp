@@ -38,6 +38,18 @@
     todo/item/origin-kind
     todo/item/origin-ref
     todo/item/set-origin
+    todo/node/cycle
+    todo/node/sync-card
+    todo/node/find-card
+    todo/node/parse-ref
+    todo/node/mirror
+    todo/node/seed-state
+    todo/node/promote-form
+    todo/node/unpromoted
+    todo/node/back-link
+    todo/promote-node
+    todo/promote-handler
+    todo/from-notes-html
     todo/recipes-default
     todo/recipes-for-list
     todo/recipe
@@ -1190,9 +1202,7 @@
     (view)
     (if
       (string-eq view "from-notes")
-      (html/ul
-        (html/attr "class" "card todo-list")
-        (todo/notes-block "from-notes"))
+      (todo/from-notes-html view)
       (if
         (string-eq view "archived")
         (html/ul
@@ -1216,10 +1226,7 @@
                     (string-append acc (todo/item/list-li row view)))
                   ""
                   (list/take (todo/item/active (todo/item/all)) 80)))
-              (html/h2 "From notes")
-              (html/ul
-                (html/attr "class" "card todo-list")
-                (todo/notes-block "everything"))))
+              (todo/from-notes-html view)))
           (html/ul
             (html/attr "class" "card todo-list")
             (list/foldl
@@ -1417,6 +1424,383 @@
   "Write a card's origin_kind + origin_ref as one call. Used by promotion
      (todo/promote-node); returns the set-field result of the last write.")
 
+;; ------------------------------------------------------------------
+;; ORG-MODE NOTE BRIDGE (borge/workstreams.borg note-todos). The
+;; promotion bridge that makes a marked heading node a real, shared
+;; work item:
+;;   1. mark in place stays free and private (outline/set-todo unchanged);
+;;   2. promotion creates ONE card with origin_ref = "<slug>#<nid>";
+;;   3. the CARD owns the pipeline and the NODE mirrors it;
+;;   4. the board renders promoted CARDS once + an unpromoted section;
+;;   5. the NOTE stays in the owner's garden, the card is shared.
+;; The reconciliation key is origin_ref: idempotent on re-promotion.
+;; ------------------------------------------------------------------
+
+(define todo/node/parse-ref
+  (lambda
+    (ref)
+    (let
+      ((parts (string-split (as-str ref) "#")))
+      (if
+        (or
+          (null? parts)
+          (null? (cdr parts))
+          (string-eq (as-str (car parts)) ""))
+        (cons "" "")
+        (cons (as-str (car parts)) (as-str (car (cdr parts)))))))
+  "Split a card origin_ref \"<slug>#<nid>\" into (slug . nid);
+     (\"\" . \"\") when malformed or empty. The reconciliation-key parser.")
+
+(define todo/node/note-path
+  (lambda
+    (slug)
+    (let
+      ((row (notes/doc/row (as-str slug))))
+      (if (null? row) "" (notes/doc/row-path row))))
+  "The tree path of the note with slug (empty when the note is absent).
+     Resolves through the folder ACL note, never a hardcoded data.note path.")
+
+(define todo/node/get
+  (lambda
+    (slug nid)
+    (let
+      ((p (todo/node/note-path slug)))
+      (if
+        (string-eq p "")
+        ()
+        (notes/node/get p (as-str nid)))))
+  "Read one heading node's body dict from (slug nid), or () when the note
+     path or node is absent.")
+
+(define todo/node/set-todo
+  (lambda
+    (slug nid todo)
+    (let
+      ((p (todo/node/note-path slug)))
+      (if
+        (string-eq p "")
+        #f
+        (notes/node/set-todo p (as-str nid) (as-str todo)))))
+  "Write the `todo` field of ONE heading node (slug nid). One read + one
+     write, never a whole-note rewrite. Returns #t when the node exists.")
+
+(define todo/node/list-has-state?
+  (lambda
+    (list-id state)
+    (if
+      (null? (list/filter
+               (lambda (c) (string-eq (as-str c) (as-str state)))
+               (todo/state/columns-for-list (as-str list-id))))
+      #f
+      #t))
+  "True when `state` is one of list-id's effective pipeline columns.")
+
+(define todo/node/seed-state
+  (lambda
+    (keyword list-id)
+    (let
+      ((k (as-str keyword)))
+      (if
+        (string-eq k "")
+        "TODO"
+        (if
+          (todo/node/list-has-state? list-id k)
+          k
+          "SPEC"))))
+  "Map a node's outline keyword onto the card pipeline. The outline set
+     is 3-state (\"\" TODO DONE); the card machine is the engineering
+     taxonomy. A keyword the card's pipeline knows passes through (TODO
+     and DONE included); an unknown keyword maps to SPEC — marked but not
+     yet specified, an honest advance past intake, never a dropped state.")
+
+(define todo/node/find-card
+  (lambda
+    (ref)
+    (if
+      (string-eq (as-str ref) "")
+      ()
+      (car
+        (list/filter
+          (lambda
+            (row)
+            (string-eq (todo/item/origin-ref (cdr row)) (as-str ref)))
+          (todo/item/all)))))
+  "The card whose origin_ref equals ref, or () when unpromoted. The
+     idempotency key for promotion and the node->card update path.")
+
+(define todo/node/mirror
+  (lambda
+    (card-id state)
+    (let
+      ((fields (todo/item/get (as-str card-id))))
+      (if
+        (null? fields)
+        ""
+        (if
+          (string-eq (todo/item/origin-kind fields) "note")
+          (let
+            ((ref (todo/node/parse-ref (todo/item/origin-ref fields))))
+            (if
+              (string-eq (car ref) "")
+              ""
+              (todo/node/set-todo (car ref) (cdr ref) state)))
+          ""))))
+  "Mirror a card's new state onto its origin note node, when it has one.
+     The write-back half of note-todos clause 3: a card transition updates
+     the linked node in the SAME transaction (todo/item/set-state and
+     todo/item/save call this beside their tree write). No-op for
+     hand-made cards and for a card whose original note has moved away.")
+
+(define todo/node/sync-card
+  (lambda
+    (slug nid)
+    (let*
+      ((ref (string-append (as-str slug) "#" (as-str nid)))
+        (card (todo/node/find-card ref)))
+      (if
+        (null? card)
+        ""
+        (let
+          ((cid (as-str (car card)))
+            (node (todo/node/get slug nid)))
+          (if
+            (null? node)
+            ""
+            (todo/item/set-state
+              cid
+              (todo/node/seed-state
+                (as-str (dict-get node "todo"))
+                (todo/item/list-id (todo/item/get cid)))))))))
+  "When a linked node's keyword changes, update its card to the same state
+     (note-todos clause 3, the node->card direction). No-op for an
+     unpromoted node.")
+
+(define todo/node/cycle
+  (lambda
+    (slug nid)
+    (let
+      ((node (todo/node/get slug nid)))
+      (if
+        (null? node)
+        ()
+        (let
+          ((prev (as-str (dict-get node "todo"))))
+          (seq
+            (todo/node/set-todo slug nid (outline/todo-next prev))
+            (todo/node/sync-card slug nid))))))
+  "Cycle a node's outline keyword AND, when the node has a promoted card,
+     update that card to the same state. One node write (not a whole-note
+     rewrite); the card write goes through todo/item/set-state so it also
+     mirrors back and records a todo-event.")
+
+(define todo/promote-node
+  (lambda
+    (slug nid list-id)
+    (let
+      ((ref (string-append (as-str slug) "#" (as-str nid))))
+      (let
+        ((existing (todo/node/find-card ref)))
+        (if
+          (null? existing)
+          (let
+            ((node (todo/node/get slug nid)))
+            (if
+              (null? node)
+              ""
+              (let*
+                ((title (as-str (dict-get node "title")))
+                  (body (as-str (dict-get node "body")))
+                  (kw (as-str (dict-get node "todo")))
+                  (lid
+                    (if
+                      (string-eq (as-str list-id) "")
+                      (todo/resolve-board)
+                      (as-str list-id)))
+                  (cid (todo/item/add lid title))
+                  (fields (todo/item/get cid)))
+                (seq
+                  (if
+                    (null? fields)
+                    ""
+                    (todo/tree/save
+                      "todo-item"
+                      cid
+                      (dict-set*
+                        fields
+                        (list
+                          "notes"
+                          body
+                          "state"
+                          (todo/node/seed-state kw lid)
+                          "origin_kind"
+                          "note"
+                          "origin_ref"
+                          ref))))
+                  (as-str cid)))))
+          (as-str (car existing))))))
+  "Promote a note heading node into ONE shared card and return its id.
+     origin_ref = \"<slug>#<nid>\" is the reconciliation key: re-promoting
+     returns the existing card (idempotent, never a duplicate). The card
+     lands in the `todo` space through todo/item/add, so a SECOND identity
+     can see and move it; the note itself stays in the owner's garden.
+     list-id is optional (empty = the shared Board). Empty string means the
+     node or note is missing. borge/workstreams.borg note-todos clause 2.")
+
+(define todo/node/promoted-refs
+  (lambda
+    ()
+    (list/filter
+      (lambda (r) (not (string-eq r "")))
+      (list/map
+        (lambda (row) (todo/item/origin-ref (cdr row)))
+        (todo/item/all))))
+  "Every non-empty origin_ref on the board, read ONCE (one card scan) so
+     the unpromoted filter never does a DB read per note node.")
+
+(define todo/node/unpromoted
+  (lambda
+    ()
+    (let
+      ((promoted (todo/node/promoted-refs)))
+      (list/filter
+        (lambda
+          (t)
+          (let
+          ((ref
+              (string-append (as-str (car t)) "#" (as-str (car (cdr t))))))
+            (null? (list/filter
+                     (lambda (r) (string-eq r ref))
+                     promoted))))
+        (notes/outline/all-todos))))
+  "Outline todo rows (slug nid title keyword) with NO card on the board —
+     the honest 'notes (unpromoted)' section of /todos (note-todos clause
+     4). The board renders only promoted cards; this is the only place a
+     raw node still shows, and each row offers promotion.")
+
+(define todo/node/promote-form
+  (lambda
+    (t)
+    (let
+      ((slug (as-str (car t)))
+        (nid (as-str (car (cdr t))))
+        (title (as-str (car (cdr (cdr t)))))
+        (kw (as-str (car (cdr (cdr (cdr t)))))))
+      (html/li
+        (html/attr "class" "todo-item todo-from-note todo-unpromoted")
+        (html/join
+          (list
+            (html/span
+              (html/attr "class" (string-append "todo-box st-" kw))
+              (if (string-eq kw "") "·" kw))
+            (html/span
+              (html/attr "class" "todo-title")
+              (html/text title))
+            (html/a
+              (string-append "/notes?slug=" slug)
+              (html/span
+                (html/attr "class" "muted todo-src")
+                (html/text slug)))
+            (html/form
+              "POST"
+              "/todos"
+              (html/attrs
+                (list
+                  (html/attr "class" "todo-promote")
+                  (html/attr "hx-post" "/todos")
+                  (html/attr "hx-target" "#todo-main")
+                  (html/attr "hx-swap" "innerHTML")))
+              (html/join
+                (list
+                  (html/hidden "action" "promote-node")
+                  (html/hidden "slug" slug)
+                  (html/hidden "node-id" nid)
+                  (html/hidden "view" "from-notes")
+                  (html/button
+                    (html/attrs
+                      (list
+                        (html/attr "type" "submit")
+                        (html/attr "class" "secondary")
+                        (html/attr "title" "promote to a shared board card")))
+                    "promote")))))))))
+  "One unpromoted node row with a promote button (POST action=promote-node).")
+
+(define todo/node/back-link
+  (lambda
+    (fields)
+    (let
+      ((ref (todo/item/origin-ref fields)))
+      (if
+        (string-eq ref "")
+        ""
+        (let
+          ((parts (todo/node/parse-ref ref)))
+          (html/a
+            (string-append
+              "/notes?slug="
+              (car parts)
+              "&node-id="
+              (cdr parts))
+            (html/span
+              (html/attr "class" "muted todo-src")
+              (html/text (string-append "from " ref))))))))
+  "Back-link from a promoted card to its origin note node, or \"\" for a
+     hand-made card. note-todos clause 4.")
+
+(define todo/from-notes-items
+  (lambda
+    ()
+    (list/filter
+      (lambda
+        (row)
+        (string-eq (todo/item/origin-kind (cdr row)) "note"))
+      (todo/item/all)))
+  "Promoted cards (origin_kind = note) — the board's 'from notes' filter,
+     a filter over CARDS, never a second scrape of the note tree.")
+
+(define todo/from-notes-html
+  (lambda
+    (view)
+    (let
+      ((cards (todo/from-notes-items))
+        (unpromoted (todo/node/unpromoted)))
+      (html/join
+        (list
+          (html/h2 "From notes")
+          (if
+            (null? cards)
+            (html/p*
+              (html/attr "class" "muted")
+              "No promoted note todos yet — mark a heading in a note, then promote it.")
+            (html/ul
+              (html/attr "class" "card todo-list")
+              (list/foldl
+                (lambda
+                  (acc row)
+                  (string-append
+                    acc
+                    (todo/item/list-li row view)
+                    (todo/node/back-link (cdr row))))
+                ""
+                (list/take (todo/item/active cards) 80))))
+          (html/h2 "Notes (unpromoted)")
+          (if
+            (null? unpromoted)
+            (html/p*
+              (html/attr "class" "muted")
+              "Every marked note node is on the board.")
+            (html/ul
+              (html/attr "class" "card todo-list")
+              (list/foldl
+                (lambda
+                  (acc t)
+                  (string-append acc (todo/node/promote-form t)))
+                ""
+                (list/take unpromoted 80))))))))
+  "The 'from notes' view: promoted cards (shared, workable) plus the
+     unpromoted nodes that are NOT on the board yet (note-todos clause 4).
+     Replaces the scrape-cache notes block, which showed every node as if
+     it were a board item.")
+
 (define todo/item/save
   (lambda
     (id title notes due state list-id)
@@ -1450,6 +1834,7 @@
                   next
                   "list_id"
                   lid)))
+            (todo/node/mirror id next)
             (todo/event/transition! id prev next)))))))
 
 (define todo/item/set-state
@@ -1469,6 +1854,7 @@
             (next (as-str state)))
           (seq
             (todo/tree/set-field "todo-item" (as-str id) "state" next)
+            (todo/node/mirror (as-str id) next)
             (todo/event/transition! id prev next)))))))
 
 (define todo/item/state
@@ -3973,9 +4359,11 @@
         ((string-eq action "delete-list")
           (todo/list/delete (request-param "list_id")))
         ((string-eq action "cycle-note")
-          (notes/outline/cycle-todo
+          (todo/node/cycle
             (request-param "slug")
             (request-param "node-id")))
+        ((string-eq action "promote-node")
+          (todo/promote-handler))
         ((string-eq action "save")
           (todo/item/save
             (request-param "id")
@@ -3995,6 +4383,20 @@
           (todo/item/add
             (todo/list/ensure-inbox)
             (request-param "title")))))))
+
+(define todo/promote-handler
+  (lambda
+    ()
+    (let
+      ((list-id (request-param "list_id")))
+        (todo/promote-node
+          (request-param "slug")
+          (request-param "node-id")
+          (if (null? list-id) "" (as-str list-id)))))
+  "The /todos POST action=promote-node handler: promote the node named by
+     slug/node-id to a shared card (optional list_id). Returns the card id
+     (existing card id when already promoted). borge/workstreams.borg
+     note-todos clause 2.")
 
 (define todo/ui/main
   (lambda
