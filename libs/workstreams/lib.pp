@@ -76,7 +76,7 @@
 (define workstreams/open-node?
   (lambda (n)
     "Open (non-terminal) card node?"
-    (todo/state/open? (todo/item-state (dict-get n "body")))))
+    (todo/state/open? (todo/item/state (dict-get n "body")))))
 
 (define workstreams/open-items
   (lambda (list-id)
@@ -105,7 +105,7 @@
 
 (define workstreams/in-column?
   (lambda (col n)
-    (string-eq (todo/item-state (dict-get n "body")) (as-str col))))
+    (string-eq (todo/item/state (dict-get n "body")) (as-str col))))
 
 (define workstreams/column-counts
   (lambda (list-id)

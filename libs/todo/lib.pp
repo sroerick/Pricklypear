@@ -3,71 +3,95 @@
 
 (package todo
   (export
-    todo/add
     todo/active-items
-    todo/list
-    todo/page
+    todo/add
+    todo/adopt-stranded
     todo/archive
-    todo/cycle
-    todo/delete
-    todo/item/add
-    todo/item/active
-    todo/item/archive
-    todo/item/cycle
-    todo/item/delete
-    todo/list/all
-    todo/list/create
-    todo/list/delete
-    todo/ensure-inbox
-    todo/comments-init!
+    todo/browse
     todo/comment/add
     todo/comment/list
+    todo/comments-init!
+    todo/css
+    todo/cycle
+    todo/ensure-inbox
+    todo/ensure-space
+    todo/event/list
     todo/event/record
     todo/event/transition!
-    todo/event/list
     todo/feed
+    todo/flow-brief
+    todo/from-notes-html
     todo/item/acceptance
+    todo/item/active
+    todo/item/add
+    todo/item/all
+    todo/item/archive
+    todo/item/assign
+    todo/item/assignee
     todo/item/branch
     todo/item/branch-kind
+    todo/item/cycle
+    todo/item/delete
+    todo/item/get
+    todo/item/kind
+    todo/item/list-id
+    todo/item/origin-kind
+    todo/item/origin-ref
+    todo/item/queue
     todo/item/set-acceptance
     todo/item/set-branch
     todo/item/set-branch-kind
-    todo/item/set-target
-    todo/item/kind
     todo/item/set-kind
-    todo/item/origin-kind
-    todo/item/origin-ref
     todo/item/set-origin
-    todo/node/cycle
-    todo/node/sync-card
-    todo/node/find-card
-    todo/node/parse-ref
-    todo/node/mirror
-    todo/node/seed-state
-    todo/node/promote-form
-    todo/node/unpromoted
-    todo/node/back-link
-    todo/promote-node
-    todo/promote-handler
-    todo/from-notes-html
-    todo/recipes-default
-    todo/recipes-for-list
-    todo/recipe
-    todo/recipe-set
-    todo/flow-brief
-    todo/state/columns-for-item
-    todo/state/pipeline-for-item
-    todo/state/next-for-item
-    todo/state/options-for-item
-    todo/ensure-space
-    todo/adopt-stranded
-    todo/resolve-board
-    todo/resolve-auto-lane
-    todo/setup-auto-lane
+    todo/item/set-state
+    todo/item/set-target
+    todo/item/state
+    todo/item/title
+    todo/items-for-list
+    todo/list/all
+    todo/list/create
+    todo/list/default?
+    todo/list/delete
+    todo/list/ensure-inbox
     todo/list/find-by-title
     todo/list/set-columns
+    todo/node/back-link
+    todo/node/cycle
+    todo/node/find-card
+    todo/node/mirror
+    todo/node/parse-ref
+    todo/node/promote-form
+    todo/node/seed-state
+    todo/node/sync-card
+    todo/node/unpromoted
+    todo/page
+    todo/promote-handler
+    todo/promote-node
+    todo/recipe
+    todo/recipe-set
+    todo/recipes-default
+    todo/recipes-for-list
+    todo/resolve-auto-lane
+    todo/resolve-board
+    todo/set-state
+    todo/setup-auto-lane
+    todo/state/archived?
     todo/state/closed?
-))
+    todo/state/columns-for-item
+    todo/state/columns-for-list
+    todo/state/list
+    todo/state/next-for-item
+    todo/state/open?
+    todo/state/options-for-item
+    todo/state/pipeline-for-item
+    todo/tree/create
+    todo/tree/prefix
+    todo/tree/redash
+    todo/tree/save
+    todo/tree/tail
+    todo/ui/handle-post
+    todo/item/unassign
+  ))
 
 ;; Declare the card-thread datum types as BARE top-level deftype forms
 ;; (the edit/suno/upsets convention) — deliberately NOT as a call to
@@ -95,7 +119,7 @@
     (list/filter
       (lambda
         (row)
-        (not (todo/archived? (todo/item-state (cdr row)))))
+        (not (todo/state/archived? (todo/item/state (cdr row)))))
       items)))
 
 (define todo/add
@@ -215,8 +239,7 @@
         (cons (car alist) (todo/alist-push k v (cdr alist))))))
   "push v onto alist bucket k (pure, one pass over groups)")
 
-(define todo/all-items
-  (lambda () (todo/tree/rows "todo-item" 200)))
+
 
 (define todo/archive
   (lambda (id) (todo/set-state id "ARCHIVED")))
@@ -227,11 +250,10 @@
     (list/filter
       (lambda
         (row)
-        (todo/archived? (todo/item-state (cdr row))))
-      (todo/all-items))))
+        (todo/state/archived? (todo/item/state (cdr row))))
+      (todo/item/all))))
 
-(define todo/archived?
-  (lambda (s) (string-eq (as-str s) "ARCHIVED")))
+
 
 (define todo/browse
   (lambda
@@ -274,10 +296,7 @@
       (todo/list/all)))
   "Column of todo lists: (title . list-id).")
 
-(define todo/count-all-in
-  (lambda
-    (items)
-    (list/foldl (lambda (acc _) (+ acc 1)) 0 items)))
+
 
 (define todo/count-open-in
   (lambda
@@ -286,26 +305,13 @@
       (lambda
         (acc row)
         (if
-          (todo/open? (todo/item-state (cdr row)))
+          (todo/state/open? (todo/item/state (cdr row)))
           (+ acc 1)
           acc))
       0
       items)))
 
-(define todo/create-list
-  (lambda
-    (title)
-    (todo/tree/create
-      "todo-list"
-      (dict-set*
-        "{}"
-        (list
-          "title"
-          (as-str title)
-          "description"
-          ""
-          "is_default"
-          "false")))))
+
 
 (define todo/css
   (lambda
@@ -542,130 +548,36 @@
         (null? row)
         ()
         (let
-          ((cur (todo/item-state row)))
+          ((cur (todo/item/state row)))
           (if
-            (todo/archived? cur)
+            (todo/state/archived? cur)
             cur
             (todo/set-state
               id
               (todo/state/next-for-item cur id)))))))
   "Advance item id to its next state; () when missing. Cycles within the\n     item's OWN effective pipeline (own `pipeline` override > list columns >\n     global default) — borge/workstreams.borg pipeline-model, so /todos and\n     /kanban agree and a card on its own pipeline never leaves it.")
 
-(define todo/db/create
-  (lambda
-    (type fields)
-    (let
-      ((r
-        (tree/upsert
-          (node-path type "new")
-          "datum"
-          (as-str type)
-          fields)))
-      (if
-        (string-starts-with? r "data.")
-        (todo/db/path-id r)
-        r))))
 
-(define todo/db/delete
-  (lambda
-    (type id)
-    (let
-      ((p (node-path type (as-str id))))
-      (if
-        (null? (tree/get p))
-        ()
-        (seq (tree/delete p) (as-str id))))))
 
-(define todo/db/get
-  (lambda
-    (type id)
-    (let
-      ((n (tree/get (node-path type (as-str id)))))
-      (if (null? n) () (dict-get n "body")))))
 
-(define todo/db/insert-by-created
-  (lambda
-    (n sorted)
-    (if
-      (null? sorted)
-      (list n)
-      (if
-        (string<?
-          (as-str (dict-get n "created_at"))
-          (as-str (dict-get (car sorted) "created_at")))
-        (cons n sorted)
-        (cons
-          (car sorted)
-          (todo/db/insert-by-created n (cdr sorted)))))))
 
-(define todo/db/node-row
-  (lambda
-    (node)
-    (cons
-      (todo/db/path-id (dict-get node "path"))
-      (dict-get node "body"))))
 
-(define todo/db/path-id
-  (lambda
-    (path)
-    (let
-      ((h (substring path (- (string-length path) 32) 32)))
-      (string-append
-        (substring h 0 8)
-        "-"
-        (substring h 8 4)
-        "-"
-        (substring h 12 4)
-        "-"
-        (substring h 16 4)
-        "-"
-        (substring h 20 12)))))
 
-(define todo/db/prefix
-  (lambda
-    (type)
-    (let
-      ((p (node-path type "")))
-      (substring p 0 (- (string-length p) 1)))))
 
-(define todo/db/rows
-  (lambda
-    (type limit)
-    (map
-      todo/db/node-row
-      (tree/list-kind (todo/db/prefix type) "datum" limit))))
 
-(define todo/db/sort-by-created
-  (lambda
-    (ns)
-    (if
-      (null? ns)
-      (list)
-      (todo/db/insert-by-created
-        (car ns)
-        (todo/db/sort-by-created (cdr ns))))))
 
-(define todo/db/update
-  (lambda
-    (type id fields)
-    (let
-      ((p (node-path type (as-str id))))
-      (if
-        (null? (tree/get p))
-        ()
-        (let
-          ((r (tree/upsert p "datum" (as-str type) fields)))
-          (if (string-starts-with? r "data.") (as-str id) r))))))
 
-(define todo/db/update-field
-  (lambda
-    (type id field value)
-    (let
-      ((fields (todo/db/get type (as-str id))))
-      (if
-        (null? fields)
-        ()
-        (todo/db/update type id (dict-set fields field value))))))
+
+
+
+
+
+
+
+
+
+
+
 
 (define todo/dbg-scrape
   (lambda
@@ -689,8 +601,7 @@
                 (whoami)))))
           (seq (update (quote todo-cache) (car row) f) "dbg-done"))))))
 
-(define todo/delete
-  (lambda (id) (todo/tree/del "todo-item" id)))
+
 
 (define todo/delete-list
   (lambda
@@ -701,15 +612,15 @@
         (string-eq lid "")
         "missing"
         (let
-          ((fields (todo/get-list lid)))
+          ((fields (todo/list/get lid)))
           (if
             (null? fields)
             "missing"
             (if
-              (todo/list-default? fields)
+              (todo/list/default? fields)
               "default"
               (seq
-                (todo/delete-list-items (todo/all-items) lid)
+                (todo/delete-list-items (todo/item/all) lid)
                 (seq (todo/tree/del "todo-list" lid) "ok")))))))))
 
 (define todo/delete-list-items
@@ -721,129 +632,13 @@
       (seq
         (if
           (string-eq
-            (todo/item-list-id (cdr (car items)))
+            (todo/item/list-id (cdr (car items)))
             (as-str lid))
-          (todo/delete (car (car items)))
+          (todo/item/delete (car (car items)))
           ())
         (todo/delete-list-items (cdr items) lid)))))
 
-(define todo/detail-html
-  (lambda
-    (id view)
-    (let
-      ((fields (todo/get-item id)))
-      (if
-        (null? fields)
-        (html/div
-          (html/attr "class" "card")
-          (html/join
-            (list
-              (html/p* (html/attr "class" "err") "Item not found.")
-              (html/a (string-append "/todos?view=" view) "← back"))))
-        (let
-          ((title (todo/item-title fields)))
-          (let
-            ((notes (todo/item-notes fields)))
-            (let
-              ((due (todo/item-due fields)))
-              (let
-                ((state (todo/item-state fields)))
-                (let
-                  ((acceptance (todo/item/acceptance fields))
-                    (branch (todo/item/branch fields))
-                    (branch-kind (todo/item/branch-kind fields)))
-                  (let
-                    ((lid (todo/item-list-id fields)))
-                    (html/div
-                      (html/attr "class" "card todo-detail")
-                    (html/join
-                      (list
-                        (html/p*
-                          (html/attr "class" "muted")
-                          (html/a
-                            (string-append "/todos?view=" view)
-                            "← back to list"))
-                        (html/h2 (html/text title))
-                        (html/form
-                          "POST"
-                          "/todos"
-                          (html/attrs
-                            (list (html/attr "class" "todo-detail-form")))
-                          (html/join
-                            (list
-                              (html/hidden "action" "save")
-                              (html/hidden "id" id)
-                              (html/hidden "view" view)
-                              (html/label (html/attr "for" "title") "Title")
-                              (html/text-input
-                                "title"
-                                (html/attrs
-                                  (list
-                                    (html/attr "id" "title")
-                                    (html/attr "value" title)
-                                    (html/attr "required" "required"))))
-                              (html/label (html/attr "for" "state") "State")
-                              (html/select
-                                "state"
-                                (html/attr "id" "state")
-                                (todo/state-options-all state))
-                              (html/label (html/attr "for" "due") "Due (YYYY-MM-DD)")
-                              (html/text-input
-                                "due"
-                                (html/attrs
-                                  (list
-                                    (html/attr "id" "due")
-                                    (html/attr "value" due)
-                                    (html/attr "placeholder" "2026-07-15"))))
-                              (html/label (html/attr "for" "list_id") "List")
-                              (html/select
-                                "list_id"
-                                (html/attr "id" "list_id")
-                                (todo/list-options lid))
-                              (html/label (html/attr "for" "notes") "Notes")
-                              (html/textarea
-                                "notes"
-                                (html/attrs
-                                  (list
-                                    (html/attr "id" "notes")
-                                    (html/attr "rows" "8")
-                                    (html/attr "class" "todo-notes")))
-                                notes)
-                              (html/p*
-                                (html/attr "class" "muted")
-                                (html/join
-                                  (list
-                                    (html/strong "Branch: ")
-                                    (html/code branch)
-                                    (if
-                                      (string-eq branch "")
-                                      ()
-                                      (html/text
-                                        (string-append
-                                          "  ("
-                                          (if
-                                            (string-eq branch-kind "")
-                                            "domain unset"
-                                            branch-kind)
-                                          ")"))))))
-                              (if
-                                (string-eq acceptance "")
-                                ()
-                                (html/div
-                                  (html/attr "class" "todo-acceptance")
-                                  (html/join
-                                    (list
-                                      (html/p*
-                                        (html/attr "class" "muted")
-                                        "Acceptance")
-                                      (html/pre (html/text acceptance))))))
-                              (html/div
-                                ""
-                                (html/join
-                                  (list
-                                    (html/button (html/attr "type" "submit") "Save")
-                                    " "
-                                    (html/a (string-append "/todos?view=" view) "Cancel"))))))) (todo/ui/feed-html id view))))))))))))))
+
 
 (define todo/done?
   (lambda
@@ -879,23 +674,21 @@
       (null? xs)
       ()
       (if
-        (todo/list-default? (cdr (car xs)))
+        (todo/list/default? (cdr (car xs)))
         (car xs)
         (let
-          ((t (todo/list-title (cdr (car xs)))))
+          ((t (todo/list/title (cdr (car xs)))))
           (if
             (string-eq t "Inbox")
             (car xs)
             (todo/find-default-in (cdr xs))))))))
 
 (define todo/find-default-list
-  (lambda () (todo/find-default-in (todo/lists))))
+  (lambda () (todo/find-default-in (todo/list/all))))
 
-(define todo/get-item
-  (lambda (id) (todo/tree/get "todo-item" id)))
 
-(define todo/get-list
-  (lambda (id) (todo/tree/get "todo-list" id)))
+
+
 
 (define todo/group-by-list
   (lambda
@@ -913,157 +706,19 @@
       items))
   "group item rows by their list_id (empty -> inbox) in ONE pass; replaces the per-list 200-item refilters that cost ~7k ticks per nav entry")
 
-(define todo/handle-post
-  (lambda
-    ()
-    (let
-      ((action (as-str (request-param "action"))))
-      (if
-        (string-eq action "comment")
-        (let
-          ((c (request-param "comment")))
-          (if
-            (or (null? c) (string-eq (as-str c) ""))
-            ()
-            (todo/comment/add (request-param "id") (as-str c))))
-        (if
-          (string-eq action "cycle")
-          (todo/cycle (request-param "id"))
-          (if
-            (string-eq action "delete")
-          (todo/delete (request-param "id"))
-          (if
-            (string-eq action "archive")
-            (todo/archive (request-param "id"))
-            (if
-              (string-eq action "add")
-              (todo/add
-                (request-param "list_id")
-                (request-param "title"))
-              (if
-                (string-eq action "create-list")
-                (todo/create-list (request-param "title"))
-                (if
-                  (string-eq action "delete-list")
-                  (todo/delete-list (request-param "list_id"))
-                  (if
-                    (string-eq action "cycle-note")
-                    (notes/cycle-node-todo
-                      (request-param "slug")
-                      (request-param "node-id"))
-                    (if
-                      (string-eq action "save")
-                      (todo/save
-                        (request-param "id")
-                        (request-param "title")
-                        (request-param "notes")
-                        (request-param "due")
-                        (request-param "state")
-                        (request-param "list_id"))
-                      (todo/add (todo/ensure-inbox) (request-param "title"))))))))))))))
 
-(define todo/item-due
-  (lambda
-    (fields)
-    (let
-      ((d (dict-get fields "due")))
-      (if (null? d) "" (as-str d)))))
 
-(define todo/item-li
-  (lambda
-    (row)
-    (let
-      ((id (car row)))
-      (let
-        ((fields (cdr row)))
-        (let
-          ((title (dict-get fields "title")))
-          (let
-            ((done (todo/done? fields)))
-            (html/li
-              (html/attrs
-                (list
-                  (html/attr
-                    "class"
-                    (if done "todo-item is-done" "todo-item"))))
-              (html/join
-                (list
-                  (html/form
-                    "POST"
-                    "/todos"
-                    (html/attrs
-                      (list
-                        (html/attr "class" "todo-check")
-                        (html/attr "hx-post" "/todos")
-                        (html/attr "hx-target" "#todo-list")
-                        (html/attr "hx-swap" "innerHTML")))
-                    (html/join
-                      (list
-                        (html/hidden "action" "toggle")
-                        (html/hidden "id" id)
-                        (html/button
-                          (html/attrs
-                            (list
-                              (html/attr "type" "submit")
-                              (html/attr "class" "todo-box")
-                              (html/attr "title" "toggle done")
-                              (html/attr "aria-label" "toggle")))
-                          (if done "[x]" "[ ]")))))
-                  (html/span
-                    (html/attr "class" "todo-title")
-                    (html/text title))
-                  (html/form
-                    "POST"
-                    "/todos"
-                    (html/attrs
-                      (list
-                        (html/attr "class" "todo-del")
-                        (html/attr "hx-post" "/todos")
-                        (html/attr "hx-target" "#todo-list")
-                        (html/attr "hx-swap" "innerHTML")))
-                    (html/join
-                      (list
-                        (html/hidden "action" "delete")
-                        (html/hidden "id" id)
-                        (html/button
-                          (html/attrs
-                            (list
-                              (html/attr "type" "submit")
-                              (html/attr "class" "secondary")
-                              (html/attr "title" "delete")))
-                          "del")))))))))))))
 
-(define todo/item-list-id
-  (lambda
-    (fields)
-    (let
-      ((lid (dict-get fields "list_id")))
-      (if (null? lid) "" (as-str lid)))))
 
-(define todo/item-notes
-  (lambda
-    (fields)
-    (let
-      ((n (dict-get fields "notes")))
-      (if (null? n) "" (as-str n)))))
 
-(define todo/item-state
-  (lambda
-    (fields)
-    (let
-      ((s (dict-get fields "state")))
-      (if
-        (null? s)
-        (let
-          ((d (dict-get fields "done")))
-          (if
-            (null? d)
-            "TODO"
-            (if (string-eq d "true") "DONE" "TODO")))
-        (as-str s)))))
 
-(define todo/item-title
-  (lambda (fields) (as-str (dict-get fields "title"))))
+
+
+
+
+
+
+
 
 (define todo/item/active
   (lambda
@@ -2643,187 +2298,25 @@
         (lambda
           (row)
           (let
-            ((fl (todo/item-list-id (cdr row))))
+            ((fl (todo/item/list-id (cdr row))))
             (if
               (string-eq fl lid)
               #t
               (if (string-eq fl "") (string-eq lid inbox-id) #f))))
-        (todo/all-items)))))
+        (todo/item/all)))))
 
-(define todo/items-html
-  (lambda
-    (view)
-    (if
-      (string-eq view "from-notes")
-      (html/ul
-        (html/attr "class" "card todo-list")
-        (list/foldl
-          (lambda
-            (acc t)
-            (string-append acc (todo/note-item-li t view)))
-          ""
-          (notes/all-todos)))
-      (if
-        (string-eq view "archived")
-        (html/ul
-          (html/attr "class" "card todo-list")
-          (list/foldl
-            (lambda
-              (acc row)
-              (string-append acc (todo/list-item-li row view)))
-            ""
-            (todo/archived-items)))
-        (if
-          (string-eq view "everything")
-          (html/join
-            (list
-              (html/h2 "Lists")
-              (html/ul
-                (html/attr "class" "card todo-list")
-                (list/foldl
-                  (lambda
-                    (acc row)
-                    (string-append acc (todo/list-item-li row view)))
-                  ""
-                  (todo/active-items (todo/all-items))))
-              (html/h2 "From notes")
-              (html/ul
-                (html/attr "class" "card todo-list")
-                (list/foldl
-                  (lambda
-                    (acc t)
-                    (if
-                      (todo/open? (car (cdr (cdr (cdr t)))))
-                      (string-append acc (todo/note-item-li t view))
-                      acc))
-                  ""
-                  (notes/all-todos)))))
-          (html/ul
-            (html/attr "class" "card todo-list")
-            (list/foldl
-              (lambda
-                (acc row)
-                (string-append acc (todo/list-item-li row view)))
-              ""
-              (todo/active-items (todo/items-for-list view)))))))))
+
 
 (define todo/land-ping
   1)
 
-(define todo/list
-  (lambda () (todo/tree/rows "todo-item" 50)))
 
-(define todo/list-default?
-  (lambda
-    (fields)
-    (let
-      ((d (dict-get fields "is_default")))
-      (if (null? d) #f (string-eq d "true")))))
 
-(define todo/list-html
-  (lambda
-    ()
-    (html/ul
-      (html/attr "class" "card todo-list")
-      (list/foldl
-        (lambda
-          (acc row)
-          (string-append acc (todo/item-li row)))
-        ""
-        (todo/list)))))
 
-(define todo/list-item-li
-  (lambda
-    (row view)
-    (let
-      ((id (car row)) (fields (cdr row)))
-      (let
-        ((title (todo/item-title fields))
-          (state (todo/item-state fields))
-          (open (todo/open? (todo/item-state fields))))
-        (html/li
-          (html/attr
-            "class"
-            (if
-              open
-              "todo-item"
-              (if
-                (todo/archived? state)
-                "todo-item is-done is-archived"
-                "todo-item is-done")))
-          (html/join
-            (list
-              (html/form
-                "POST"
-                "/todos"
-                (html/attrs
-                  (list
-                    (html/attr "class" "todo-check")
-                    (html/attr "hx-post" "/todos")
-                    (html/attr "hx-target" "#todo-main")
-                    (html/attr "hx-swap" "innerHTML")))
-                (html/join
-                  (list
-                    (html/hidden "action" "cycle")
-                    (html/hidden "id" id)
-                    (html/hidden "view" view)
-                    (html/button
-                      (html/attrs
-                        (list
-                          (html/attr "type" "submit")
-                          (html/attr "class" (string-append "todo-box st-" state))
-                          (html/attr "title" "cycle state")))
-                      (if (string-eq state "") "·" state)))))
-              (html/a
-                (string-append "/todos?id=" id "&view=" view)
-                (html/span
-                  (html/attr "class" "todo-title")
-                  (html/text title)))
-              (if
-                (string-eq state "DONE")
-                (html/form
-                  "POST"
-                  "/todos"
-                  (html/attrs
-                    (list
-                      (html/attr "class" "todo-archive")
-                      (html/attr "hx-post" "/todos")
-                      (html/attr "hx-target" "#todo-main")
-                      (html/attr "hx-swap" "innerHTML")))
-                  (html/join
-                    (list
-                      (html/hidden "action" "archive")
-                      (html/hidden "id" id)
-                      (html/hidden "view" view)
-                      (html/button
-                        (html/attrs
-                          (list
-                            (html/attr "type" "submit")
-                            (html/attr "class" "secondary")
-                            (html/attr "title" "archive done task")))
-                        "arch"))))
-                "")
-              (html/form
-                "POST"
-                "/todos"
-                (html/attrs
-                  (list
-                    (html/attr "class" "todo-del")
-                    (html/attr "hx-post" "/todos")
-                    (html/attr "hx-target" "#todo-main")
-                    (html/attr "hx-swap" "innerHTML")))
-                (html/join
-                  (list
-                    (html/hidden "action" "delete")
-                    (html/hidden "id" id)
-                    (html/hidden "view" view)
-                    (html/button
-                      (html/attrs
-                        (list
-                          (html/attr "type" "submit")
-                          (html/attr "class" "secondary")
-                          (html/attr "title" "delete")))
-                      "del")))))))))))
+
+
+
+
 
 (define todo/list-options
   (lambda
@@ -2834,7 +2327,7 @@
         (let
           ((id (car row)))
           (let
-            ((title (todo/list-title (cdr row))))
+            ((title (todo/list/title (cdr row))))
             (string-append
               acc
               (html/option
@@ -2842,10 +2335,9 @@
                 title
                 (string-eq (as-str id) (as-str selected)))))))
       ""
-      (todo/lists))))
+      (todo/list/all))))
 
-(define todo/list-title
-  (lambda (fields) (as-str (dict-get fields "title"))))
+
 
 (define todo/list/find-by-title
   (lambda
@@ -3205,127 +2697,13 @@
 (define todo/list/title
   (lambda (fields) (as-str (dict-get fields "title"))))
 
-(define todo/lists
-  (lambda () (todo/tree/rows "todo-list" 50)))
 
-(define todo/main-html
-  (lambda
-    (view)
-    (let
-      ((id-param (request-param "id"))
-        (is-get (string-eq (request-method) "GET")))
-      (if
-        (if
-          is-get
-          (if
-            (null? id-param)
-            #f
-            (not (string-eq (as-str id-param) "")))
-          #f)
-        (html/div
-          (html/attr "id" "todo-main")
-          (html/join
-            (list
-              (html/div
-                (html/attr "class" "todo-layout")
-                (html/join
-                  (list
-                    (html/div
-                      (html/attr "class" "todo-side")
-                      (todo/nav-html view))
-                    (html/div
-                      (html/attr "class" "todo-body")
-                      (todo/detail-html (as-str id-param) view))))))))
-        (let
-          ((list-id
-            (if
-              (string-eq view "everything")
-              (todo/ensure-inbox)
-              (if
-                (string-eq view "from-notes")
-                ""
-                (if (string-eq view "archived") "" view)))))
-          (html/div
-            (html/attr "id" "todo-main")
-            (html/join
-              (list
-                (html/div
-                  (html/attr "class" "todo-layout")
-                  (html/join
-                    (list
-                      (html/div
-                        (html/attr "class" "todo-side")
-                        (todo/nav-html view))
-                      (html/div
-                        (html/attr "class" "todo-body")
-                        (html/join
-                          (list
-                            (todo/add-form view list-id)
-                            (todo/items-html view)))))))))))))))
 
-(define todo/nav-html
-  (lambda
-    (view)
-    (let
-      ((lists (todo/lists))
-        (inbox (todo/ensure-inbox))
-        (arch-n (todo/count-all-in (todo/archived-items))))
-      (html/ul
-        (html/attr "class" "todo-nav")
-        (html/join
-          (list
-            (todo/nav-link view "everything" "Everything" "")
-            (todo/nav-link view "from-notes" "From notes" "")
-            (todo/nav-link
-              view
-              "archived"
-              "Archived"
-              (string-append "(" (as-str arch-n) ")"))
-            (list/foldl
-              (lambda
-                (acc row)
-                (string-append acc (todo/nav-list-li view row)))
-              ""
-              lists)
-            (html/li
-              (html/attr "class" "todo-nav-item")
-              (html/form
-                "POST"
-                "/todos"
-                (html/attrs
-                  (list
-                    (html/attr "class" "todo-new-list")
-                    (html/attr "hx-post" "/todos")
-                    (html/attr "hx-target" "#todo-main")
-                    (html/attr "hx-swap" "innerHTML")))
-                (html/join
-                  (list
-                    (html/hidden "action" "create-list")
-                    (html/hidden "view" view)
-                    (html/text-input
-                      "title"
-                      (html/attrs
-                        (list
-                          (html/attr "placeholder" "New list")
-                          (html/attr "required" "required")
-                          (html/attr "class" "todo-new-list-input"))))
-                    (html/button (html/attr "type" "submit") "+ list")))))))))))
 
-(define todo/nav-link
-  (lambda
-    (view key label extra)
-    (html/li
-      (html/attr
-        "class"
-        (if
-          (string-eq view key)
-          "todo-nav-item is-active"
-          "todo-nav-item"))
-      (html/a
-        (string-append "/todos?view=" key)
-        (string-append
-          label
-          (if (string-eq extra "") "" (string-append " " extra)))))))
+
+
+
+
 
 (define todo/nav-list-li
   (lambda
@@ -3347,12 +2725,12 @@
             (html/a
               (string-append "/todos?view=" id)
               (string-append
-                (todo/list-title f)
+                (todo/list/title f)
                 " ("
                 (todo/ratio items)
                 ")"))
             (if
-              (todo/list-default? f)
+              (todo/list/default? f)
               ""
               (html/form
                 "POST"
@@ -3382,7 +2760,7 @@
 (define todo/next-state
   (lambda
     (cur)
-    (outline/todo-next-in todo/states (as-str cur))))
+    (outline/todo-next-in todo/state/list (as-str cur))))
 
 (define todo/note-item-li
   (lambda
@@ -3393,7 +2771,7 @@
         (title (car (cdr (cdr t))))
         (state (car (cdr (cdr (cdr t))))))
       (let
-        ((open (todo/open? state)))
+        ((open (todo/state/open? state)))
         (html/li
           (html/attr
             "class"
@@ -3577,11 +2955,7 @@
       (if (null? rs) () (car rs))))
   "cache row for the notes-todo scrape (or ())")
 
-(define todo/open?
-  (lambda (s) (todo/state/open? s))
-  "Alias of todo/state/open? (deleted in T4, lib-hygiene). Both read the
-     one closed-set decision in todo/state/closed?, so a PARKED card is
-     closed here too.")
+
 
 (define todo/page
   (lambda
@@ -3610,18 +2984,13 @@
               "Lists (Basecamp) + notes scrape (org). Click a title for details.")
             (todo/ui/main (todo/ui/view))))))))
 
-(define todo/partial
-  (lambda
-    ()
-    (seq
-      (todo/list/ensure-inbox)
-      (render-html (todo/ui/main (todo/ui/view))))))
+
 
 (define todo/ratio
   (lambda
     (items)
     (let
-      ((n (todo/count-all-in items))
+      ((n (todo/item/count-all items))
         (open (todo/count-open-in items)))
       (string-append (as-str (- n open)) "/" (as-str n)))))
 
@@ -3629,12 +2998,12 @@
   (lambda
     (id title notes due state list-id)
     (let
-      ((fields (todo/get-item id)))
+      ((fields (todo/item/get id)))
       (if
         (null? fields)
         ()
         (let
-          ((prev (todo/item-state fields))
+          ((prev (todo/item/state fields))
             (next (as-str state))
             (lid
               (if
@@ -3676,46 +3045,17 @@
         (null? cur)
         (list)
         (let
-          ((prev (todo/item-state cur))
+          ((prev (todo/item/state cur))
             (next (as-str state)))
           (seq
             (todo/tree/set-field "todo-item" (as-str id) "state" next)
             (todo/event/transition! id prev next)))))))
 
-(define todo/state-options
-  (lambda
-    (selected)
-    (list/foldl
-      (lambda
-        (acc st)
-        (let
-          ((lab (if (string-eq st "") "(none)" st)))
-          (string-append
-            acc
-            (html/option st lab (string-eq st (as-str selected))))))
-      ""
-      todo/states)))
 
-(define todo/state-options-all
-  (lambda
-    (selected)
-    (todo/state-options-from
-      selected
-      (append todo/states (list "ARCHIVED")))))
 
-(define todo/state-options-from
-  (lambda
-    (selected states)
-    (list/foldl
-      (lambda
-        (acc st)
-        (let
-          ((lab (if (string-eq st "") "(none)" st)))
-          (string-append
-            acc
-            (html/option st lab (string-eq st (as-str selected))))))
-      ""
-      states)))
+
+
+
 
 (define todo/state/archived?
   (lambda (s) (string-eq (as-str s) "ARCHIVED")))
@@ -3934,32 +3274,10 @@
         (todo/state/todo-next-in-at (cdr xs) cur head))))
   "Accumulating: find cur in xs, return the next; wrap to head at the end or\n     on absent.")
 
-(define todo/states
-  (list
-    ""
-    "TODO"
-    "SPEC"
-    "CODE"
-    "LOGIC-REVIEW"
-    "UI-REVIEW"
-    "HUMAN-REVIEW"
-    "DONE"
-    "PARKED"))
+
   ;; alias of todo/state/list; deleted in T4 (lib-hygiene).
 
-(define todo/toggle
-  (lambda
-    (id)
-    (let
-      ((row (todo/tree/get "todo-item" id)))
-      (if
-        (null? row)
-        ()
-        (todo/tree/set-field
-          "todo-item"
-          id
-          "done"
-          (if (todo/done? row) "false" "true"))))))
+
 
 (define todo/tree/create
   (lambda
@@ -4541,12 +3859,6 @@
       ((v (request-param "view")))
       (if (null? v) "everything" (as-str v)))))
 
-(define todo/view
-  (lambda
-    ()
-    (let
-      ((v (request-param "view")))
-      (if (null? v) "everything" (as-str v)))))
+
 
 (route "/todos" "todo/page")
-(route "/partials/todo-list" "todo/partial")
