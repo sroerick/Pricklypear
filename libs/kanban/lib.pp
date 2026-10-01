@@ -635,6 +635,7 @@ function kbDrop(ev){
 (define kanban/page
   (lambda ()
     "GET /kanban?list=<id> renders the board; POST dispatches a tree action."
+    (todo/ensure-space)
     (let ((list-id
             (let ((x (request-param "list")))
               (if (null? x) (todo/ensure-inbox) (as-str x)))))
