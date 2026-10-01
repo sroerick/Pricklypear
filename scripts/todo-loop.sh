@@ -53,6 +53,9 @@ cd "$WORKTREE" || exit 2
 print -r -- "=== todo-loop: model=$MODEL max=$MAX timeout=${TIMEOUT}s ==="
 print -r -- "=== worktree=$WORKTREE branch=$(git branch --show-current) ==="
 
+retries=0
+TRANSIENT_RETRY_S=30
+MAX_RETRIES=4
 loop=1
 while [ "$loop" -le "$MAX" ]; do
   print -r -- ""
@@ -116,10 +119,35 @@ PYEOF
   fi
 
   if [ -n "$err" ]; then
-    print -ru2 -- "!!! provider error on child $loop: $err"
-    print -ru2 -- "!!! stopping; fix the provider/model and re-run."
-    exit 1
+    # A provider fault is not a task failure. Only a CREDIT/quota exhaustion
+    # (402 payment_required / "out of credits") is terminal — no retry can
+    # clear it. Everything else (socket closed, 5xx, timeouts, transient
+    # subscription flakiness — all observed live) is retried with backoff,
+    # because the child either did nothing or left work that the next child
+    # reconciles from git + the plan (the plan tells it to reconcile first).
+    case "$err" in
+      *payment_required*|*credit\ balance*|*exhausted*|*"out of credits"*|*402*)
+        print -ru2 -- "!!! provider CREDIT exhaustion on child $loop: $err"
+        print -ru2 -- "!!! stopping; add credits or change --model, then re-run."
+        exit 1
+        ;;
+      *)
+        print -ru2 -- "!!! transient provider fault on child $loop: $err"
+        print -ru2 -- "!!! retry ${TRANSIENT_RETRY_S}s (attempt ${retries}); work is reconciled from git+plan next loop."
+        retries=$((retries + 1))
+        if [ "$retries" -gt "$MAX_RETRIES" ]; then
+          print -ru2 -- "!!! giving up after $MAX_RETRIES transient retries."
+          exit 1
+        fi
+        sleep "$TRANSIENT_RETRY_S"
+        TRANSIENT_RETRY_S=$((TRANSIENT_RETRY_S * 2))
+        # do NOT advance the loop counter: this child produced nothing.
+        continue
+        ;;
+    esac
   fi
+  retries=0
+  TRANSIENT_RETRY_S=30
 
   if print -r -- "$final" | grep -q '<promise>TASK_DONE</promise>'; then
     print -r -- "--- child $loop: TASK_DONE (rc=$rc) ---"
