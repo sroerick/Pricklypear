@@ -191,6 +191,33 @@ let is_no_stored_base (e : exn) : bool =
       go 0
   | _ -> false
 
+(** The image serializes prim results with Prims_pure.value_to_json. Since
+    f83827c (2026-09-27, json-values-alist) a JSON object crosses /api/prim
+    as an ALIST value (VList of VPair (VStr k, v)) instead of a VStr
+    carrying the JSON text; pre-f83827c servers still send the text form.
+    The sync client accepts BOTH: parse a VStr as JSON, pass anything else
+    through value_to_json (the exact inverse — an alist becomes the
+    object). Callers read only `Assoc payloads. *)
+let prim_json_of_value (v : value) : (Yojson.Safe.t, string) result =
+  match v with
+  | Ast.VStr j ->
+      (try Ok (Yojson.Safe.from_string j) with Yojson.Json_error e -> Error e)
+  | v -> Ok (Prims_pure.value_to_json v)
+
+(** Materialize one pulled node into the lens: a VStr carries the envelope
+    JSON text (pre-f83827c servers); a decoded envelope (alist since
+    f83827c) is re-serialized to JSON text first. True when the shape was
+    usable. *)
+let materialize_node ~(lens : Lens_store.lens) (v : value) : bool =
+  match v with
+  | Ast.VStr s -> ignore (Lens_store.materialize ~lens s); true
+  | Ast.VList _ ->
+      ignore
+        (Lens_store.materialize ~lens
+           (Yojson.Safe.to_string (Prims_pure.value_to_json v)));
+      true
+  | _ -> false
+
 (** One sync round over the DELTA exchange (the chunked protocol;
      issue i-1789178161-87d0742f). Requires a recorded base (the caller
      checks). The round:
@@ -252,19 +279,17 @@ let run_delta_round ~(transport : transport) ~(lens : Lens_store.lens)
        transport "sync/plan2"
          [ Ast.VStr lens.Lens_store.branch; manifest_v changes; vstr_list deletes ]
      in
-     let plan_json =
+     let kv =
        match plan_resp with
-       | Ok (Ast.VStr j) -> j
-       | Ok _ -> failwith "sync/plan2: bad shape"
+       | Ok v -> (
+           match prim_json_of_value v with
+           | Ok (`Assoc kv) -> kv
+           | Ok _ -> failwith "sync/plan2: bad shape"
+           | Error e -> failwith ("sync/plan2: bad json: " ^ e))
        | Error e ->
            if is_transport_error e then raise e
            else if is_no_stored_base e then raise No_stored_base
            else raise Other_prim_error
-     in
-     let kv =
-       match Yojson.Safe.from_string plan_json with
-       | `Assoc kv -> kv
-       | _ -> failwith "sync/plan2: bad json"
      in
      let strs k =
        match List.assoc_opt k kv with
@@ -348,23 +373,22 @@ let run_delta_round ~(transport : transport) ~(lens : Lens_store.lens)
                 transport "sync/push2"
                   [ Ast.VStr lens.Lens_store.branch; bodies_v; vstr_list deletes ]
               with
-              | Ok (Ast.VStr j) -> (
-                  match Yojson.Safe.from_string j with
-                  | `Assoc kv ->
-                      pushed_total := !pushed_total + (int "applied");
-                      won_all := !won_all @ strs "lww_client_won";
-                      kept_all := !kept_all @ strs "lww_server_kept";
-                      (match List.assoc_opt "failed_paths" kv with
-                       | Some (`List xs) ->
-                           List.iter
-                             (function
-                               | `String p ->
-                                   log "push %s: server rejected (kept locally; re-pushes next round)" p
-                               | _ -> ())
-                             xs
-                       | _ -> ())
-                  | _ -> log "push2: bad json")
-              | Ok _ -> log "push2: bad shape"
+               | Ok v -> (
+                   match prim_json_of_value v with
+                   | Ok (`Assoc kv) ->
+                       pushed_total := !pushed_total + (int "applied");
+                       won_all := !won_all @ strs "lww_client_won";
+                       kept_all := !kept_all @ strs "lww_server_kept";
+                       (match List.assoc_opt "failed_paths" kv with
+                        | Some (`List xs) ->
+                            List.iter
+                              (function
+                                | `String p ->
+                                    log "push %s: server rejected (kept locally; re-pushes next round)" p
+                                | _ -> ())
+                              xs
+                        | _ -> ())
+                   | _ -> log "push2: bad json")
               | Error e ->
                   log "push2 failed: %s" (Printexc.to_string e);
                   ok := false);
@@ -402,11 +426,7 @@ let run_delta_round ~(transport : transport) ~(lens : Lens_store.lens)
                let n = ref 0 in
                List.iter
                  (fun node ->
-                   match node with
-                   | Ast.VStr env ->
-                       ignore (Lens_store.materialize ~lens env);
-                       incr n
-                   | _ -> ())
+                   if materialize_node ~lens node then incr n)
                  envs;
                pulled_total := !pulled_total + !n
            | Ok _ -> log "pull batch: bad shape"
@@ -445,14 +465,13 @@ let run_delta_round ~(transport : transport) ~(lens : Lens_store.lens)
           stale-base guard above closes on recovery). *)
        if not !ok then raise (Failure "round had failures — skipping commit");
        (match transport "sync/commit2" [ Ast.VStr lens.Lens_store.branch ] with
-        | Ok (Ast.VStr j) -> (
-            match Yojson.Safe.from_string j with
-            | `Assoc kv -> (
+        | Ok v -> (
+            match prim_json_of_value v with
+            | Ok (`Assoc kv) -> (
                 match List.assoc_opt "generation" kv with
                 | Some (`String g) -> gen := (try Int64.of_string g with _ -> 0L)
                 | _ -> ())
             | _ -> ())
-        | Ok _ -> ()
         | Error e ->
             log "commit2 failed: %s" (Printexc.to_string e);
             ok := false);
@@ -547,9 +566,9 @@ let run_v1_round_inner ~(transport : transport) ~(lens : Lens_store.lens)
              ok = false;
              error = Some (Printexc.to_string e) };
          log "failed: %s" (Printexc.to_string e)
-     | Ok (Ast.VStr json) -> (
-         match Yojson.Safe.from_string json with
-         | `Assoc kv ->
+       | Ok v -> (
+           match prim_json_of_value v with
+           | Ok (`Assoc kv) ->
              let int k =
                match List.assoc_opt k kv with Some (`Int n) -> n | _ -> 0
              in
@@ -614,12 +633,12 @@ let run_v1_round_inner ~(transport : transport) ~(lens : Lens_store.lens)
              let pulled =
                List.fold_left
                  (fun n p ->
-                   match transport "tree/get" [ Ast.VStr p ] with
-                   | Ok (Ast.VStr env) ->
-                       ignore (Lens_store.materialize ~lens env);
-                       if not quiet then log "pulled %s" p;
-                       n + 1
-                   | Ok _ -> n
+                    match transport "tree/get" [ Ast.VStr p ] with
+                   | Ok v ->
+                       if materialize_node ~lens v then begin
+                         if not quiet then log "pulled %s" p;
+                         n + 1
+                       end else n
                    | Error e ->
                        log "pull %s: %s" p (Printexc.to_string e);
                        n)
@@ -657,12 +676,12 @@ let run_v1_round_inner ~(transport : transport) ~(lens : Lens_store.lens)
              let converged =
                List.fold_left
                  (fun n (p, _) ->
-                   match transport "tree/get" [ Ast.VStr p ] with
-                   | Ok (Ast.VStr env) ->
-                       ignore (Lens_store.materialize ~lens env);
-                       if not quiet then log "converged %s (server hash)" p;
-                       n + 1
-                   | Ok _ -> n
+                    match transport "tree/get" [ Ast.VStr p ] with
+                   | Ok v ->
+                       if materialize_node ~lens v then begin
+                         if not quiet then log "converged %s (server hash)" p;
+                         n + 1
+                       end else n
                    | Error e ->
                        log "converge %s: %s" p (Printexc.to_string e);
                        n)
@@ -717,9 +736,6 @@ let run_v1_round_inner ~(transport : transport) ~(lens : Lens_store.lens)
          | _ ->
              report := { !report with ok = false; error = Some "bad response shape" };
              log "bad response shape")
-     | Ok _ ->
-         report := { !report with ok = false; error = Some "unexpected return value" };
-         log "unexpected return value"
    with exn ->
      report :=
        { !report with
@@ -737,19 +753,19 @@ let run_v1_round ~(transport : transport) ~(lens : Lens_store.lens)
   let report = run_v1_round_inner ~transport ~lens ~quiet () in
   if report.ok && register_base then
     (try
-       match transport "sync/commit2" [ Ast.VStr lens.Lens_store.branch ] with
-       | Ok (Ast.VStr j) -> (
-           match Yojson.Safe.from_string j with
-           | `Assoc kv -> (
-               match List.assoc_opt "generation" kv with
-               | Some (`String g) ->
-                   let g = try Int64.of_string g with _ -> 0L in
-                   if g > 0L then
-                     Lens_store.record_snapshot ~lens
-                       ~branch:lens.Lens_store.branch ~generation:g
-               | _ -> ())
-           | _ -> ())
-       | Ok _ | Error _ -> ()
+         match transport "sync/commit2" [ Ast.VStr lens.Lens_store.branch ] with
+         | Ok v -> (
+             match prim_json_of_value v with
+             | Ok (`Assoc kv) -> (
+                 match List.assoc_opt "generation" kv with
+                 | Some (`String g) ->
+                     let g = try Int64.of_string g with _ -> 0L in
+                     if g > 0L then
+                       Lens_store.record_snapshot ~lens
+                         ~branch:lens.Lens_store.branch ~generation:g
+                 | _ -> ())
+             | _ -> ())
+         | Error _ -> ()
      with _ -> ());
   report
 
