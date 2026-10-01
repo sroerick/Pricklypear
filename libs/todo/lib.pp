@@ -2423,7 +2423,7 @@
 (define todo/list/find-by-title
   (lambda
     (title)
-    (let
+    (let*
       ((want (as-str title))
         (hit
           (list/filter
