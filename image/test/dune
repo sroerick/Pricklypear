@@ -293,3 +293,8 @@
  (name prim_gates_test)
  (modules prim_gates_test)
  (libraries pricklypear-image pricklypear-common pricklypear-lisp alcotest eio_main unix))
+
+(test
+ (name crud_update_field_test)
+ (modules crud_update_field_test)
+ (libraries pricklypear-image pricklypear-lisp alcotest eio_main yojson))

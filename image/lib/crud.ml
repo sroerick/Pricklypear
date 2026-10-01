@@ -741,11 +741,28 @@ let update_field_impl
     (store : Store.t) ~(type_name : string) ~(id : string)
     ~(field : string) ~(value : string) ~(caller : string)
     : value =
-  (* Preserve type-field validation (update_field used to route through
-     update -> check_type_fields). Build a throwaway single-field JSON to
-     reuse the same rejection path. *)
-  let sample_json = Printf.sprintf "{\"%s\":\"%s\"}" field value in
-  let reject = check_type_fields store ~type_name ~fields_json:sample_json in
+  (* Typed-boundary validation for update-field (i-1789074821): check the
+     ONE field being written against the declared type's fields. The old
+     path built a throwaway single-field JSON and routed it through
+     Tree_store.validate_fields, which requires EVERY declared field to be
+     present - so update-field on any declared type with 2+ fields always
+     rejected ("missing fields") and callers fell back to full-row
+     updates. Parity with create/update: an undeclared type and a type
+     declared with no fields stay unconstrained. The VALUE is never
+     interpolated into validation JSON anymore - a value containing a
+     double quote used to reject as "invalid JSON" before the write was
+     reached. Value coercion still happens at write time below. *)
+  let reject =
+    match Store.lookup_type_fields store ~name:type_name with
+    | None | Some [] -> None
+    | Some declared ->
+        if List.mem field declared then None
+        else
+          Some
+            (Printf.sprintf
+               "update-field %s: unknown field \"%s\" (declared: %s)"
+               type_name field (String.concat ", " declared))
+  in
   match reject with
   | Some msg -> VStr msg
   | None ->
