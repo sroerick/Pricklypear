@@ -2981,9 +2981,9 @@
         (workout/ksf-bell-for st deload)
         (workout/field st "unit") deload))))
 
-(define workout/ksf-duration-min
+(define workout/ksf-duration-sum
   (lambda (session-id)
-    "Duration in minutes from the Duration fact."
+    "Duration in minutes from any Duration exercise rows (legacy convention)."
     (list/foldl
       (lambda (acc row)
         (let ((f (workout/row-fields row)))
@@ -2992,6 +2992,22 @@
               acc)))
       0
       (workout/exercises session-id))))
+
+(define workout/ksf-duration-min
+  (lambda (session-id)
+    "Duration in minutes for a ksf session (card 3bfba572).
+     Prefer doc.progress.elapsed_min, which the ksf runner writes on every
+     step (kept from legacy/direct doc writes); fall back to the legacy
+     Duration exercise-row sum when progress carries no elapsed_min, and
+     take the max so either signal can clear the 30-minute gate."
+    (let*
+      ((doc (workout/parse-session-doc session-id))
+       (elapsed (workout/pget (workout/doc-progress doc) "elapsed_min"))
+       (from-doc (workout/as-int elapsed))
+       (from-rows (workout/ksf-duration-sum session-id)))
+      (if (blank? elapsed)
+          from-rows
+          (max from-doc from-rows)))))
 
 (define workout/ksf-cleared?
   (lambda (session-id)
