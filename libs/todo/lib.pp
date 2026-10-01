@@ -3151,20 +3151,10 @@
   "cache row for the notes-todo scrape (or ())")
 
 (define todo/open?
-  (lambda
-    (s)
-    (let
-      ((t (as-str s)))
-      (if
-        (string-eq t "")
-        #f
-        (if
-          (string-eq t "DONE")
-          #f
-          (if
-            (string-eq t "CANCELLED")
-            #f
-            (if (string-eq t "ARCHIVED") #f #t)))))))
+  (lambda (s) (todo/state/open? s))
+  "Alias of todo/state/open? (deleted in T4, lib-hygiene). Both read the
+     one closed-set decision in todo/state/closed?, so a PARKED card is
+     closed here too.")
 
 (define todo/page
   (lambda
@@ -3303,6 +3293,23 @@
 (define todo/state/archived?
   (lambda (s) (string-eq (as-str s) "ARCHIVED")))
 
+(define todo/state/closed?
+  (lambda
+    (s)
+    (let
+      ((t (as-str s)))
+      (or
+        (string-eq t "")
+        (string-eq t "DONE")
+        (string-eq t "PARKED")
+        (string-eq t "CANCELLED")
+        (string-eq t "ARCHIVED")))))
+  "The CLOSED set as one decision: \"\", DONE, PARKED, CANCELLED, ARCHIVED
+     all end a card; every other state is open. borge/workstreams.borg
+     default-pipeline: PARKED is deliberately not moving, so it is closed.
+     todo/state/open? and todo/open? both read through here so /workstreams
+     counts, the kanban stray bucket and standup cannot disagree."
+
 (define todo/state/columns-for-list
   (lambda
     (list-id)
@@ -3322,7 +3329,23 @@
   "The state set (list of state strings) for a todo-list: the list's own\n     `columns` field when present and non-empty, else the global default\n     todo/state/list. THE per-list override kanban columns and the /todos\n     state machine both read through, so a list with custom columns cycles\n     only those states everywhere.")
 
 (define todo/state/list
-  (list "" "TODO" "DONE" "WAITING" "CANCELLED"))
+  (list
+    ""
+    "TODO"
+    "SPEC"
+    "CODE"
+    "LOGIC-REVIEW"
+    "UI-REVIEW"
+    "HUMAN-REVIEW"
+    "DONE"
+    "PARKED"))
+  ;; borge/workstreams.borg default-pipeline: the GLOBAL DEFAULT is the
+  ;; engineering taxonomy, ordered TODO -> SPEC -> CODE -> LOGIC-REVIEW ->
+  ;; UI-REVIEW -> HUMAN-REVIEW -> DONE -> PARKED, so a columns-less list
+  ;; cannot strand a card outside its own pipeline and a bare todo/cycle is
+  ;; a safe advance (TODO -> SPEC). The legacy checklist (WAITING/CANCELLED)
+  ;; is not deleted, just no longer the default: a list that wants it sets
+  ;; its own `columns`.
 
 (define todo/state/next
   (lambda
@@ -3403,20 +3426,7 @@
      same set, so a card on its own pipeline never leaves it.")
 
 (define todo/state/open?
-  (lambda
-    (s)
-    (let
-      ((t (as-str s)))
-      (if
-        (string-eq t "")
-        #f
-        (if
-          (string-eq t "DONE")
-          #f
-          (if
-            (string-eq t "CANCELLED")
-            #f
-            (if (string-eq t "ARCHIVED") #f #t)))))))
+  (lambda (s) (not (todo/state/closed? s))))
 
 (define todo/state/options
   (lambda
@@ -3498,7 +3508,17 @@
   "Accumulating: find cur in xs, return the next; wrap to head at the end or\n     on absent.")
 
 (define todo/states
-  (list "" "TODO" "DONE" "WAITING" "CANCELLED"))
+  (list
+    ""
+    "TODO"
+    "SPEC"
+    "CODE"
+    "LOGIC-REVIEW"
+    "UI-REVIEW"
+    "HUMAN-REVIEW"
+    "DONE"
+    "PARKED"))
+  ;; alias of todo/state/list; deleted in T4 (lib-hygiene).
 
 (define todo/toggle
   (lambda
