@@ -35,6 +35,9 @@
     todo/item/set-target
     todo/item/kind
     todo/item/set-kind
+    todo/item/origin-kind
+    todo/item/origin-ref
+    todo/item/set-origin
     todo/recipes-default
     todo/recipes-for-list
     todo/recipe
@@ -51,6 +54,7 @@
     todo/setup-auto-lane
     todo/list/find-by-title
     todo/list/set-columns
+    todo/state/closed?
 ))
 
 ;; Declare the card-thread datum types as BARE top-level deftype forms
@@ -119,6 +123,10 @@
             "pipeline"
             ""
             "kind"
+            ""
+            "origin_kind"
+            ""
+            "origin_ref"
             ""))))))
 
 (define todo/add-form
@@ -1091,6 +1099,10 @@
             "pipeline"
             ""
             "kind"
+            ""
+            "origin_kind"
+            ""
+            "origin_ref"
             ""))))))
 
 (define todo/item/all
@@ -1375,6 +1387,35 @@
     (let
       ((n (dict-get fields "notes")))
       (if (null? n) "" (as-str n)))))
+
+(define todo/item/origin-kind
+  (lambda
+    (fields)
+    (let
+      ((v (dict-get fields "origin_kind")))
+      (if (null? v) "" (as-str v))))
+  "The card's origin kind: empty for a hand-made card, `note` when
+     promoted from an outline node. Tolerates a pre-T3 card with no
+     field, so readers never see null. borge/workstreams.borg note-todos.")
+
+(define todo/item/origin-ref
+  (lambda
+    (fields)
+    (let
+      ((v (dict-get fields "origin_ref")))
+      (if (null? v) "" (as-str v))))
+  "The reconciliation key linking a promoted card to its origin node,
+     `<slug>#<nid>` (empty for a hand-made card). borge/workstreams.borg
+     note-todos clause 2.")
+
+(define todo/item/set-origin
+  (lambda
+    (id kind ref)
+    (seq
+      (todo/tree/set-field "todo-item" (as-str id) "origin_kind" (as-str kind))
+      (todo/tree/set-field "todo-item" (as-str id) "origin_ref" (as-str ref))))
+  "Write a card's origin_kind + origin_ref as one call. Used by promotion
+     (todo/promote-node); returns the set-field result of the last write.")
 
 (define todo/item/save
   (lambda
