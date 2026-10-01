@@ -714,7 +714,10 @@ let claim_due_schedule ~(store : Store.t) : schedule option =
         in
         (match rows with row :: _ -> row_to_schedule row | [] -> None))
 
-(** Advance a schedule's next_run after it fired (cron or every-ms). *)
+(** Advance a schedule's next_run after it fired (cron or every-ms). An
+    impossible cron (next_cron_ms = None, e.g. Feb 30) DISABLES the
+    schedule here instead of rescheduling it: retrying in a minute
+    re-fired the broken spec every minute forever (i-1789100668). *)
 let advance_schedule ~(store : Store.t) ~(name : string) ~(fired_at : int64)
     ~(cron : string option) ~(every_ms : int64 option) : unit =
   match pg_conn store with
@@ -723,16 +726,23 @@ let advance_schedule ~(store : Store.t) ~(name : string) ~(fired_at : int64)
     let now_ms = Int64.of_float (Unix.gettimeofday () *. 1000.0) in
     let next =
       match cron, every_ms with
-      | Some c, _ ->
-          (match next_cron_ms c now_ms with
-           | Some n -> n
-           | None -> Int64.add now_ms 60_000L)
-      | None, Some e -> next_every_ms e now_ms
-      | None, None -> Int64.add now_ms 60_000L
+      | Some c, _ -> next_cron_ms c now_ms
+      | None, Some e -> Some (next_every_ms e now_ms)
+      | None, None -> Some (Int64.add now_ms 60_000L)
     in
-    ignore
-      (Store_db.exec conn ~params:[ Pgx.Value.of_string name; Pgx.Value.of_int64 next ]
-         "UPDATE schedules SET next_run = $2 WHERE name = $1")
+    (match next with
+     | Some n ->
+       ignore
+         (Store_db.exec conn
+            ~params:[ Pgx.Value.of_string name; Pgx.Value.of_int64 n ]
+            "UPDATE schedules SET next_run = $2 WHERE name = $1")
+     | None ->
+       (* No next match within the search horizon: disable once. The
+          (schedules) listing shows enabled=false; re-upserting a fixed
+          spec re-enables. *)
+       ignore
+         (Store_db.exec conn ~params:[ Pgx.Value.of_string name ]
+            "UPDATE schedules SET enabled = false WHERE name = $1"))
 
 (* The runner loop (eval_job + runner_loop) lives in boot.ml to avoid a
    dependency cycle: Jobs (DB ops) must not depend on Session, which
