@@ -59,6 +59,8 @@
     todo/node/cycle
     todo/node/find-card
     todo/node/mirror
+    todo/node/mirror-notice
+    todo/node/note-visible?
     todo/node/parse-ref
     todo/node/promote-form
     todo/node/seed-state
@@ -1099,12 +1101,32 @@
       (if
         (or
           (null? parts)
-          (null? (cdr parts))
           (string-eq (as-str (car parts)) ""))
         (cons "" "")
-        (cons (as-str (car parts)) (as-str (car (cdr parts)))))))
-  "Split a card origin_ref \"<slug>#<nid>\" into (slug . nid);
-     (\"\" . \"\") when malformed or empty. The reconciliation-key parser.")
+        (let
+          ((slug (as-str (car parts)))
+            (rest (cdr parts)))
+          (if
+            (null? rest)
+            (cons slug "")
+            (cons slug (as-str (car rest))))))))
+  "Split a card origin_ref \"<slug>#<nid>\" into (slug . nid); (\"\" . \"\")
+     for an empty/malformed slug. A bare \"slug\" (no #) also parses, with an
+     empty nid, so a note-LEVEL provenance ref round-trips instead of being
+     silently dropped. The reconciliation-key parser.")
+
+(define todo/node/note-visible?
+  (lambda
+    (slug)
+    (not
+      (string-eq
+        (todo/node/note-path slug)
+        "")))
+  "True when the CALLER can resolve the note slug through the garden-scoped
+     notes read (notes/tree/find-slug -> tree/find-by, prefix = caller's
+     garden). Visibility, not existence: another identity's private note is
+     invisible here (note-todos clause 5). The distinction that lets
+     todo/node/mirror tell 'origin gone' from 'origin not mine'.")
 
 (define todo/node/note-path
   (lambda
@@ -1183,6 +1205,53 @@
   "The card whose origin_ref equals ref, or () when unpromoted. The
      idempotency key for promotion and the node->card update path.")
 
+(define todo/node/mirror-notice
+  (lambda
+    (card-id ref state)
+    (let*
+      ((ref-pair (todo/node/parse-ref ref))
+        (reason
+          (if (todo/node/note-visible? (car ref-pair))
+            "node keyword is gone; only the card moved for"
+            "is not visible to"))
+        (note
+          (string-append
+            "origin note ("
+            (as-str ref)
+            ") "
+            reason
+            " "
+            (whoami)
+            " — keyword not mirrored to "
+            (as-str state)))
+        (seen
+          (list/filter
+            (lambda
+              (n)
+              (and
+                (string-eq (as-str (dict-get n "author")) (as-str (whoami)))
+                (let
+                  ((b (dict-get (dict-get n "body") "body")))
+                  (and
+                    (not (null? b))
+                    (string-contains? (as-str b) "origin note (")))))
+            (todo/comment/list (as-str card-id)))))
+      (if
+        (null? seen)
+        (todo/comment/add (as-str card-id) note)
+        (as-str
+          (dict-get
+            (dict-get (car seen) "body")
+            "body")))))
+  "Record ONE attributed comment on the card when its origin note cannot be
+     mirrored (note-todos clause 5; T7 option B). IDEMPOTENT per (card,
+     author): once this caller has recorded a notice, a later move does NOT
+     append again — the first notice already carries the exact state that
+     failed to mirror, and the card's own todo-event stream is the record of
+     every later transition. Returns the existing notice instead. Never
+     edits a row another author wrote. Callers get a value on every move so
+     the divergence can never masquerade as a silent no-op.")
+
 (define todo/node/mirror
   (lambda
     (card-id state)
@@ -1198,13 +1267,23 @@
             (if
               (string-eq (car ref) "")
               ""
-              (todo/node/set-todo (car ref) (cdr ref) state)))
+              (let
+                ((ok (todo/node/set-todo (car ref) (cdr ref) state)))
+                (if
+                  ok
+                  #t
+                  (todo/node/mirror-notice
+                    (as-str card-id)
+                    (todo/item/origin-ref fields)
+                    state)))))
           ""))))
   "Mirror a card's new state onto its origin note node, when it has one.
      The write-back half of note-todos clause 3: a card transition updates
      the linked node in the SAME transaction (todo/item/set-state and
-     todo/item/save call this beside their tree write). No-op for
-     hand-made cards and for a card whose original note has moved away.")
+     todo/item/save call this beside their tree write). Returns #t when the
+     node was written, the notice comment id when the origin note is not
+     visible to this caller (T7 option B — the divergence is VISIBLE, never
+     silent), and '' for hand-made cards or a malformed ref.")
 
 (define todo/node/sync-card
   (lambda
