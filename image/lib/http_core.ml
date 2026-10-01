@@ -131,15 +131,37 @@ let emergency_css : string =
    }\n\
    "
 
+(** HSTS max-age is on by default: 180 days, no includeSubDomains (the
+    garden subdomains are the reason — a bad cert would otherwise lock
+    every garden out) and no preload. Set PP_HSTS_MAX_AGE=0 to disable
+    (plain-HTTP dev; a browser would otherwise force https on
+    localhost). i-1787970880 residual: HSTS was absent entirely. *)
+let hsts_max_age () : int =
+  match Sys.getenv_opt "PP_HSTS_MAX_AGE" with
+  | Some v -> (match int_of_string_opt (String.trim v) with Some n -> max 0 n | None -> 15552000)
+  | None -> 15552000
+
 (** Security headers appended to every response. Deliberately NOT a full
     CSP: the chrome relies on inline <style>/<script> (htmx + outline
-    client script), so we only pin frame-ancestors 'none'. *)
+    client script), so we only pin frame-ancestors 'none'.
+
+    HSTS is emitted unconditionally when enabled: browsers IGNORE
+    Strict-Transport-Security received over plain HTTP (RFC 6797), so a
+    dev server on http is unaffected while a TLS edge gets the header on
+    its very first https response. Disable with PP_HSTS_MAX_AGE=0. *)
 let security_headers () : (string * string) list =
-  [ ("x-content-type-options", "nosniff")
-  ; ("x-frame-options", "DENY")
-  ; ("referrer-policy", "strict-origin-when-cross-origin")
-  ; ("content-security-policy", "frame-ancestors 'none'")
-  ]
+  let base =
+    [ ("x-content-type-options", "nosniff")
+    ; ("x-frame-options", "DENY")
+    ; ("referrer-policy", "strict-origin-when-cross-origin")
+    ; ("content-security-policy", "frame-ancestors 'none'")
+    ]
+  in
+  if hsts_max_age () > 0 then
+    ("strict-transport-security",
+     Printf.sprintf "max-age=%d" (hsts_max_age ()))
+    :: base
+  else base
 
 let html_response (reqd : Httpun.Reqd.t) ?(status = `OK)
     ?session ?(css : string option) (body : Pure_html.node) : unit =
@@ -519,39 +541,67 @@ let parse_bearer_auth (headers : (string * string) list) : string option =
         if scheme <> "bearer" then None
         else Some (String.trim (String.sub v 6 (String.length v - 6)))
 
-(** Emit "; Secure" on the session cookie unless explicitly disabled via
-    PP_COOKIE_SECURE=0/false, and only when a base domain is configured —
-    prod (base domain set) is https, while dev plain HTTP (no domain)
-    stays without Secure. *)
-let cookie_secure () : bool =
-  let forced_off =
-    match Sys.getenv_opt "PP_COOKIE_SECURE" with
-    | Some ("0" | "false" | "FALSE" | "False") -> true
-    | _ -> false
-  in
-  (not forced_off) && base_domain () <> None
+(** Emit "; Secure" on the session cookie.
 
-let set_cookie_header ~(token : string) : string =
+    i-1787970928 follow-up: the original rule was `Secure only when
+    PP_BASE_DOMAIN is set`, which made the flag INEFFECTIVE ON PROD —
+    prod serves https://pricklypear.rocks with no base domain, so it
+    emitted a cookie a browser may send over plain http (verified live
+    2026-10-01: /login Set-Cookie had no Secure).
+
+    Resolution order:
+      1. PP_COOKIE_SECURE=1/true  -> force ON  (works with or without
+         a base domain; the correct prod setting behind a TLS edge).
+      2. PP_COOKIE_SECURE=0/false -> force OFF (plain-HTTP dev).
+      3. unset -> fall back to the original heuristic (base domain set
+         implies https). Kept so existing deployments do not regress. *)
+let cookie_secure () : bool =
+  match Sys.getenv_opt "PP_COOKIE_SECURE" with
+  | Some v ->
+      let v = String.trim (String.lowercase_ascii v) in
+      (match v with
+       | "" -> base_domain () <> None
+       | "0" | "false" | "no" -> false
+       | _ -> true)
+  | None -> base_domain () <> None
+
+(** [true] when the request arrived over TLS at the edge, judged from
+    X-Forwarded-Proto (nginx sets it). Used to auto-emit Secure so a
+    TLS-terminating edge need not remember PP_COOKIE_SECURE. *)
+let request_is_https (headers : (string * string) list) : bool =
+  let rec find = function
+    | [] -> false
+    | (k, v) :: _ when String.lowercase_ascii k = "x-forwarded-proto" ->
+        (match String.index_opt v ',' with
+         | Some i -> String.lowercase_ascii (String.trim (String.sub v 0 i)) = "https"
+         | None -> String.lowercase_ascii (String.trim v) = "https")
+    | _ :: rest -> find rest
+  in
+  find headers
+
+let set_cookie_header ?(force_secure = false) ~(token : string) () : string =
   (* Path=/; HttpOnly; SameSite=Lax. PP_BASE_DOMAIN scopes cookie across
-     subdomains. Secure when a base domain is set unless PP_COOKIE_SECURE
-     forces it off (see cookie_secure). *)
+     subdomains. Secure per cookie_secure (see there), OR forced when the
+     live request was seen over https at the edge. *)
   let domain =
     match base_domain () with
     | Some b -> "; Domain=." ^ b
     | None -> ""
   in
-  let secure = if cookie_secure () then "; Secure" else "" in
+  let secure = if force_secure || cookie_secure () then "; Secure" else "" in
   Printf.sprintf "%s=%s; Path=/; HttpOnly; SameSite=Lax; Max-Age=%d%s%s"
     cookie_name token (60 * 60 * 24 * 14) domain secure
 
-let clear_cookie_header () : string =
+let clear_cookie_header ?(force_secure = false) () : string =
   let domain =
     match base_domain () with
     | Some b -> "; Domain=." ^ b
     | None -> ""
   in
+  let secure = if force_secure || cookie_secure () then "; Secure" else "" in
   Printf.sprintf
-    "%s=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0%s" cookie_name domain
+    "%s=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0%s%s" cookie_name domain
+    secure
 
 let redirect_with_cookie (reqd : Httpun.Reqd.t) ~(location : string)
     ~(set_cookie : string) : unit =
@@ -1038,7 +1088,10 @@ let post_login (session : Session.t) ?source_ip (reqd : Httpun.Reqd.t) : unit =
                     | None -> "/")
              in
              redirect_with_cookie reqd ~location
-               ~set_cookie:(set_cookie_header ~token);
+               ~set_cookie:
+                 (set_cookie_header
+                    ~force_secure:(request_is_https (header_list (Httpun.Reqd.request reqd)))
+                    ~token ());
              ())
 
 let post_logout (session : Session.t) (reqd : Httpun.Reqd.t) : unit =

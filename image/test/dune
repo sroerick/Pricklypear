@@ -298,3 +298,8 @@
  (name crud_update_field_test)
  (modules crud_update_field_test)
  (libraries pricklypear-image pricklypear-lisp alcotest eio_main yojson))
+
+(test
+ (name http_secure_cookie_test)
+ (modules http_secure_cookie_test)
+ (libraries pricklypear-image alcotest unix))
