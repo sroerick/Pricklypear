@@ -1119,20 +1119,28 @@
                     (as-str kind)
                     "day"
                     (as-str day)))))
-            (seq
-              (notes/tree/ensure-folder (notes/tree/root) (whoami))
-              (tree/upsert path "note" "note" body)
-              (notes/tree/save-outline path outline)
-              (if
-                (and
-                  (not (null? prev))
-                  (not (string-eq oldp ""))
-                  (not
-                    (string-eq (as-str folder) (notes/doc/row-folder prev))))
-                (notes/doc/set-folder slug folder)
-                0)
-              (roam/reindex (as-str slug) outline)
-              slug))))
+            ;; i-1790546235 item 1: the note-row upsert and the outline
+            ;; save are TWO writes; each was internally atomic but the
+            ;; PAIR was not, so a failure between them left a new note
+            ;; row with the OLD outline. ONE with-transaction here makes
+            ;; the whole upsert all-or-nothing (nested wraps JOIN).
+            (with-transaction
+              (lambda
+                ()
+                (seq
+                  (notes/tree/ensure-folder (notes/tree/root) (whoami))
+                  (tree/upsert path "note" "note" body)
+                  (notes/tree/save-outline path outline)
+                  (if
+                    (and
+                      (not (null? prev))
+                      (not (string-eq oldp ""))
+                      (not
+                        (string-eq (as-str folder) (notes/doc/row-folder prev))))
+                    (notes/doc/set-folder slug folder)
+                    0)
+                  (roam/reindex (as-str slug) outline)
+                  slug))))))
         (string-append
           "refused: outline is malformed (every node must be a 5-element list [id title body todo kids], recursively); note not changed: "
           (as-str slug)))
