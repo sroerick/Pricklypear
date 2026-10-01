@@ -248,6 +248,7 @@
 (define workstreams/page
   (lambda ()
     "GET /workstreams renders the live orchestration face."
+    (todo/ensure-space)
     (html/page
       (list
         (html/h1 (html/text "Workstreams"))

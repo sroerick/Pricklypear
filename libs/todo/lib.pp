@@ -44,6 +44,13 @@
     todo/state/pipeline-for-item
     todo/state/next-for-item
     todo/state/options-for-item
+    todo/ensure-space
+    todo/adopt-stranded
+    todo/resolve-board
+    todo/resolve-auto-lane
+    todo/setup-auto-lane
+    todo/list/find-by-title
+    todo/list/set-columns
 ))
 
 ;; Declare the card-thread datum types as BARE top-level deftype forms
@@ -2413,6 +2420,41 @@
 (define todo/list-title
   (lambda (fields) (as-str (dict-get fields "title"))))
 
+(define todo/list/find-by-title
+  (lambda
+    (title)
+    (let
+      ((want (as-str title))
+        (hit
+          (list/filter
+            (lambda
+              (l)
+              (string-eq (as-str (dict-get (cdr l) "title")) want))
+            (todo/list/all))))
+      (if (null? hit) () (car hit))))
+  "The (id . fields) pair of the first todo-list whose title equals title,
+     or () when none. Used by the shared-space naming migration to resolve
+     the board/AUTO lane by TITLE rather than a per-garden uuid.")
+
+(define todo/list/set-columns
+  (lambda
+    (list-id cols)
+    (let
+      ((lid (as-str list-id))
+        (lf (todo/tree/get "todo-list" (as-str list-id))))
+      (if
+        (null? lf)
+        "no such list"
+        (seq
+          (todo/tree/save
+            "todo-list"
+            lid
+            (dict-set* lf (list "columns" (json-emit cols))))
+          lid))))
+  "Set a todo-list's `columns` field (its own pipeline, a JSON array of
+     state strings). Returns the list id, or \"no such list\". Local to the
+     todo family so it does not depend on the kanban package.")
+
 (define todo/list/all
   (lambda () (todo/tree/rows "todo-list" 50)))
 
@@ -2495,6 +2537,149 @@
 
 (define todo/list/find-default
   (lambda () (todo/list/find-default-in (todo/list/all))))
+
+;; ------------------------------------------------------------------
+;; SHARED OPEN SPACE (borge/workstreams.borg shared-store)
+;;
+;; The board, its lists and its cards are collaboration furniture: every
+;; authenticated identity shares ONE board. The mechanism is the existing
+;; open-space substrate (`data.s.<space>.<type>.<id>`, migration 030) —
+;; the chat lobby is the precedent. Admission is TYPE-level and routes
+;; FUTURE writes; the four todo types admitted here are todo-list,
+;; todo-item, todo-comment, todo-event.
+;;
+;; ORDERING HAZARD: admission changes (node-path 'todo-item ...), so
+;; ensure-space MUST run before any read that computes a prefix. Every
+;; todo entry point (todo/page, kanban/page, workstreams/page) calls
+;; todo/ensure-space at the top.
+;; ------------------------------------------------------------------
+
+(define todo/open-space
+  "todo")
+
+(define todo/admitted-types
+  (list "todo-list" "todo-item" "todo-comment" "todo-event"))
+
+(define todo/ensure-space
+  (lambda
+    ()
+    (if
+      (string-eq (as-str (whoami)) "anonymous")
+      #f
+      (guard
+        (lambda (e) #f)
+        (seq
+          (if
+            (space-exists? todo/open-space)
+            #t
+            (space-create todo/open-space (quote open)))
+          (list/foldl
+            (lambda (acc t)
+              (seq
+                (guard
+                  (lambda (e) #f)
+                  (space-admit t todo/open-space))
+                acc))
+            #t
+            todo/admitted-types)))))
+  "Create the shared open `todo` space and admit the four card types
+     (idempotent, best-effort; the first writer races safely). Ensures
+     the space exists AND the admissions are present even when the space
+     predates an admission — so a repair is `(todo/ensure-space)`.
+     Anonymous is a no-op (guests keep their own garden), and a
+     non-owner (any non-first identity) silently skips the owner-only
+     admit — the space already exists and is open, so membership is
+     implicit.")
+
+(define todo/space-path
+  (lambda (type-name id)
+    (node-path type-name (as-str id)))
+  "The space-routed node path for a todo datum (assumes the type is
+     admitted). Thin wrapper over node-path for readability.")
+
+(define todo/adopt-stranded
+  (lambda
+    ()
+    (with-transaction
+      (lambda
+        ()
+        (let
+          ((scan
+            (list/foldl
+              (lambda
+                (acc t)
+                (list/foldl
+                  (lambda
+                    (a n)
+                    (if
+                      (string-eq (as-str (dict-get n "type")) t)
+                      (let
+                        ((old (as-str (dict-get n "path"))))
+                        (let
+                          ((id (as-str (dict-get n "id"))))
+                          (let
+                            ((new (todo/space-path t id)))
+                            (let
+                              ((has-new (tree/get new)))
+                              (if
+                                (null? has-new)
+                                (seq
+                                  (tree/move old new)
+                                  (cons (+ (car a) 1) (cdr a)))
+                                (cons (car a) (+ (cdr a) 1)))))))
+                      a))
+                  acc
+                  (tree/list-kind "data.u" "datum" 4000)))
+              (cons 0 0)
+              todo/admitted-types)))
+          (json-emit
+            (dict-set*
+              "{}"
+              (list
+                "moved"
+                (car scan)
+                "skipped"
+                (cdr scan))))))))
+  "One-time adoption: move every stranded `data.u.*` node of the four
+     todo types (all identities — the reads are not RLS-filtered and the
+     spec deliberately publishes the pre-adoption backlog) into the shared
+     `todo` space, preserving id, body, author and created_at. Idempotent:
+     a row whose target already exists is skipped. The whole scan runs in
+     ONE with-transaction (a tree/move is a write; the multi-write sequence
+     must be atomic). Returns JSON {\"moved\":N,\"skipped\":M}.")
+
+(define todo/resolve-board
+  (lambda
+    ()
+    (let
+      ((hit (todo/list/find-by-title "Board")))
+      (if (null? hit) (todo/list/ensure-inbox) (as-str (car hit)))))
+  "The shared Board list id: the todo-list titled \"Board\", falling back
+     to the Inbox. Resolves by TITLE (never a hardcoded per-garden uuid).")
+
+(define todo/resolve-auto-lane
+  (lambda
+    ()
+    (let
+      ((hit (todo/list/find-by-title "AUTO")))
+      (if (null? hit) "" (as-str (car hit)))))
+  "The AUTO-lane list id: the todo-list titled \"AUTO\", or \"\" when absent.")
+
+(define todo/setup-auto-lane
+  (lambda
+    ()
+    (let
+      ((aid (todo/resolve-auto-lane)))
+      (if
+        (string-eq aid "")
+        ""
+        (todo/list/set-columns
+          aid
+          (list "TODO" "CODE" "LOGIC-REVIEW" "DONE" "PARKED")))))
+  "Give the AUTO lane its spec-mandated columns (NO HUMAN-REVIEW):
+     [TODO CODE LOGIC-REVIEW DONE PARKED]. Returns the list id or \"\".
+     borge/workstreams.borg stream-pipelines: an AUTO LOGIC-REVIEW PASS
+     lands on DONE, so the human gate must not be a column.")
 
 (define todo/list/find-default-in
   (lambda
@@ -2985,6 +3170,7 @@
   (lambda
     ()
     (seq
+      (todo/ensure-space)
       (todo/list/ensure-inbox)
       (if
         (string-eq (request-method) "POST")
@@ -3898,3 +4084,6 @@
     (let
       ((v (request-param "view")))
       (if (null? v) "everything" (as-str v)))))
+
+(route "/todos" "todo/page")
+(route "/partials/todo-list" "todo/partial")
