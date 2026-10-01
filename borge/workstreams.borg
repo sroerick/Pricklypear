@@ -716,7 +716,7 @@
    changes, which the loop proves by diffing `/todos`, `/kanban`, and
    `/workstreams` renders before and after.")
   (implements "libs/todo/lib.pp (legacy layer removal + export manifest sync)")
-  (status planned)
+  (status implemented-live)  ;; T4 lib-hygiene (2026-10-01): 41 legacy defines deleted, export manifest synced 64->88, scripts/verify_todo_exports.sh guards it
   (verify
    (test "no define named todo/db/* or todo/main-html|detail-html|nav-html|items-html|handle-post|list-item-li|item-li|partial remains"
          "no duplicate-alias pairs remain (one canonical name per body)"
