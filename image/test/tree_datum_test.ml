@@ -348,10 +348,13 @@ let test_move_type_change_ok () =
                 ~body_json:"{\"title\":\"x\",\"body\":\"y\",\"status\":\"todo\"}" ~author:"tester" ~rank:None
             with
             | Error e -> Alcotest.fail ("create failed: " ^ e) | Ok _ -> ());
-           (match C.tree_move store ~old_path ~new_path with
-            | VInt _ -> ()
-            | VStr s -> Alcotest.fail ("move should succeed: " ^ s)
-            | _ -> Alcotest.fail "move returned unexpected value")));
+             (match C.tree_move store ~old_path ~new_path with
+              (* a685c49 (09-06): tree writes return a JSON result string on
+                 success ({"moved":n,...}); VInt was the pre-09-06 shape and
+                 no longer occurs. Rejections are "tree/move: ..." strings. *)
+              | VStr s when contains_sub s "\"moved\"" -> ()
+              | VStr s -> Alcotest.fail ("move should succeed: " ^ s)
+              | _ -> Alcotest.fail "move returned unexpected value")));
   ()
 
 let () =
