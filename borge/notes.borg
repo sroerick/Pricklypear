@@ -962,7 +962,7 @@
 
   (subsection note-path-resolution
    (doc "Addressing an existing note resolves its live tree path; note-path is a constructor for new notes, never a slug lookup; writes refuse absent note parents")
-   (status planned)
+    (status implemented)
    (implements libs/notes/lib.pp)
    (verify
     (smoke "the agents note (folder wiki) resolves to its stored path: notes/doc/path returns data.note.u.admin.wiki.agents and (notes/tree/folder-of-path path) = \"wiki\"")
