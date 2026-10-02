@@ -273,6 +273,84 @@ let last_prune = ref 0.0
     (or no prune has run yet). *)
 let prune_due (now : float) : bool = now -. !last_prune >= prune_secs
 
+(* —— read face —————————————————————————————————————————————————
+   (ops/activity [actor] [since] [class]) — product-experience
+   §activity-ledger READ. Read-only and safe for agent monitors.
+
+   SECURITY: a non-admin caller is force-filtered to its own actor rows
+   AT THE SQL LAYER (the WHERE clause carries `actor = $caller`), never
+   post-filtered in Lisp. [~actor] is honored only when [~is_admin]. A
+   watched machine shows its watch to the watched; it never leaks
+   another identity's rows through a crafted argument. Port 033's admin
+   disjunct precedent, but THIS table has no RLS, so the caller identity
+   is the only gate and it must live in the query text. *)
+let json_row (row : Pgx.row) : string =
+  match row with
+  | [ at; actor; cls; target; outcome; cost ] ->
+      let str v = match Pgx.Value.to_string v with Some s -> s | None -> "" in
+      let opt v =
+        match Pgx.Value.to_string v with Some s -> `String s | None -> `Null
+      in
+      let cost_j =
+        match Pgx.Value.to_string cost with
+        | Some c -> (try Yojson.Safe.from_string c with _ -> `Null)
+        | None -> `Null
+      in
+      Yojson.Safe.to_string
+        (`Assoc
+           [ ("at", `String (str at)); ("actor", `String (str actor));
+             ("class", `String (str cls)); ("target", opt target);
+             ("outcome", `String (str outcome)); ("cost", cost_j) ])
+  | _ -> "{}"
+
+let read_rows ~(store : Store.t) ~(caller : string) ~(is_admin : bool)
+    ?(actor : string option)
+    ?(since : [ `Epoch of float | `Iso of string ] option)
+    ?(cls : string option) ?(limit : int = 100) () : string list =
+  match Io_db.Db.current_conn store with
+  | None -> []
+  | Some conn ->
+      let where = ref [] in
+      let params = ref [] in
+      let add v =
+        params := !params @ [ v ];
+        List.length !params
+      in
+      (* force-filter: a non-admin always filters to self, ignoring any
+         supplied [actor] (SQL-layer gate, not a Lisp post-filter). *)
+      let actor_filter = if is_admin then actor else Some caller in
+      (match actor_filter with
+       | Some a ->
+           let i = add (Pgx.Value.of_string a) in
+           where := !where @ [ Printf.sprintf "actor = $%d" i ]
+       | None -> ());
+      (match since with
+       | Some (`Epoch t) ->
+           let i = add (Pgx.Value.of_float t) in
+           where := !where @ [ Printf.sprintf "at >= to_timestamp($%d)" i ]
+       | Some (`Iso s) ->
+           let i = add (Pgx.Value.of_string s) in
+           where := !where @ [ Printf.sprintf "at >= $%d::timestamptz" i ]
+       | None -> ());
+      (match cls with
+       | Some c ->
+           let i = add (Pgx.Value.of_string c) in
+           where := !where @ [ Printf.sprintf "class = $%d" i ]
+       | None -> ());
+      let limit_i = add (Pgx.Value.of_int (max 0 (min limit 1000))) in
+      let conds = match !where with [] -> "" | xs -> "WHERE " ^ String.concat " AND " xs in
+      let sql =
+        Printf.sprintf
+          "SELECT at::text, actor, class, target, outcome, cost::text FROM activity_ledger %s \
+           ORDER BY at DESC, id DESC LIMIT $%d"
+          conds limit_i
+      in
+      (try Store_db.exec conn ~params:!params sql |> List.map json_row
+       with exn ->
+         Printf.eprintf "[activity_ledger] read failed: %s\n%!"
+           (Printexc.to_string exn);
+         [])
+
 (** Background flush loop; fork once at boot. Uses the Eio clock — never
     route this through any run_lwt-style bridge (function_stats comment:
     concurrent bridge calls across fibers took the switch down). *)

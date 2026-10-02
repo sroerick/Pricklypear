@@ -448,6 +448,7 @@ let prim_summary (name : string) : string =
   | "log-tail" -> "recent structured ops log events"
   | "ops/summary" -> "today analytics JSON (viewers, logins, errors)"
   | "ops/incidents" -> "open reliability incident fingerprints"
+  | "ops/activity" -> "activity ledger rows (admin all; non-admin self); JSON strings"
   | _ -> "built-in primitive"
 
 (** All registered prim names with one-line summaries, sorted. *)

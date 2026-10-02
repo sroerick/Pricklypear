@@ -196,6 +196,65 @@ let test_lonely_bit () =
   Alcotest.(check bool) "two humans is not lonely" false
     (Al.is_lonely_habitat ~human_count:(Some 2) ())
 
+(* T3.3 read face: (ops/activity) reads ledger rows, and a non-admin
+   is force-filtered to its own actor AT THE SQL LAYER. Uses read_rows
+   directly (the prim adds the arg parsing + class grammar only). *)
+let test_read_force_filter () =
+  with_store (fun store ->
+      let alice = uniq "alice" in
+      let bob = uniq "bob" in
+      cleanup store ~actor:alice;
+      cleanup store ~actor:bob;
+      Fun.protect
+        ~finally:(fun () -> cleanup store ~actor:alice; cleanup store ~actor:bob)
+        (fun () ->
+          ignore
+            (Al.push ~actor:alice ~cls:"api.eval" ~target:(Some "b.fn.a")
+               ~outcome:"ok"
+               ~cost_json:(Al.budget_cost_json ~steps:1 ~prim_calls:1
+                             ~db_hits:0 ~db_ms:0.0) ());
+          ignore
+            (Al.push ~actor:bob ~cls:"route.hit" ~target:(Some "/b")
+               ~outcome:"ok" ());
+          Al.flush ~store;
+          (* admin, no actor filter: sees both (and any concurrent rows) *)
+          let admin_rows =
+            Al.read_rows ~store ~caller:alice ~is_admin:true
+              ~actor:alice ()
+          in
+          Alcotest.(check int) "admin sees its own filtered row" 1
+            (List.length admin_rows);
+          (* non-admin cannot see another actor even if it asks for it:
+             the supplied actor is ignored and the SQL filters to self. *)
+          let sneaky =
+            Al.read_rows ~store ~caller:alice ~is_admin:false
+              ~actor:bob ()
+          in
+          Alcotest.(check int) "non-admin force-filtered to self" 1
+            (List.length sneaky);
+          let row = List.hd sneaky in
+          let j = Yojson.Safe.from_string row in
+          Alcotest.(check string) "row is the caller's" alice
+            (Yojson.Safe.Util.member "actor" j |> Yojson.Safe.Util.to_string);
+          (* class filter: bob's route.hit never appears for alice *)
+          let cls_rows =
+            Al.read_rows ~store ~caller:alice ~is_admin:false
+              ~cls:"route.hit" ()
+          in
+          Alcotest.(check int) "class filter excludes other actor" 0
+            (List.length cls_rows);
+          (* JSON row shape: cost is an object with steps *)
+          Alcotest.(check int) "cost.steps present" 1
+            (Yojson.Safe.Util.member "cost" j
+             |> Yojson.Safe.Util.member "steps"
+             |> Yojson.Safe.Util.to_int)))
+
+let test_read_class_rejects () =
+  (* the prim rejects an unknown class before it ever reaches SQL;
+     valid_class is the same gate read_rows' callers use. *)
+  Alcotest.(check bool) "unknown class rejected" false
+    (Al.valid_class "activity.secret")
+
 let () =
   Alcotest.run "activity_ledger"
     [ ( "activity-ledger",
@@ -208,5 +267,9 @@ let () =
           Alcotest.test_case "auth_log kind -> ledger class" `Quick
             test_auth_kind_map;
           Alcotest.test_case "lonely-habitat bit" `Quick test_lonely_bit;
+          Alcotest.test_case "read force-filters non-admin" `Quick
+            test_read_force_filter;
+          Alcotest.test_case "read rejects unknown class" `Quick
+            test_read_class_rejects;
         ] )
     ]

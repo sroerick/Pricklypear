@@ -197,7 +197,7 @@ let read_db_prims = [
   "route-visibility";
   "list-usernames"; "list-ssh-keys";
   "llm-key-status";
-  "log-tail"; "ops/summary"; "ops/incidents";
+  "log-tail"; "ops/summary"; "ops/incidents"; "ops/activity";
   "agent-history"; "agent-sessions";
   "job-status"; "jobs"; "schedules";  (* borge/jobs.borg ReadDb *)
   "gen-now";  (* borge/tree-time.borg reads-as-of-gen ReadDb *)
