@@ -87,7 +87,7 @@
       "chapter"
       (as-str chapter)
       200
-      "COALESCE((fields->>'verse')::int, 0) ASC, created_at ASC"))
+      "fields->>'verse'::int ASC"))
   "Return a chapter's bible-verse rows as (id . fields) pairs, ordered by verse number.")
 
 (define bible/chapter-count

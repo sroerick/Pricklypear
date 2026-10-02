@@ -233,7 +233,7 @@
    (verify
     (test "poison-the-future: replay snapshot S with all post-T rows corrupted (flipped resolutions, moved prints) — the signal log and paper fills with ts <= T are BYTE-IDENTICAL to the clean run")
     (test "fill discipline: no fill may price at its own signal tick; fills use the next print on that token after T, plus the slippage model's depth haircut; fills beyond window end are unrealised and reported as such")
-    (test "walk-forward: train windows optimise params; validate windows are tug; the holdout window is touched exactly once, flagged in the manifest, and a second holdout run on the same rule-hash is refused by the CLI"))
+    (test "walk-forward: train windows optimise params; validate windows tune params; the holdout window is touched exactly once, flagged in the manifest, and a second holdout run on the same rule-hash is refused by the CLI"))
    (details
     (doc (|
          MODEL:

@@ -53,10 +53,61 @@ let manifest_from_env () : Pricklypear_common.Manifest.t =
     ~image_version:(env_or "PP_IMAGE_VERSION" "0.1.0-dev")
     ()
 
+(** Security.borg LAW 1 (structure over judgment): PP_AUTH_DISABLED is a
+    dev-only escape, but nothing stops it leaking into a prod env file
+    (copy-paste, emergency debug then forget) — the image would then
+    boot with EVERY gate off and /health would still read green.
+
+    Refuse when the flag is set together with a prod-shaped config
+    (a named PP_PROFILE, a PP_BASE_DOMAIN, or a TLS edge header is
+    impossible at boot, so those two are the boot-visible signals).
+    The check is structural: the bad combination cannot start, so
+    remembering to unset the flag is not a safety property.
+
+    PP_AUTH_DISABLED_ALLOW_PROD=1 is the explicit, audible override
+    for someone who really means it (still logs a loud warning). *)
+let auth_disabled_prod_guard () : unit =
+  let auth_disabled =
+    match Sys.getenv_opt "PP_AUTH_DISABLED" with
+    | Some ("1" | "true" | "TRUE" | "yes" | "YES") -> true
+    | _ -> false
+  in
+  if auth_disabled then begin
+    let prod_shaped =
+      (match Sys.getenv_opt "PP_PROFILE" with
+       | Some p when String.trim p <> "" -> Some ("PP_PROFILE=" ^ p)
+       | _ ->
+           (match Sys.getenv_opt "PP_BASE_DOMAIN" with
+            | Some d when String.trim d <> "" ->
+                Some ("PP_BASE_DOMAIN=" ^ d)
+            | _ -> None))
+    in
+    match prod_shaped with
+    | None -> ()
+    | Some why ->
+        let override =
+          match Sys.getenv_opt "PP_AUTH_DISABLED_ALLOW_PROD" with
+          | Some ("1" | "true" | "TRUE" | "yes" | "YES") -> true
+          | _ -> false
+        in
+        if override then
+          Printf.eprintf
+            "[boot] WARNING: PP_AUTH_DISABLED=1 with prod-shaped config \
+             (%s) — ALL AUTH GATES ARE OFF (explicit override)\n%!" why
+        else
+          failwith
+            (Printf.sprintf
+               "refusing to boot: PP_AUTH_DISABLED=1 with prod-shaped \
+                config (%s). Every auth gate would be off. Unset \
+                PP_AUTH_DISABLED, or set PP_AUTH_DISABLED_ALLOW_PROD=1 \
+                to override deliberately." why)
+  end
+
 (** Shared setup: RNG, store connect, session. Returns session + ports. *)
 let prepare () : Session.t * int * int =
   ignore (Ops_log.info ~component:"boot" "Pricklypear image starting up");
   Printf.eprintf "[boot] Pricklypear image starting up...\n%!";
+  auth_disabled_prod_guard ();
   Mirage_crypto_rng_unix.use_default ();
   Random.self_init ();
   let manifest = manifest_from_env () in

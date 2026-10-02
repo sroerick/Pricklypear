@@ -308,3 +308,8 @@
  (name http_secure_cookie_test)
  (modules http_secure_cookie_test)
  (libraries pricklypear-image alcotest unix))
+
+(test
+ (name auth_disabled_guard_test)
+ (modules auth_disabled_guard_test)
+ (libraries pricklypear-image alcotest unix))

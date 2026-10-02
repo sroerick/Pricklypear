@@ -10,7 +10,7 @@
    (build "dune build image")
    (smoke "(load-library \"edit\") installs edit/… bindings and routes")
    (smoke "define assets/characters, a project, shots with cast, choose takes, emit an EDL")
-   (smoke "GET /edit lists projects; /edit/<slug> shows cast, shot table, and render state")
+   (smoke "GET /studio lists projects; /studio/project?slug=<slug> shows cast, shot table, and render state")
    (smoke "pp_eval edit/… entry points work for agents"))
 
   (details
@@ -105,7 +105,7 @@
         - data_rows types         — asset, project, shot, shot-cast,
                                     shot-ref, take, edl-entry,
                                     render-job, line, cue, mix-job
-        - Routes via (route …)    — /edit and project/report paths
+        - Routes via (route …)    — /studio and project/report paths
         - services/blender_bridge — OCaml daemon: typed commands in,
           bpy socket calls out; owns the render job queue
         - blender/bridge_addon.py — thin socket-eval addon inside
@@ -610,10 +610,10 @@
         |)))))
 
   (subsection ui
-   (doc "routes /edit, /edit/<slug>: cast/library panel, shot table with take picker, cut timeline view, render state, spend panel")
+   (doc "routes /studio, /studio/project?slug=<slug>, /studio/shot, /studio/export: cast/library panel, shot table with take picker, cut timeline view, render state, spend panel. NOTE (2026-10-02): the kernel function editor already owns /edit and /edit/<name>, so the package serves under /studio (BORGE-1785714837).")
    (status planned)
    (verify
-    (smoke "GET /edit 200 after load-library")
+    (smoke "GET /studio 200 after load-library")
     (smoke "project page lists assets/cast and shots in ord with chosen takes")
     (smoke "binding a character to a shot shows on the shot row")
     (smoke "choosing a take updates the cut and invalidates render cache visibly")
