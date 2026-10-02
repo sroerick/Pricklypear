@@ -286,6 +286,41 @@ def main() -> int:
     else:
         fail("lisp-user login", str(j))
 
+    section("lisp set-password admin gate")
+    # Non-admin is denied; admin resets the credential by username, the old
+    # password stops working, and the new one logs in. (auth.user-management:
+    # set_password is part of the complete admin surface.)
+    j = api_eval(ca, '(set-password "lisp-user" "nope")')
+    if j.get("ok") and "admin only" in str(j.get("value", "")):
+        ok("non-admin set-password denied")
+    else:
+        fail("non-admin set-password", str(j))
+    j = api_eval(c, '(set-password "lisp-user" "wordpass")')
+    if j.get("ok") and str(j.get("value", "")) == "ok":
+        ok("admin set-password by username -> ok")
+    else:
+        fail("admin set-password", str(j))
+    cl_old = Client()
+    cl_old.request(
+        "POST", "/login",
+        {"username": "lisp-user", "password": "lisp-pass-1"},
+    )
+    j = api_eval(cl_old, "(whoami)")
+    if not (j.get("ok") and "lisp-user" in str(j.get("value", ""))):
+        ok("old password rejected after set-password")
+    else:
+        fail("old password still works", str(j))
+    cl_new = Client()
+    cl_new.request(
+        "POST", "/login",
+        {"username": "lisp-user", "password": "wordpass"},
+    )
+    j = api_eval(cl_new, "(whoami)")
+    if j.get("ok") and "lisp-user" in str(j.get("value", "")):
+        ok("new password logs in after set-password")
+    else:
+        fail("new password login", str(j))
+
     section("admin revoke_sessions")
     # Re-login admin (may have switched during alice checks)
     c_admin = Client()

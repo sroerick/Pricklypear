@@ -236,6 +236,31 @@ let test_checkout_stale_admin_flag_denied () =
             "denied: branch victim/personal is owned by victim" s
       | v -> Alcotest.fail ("expected denial, got: " ^ pp v))
 
+(* set-password: anonymous -> VStr denial (require_admin shape shared
+   with create-user/delete-user/set-user-type), before any store call. *)
+let test_set_password_anon_denied () =
+  with_eio (fun () ->
+      let t = make_session ~username:"anonymous" in
+      match call t "set-password" [ VStr "marcus"; VStr "new-word" ] with
+      | VStr s ->
+          Alcotest.(check string) "set-password anon gate"
+            "set-password: denied for anonymous" s
+      | v -> Alcotest.fail ("expected anon denial, got: " ^ pp v))
+
+(* set-password: authenticated non-admin -> admin-only VStr denial. *)
+let test_set_password_non_admin_denied () =
+  with_eio (fun () ->
+      let t = make_session ~username:"tester" in
+      match call t "set-password" [ VStr "marcus"; VStr "new-word" ] with
+      | VStr s ->
+          Alcotest.(check string) "set-password admin gate"
+            "set-password: denied: admin only" s
+      | v -> Alcotest.fail ("expected admin denial, got: " ^ pp v))
+
+(* set-password: missing/empty password while admin -> bad-args raise
+   (never a silent no-op that would look like a successful reset). The
+   gate runs first, so this only fires for an admin caller. *)
+
 let () =
   Alcotest.run "pricklypear-prim-gates"
     [
@@ -274,5 +299,11 @@ let () =
           ; ( "checkout-stale-admin-flag-denied"
             , `Quick
             , test_checkout_stale_admin_flag_denied )
+          ; ( "set-password-anon-denied"
+            , `Quick
+            , test_set_password_anon_denied )
+          ; ( "set-password-non-admin-denied"
+            , `Quick
+            , test_set_password_non_admin_denied )
         ] )
     ]
