@@ -2667,25 +2667,32 @@ passes through verbatim as %xx -- never throw inside a renderer).")
                        (if (string-eq raw "") (list) (json-parse raw))
                        raw))))
         (is-dir (string-eq kind "dir"))
-        ;; EAGER MODE (rail-trees-v4 amendment): a dir node MAY carry
-        ;; "kids" -- a JSON string of its walked child level. The fold
-        ;; then needs NO toggle-once pull (pure <details>, zero XHRs);
-        ;; absent/empty kids keeps the lazy level GET exactly as v4
-        ;; shipped it. Whether to pre-walk is the HOST's threshold
-        ;; decision -- the lib only renders what it is handed.
-        (kids (let ((k (dict-get n "kids")))
-                (if (null? k)
-                    ""
-                    (if (string? k) k (json-emit k)))))
-        (eager (and is-dir (not (string-eq kids ""))))
         ;; DEFAULT-EXPANDED dirs (host policy, not lib state): a node
         ;; carrying "expand":"true" renders its <details> already OPEN.
         ;; The DOM-state rule still holds -- this seeds the state, the
         ;; operator folds it like any other row; the mutation OOB
-        ;; re-render re-seeds it. expand WITHOUT kids renders an
-        ;; open-but-empty dir that pulls its level only when the
-        ;; operator re-folds (a parsed-open details never fires
-        ;; "toggle once") -- hosts therefore pair expand with kids.
+        ;; re-render re-seeds it. expand RIDES kids: a parsed-open
+        ;; details never fires "toggle once", so expand WITHOUT kids
+        ;; must ALSO render eager (an empty kids ul, no pull attrs) --
+        ;; otherwise an expanded-but-empty dir carries a lazy pull that
+        ;; can never fire (the desktop tree's empty desks did exactly
+        ;; this: open="open" + hx-get="toggle once").
+        (expanded (let ((e (dict-get n "expand")))
+                    (and is-dir (not (null? e))
+                         (string-eq (as-str e) "true"))))
+        ;; EAGER MODE (rail-trees-v4 amendment): a dir node MAY carry
+        ;; "kids" -- a JSON string of its walked child level. The fold
+        ;; then needs NO toggle-once pull (pure <details>, zero XHRs);
+        ;; a non-expand dir with absent/empty kids keeps the lazy level
+        ;; GET exactly as v4 shipped it. Whether to pre-walk is the
+        ;; HOST's threshold decision -- the lib only renders what it is
+        ;; handed.
+        (kids (let ((k (dict-get n "kids")))
+                (if (null? k)
+                    ""
+                    (if (string? k) k (json-emit k)))))
+        (eager (and is-dir (or expanded (not (string-eq kids "")))))
+
         (label-word
           (if (string-eq open "")
               (html/span (html/attr "class" "fs-tr-open") (html/text label))
@@ -2783,9 +2790,6 @@ passes through verbatim as %xx -- never throw inside a renderer).")
                 "ul"
                 (html/attr "class" "fs-tr-acts-ul")
                 (html/join (list/map action-li verbs)))))
-        (expanded (let ((e (dict-get n "expand")))
-                    (and is-dir (not (null? e))
-                         (string-eq (as-str e) "true"))))
         (details-attrs
           (append
             (list (html/attr "class" "fs-tr-node"))
@@ -2838,7 +2842,8 @@ passes through verbatim as %xx -- never throw inside a renderer).")
                       (html/attr "class" "fs-tr-kids")
                       (if
                         eager
-                        (filmstrip/tree-level root-id (json-parse kids))
+                        (filmstrip/tree-level root-id
+                          (if (string-eq kids "") (list) (json-parse kids)))
                         ""))))
               (list actions-fold)))))))
   "One node row: li[data-node] > details > summary(fold arrow + label\n+ verb GLYPHS) [+ kids ul for dirs: EAGER (pre-walked level rendered\ninline, no pull attrs) when the node carries a non-empty kids JSON\nstring, else the lazy toggle-once level GET] [+ a narrow-only actions\nul when the node carries verbs -- the SAME glyphs as children, never\na second summary or a duplicate list]. Leaf details are fold-only.\nZero JS beyond the htmx attrs.")
