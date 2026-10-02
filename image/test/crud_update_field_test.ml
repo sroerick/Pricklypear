@@ -108,6 +108,24 @@ let test_value_with_quotes () =
       Alcotest.(check bool) "quoted value stored verbatim" true
         (List.assoc_opt "body" kvs = Some (`String v)))
 
+(* An UNDECLARED type_name is a clean rejection naming the type and the
+   (deftype) surface (one-tree declared-type write gate); the row is not
+   touched. *)
+let test_undeclared_rejects () =
+  with_store (fun store ->
+      let type_name = uniq "ghost" in
+      (match
+         C.update_field store ~type_name
+           ~id:"00000000-0000-0000-0000-000000000001" ~field:"title"
+           ~value:"x"
+       with
+       | VStr msg ->
+           Alcotest.(check bool) "rejection names undeclared" true
+             (contains_sub msg "undeclared");
+           Alcotest.(check bool) "rejection names (deftype)" true
+             (contains_sub msg "deftype")
+       | _ -> Alcotest.fail "update-field on undeclared type should reject"))
+
 let () =
   Random.self_init ();
   Alcotest.run "crud_update_field"
@@ -116,6 +134,7 @@ let () =
         [
           ("update-one-field", `Quick, test_update_one_field);
           ("unknown-field-rejects", `Quick, test_unknown_field_rejects);
-          ("value-with-quotes", `Quick, test_value_with_quotes);
+            ("value-with-quotes", `Quick, test_value_with_quotes);
+            ("undeclared-rejects", `Quick, test_undeclared_rejects);
         ] );
     ]

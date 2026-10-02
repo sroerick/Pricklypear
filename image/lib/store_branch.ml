@@ -979,9 +979,9 @@ let list_routes (t : Store_db.t) : (string * string * string) list =
    note that generating one PG table per Lisp type would require
    runtime DDL breaking additive-migrations-only. Instead, all data
    rows are stored in the shared data_rows(type_name, fields jsonb)
-   table, and type_defs is pure declaration metadata. (Type
-   declarations MAY eventually guide field-level validation; for now
-   they're documentation.)
+     table, and type_defs is pure declaration metadata, load-bearing at
+     the datum write boundary (crud.ml check_type_fields rejects an
+     undeclared type_name; declarative fields are validated).
 
    The recursive-CTE override walk applies to type_defs the same as
    function_defs / view_bindings: ancestors' types are visible, child's
