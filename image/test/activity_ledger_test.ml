@@ -255,6 +255,136 @@ let test_read_class_rejects () =
   Alcotest.(check bool) "unknown class rejected" false
     (Al.valid_class "activity.secret")
 
+(* T3.4 acceptance #2: auth events land as attributed rows with the
+   right outcomes. Auth_store.log_auth MIRRORS onto the ledger (it does
+   not fork the write); a failed password is a denied auth.login, a
+   successful password is an ok auth.login, and a mint is ok auth.mint. *)
+let test_auth_events_rows () =
+  with_store (fun store ->
+      let uname = uniq "authactor" in
+      (* create_user lowercases; derive the canonical name. *)
+      let uname = String.lowercase_ascii uname in
+      let uid =
+        match Pricklypear_image_lib.Auth_store.create_user store ~username:uname
+                ~is_admin:false with
+        | Ok u -> u.Pricklypear_image_lib.Auth_store.id
+        | Error e -> Alcotest.fail ("create_user: " ^ e)
+      in
+      let conn = Option.get (S.conn_of store) in
+      Fun.protect
+        ~finally:(fun () ->
+          cleanup store ~actor:uname;
+          cleanup store ~actor:"anonymous";
+          (try
+             ignore
+               (Db.exec conn
+                  ~params:[ Pgx.Value.of_string uid ]
+                  "DELETE FROM users WHERE id=$1::uuid")
+           with _ -> ()))
+        (fun () ->
+          (* failed password, no user_id -> anonymous actor, denied *)
+          Pricklypear_image_lib.Auth_store.log_auth store ~kind:"password"
+            ~success:false ~source_ip:"203.0.113.7" ();
+          (* successful login, attributed, ok *)
+          Pricklypear_image_lib.Auth_store.log_auth store ~user_id:uid
+            ~kind:"password" ~success:true ~source_ip:"203.0.113.8" ();
+          (* token mint, attributed, ok *)
+          Pricklypear_image_lib.Auth_store.log_auth store ~user_id:uid
+            ~kind:"mint" ~success:true ();
+          Al.flush ~store;
+          let outcome_cls actor =
+            match
+              Db.exec conn
+                ~params:[ Pgx.Value.of_string actor ]
+                "SELECT class, outcome FROM activity_ledger WHERE actor=$1 \
+                 ORDER BY id"
+            with
+            | [ [ c; o ] ] ->
+                (Option.get (Pgx.Value.to_string c),
+                 Option.get (Pgx.Value.to_string o))
+            | _ -> Alcotest.fail "shape (expected one row)"
+          in
+          let anon_cls, anon_out = outcome_cls "anonymous" in
+          Alcotest.(check string) "denial is auth.login" "auth.login" anon_cls;
+          Alcotest.(check string) "denial outcome" "denied" anon_out;
+          let cls, out = outcome_cls uname in
+          Alcotest.(check string) "login is auth.login" "auth.login" cls;
+          Alcotest.(check string) "login outcome" "ok" out;
+          (* the mint row is the second attributed row *)
+          let mint_cls =
+            match
+              Db.exec conn
+                ~params:[ Pgx.Value.of_string uname ]
+                "SELECT class FROM activity_ledger WHERE actor=$1 \
+                 AND class <> 'auth.login'"
+            with
+            | [ [ c ] ] -> Option.get (Pgx.Value.to_string c)
+            | _ -> Alcotest.fail "shape (expected one mint row)"
+          in
+          Alcotest.(check string) "mint is auth.mint" "auth.mint" mint_cls))
+
+(* T3.4 acceptance #3: a labeled eval pushes api.eval ASYNCHRONOUSLY.
+   The proof is the absence of a synchronous insert path: the DB row
+   count is unchanged the instant the eval returns (the event is sitting
+   in the in-process ring), and only appears after an explicit flush. *)
+let test_api_eval_async () =
+  with_store (fun store ->
+      let uname = uniq "evalactor" in
+      let manifest =
+        Pricklypear_common.Manifest.make ~user_id:uname ~username:uname
+          ~branch_id:main_id ~branch_name:"system/main"
+          ~boot_mode:Pricklypear_common.Manifest.Boot_on_connect
+          ~image_version:"test" ()
+      in
+      let t = Pricklypear_image_lib.Session.make ~manifest ~store () in
+      Fun.protect ~finally:(fun () -> cleanup store ~actor:uname) (fun () ->
+          let conn = Option.get (S.conn_of store) in
+          ignore (Al.drain ());
+          let before =
+            q_int conn ~params:[ Pgx.Value.of_string uname ]
+              "SELECT count(*)::text FROM activity_ledger WHERE actor=$1"
+          in
+          ignore (Pricklypear_image_lib.Session.eval_string_rim t "(+ 1 2)");
+          (* ring holds the event; zero synchronous DB work happened. *)
+          let pending =
+            List.filter
+              (fun (e : Al.entry) -> e.actor = uname && e.cls = "api.eval")
+              (Al.drain ())
+          in
+          Alcotest.(check int) "one api.eval pending in the ring" 1
+            (List.length pending);
+          let after_eval =
+            q_int conn ~params:[ Pgx.Value.of_string uname ]
+              "SELECT count(*)::text FROM activity_ledger WHERE actor=$1"
+          in
+          Alcotest.(check int) "no synchronous insert on the eval path" before
+            after_eval;
+          (* the evaluator drained the ring above; re-push what we saw back
+             so the flush path is still exercised with a real row. *)
+          List.iter
+            (fun (e : Al.entry) ->
+              ignore
+                (Al.push ~actor:e.actor ~cls:e.cls ~target:e.target
+                   ~outcome:e.outcome ?cost_json:e.cost_json ()))
+            pending;
+          Al.flush ~store;
+          let flushed =
+            q_int conn ~params:[ Pgx.Value.of_string uname ]
+              "SELECT count(*)::text FROM activity_ledger WHERE actor=$1 \
+               AND class='api.eval'"
+          in
+          Alcotest.(check int) "flush lands the api.eval row" 1 flushed;
+          let cost_steps =
+            match
+              Db.exec conn
+                ~params:[ Pgx.Value.of_string uname ]
+                "SELECT (cost->>'steps') FROM activity_ledger WHERE actor=$1"
+            with
+            | [ [ c ] ] -> int_of_string (Option.get (Pgx.Value.to_string c))
+            | _ -> Alcotest.fail "shape (cost)"
+          in
+          Alcotest.(check bool) "cost carries steps" true (cost_steps > 0)))
+
 let () =
   Alcotest.run "activity_ledger"
     [ ( "activity-ledger",
@@ -271,5 +401,9 @@ let () =
             test_read_force_filter;
           Alcotest.test_case "read rejects unknown class" `Quick
             test_read_class_rejects;
+          Alcotest.test_case "auth events land as rows" `Quick
+            test_auth_events_rows;
+          Alcotest.test_case "api.eval pushes asynchronously" `Quick
+            test_api_eval_async;
         ] )
     ]

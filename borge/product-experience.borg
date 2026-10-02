@@ -601,7 +601,8 @@
   )
   (subsection activity-ledger
    (doc "Identity-attributed action ledger, SMF-shaped: who, what class, what target, what outcome, what cost — structure events only, never content. An operator can answer \"who did what, when, at what spend\" from the product instead of the DB. The privacy/auditing doctrine is owned by security.borg §the-watched-machine; this section owns the mechanism.")
-   (status planned)
+   (status implemented)
+   (implements migrations/035_activity_ledger.sql image/lib/activity_ledger.ml image/lib/prims_ops.ml image/lib/session.ml image/lib/http.ml image/lib/auth_store.ml image/lib/crud.ml image/lib/prims_auth.ml image/lib/boot.ml image/lib/request_context.ml image/test/activity_ledger_test.ml)
    (* agent note (|2026-10-02: spec'd from the marcus guest-user test + mainframe-SMF discussion (roerick + agent). Heritage: function_statring (031) already proves the storage shape (dedicated table, ring, async flush, set-based prune — TELEMETRY IS NOT CONTENT), auth_log (002) proves audit rows, tree_versions proves attribution, per-eval budgets prove the cost fields; the missing pieces are the by-ACTOR read faces, the deterministic knock policy, and the operator console.|) *)
    (verify
     (build "dune build image")
