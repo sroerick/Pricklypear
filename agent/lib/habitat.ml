@@ -11,7 +11,13 @@
     type "gregor-memory" in space cactus-ops.
 
     Config (first non-empty wins): AGENT_HABITAT_URL > PP_URL;
-    AGENT_HABITAT_USER > PP_USER; AGENT_HABITAT_PASS > PP_PASS.
+    AGENT_HABITAT_USER > PP_USER; AGENT_HABITAT_PASS > PP_PASS;
+    AGENT_HABITAT_TOKEN > PP_TOKEN. TOKEN WINS when set: a per-user
+    api_key Bearer token (mint once on the habitat: run
+    (issue-token "glochid") in a REPL or /api/eval) replaces
+    user/pass everywhere (eval Basic AND the
+    pane forwarder's /login jar) — the laptop then holds a revocable
+    credential, never the operator's password.
     Model-facing TOOL "memory" wraps the four core verbs (remember /
     search / get / forget) with the default type. Fail-soft: a broken
     or missing habitat degrades to a Prim_error at CALL time — boot,
@@ -25,7 +31,7 @@ let eval_timeout_s = 30.
 let getenv ?(default = "") (n : string) : string =
   match Sys.getenv_opt n with Some s when s <> "" -> s | _ -> default
 
-type creds = { url : string; user : string; pass : string }
+type creds = { url : string; user : string; pass : string; token : string }
 
 (** Last-ditch fallback: the pp-standard local secrets file
     (~/.config/pricklypear/env, mode 600 — a SHELL file, values may
@@ -90,8 +96,14 @@ let creds ~(env : Eio_unix.Stdenv.base) : creds option =
     | "" -> file_fallback ~env "PP_PASS"
     | p -> p
   in
-  if url = "" || user = "" || pass = "" then None
-  else Some { url; user; pass }
+  let token =
+    match getenv "AGENT_HABITAT_TOKEN" with
+    | "" -> file_fallback ~env "PP_TOKEN"
+    | t -> t
+  in
+  (* url is always required; then EITHER a Bearer token OR user+pass. *)
+  if url = "" || (token = "" && (user = "" || pass = "")) then None
+  else Some { url; user; pass; token }
 
 let trim_url (base : string) : string =
   let base = String.trim base in
@@ -104,6 +116,12 @@ let basic_auth_header ~(user : string) ~(password : string) : string * string =
   let cred = user ^ ":" ^ password in
   let b64 = Base64.encode_string ~pad:true cred in
   ("authorization", "Basic " ^ b64)
+
+(** A per-user api_key Bearer when present, else Basic user:pass — one
+    header builder for both the eval client and the pane forwarder. *)
+let auth_header (c : creds) : string * string =
+  if c.token <> "" then ("authorization", "Bearer " ^ c.token)
+  else basic_auth_header ~user:c.user ~password:c.pass
 
 (** POST {"expr": expr} to /api/eval; Ok carries the reply VALUE as
     JSON, Error the failure text. *)
@@ -566,9 +584,11 @@ let fwd_hop ~(env : Eio_unix.Stdenv.base) (c : creds) (meth : string)
   | Ok endpoint -> (
       let target = if query = "" then path else path ^ "?" ^ query in
       let extra =
-        match !(fwd_jar.fwd_token) with
-        | Some t -> [ ("cookie", "pp_session=" ^ t) ]
-        | None -> []
+        if c.token <> "" then [ auth_header c ]
+        else (
+          match !(fwd_jar.fwd_token) with
+          | Some t -> [ ("cookie", "pp_session=" ^ t) ]
+          | None -> [])
       in
       (* the caller's htmx-ness decides fragment vs full page: a boosted
          anchor or in-process pane dispatch answers fragments; an
@@ -604,15 +624,19 @@ let forward_response ~(env : Eio_unix.Stdenv.base) ~(meth : string)
   match creds ~env with
   | None ->
       Error
-        "habitat bridge not configured: set AGENT_HABITAT_URL/USER/PASS \
-         (or PP_URL/PP_USER/PP_PASS)"
+        "habitat bridge not configured: set AGENT_HABITAT_URL + TOKEN \
+         (or USER/PASS) — env PP_URL/PP_TOKEN (or PP_USER/PP_PASS) also works"
   | Some c ->
       let rec walk path query redirects =
         match fwd_hop ~env c meth path query body ~hx with
         | Error e -> Error ("habitat: " ^ e)
         | Ok { Pp_http.status; Pp_http.headers = hs; Pp_http.body = b } ->
             if fwd_auth_bounced status hs b then
-              if redirects <= 0 then
+              (* A Bearer either authenticates or it does not — no
+                 session jar to re-mint; surface the rejection. *)
+              if c.token <> "" then
+                Error "habitat: 401 (Bearer token rejected or revoked)"
+              else if redirects <= 0 then
                 Error "habitat: unauthenticated (session expired)"
               else
                 match fwd_login ~env c with

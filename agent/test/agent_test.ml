@@ -1455,6 +1455,46 @@ let test_habitat_expr_builders () =
     "(json-emit (dict-set (dict-set \"{}\" \"doc\" (function-doc \"todo/add\")) \"source\" (function-source \"todo/add\")))"
     (Habitat.binding_expr ~name:"todo/add")
 
+let test_habitat_bearer ~env () =
+  (* auth_header: Bearer wins when token set, Basic fallback otherwise *)
+  let c_tok : Habitat.creds =
+    { url = "https://pricklypear.rocks"; user = "u"; pass = "p"; token = "tok-123" }
+  in
+  Alcotest.(check (pair string string)) "bearer wins"
+    ("authorization", "Bearer tok-123")
+    (Habitat.auth_header c_tok);
+  let c_basic : Habitat.creds =
+    { url = "https://pricklypear.rocks"; user = "u"; pass = "p"; token = "" }
+  in
+  Alcotest.(check (pair string string)) "basic fallback (b64 u:p)"
+    ("authorization", "Basic dTpw")
+    (Habitat.auth_header c_basic);
+  (* creds: url + token alone is a complete config — no password needed *)
+  let saved =
+    [ ("AGENT_HABITAT_URL", Sys.getenv_opt "AGENT_HABITAT_URL")
+    ; ("AGENT_HABITAT_TOKEN", Sys.getenv_opt "AGENT_HABITAT_TOKEN")
+    ; ("AGENT_HABITAT_USER", Sys.getenv_opt "AGENT_HABITAT_USER")
+    ; ("AGENT_HABITAT_PASS", Sys.getenv_opt "AGENT_HABITAT_PASS") ]
+  in
+  Fun.protect
+    ~finally:(fun () ->
+       List.iter
+         (fun (k, v) ->
+            match v with Some x -> Unix.putenv k x | None -> Unix.putenv k "")
+         saved)
+    (fun () ->
+       List.iter (fun (k, _) -> Unix.putenv k "") saved;
+       Unix.putenv "AGENT_HABITAT_URL" "https://pricklypear.rocks";
+       Unix.putenv "AGENT_HABITAT_TOKEN" "tok-abc";
+       Unix.putenv "AGENT_HABITAT_USER" "";
+       Unix.putenv "AGENT_HABITAT_PASS" "";
+       match Habitat.creds ~env with
+       | None -> Alcotest.fail "url+token should be a complete config"
+       | Some c ->
+           Alcotest.(check string) "token read" "tok-abc" c.Habitat.token;
+           Alcotest.(check (pair string string)) "bearer header"
+             ("authorization", "Bearer tok-abc") (Habitat.auth_header c))
+
 let () =
   Eio_main.run @@ fun env ->
   let rt = Runtime.make () in
@@ -1497,7 +1537,9 @@ let () =
         ; Alcotest.test_case "turn-sink" `Quick
             (test_loop_on_msg ~env ~sw ~rt) ] );
       ( "memory-bridge",
-        [ Alcotest.test_case "expr-builders" `Quick
+        [ Alcotest.test_case "bearer-creds" `Quick
+            (fun () -> test_habitat_bearer ~env ())
+        ; Alcotest.test_case "expr-builders" `Quick
             test_habitat_expr_builders ] );
       ( "agent-route-table",
         [ Alcotest.test_case "register-and-render" `Quick

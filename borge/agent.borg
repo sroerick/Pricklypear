@@ -666,10 +666,16 @@
          pipe); the tool only when credentials resolve.
 
          IDENTITY + CONFIG. The habitat sees the caller the env
-         presents: AGENT_HABITAT_(URL|USER|PASS) > PP_(URL|USER|PASS)
+         presents: AGENT_HABITAT_(URL|USER|PASS|TOKEN) >
+         PP_(URL|USER|PASS|TOKEN)
          > ~/.config/pricklypear/env, which is a SHELL file and is
          sourced through /bin/sh (same semantics pp-eval uses), so
-         quoting/expansion is the operator's own. Fail-soft: with no
+         quoting/expansion is the operator's own. TOKEN WINS when
+         set — a per-user api_key Bearer minted on the habitat
+         ((issue-token "glochid")) replaces user/pass everywhere
+         (eval calls AND the pane forwarder, which skips its /login
+         session jar), so an operator's laptop can hold a REVOCABLE
+         credential and never the password. Fail-soft: with no
          reachable habitat the prims raise a habitat-unreachable
          Prim_error at CALL time — boot, chat turns, sessions, and
          sync never depend on the bridge.
