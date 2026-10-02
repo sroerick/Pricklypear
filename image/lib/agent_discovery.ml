@@ -53,6 +53,10 @@ let first_calls =
 
 let rules =
   [ "One Lisp expression per POST /api/eval unless you own multi-step state yourself."
+  ; "Mint your own labeled per-user Bearer token on first login — "
+    ^ "(issue-token \"agent-label\") — store it mode 600, switch to "
+    ^ "Bearer, and stop carrying the password. All tokens are "
+    ^ "per-user and revocable; there are no global tokens."
   ; "Package functions bind LAZILY from your branch chain — call them "
     ^ "directly, no (load-library) needed. load-library is a DEPLOY tool: "
     ^ "it re-evals the release file onto your current branch (warns + pins "
@@ -310,6 +314,40 @@ let agent_json ?(base_url : string option = None) () : Yojson.Safe.t =
             [ ("curl", `String (curl_example example_base))
             ; ("python", `String (python_example example_base))
             ] )
+      ; ( "onboarding"
+        , `Assoc
+            [ ( "summary"
+              , `String
+                  ( "A human creates the account at /admin/users and hands the \
+                     username + password to the agent ONCE. The agent verifies "
+                  ^ "(whoami), mints its own per-user api_key with "
+                  ^ "(issue-token \"label\") (raw token returned ONCE; store "
+                  ^ "mode 600), switches to Authorization: Bearer for all "
+                  ^ "future calls, and the password may be discarded. It "
+                  ^ "then works on its own branch: (checkout \"USER/personal\")." ) )
+            ; ( "identity_patterns"
+              , `List
+                  [ `String
+                      "same user + labeled token: simplest — the agent acts AS \
+                       its human (attribution = the human's username)."
+                  ; `String
+                      ( "delegated token: the owner mints (mint-delegated-token \
+                         \"agent-username\" \"label\") — data-only, no code "
+                    ^ "persistence, no admin, provenance via (current-actor). "
+                    ^ "Preferred for a designated agent working in the owner's "
+                    ^ "data space." )
+                  ; `String
+                      ( "separate agent user row: the admin creates e.g. \
+                         'marcus-agent' at /admin/users — a full identity of "
+                    ^ "its own (own branch, own tokens)." )
+                  ] )
+            ; ( "glochid"
+              , `String
+                  ( "To run the local glochid harness against this habitat: set "
+                ^ "PP_URL + PP_TOKEN (or AGENT_HABITAT_URL / AGENT_HABITAT_TOKEN; \
+                   token wins over user/pass) — the laptop then holds a revocable "
+                  ^ "token, never a password." ) )
+            ] )
       ; ( "related"
         , `Assoc
             [ ("welcome", `String "/welcome")
@@ -358,11 +396,47 @@ let agent_markdown ?(base_url : string option = None) () : string =
     ; "local secrets file (mode 600). This document never contains"
     ; "passwords. Create users at /admin/users after bootstrap login."
     ; ""
+    ; "### Onboarding ceremony (first login)"
+    ; ""
+    ; "A human creates your account at /admin/users and hands you the"
+    ; "username + password ONCE. Your first moves:"
+    ; ""
+    ; "  1. Verify:          POST /api/eval  {\"expr\":\"(whoami)\"}"
+    ; "  2. Mint a token:    {\"expr\":\"(issue-token \\\"agent-label\\\")\"}"
+    ; "     The raw token is returned ONCE. Store it mode 600."
+    ; "  3. Switch auth:     Authorization: Bearer <token>"
+    ; "     (eval and every other authed endpoint accept Bearer)."
+    ; "  4. Discard the password — you never need it again."
+    ; "  5. Claim your branch: {\"expr\":\"(checkout \\\"USER/personal\\\")\"}"
+    ; ""
+    ; "All tokens are per-user, hashed at rest, and revocable"
+    ; "((list-tokens), (revoke-token id), or the /tokens page). There"
+    ; "are NO global tokens — if you are handed one alert your human."
+    ; ""
+    ; "Identity patterns, simplest first:"
+    ; ""
+    ; "- SAME USER + labeled token: you act AS your human"
+    ; "  (attribution = their username)."
+    ; "- DELEGATED token: the owner runs"
+    ; "  (mint-delegated-token \"agent-username\" \"label\") and hands"
+    ; "  you the result — data-only (no define/route/deftype/checkout,"
+    ; "  never admin), (current-actor) keeps your provenance."
+    ; "- SEPARATE AGENT USER: the admin creates e.g. 'marcus-agent' —"
+    ; "  a full identity of your own (own branch, own tokens)."
+    ; ""
+    ; "### Running glochid against this habitat"
+    ; ""
+    ; "The local glochid harness (the coding-agent binary) authenticates"
+    ; "with env: PP_URL + PP_TOKEN (or AGENT_HABITAT_URL & TOKEN). The"
+    ; "token wins over user/pass when set — your laptop holds a revocable"
+    ; "token, never a password. ~/.config/pricklypear/env (mode 600) is"
+    ; "read as a shell file as a fallback."
+    ; ""
     ; "Notes:"
     ; "- Use the image password, not nginx/edge htpasswd."
     ; "- No OAuth/JWT in v1."
     ; "- Browser clients may use cookie pp_session after POST /login;"
-    ; "  agents usually use Basic auth."
+    ; "  agents use Basic for first login, then a Bearer token."
     ; ""
     ; "### Delegation: act AS your human (on-behalf-of tokens)"
     ; ""
