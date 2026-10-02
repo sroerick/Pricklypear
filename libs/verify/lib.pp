@@ -129,6 +129,68 @@
           (render-links "[[media:uuid-1|alt]]")
           "note-media")))))
 
+(define verify/suite-function-doc
+  (lambda
+    ()
+    "Check docstrings exist for core library functions."
+    (seq
+      (load-library "calendar")
+      (load-library "contacts")
+      (load-library "plan")
+      (load-library "todo")
+      (load-library "flashcards")
+      (list
+        (verify/check
+          "calendar/add-month has doc"
+          (not
+            (null? (function-doc "calendar/add-month"))))
+        (verify/check
+          "calendar/today has doc"
+          (not
+            (null? (function-doc "calendar/today"))))
+        (verify/check
+          "calendar/year has doc"
+          (not
+            (null? (function-doc "calendar/year"))))
+        (verify/check
+          "contacts/create has doc"
+          (not
+            (null? (function-doc "contacts/create"))))
+        (verify/check
+          "contacts/all has doc"
+          (not
+            (null? (function-doc "contacts/all"))))
+        (verify/check
+          "plan/all-rows has doc"
+          (not
+            (null? (function-doc "plan/all-rows"))))
+        (verify/check
+          "todo/add has doc"
+          (not
+            (null? (function-doc "todo/add"))))
+        (verify/check
+          "todo/list has doc"
+          (not
+            (null? (function-doc "todo/list"))))
+        (verify/check
+          "todo/states has doc"
+          (not
+            (null? (function-doc "todo/states"))))
+        (verify/check
+          "flash/add has doc"
+          (not
+            (null? (function-doc "flash/add"))))
+        (verify/check
+          "flash/blank? has doc"
+          (not
+            (null? (function-doc "flash/blank?"))))
+        (verify/check
+          "apropos-docs finds calendar/add-month"
+          (> (count (apropos-docs "calendar/add-month")) 0))
+        (verify/check
+          "apropos-docs finds todo/add"
+          (> (count (apropos-docs "todo/add")) 0))))))
+
 (define verify/suite-list-hof
   (lambda
     ()
@@ -256,68 +318,6 @@
                 (verify/check "reindex 10 links" (= nlinks 10))
                 (verify/check "upsert budget floor" (> left 10000))))))))))
 
-(define verify/suite-function-doc
-  (lambda
-    ()
-    "Check docstrings exist for core library functions."
-    (seq
-      (load-library "calendar")
-      (load-library "contacts")
-      (load-library "plan")
-      (load-library "todo")
-      (load-library "flashcards")
-      (list
-        (verify/check
-          "calendar/add-month has doc"
-          (not
-            (null? (function-doc "calendar/add-month"))))
-        (verify/check
-          "calendar/today has doc"
-          (not
-            (null? (function-doc "calendar/today"))))
-        (verify/check
-          "calendar/year has doc"
-          (not
-            (null? (function-doc "calendar/year"))))
-        (verify/check
-          "contacts/create has doc"
-          (not
-            (null? (function-doc "contacts/create"))))
-        (verify/check
-          "contacts/all has doc"
-          (not
-            (null? (function-doc "contacts/all"))))
-        (verify/check
-          "plan/all-rows has doc"
-          (not
-            (null? (function-doc "plan/all-rows"))))
-        (verify/check
-          "todo/add has doc"
-          (not
-            (null? (function-doc "todo/add"))))
-        (verify/check
-          "todo/list has doc"
-          (not
-            (null? (function-doc "todo/list"))))
-        (verify/check
-          "todo/states has doc"
-          (not
-            (null? (function-doc "todo/states"))))
-        (verify/check
-          "flash/add has doc"
-          (not
-            (null? (function-doc "flash/add"))))
-        (verify/check
-          "flash/blank? has doc"
-          (not
-            (null? (function-doc "flash/blank?"))))
-        (verify/check
-          "apropos-docs finds calendar/add-month"
-          (> (count (apropos-docs "calendar/add-month")) 0))
-        (verify/check
-          "apropos-docs finds todo/add"
-          (> (count (apropos-docs "todo/add")) 0))))))
-
 (define verify/summary-of
   (lambda
     (rs)
@@ -331,4 +331,3 @@
           (as-str (count rs))
           " checks)")
         (string-append "FAILED: " (str (verify/fail-names rs)))))))
-

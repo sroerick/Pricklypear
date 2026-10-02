@@ -18,6 +18,252 @@
     filmstrip/launcher-hint
 ))
 
+(define calendar/browse
+  (lambda
+    (path)
+    (filmstrip/browse-walk
+      calendar/browse-children
+      (list (calendar/browse-years))
+      path))
+  "calendar cascade: year -> month -> day. Day entries leaf to\n/calendar?day=YYYY-MM-DD (the day agenda route).")
+
+(define calendar/browse-children
+  (lambda
+    (entry)
+    (let
+      ((e (as-str entry)))
+      (if
+        (= (string-length e) 4)
+        (calendar/browse-months e)
+        (if
+          (= (string-length e) 7)
+          (calendar/browse-days e)
+          (list)))))
+  "Children of a calendar crumb: year -> months, YYYY-MM -> days.")
+
+(define calendar/browse-contains
+  (lambda
+    (xs s)
+    (if
+      (null? xs)
+      #f
+      (if
+        (string-eq (as-str (car xs)) s)
+        #t
+        (calendar/browse-contains (cdr xs) s))))
+  "Membership by string equality.")
+
+(define calendar/browse-days
+  (lambda
+    (ym)
+    (let
+      ((y (substring ym 0 4))
+        (m (parse-int (substring ym 5 2))))
+      (calendar/browse-days-acc
+        y
+        m
+        1
+        (calendar/days-in-month y m)
+        (list))))
+  "Day entries for a month, each a leaf to the day agenda.")
+
+(define calendar/browse-days-acc
+  (lambda
+    (y m d dim acc)
+    (if
+      (> d dim)
+      acc
+      (calendar/browse-days-acc
+        y
+        m
+        (+ d 1)
+        dim
+        (append
+          acc
+          (list
+            (list
+              (as-str d)
+              (string-append
+                "/calendar?day="
+                y
+                "-"
+                (calendar/pad2 m)
+                "-"
+                (calendar/pad2 d))))))))
+  "Accumulate day entries (label D, target /calendar?day=YYYY-MM-DD).")
+
+(define calendar/browse-event-years
+  (lambda
+    ()
+    (calendar/browse-year-acc (calendar/all-events) (list)))
+  "Distinct years across stored events.")
+
+(define calendar/browse-insert-sorted
+  (lambda
+    (s xs)
+    (if
+      (null? xs)
+      (list s)
+      (if
+        (string<? s (as-str (car xs)))
+        (cons s xs)
+        (cons
+          (car xs)
+          (calendar/browse-insert-sorted s (cdr xs))))))
+  "Insert into an ascending string list.")
+
+(define calendar/browse-months
+  (lambda (y) (calendar/browse-months-acc y 1 (list)))
+  "Twelve YYYY-MM entries for a year.")
+
+(define calendar/browse-months-acc
+  (lambda
+    (y m acc)
+    (if
+      (> m 12)
+      acc
+      (calendar/browse-months-acc
+        y
+        (+ m 1)
+        (append
+          acc
+          (list
+            (list
+              (string-append
+                (calendar/pad2 m)
+                " "
+                (calendar/month-name m))
+              (string-append y "-" (calendar/pad2 m))))))))
+  "Accumulate month entries (label DD Mon, target YYYY-MM).")
+
+(define calendar/browse-numsort
+  (lambda (xs) xs)
+  "Lists are built ascending already; identity for clarity.")
+
+(define calendar/browse-year-acc
+  (lambda
+    (rows acc)
+    (if
+      (null? rows)
+      acc
+      (let
+        ((d (as-str (dict-get (cdr (car rows)) "day"))))
+        (if
+          (< (string-length d) 4)
+          (calendar/browse-year-acc (cdr rows) acc)
+          (let
+            ((y (substring d 0 4)))
+            (calendar/browse-year-acc
+              (cdr rows)
+              (if
+                (calendar/browse-contains acc y)
+                acc
+                (calendar/browse-insert-sorted y acc))))))))
+  "Accumulate distinct YYYY prefixes from event rows.")
+
+(define calendar/browse-years
+  (lambda
+    ()
+    (let
+      ((today (calendar/today)))
+      (let
+        ((y (substring today 0 4)))
+        (let
+          ((ev-years (calendar/browse-event-years)))
+          (calendar/browse-numsort
+            (if
+              (calendar/browse-contains ev-years y)
+              ev-years
+              (calendar/browse-insert-sorted y ev-years)))))))
+  "Years with events, plus the current year; sorted ascending.")
+
+(define calendar/month-name
+  (lambda
+    (m)
+    (nth
+      (list
+        "Jan"
+        "Feb"
+        "Mar"
+        "Apr"
+        "May"
+        "Jun"
+        "Jul"
+        "Aug"
+        "Sep"
+        "Oct"
+        "Nov"
+        "Dec")
+      (- m 1)))
+  "Month abbreviation for 1..12.")
+
+(define filmstrip/act-glyph
+  (lambda (word)
+    (let ((g (filmstrip/act-glyph-lookup (as-str word) filmstrip/act-glyphs)))
+      (if (string-eq g "") (as-str word) g)))
+  "Action glyph for a verb word; the WORD when the table has no glyph
+(so an unknown verb renders as itself -- never an empty button).")
+
+(define filmstrip/act-glyph-lookup
+  (lambda (word table)
+    (if (null? table)
+        ""
+        (if (string-eq (car (car table)) word)
+            (as-str (car (cdr (car table))))
+            (filmstrip/act-glyph-lookup word (cdr table)))))
+  "The glyph for word in table, or \"\" when the table has no entry.")
+
+;; ---- action glyphs (UI vocabulary, ONE table) ----
+;; borge/filmstrip.borg action-glyphs: verbs are GLYPHS in the row; the
+;; word survives as title + aria-label + data-verb (the queryable
+;; identity), never as the label. The default table lives HERE because
+;; the LIB renders the pane head too -- a host that wants another glyph
+;; set redefines this one function (same seam as filmstrip/apps), no
+;; renderer fork. Narrow viewports and a missing/invalid glyph both
+;; fall back to the word, so the shell degrades to the old behavior
+;; instead of rendering a blank button.
+(define filmstrip/act-glyphs
+  (list
+    (list "focus" "⦿")
+    (list "pin" "⤒")
+    (list "unpin" "⤓")
+    (list "width" "⇆")
+    (list "close" "⌄")
+    (list "restore" "⌃")
+    (list "destroy" "✕")
+    (list "switch" "⇥")
+    (list "collapse" "⇱")
+    (list "single" "⛶"))
+  "Verb word -> glyph pairs (the UI vocabulary table). A verb with no\nentry (or an entry whose glyph is empty) renders its WORD -- glyphs\nare an improvement over words, never a hard requirement.")
+
+(define filmstrip/app-link
+  (lambda
+    (r label)
+    (html/button
+      (html/attrs
+        (list
+          (html/attr "type" "button")
+          (html/attr "class" "fs-applink")
+          (html/attr "hx-post" "/filmstrip/open")
+          (html/attr "hx-vals" (string-append "{\"route\":\"" r "\"}"))
+          (html/attr "hx-target" "#fs-sink")
+          (html/attr "hx-swap" "innerHTML")))
+      (html/text label)))
+  "In-shell app link: a link-looking button POSTing /filmstrip/open\n(hx-vals carries the route; open-or-focus semantics) with the OOB pane\nswaps landed in #fs-sink. Pane chrome uses these INSTEAD of <a href> --\nan anchor navigates the WHOLE WINDOW out of the shell; an app-link\nnever leaves it. Returns a PLAIN string (no render-html: the sentinel\nwould leak into any string-append embed like chat/body's h1 nav).")
+
+(define filmstrip/app-routes
+  (lambda
+    (apps)
+    (if
+      (null? apps)
+      (list)
+      (if
+        (string-starts-with? (as-str (car (cdr (car apps)))) "/")
+        (cons (as-str (car (cdr (car apps))))
+          (filmstrip/app-routes (cdr apps)))
+        (filmstrip/app-routes (cdr apps)))))
+  "The route-leaf targets of the app list ((label target) entries whose\ntarget starts with /).")
+
 (define filmstrip/apps
   (lambda
     ()
@@ -76,20 +322,16 @@
         (let*
           ((res (filmstrip/open-apply panes t))
             (panes2 (nth res 0))
-            (target (nth res 1))
-            (appended? (nth res 2))
-            (unshelved? (nth res 3))
-            (focus2 (filmstrip/rail-focus-onto panes2 focus target)))
+            (focus2 (nth res 1))
+            (appended? (nth res 2)))
           (seq
             (filmstrip/save-all path2 panes2 focus2)
             (render-html
               (html/join
                 (list
                   (filmstrip/oob-msg "")
-                  (if unshelved? (filmstrip/shelf-oob) "")
-                  (filmstrip/winbox-oob)
                   (filmstrip/oob-cascade path2)
-                  (filmstrip/open-response panes2 focus focus2 target appended?))))))
+                  (filmstrip/open-response panes2 focus focus2 appended?))))))
         (seq
           (filmstrip/save-all path2 panes focus)
           (render-html
@@ -131,44 +373,6 @@
         (render-html
           (filmstrip/oob-msg "filmstrip: no such pane"))
         (let*
-          ((p2 (dict-set (nth panes i) "state" "shelved"))
-            (panes2 (filmstrip/replace-at panes i p2))
-            (focus2
-              (if (= i focus)
-                  (filmstrip/close-heal panes2 i)
-                  focus)))
-          (seq
-            (filmstrip/save-all cascade panes2 focus2)
-            (render-html
-              (html/join
-                (list
-                  (filmstrip/oob-msg "")
-                  (filmstrip/shelf-oob)
-                  (filmstrip/winbox-oob)
-                  (filmstrip/oob-section p2 (= i focus2))
-                  (if
-                    (if (>= focus2 0) (not (= focus2 focus)) #f)
-                    (filmstrip/oob-section
-                      (filmstrip/pane-at panes2 focus2)
-                      #t)
-                    "")))))))))
-  "POST /filmstrip/close: id param -> v2 SHELF = the default close:\nstate=shelved, the pane record SURVIVES (its hx-preserve body keeps\nlive DOM), OOB class swap adds .shelved; focus heals to the first\nlive pane when the shelved pane held it. Row removal is destroy.")
-
-(define filmstrip/destroy
-  (lambda
-    ()
-    (let*
-      ((id (as-str (request-param "id")))
-        (row (filmstrip/row))
-        (cascade (nth row 0))
-        (panes (nth row 1))
-        (focus (nth row 2))
-        (i (filmstrip/find-pane-index panes id)))
-      (if
-        (< i 0)
-        (render-html
-          (filmstrip/oob-msg "filmstrip: no such pane"))
-        (let*
           ((panes2 (filmstrip/remove-at panes i))
             (focus2 (filmstrip/close-focus i focus (length panes2))))
           (seq
@@ -177,8 +381,6 @@
               (html/join
                 (list
                   (filmstrip/oob-msg "")
-                  (filmstrip/shelf-oob)
-                  (filmstrip/winbox-oob)
                   (filmstrip/oob-delete-pane id)
                   (if
                     (if (>= focus2 0) (not (= focus2 focus)) #f)
@@ -186,65 +388,7 @@
                       (filmstrip/pane-at panes2 focus2)
                       #t)
                     "")))))))))
-  "POST /filmstrip/destroy: id param -> REMOVE the pane record (the\npre-v2 close): OOB delete of its section + focus hand-off per\nclose-focus. The shelf row for the pane goes with it.")
-
-(define filmstrip/restore
-  (lambda
-    ()
-    (let*
-      ((id (as-str (request-param "id")))
-        (row (filmstrip/row))
-        (cascade (nth row 0))
-        (panes (nth row 1))
-        (focus (nth row 2))
-        (i (filmstrip/find-pane-index panes id)))
-      (if
-        (< i 0)
-        (render-html
-          (filmstrip/oob-msg "filmstrip: no such pane"))
-        (let*
-          ;; pane-stamp on unshelve, same as open-apply (v4 cross-desk
-          ;; rule): the shelf subtree is DESKTOP-GLOBAL, so a restore
-          ;; fired from desktop M on a pane shelved from desktop N must
-          ;; re-stamp desktop=M -- state=live alone leaves the old
-          ;; data-desktop on the record and the :has(#ws-desk.dsk-N)
-          ;; hiding makes the pane invisible ("restore did nothing").
-          ((p2 (filmstrip/pane-stamp
-                 (dict-set (nth panes i) "state" "live")))
-            (panes2 (filmstrip/replace-at panes i p2))
-            (focus2
-              (if
-                (or
-                  (< focus 0)
-                  (string-eq
-                    (filmstrip/pane-state (filmstrip/pane-at panes focus))
-                    "shelved"))
-                i
-                focus)))
-          (seq
-            (filmstrip/save-all cascade panes2 focus2)
-            (render-html
-              (html/join
-                (list
-                  (filmstrip/oob-msg "")
-                  (filmstrip/shelf-oob)
-                  (filmstrip/winbox-oob)
-                  (filmstrip/oob-section p2 (= i focus2))
-                  (if
-                    (if (>= focus 0) (not (= focus2 focus)) #f)
-                    (filmstrip/oob-section
-                      (filmstrip/pane-at panes2 focus)
-                      #f)
-                    "")))))))))
-  "POST /filmstrip/restore: id param -> state=live, the pane returns to\nits position; OOB class swap brings the section back; focus heals onto\nthe restored pane when nothing live holds focus (a shelved pane's\n.focused class is cleared by the same swap). The unshelve passes\nthrough filmstrip/pane-stamp like open-apply's acme-Get branch: the\nshelf is desktop-global, so a cross-desktop restore re-stamps\ndesktop=current and the pane is VISIBLE on the operator's desktop,\nnever stranded hidden on its shelving desktop.")
-
-(define filmstrip/shelf-oob
-  (lambda () "")
-  "OOB payload re-rendering the shelf controlbox after\nclose/restore/destroy. Default empty -- the plain habitat shell has\nno shelf rail yet; glochid redefines it to swap its #fs-shelf rows.")
-
-(define filmstrip/winbox-oob
-  (lambda () "")
-  "OOB payload re-rendering the windows controlbox after\nclose/restore/destroy (a pane leaving or rejoining the live set\nchanges its rows). Default empty -- the plain habitat shell has no\nwindows rail yet; glochid redefines it to swap its #fs-winbox rows.")
+  "POST /filmstrip/close: id param -> remove the pane record; OOB delete\nof its section + focus hand-off per close-focus.")
 
 (define filmstrip/close-focus
   (lambda
@@ -256,6 +400,19 @@
       ((> focus i) (- focus 1))
       (#t focus)))
   "Focus index after removing pane i (m = pane count after removal): the\nclosed pane's focus moves to its left neighbor (or the new head), later\npanes shift left with it.")
+
+(define filmstrip/close-heal
+  (lambda
+    (panes)
+    (let*
+      ((d (filmstrip/ws-desktop))
+        (m (filmstrip/first-region-live panes 0 "main" d))
+        (r (filmstrip/first-region-live panes 0 "rail" d)))
+      (cond
+        ((>= m 0) m)
+        ((>= r 0) r)
+        (#t (filmstrip/first-live-index panes)))))
+  "Focus target after a close SHELVED the focused pane (v3): first a\nlive MAIN pane on the CURRENT desktop (the v2 lift continues, on a\npane the operator can actually see), else the first live RAIL pane\n(dock semantics: a rail pane is visible on every desktop, so a\nfocused rail pane satisfies I1 with no main lift), else the first\nlive pane anywhere (v2 behavior for region-less hosts). Never a\nshelved pane. Without this, closing the last focused pane while\npinned panes showed beside it healed focus onto a hidden 0x0 main\npane on a foreign desktop — the exact I1 violation the v3 spec\nbans (no 0x0 focused pane).")
 
 (define filmstrip/col-html
   (lambda
@@ -406,31 +563,12 @@
             "background"
             "var(--panel)"
             "overflow"
-            "hidden"
-            ;; v5 focus-scroll: when the OOB swap autofocuses the focused
-            ;; pane, the browser scrolls every scrollable ancestor so the
-            ;; section is on-stage; these inline margins reserve peek
-            ;; space so the NEIGHBOR columns stay visible at the edges
-            ;; (niri semantics; the margin shrinks as the column grows).
-            "scroll-margin-inline"
-            "3rem"))
+            "hidden"))
         (css/rule
           ".fs-pane.fs-third"
-          (list "flex-basis" "33.333%" "scroll-margin-inline" "3rem"))
-        (css/rule ".fs-pane.fs-half" (list "flex-basis" "50%" "scroll-margin-inline" "1.5rem"))
+          (list "flex-basis" "33.333%"))
+        (css/rule ".fs-pane.fs-half" (list "flex-basis" "50%"))
         (css/rule ".fs-pane.fs-full" (list "flex-basis" "100%"))
-        ;; v5 one-up: while ANY LIVE single pane exists it takes the
-        ;; whole strip and its strip siblings step aside (shelved and
-        ;; cross-desktop panes are already display:none; a shelved
-        ;; single releases the strip back). Rail-region panes are not
-        ;; strip siblings (glochid renders them in its rail box; a bare
-        ;; host shell shows pinned panes as columns) — the region guard
-        ;; keeps those visible.
-        (css/rule ".fs-pane.fs-single"
-          (list "flex-basis" "100%" "scroll-margin-inline" "0"))
-        (css/rule
-          ".fs-shell:has(.fs-pane.fs-single:not(.shelved)) .fs-pane[data-region=\"main\"]:not(.fs-single)"
-          (list "display" "none"))
         (css/rule
           ".fs-pane.focused"
           (list
@@ -438,9 +576,6 @@
             "2px solid var(--sel-accent)"
             "outline-offset"
             "-2px"))
-        (css/rule
-          ".fs-pane.shelved"
-          (list "display" "none"))
         (css/rule
           ".fs-head"
           (list
@@ -518,139 +653,48 @@
           (list "color" "var(--muted)" "font-size" ".85rem"))
         (css/rule ".fs-sentinel" (list "display" "none"))
         (css/rule ".fs-sink" (list "display" "none"))
-        (css/rule ".fs-oob-delete" (list "display" "none"))
-        (css/rule
-          ".fs-rmode"
-          (list
-            "display"
-            "flex"
-            "flex-direction"
-            "column"
-            "border"
-            "1px solid var(--border)"
-            "background"
-            "var(--panel)"
-            "padding"
-            ".3rem .35rem"
-            "gap"
-            ".15rem"
-            "max-height"
-            "22rem"
-            "overflow"
-            "auto"))
-        (css/rule
-          ".fs-tr-root"
-          (list
-            "list-style"
-            "none"
-            "margin"
-            "0"
-            "padding"
-            "0"))
-        (css/rule
-          ".fs-tr-kids"
-          (list
-            "list-style"
-            "none"
-            "margin"
-            "0"
-            "padding"
-            "0 0 0 .8rem"
-            "border-left"
-            "1px solid var(--border)"))
-        (css/rule
-          ".fs-tr-item"
-          (list "min-height" "1.4rem"))
-        (css/rule
-          ".fs-tr-row"
-          (list
-            "display"
-            "flex"
-            "gap"
-            ".3rem"
-            "align-items"
-            "center"
-            "min-height"
-            "1.4rem"
-            "cursor"
-            "pointer"
-            "list-style"
-            "none"))
-        (css/rule
-          ".fs-tr-row::-webkit-details-marker"
-          (list "display" "none"))
-        (css/rule
-          ".fs-tr-fold"
-          (list
-            "flex"
-            "0 0 1rem"
-            "width"
-            "1rem"
-            "text-align"
-            "center"
-            "color"
-            "var(--muted)"
-            "display"
-            "inline-block"
-            "transition"
-            "transform .08s"))
-        (css/rule
-          "details[open] > .fs-tr-row .fs-tr-fold"
-          (list "transform" "rotate(90deg)"))
-        (css/rule
-          ".fs-tr-open"
-          (list
-            "flex"
-            "1 1 auto"
-            "overflow"
-            "hidden"
-            "text-overflow"
-            "ellipsis"
-            "white-space"
-            "nowrap"
-            "text-align"
-            "left"))
-        (css/rule
-          ".fs-tr-verb"
-          (list "flex" "0 0 auto"))
-        (css/rule
-          ".fs-act"
-          (list
-            "padding"
-            ".06rem .34rem"
-            "font-size"
-            ".9rem"
-            "line-height"
-            "1.1"
-            "min-width"
-            "1.5rem"))
-        (css/rule
-          ".fs-tr-acts-ul"
-          (list
-            "list-style"
-            "none"
-            "margin"
-            "0"
-            "padding"
-            ".1rem 0 .15rem 1.3rem"))
-        ;; The actions fold is NARROW-ONLY: at rail width the row reads
-        ;; as fold + label + glyphs; past the breakpoint the glyphs
-        ;; demote into the fold (responsive = depth, not a new widget --
-        ;; the fold IS the menu). Never both at once.
-        (css/rule ".fs-tr-node > .fs-tr-acts-ul" (list "display" "none"))
-        (css/media
-          "max-width:40rem"
-          (list
-            (css/rule
-              ".fs-tr-verb"
-              (list "display" "none"))
-            (css/rule
-              ".fs-tr-node[open] > .fs-tr-acts-ul"
-              (list "display" "block")))))))
+        (css/rule ".fs-oob-delete" (list "display" "none")))))
   "Strip + pane + launcher stylesheet (~50 lines of rules). Widths are\nthe three presets only; .focused is the server-owned ring.")
 
 (define filmstrip/default-width
   "third")
+
+(define filmstrip/desk-count 3
+  "Desktops the pane-head move verb CYCLES (0 .. N-1, wraps). Glochid\ndeclares three (the windows tree's desk/0..2 rows); a host modeling a\nbigger ring redefines this. The :has CSS may cover 0..9 -- the cycle\nwalks the DECLARED ring, not the CSS ceiling.")
+
+(define filmstrip/destroy
+  (lambda
+    ()
+    (let*
+      ((id (as-str (request-param "id")))
+        (row (filmstrip/row))
+        (cascade (nth row 0))
+        (panes (nth row 1))
+        (focus (nth row 2))
+        (i (filmstrip/find-pane-index panes id)))
+      (if
+        (< i 0)
+        (render-html
+          (filmstrip/oob-msg "filmstrip: no such pane"))
+        (let*
+          ((panes2 (filmstrip/remove-at panes i))
+            (focus2 (filmstrip/close-focus i focus (length panes2))))
+          (seq
+            (filmstrip/save-all cascade panes2 focus2)
+            (render-html
+              (html/join
+                (list
+                  (filmstrip/oob-msg "")
+                  (filmstrip/shelf-oob)
+                  (filmstrip/winbox-oob)
+                  (filmstrip/oob-delete-pane id)
+                  (if
+                    (if (>= focus2 0) (not (= focus2 focus)) #f)
+                    (filmstrip/oob-section
+                      (filmstrip/pane-at panes2 focus2)
+                      #t)
+                    "")))))))))
+  "POST /filmstrip/destroy: id param -> REMOVE the pane record (the\npre-v2 close): OOB delete of its section + focus hand-off per\nclose-focus. The shelf row for the pane goes with it.")
 
 (define filmstrip/entry-html
   (lambda
@@ -713,6 +757,30 @@
       0))
   "Index of the pane already showing route r, else -1 (open-or-focus).")
 
+(define filmstrip/first-live-index
+  (lambda (panes)
+    (filmstrip/find-index filmstrip/pane-live? panes 0))
+  "Index of the first live (not shelved) pane, else -1.")
+
+(define filmstrip/first-region-live
+  (lambda (panes i region d)
+    (if
+      (null? panes)
+      -1
+      (if
+        (and
+          (filmstrip/pane-live? (car panes))
+          (string-eq (filmstrip/pane-region (car panes)) region)
+          (if (string-eq region "rail")
+              #t
+              (= (filmstrip/pane-desk (car panes)) d)))
+        i
+        (filmstrip/first-region-live (cdr panes) (+ i 1) region d))))
+  "Index of the first LIVE pane of one region (else -1). MAIN panes
+are desktop-scoped (must sit on desktop d); RAIL panes are
+desktop-global (dock semantics — visible on every desktop, so the d
+check is skipped). Never a shelved pane.")
+
 (define filmstrip/focus
   (lambda
     ()
@@ -722,7 +790,7 @@
         (cascade (nth row 0))
         (panes (nth row 1))
         (focus (nth row 2))
-        (focus2 (filmstrip/focus-step panes focus dir)))
+        (focus2 (filmstrip/focus-step (length panes) focus dir)))
       (if
         (= focus2 focus)
         (render-html (filmstrip/oob-msg ""))
@@ -739,45 +807,6 @@
                   (filmstrip/pane-at panes focus2)
                   #t))))))))
   "POST /filmstrip/focus: dir param -> move .focused one pane over\n(clamped, no wrap); OOB class swap on exactly two panes (old, new).")
-
-(define filmstrip/lift-holds-live-main?
-  (lambda
-    (panes old)
-    (if
-      (< old 0)
-      #f
-      (let
-        ((p (filmstrip/pane-at panes old)))
-        (and
-          (filmstrip/pane-live? p)
-          (string-eq (filmstrip/pane-region p) "main")))))
-  "True when the persisted focus points at a LIVE main-region pane (that
-pane owns the fixed lift). A focused rail pane is a ring, not a window
-— it never counts as the lift.")
-
-(define filmstrip/rail-focus-onto
-  (lambda
-    (panes old new)
-    (if
-      (= new old)
-      old
-      (if
-        (not
-          (string-eq
-            (filmstrip/pane-region (filmstrip/pane-at panes new))
-            "rail"))
-        new
-        (if
-          (filmstrip/lift-holds-live-main? panes old)
-          old
-          new))))
-  "Focused index for a focus attempt onto pane `new` (v3 region
-discipline): a rail-region target NEVER takes the fixed main slot. If
-a live main pane holds the lift, focus stays on it (only the caller's
-OOB ring moves onto the rail pane); when no live main pane is lifted,
-the rail pane becomes the persisted focus itself — a focused rail pane
-visible in the rail satisfies I1 (no forced main pane). Main-region
-targets behave exactly as before (take the focus).")
 
 (define filmstrip/focus-id
   (lambda
@@ -815,55 +844,26 @@ targets behave exactly as before (take the focus).")
 
 (define filmstrip/focus-step
   (lambda
-    (panes i dir)
-    (letrec
-      ((n (length panes))
-        (d (filmstrip/ws-desktop))
-        ;; v5: the strip's visible columns. A column takes the ring only
-        ;; if live AND not :has-hidden (shelved panes never; main panes
-        ;; of a foreign desktop never; docked rail panes always). The
-        ;; pre-v5 arithmetic could land .focused on a display:none
-        ;; section — the 0x0 focus bug, cut off at the source.
-        (visible?
-          (lambda (p)
-            (and
-              (filmstrip/pane-live? p)
-              (or
-                (string-eq (filmstrip/pane-region p) "rail")
-                (= (filmstrip/pane-desk p) d)))))
-        (vis-at
-          (lambda (j)
-            (let ((p (filmstrip/pane-at panes j)))
-              (if (if (null? p) #f (visible? p)) #t #f))))
-        (first-vis-from
-          (lambda (lo)
-            (if (>= lo n) -1
-                (if (vis-at lo) lo (first-vis-from (+ lo 1))))))
-        (last-vis-before
-          (lambda (hi)
-            (if (< hi 0) -1
-                (if (vis-at hi) hi (last-vis-before (- hi 1))))))
-        (raw
-          (lambda ()
-            (if
-              (or (< i 0) (>= i n))
-              (if (string-eq dir "left") -1 (if (> n 0) 0 -1))
-              (let
-                ((j (if (string-eq dir "left") (- i 1) (+ i 1))))
-                (if (< j 0) 0 (if (>= j n) (- n 1) j))))))
-        (stay-put
-          (lambda ()
-            (if (and (>= i 0) (< i n) (vis-at i)) i -1)))
-        (j (raw)))
-      (cond
-        ((< j 0) -1)
-        ((string-eq dir "left")
-          (let ((v (last-vis-before j)))
-            (if (>= v 0) v (stay-put))))
-        (#t
-          (let ((v (first-vis-from j)))
-            (if (>= v 0) v (stay-put)))))))
-  "Next focus index for dir (left/right): clamped to the pane count, no\nwrap (niri discipline) — then v5 visibility: the walk skips panes the\nstrip would hide (shelved, or main panes of a foreign desktop),\nsettling on the nearest visible column (the current pane keeps the\nring when none exists in that direction — a no-op, and the caller\nanswers empty). Rail panes (dock-visible every desktop) count\neverywhere. An unset/out-of-range focus heals to the first visible\npane on right, none on left.")
+    (n i dir)
+    (if
+      (or (< i 0) (>= i n))
+      (if (string-eq dir "left") -1 (if (> n 0) 0 -1))
+      (let
+        ((j (if (string-eq dir "left") (- i 1) (+ i 1))))
+        (if (< j 0) 0 (if (>= j n) (- n 1) j)))))
+  "Next focus index for dir (left/right): clamped to the pane count, no\nwrap (niri discipline). An unset/out-of-range focus heals to pane 0 on\nright, none on left.")
+
+(define filmstrip/hint-routes
+  (lambda ()
+    (let
+      ((rs (filmstrip/app-routes (filmstrip/apps))))
+      (if
+        (null? rs)
+        (list/map
+          (lambda (a) (string-append "/" (as-str (car a))))
+          (filmstrip/apps))
+        rs)))
+  "Route names the launcher may honestly suggest: the apps' route-leaf\ntargets when the host has them (glochid: /chat /code /sessions\n/settings), else /+label for package-key apps (habitat: /todos\n/notes /calendar). Env late binding picks up host redefinitions of\nfilmstrip/apps — no host seam needed.")
 
 (define filmstrip/key-sentinels
   (lambda
@@ -900,55 +900,12 @@ targets behave exactly as before (take the focus).")
         (filmstrip/last-col (cdr cols)))))
   "The deepest column of a column list.")
 
-(define filmstrip/app-routes
-  (lambda
-    (apps)
-    (if
-      (null? apps)
-      (list)
-      (if
-        (string-starts-with? (as-str (car (cdr (car apps)))) "/")
-        (cons (as-str (car (cdr (car apps))))
-          (filmstrip/app-routes (cdr apps)))
-        (filmstrip/app-routes (cdr apps)))))
-  "The route-leaf targets of the app list ((label target) entries whose\ntarget starts with /).")
-
-(define filmstrip/hint-routes
-  (lambda ()
-    (let
-      ((rs (filmstrip/app-routes (filmstrip/apps))))
-      (if
-        (null? rs)
-        (list/map
-          (lambda (a) (string-append "/" (as-str (car a))))
-          (filmstrip/apps))
-        rs)))
-  "Route names the launcher may honestly suggest: the apps' route-leaf\ntargets when the host has them (glochid: /chat /code /sessions\n/settings), else /+label for package-key apps (habitat: /todos\n/notes /calendar). Env late binding picks up host redefinitions of\nfilmstrip/apps — no host seam needed.")
-
-(define filmstrip/routes-str
-  (lambda
-    (rs)
-    (if
-      (null? rs)
-      ""
-      (string-append
-        (car rs)
-        (if (null? (cdr rs)) "" " ")
-        (filmstrip/routes-str (cdr rs)))))
-  "Space-joined routes string.")
-
 (define filmstrip/launcher-hint
   (lambda ()
     (let
       ((rs (filmstrip/hint-routes)))
       (if (null? rs) "/" (car rs))))
   "The launcher's example route: the first real route of THIS host's\napp list (was the habitat-specific /todos — the miss that made glochid's\nlauncher a dead end).")
-
-(define filmstrip/pane-stamp
-  (lambda
-    (rec)
-    rec)
-  "Host hook on freshly-stamped pane records (default identity). A host\nmay add its own fields — glochid stamps the pane's desktop from the ws\nrow so an app-link open on desk>0 lands VISIBLE there (the lib must not\nread glochid row fields itself; same seam discipline as save-all).")
 
 (define filmstrip/launcher-html
   (lambda
@@ -975,7 +932,7 @@ targets behave exactly as before (take the focus).")
             (html/attrs
               (list
                 (html/attr "id" "fs-launch-route")
-                (html/attr "placeholder" (filmstrip/launcher-hint))
+                (html/attr "placeholder" "/todos")
                 (html/attr "autocomplete" "off")
                 (html/attr "accesskey" "l")
                 (html/attr
@@ -994,6 +951,21 @@ targets behave exactly as before (take the focus).")
                 (html/attr "class" "fs-msg")))
             "")))))
   "Inline launcher row at the head of the content strip: text input for a\nroute + open button. The input's accesskey is the zero-JS 'a key opens\nthe launcher' affordance (browser chord, e.g. Alt+Shift+L on Firefox).")
+
+(define filmstrip/lift-holds-live-main?
+  (lambda
+    (panes old)
+    (if
+      (< old 0)
+      #f
+      (let
+        ((p (filmstrip/pane-at panes old)))
+        (and
+          (filmstrip/pane-live? p)
+          (string-eq (filmstrip/pane-region p) "main")))))
+  "True when the persisted focus points at a LIVE main-region pane (that
+pane owns the fixed lift). A focused rail pane is a ring, not a window
+— it never counts as the lift.")
 
 (define filmstrip/map-indexed
   (lambda
@@ -1033,13 +1005,6 @@ targets behave exactly as before (take the focus).")
                   (filmstrip/oob-msg "")
                   (filmstrip/oob-content-strip panes2 j)))))))))
   "POST /filmstrip/move: dir param -> adjacent-transpose the focused pane\nwith its neighbor; focus follows the pane. OOB re-render of the whole\ncontent strip (bodies preserved).")
-
-(define filmstrip/desk-count 3
-  "Desktops the pane-head move verb CYCLES (0 .. N-1, wraps). Glochid\ndeclares three (the windows tree's desk/0..2 rows); a host modeling a\nbigger ring redefines this. The :has CSS may cover 0..9 -- the cycle\nwalks the DECLARED ring, not the CSS ceiling.")
-
-(define filmstrip/pane-set-desk
-  (lambda (p d) (dict-set p "desktop" d))
-  "Pane record with a new desktop (AS A STRING -- dict values ride\nJSON/records as strings everywhere; filmstrip/pane-desk parse-ints on\nread, so both field shapes read identically).")
 
 (define filmstrip/move-to
   (lambda
@@ -1139,7 +1104,7 @@ targets behave exactly as before (take the focus).")
         (cascade (nth row 0))
         (panes (nth row 1))
         (focus (nth row 2))
-        (focus2 (filmstrip/focus-step panes focus dir)))
+        (focus2 (filmstrip/focus-step (length panes) focus dir)))
       (seq
         (filmstrip/save-all cascade panes focus2)
         (filmstrip/native-state))))
@@ -1196,9 +1161,7 @@ targets behave exactly as before (take the focus).")
                     "width"
                     filmstrip/default-width
                     "view"
-                    view-key
-                    "state"
-                    "live"))))))
+                    view-key))))))
           (seq
             (filmstrip/save-all cascade panes2 (length panes))
             (filmstrip/native-state))))))
@@ -1216,8 +1179,6 @@ targets behave exactly as before (take the focus).")
         (filmstrip/pane-route p)
         "width"
         (filmstrip/pane-width p)
-        "region"
-        (filmstrip/pane-region p)
         "view"
         (filmstrip/pane-view p)
         "focused"
@@ -1332,26 +1293,17 @@ targets behave exactly as before (take the focus).")
       (html/tag
         "section"
         (html/attrs
-          (append
-            (list
-              (html/attr "class" (filmstrip/pane-sclass p focused?))
-              (html/attr "id" (string-append "fs-pane-" id))
-              (html/attr "data-pane" id)
-              (html/attr "tabindex" "-1")
-              (html/attr
-                "data-desktop"
-                (as-str (filmstrip/pane-desk p)))
-              (html/attr
-                "data-region"
-                (filmstrip/pane-region p))
-              (html/attr "hx-swap-oob" "true"))
-            ;; autofocus ONLY on the pane TAKING focus: htmx focuses the
-            ;; first [autofocus] in the response, and a two-section swap
-            ;; (old focus + new focus) must land the browser's focus --
-            ;; and therefore the v5 scroll -- on the new one.
-            (if focused?
-                (list (html/attr "autofocus" "autofocus"))
-                (list))))
+          (list
+            (html/attr
+              "class"
+              (string-append
+                "fs-pane"
+                " fs-"
+                (filmstrip/pane-width p)
+                (if focused? " focused" "")))
+            (html/attr "id" (string-append "fs-pane-" id))
+            (html/attr "data-pane" id)
+            (html/attr "hx-swap-oob" "true")))
         (html/join
           (list
             (filmstrip/pane-head p)
@@ -1364,21 +1316,6 @@ targets behave exactly as before (take the focus).")
                   (html/attr "hx-preserve" "true")))
               ""))))))
   "OOB outerHTML swap carrying only shell state: width + .focused classes.\nThe body div is an hx-preserve placeholder -- htmx re-inserts the live\npane DOM, so focus/width changes never clobber in-pane state.")
-
-(define filmstrip/app-link
-  (lambda
-    (r label)
-    (html/button
-      (html/attrs
-        (list
-          (html/attr "type" "button")
-          (html/attr "class" "fs-applink")
-          (html/attr "hx-post" "/filmstrip/open")
-          (html/attr "hx-vals" (string-append "{\"route\":\"" r "\"}"))
-          (html/attr "hx-target" "#fs-sink")
-          (html/attr "hx-swap" "innerHTML")))
-      (html/text label)))
-  "In-shell app link: a link-looking button POSTing /filmstrip/open\n(hx-vals carries the route; open-or-focus semantics) with the OOB pane\nswaps landed in #fs-sink. Pane chrome uses these INSTEAD of <a href> --\nan anchor navigates the WHOLE WINDOW out of the shell; an app-link\nnever leaves it. Returns a PLAIN string (no render-html: the sentinel\nwould leak into any string-append embed like chat/body's h1 nav).")
 
 (define filmstrip/open
   (lambda
@@ -1395,35 +1332,27 @@ targets behave exactly as before (take the focus).")
           (not (string-starts-with? r "/")))
         (render-html
           (filmstrip/oob-msg
-            (string-append "filmstrip: routes start with / (try "
-              (filmstrip/launcher-hint) ")")))
+            "filmstrip: routes start with / (try /todos)"))
         (let
           ((path (car (filmstrip/split-query r))))
           (if
             (null? (route/lookup path))
             (render-html
               (filmstrip/oob-msg
-                (string-append "filmstrip: no route " path
-                  "  (routes on this host: "
-                  (filmstrip/routes-str (filmstrip/hint-routes))
-                  ")")))
+                (string-append "filmstrip: no route " path)))
             (let*
               ((res (filmstrip/open-apply panes r))
                 (panes2 (nth res 0))
-                (target (nth res 1))
-                (appended? (nth res 2))
-                (unshelved? (nth res 3))
-                (focus2 (filmstrip/rail-focus-onto panes2 focus target)))
+                (focus2 (nth res 1))
+                (appended? (nth res 2)))
               (seq
                 (filmstrip/save-all cascade panes2 focus2)
                 (render-html
                   (html/join
                     (list
                       (filmstrip/oob-msg "")
-                      (if unshelved? (filmstrip/shelf-oob) "")
-                      (filmstrip/winbox-oob)
-                      (filmstrip/open-response panes2 focus focus2 target appended?)))))))))))
-  "POST /filmstrip/open: launcher route param -> open-or-focus a pane.\nBad/missing routes answer with the launcher status line only; valid ones\npersist the row and answer with OOB pane swaps + winbox/shelf\nrefreshes (a win that unshelves drops its shelf row in the same\nresponse).")
+                      (filmstrip/open-response panes2 focus focus2 appended?)))))))))))
+  "POST /filmstrip/open: launcher route param -> open-or-focus a pane.\nBad/missing routes answer with the launcher status line only; valid ones\npersist the row and answer with OOB pane swaps.")
 
 (define filmstrip/open-apply
   (lambda
@@ -1432,42 +1361,27 @@ targets behave exactly as before (take the focus).")
       ((i (filmstrip/find-route-index panes r)))
       (if
         (>= i 0)
-        (let
-          ((p (filmstrip/pane-at panes i)))
-          (if
-            (string-eq (filmstrip/pane-state p) "shelved")
+        (list panes i #f)
+        (list
+          (append
+            panes
             (list
-              (filmstrip/replace-at panes i
-                (filmstrip/pane-stamp (dict-set p "state" "live")))
-              i
-              #f
-              #t)
-            (list panes i #f #f)))
-          (list
-            (append
-              panes
-              (list
-                (filmstrip/pane-stamp
-                  (dict-set*
-                    "{}"
-                    (list
-                      "id"
-                      (filmstrip/new-id)
-                      "route"
-                      r
-                      "width"
-                      filmstrip/default-width
-                      "state"
-                      "live")))))
+              (dict-set*
+                "{}"
+                (list
+                  "id"
+                  (filmstrip/new-id)
+                  "route"
+                  r
+                  "width"
+                  filmstrip/default-width))))
           (length panes)
           #t))))
-  "Open-or-focus for route r: a fresh pane record (UUID id, default\nwidth preset, state=live, passed through filmstrip/pane-stamp) appended,\nor the existing pane's index. A HIT ON A SHELVED PANE UNSHELVES it\n(acme Get semantics: naming a hidden window re-shows it -- and re-stamps
-it to the operator's current desktop via pane-stamp, same as a fresh
-pane: a cross-desktop tree row must open VISIBLE, not 0x0). Returns\n(panes focus appended? unshelved?) -- appended? false means an existing\npane won; unshelved? true means the caller owes a shelf OOB swap.")
+  "Open-or-focus for route r: a fresh pane record (UUID id, default\nwidth preset) appended, or the existing pane's index. Returns\n(panes focus appended?) -- appended? false means an existing pane won.")
 
 (define filmstrip/open-response
   (lambda
-    (panes2 old-focus focus2 target appended?)
+    (panes2 old-focus focus2 appended?)
     (html/join
       (list
         (if
@@ -1479,12 +1393,12 @@ pane: a cross-desktop tree row must open VISIBLE, not 0x0). Returns\n(panes focu
         (if
           appended?
           (filmstrip/oob-append-pane
-            (filmstrip/pane-at panes2 target)
+            (filmstrip/pane-at panes2 focus2)
             #t)
           (filmstrip/oob-section
-            (filmstrip/pane-at panes2 target)
+            (filmstrip/pane-at panes2 focus2)
             #t)))))
-  "OOB response body for an open/leaf click: OOB class swap on the\npreviously focused pane (skipped when focus2 stays behind — the v3\nrail discipline keeps a lifted main pane focused while the ring moves),\nthen the OPENED pane (target -- appended with its real dispatched\ncontent, or re-swapped focused, open-or-focus). focus2 is the index\nthat gets PERSISTED; target is the pane the ring lands on.")
+  "OOB response body for an open/leaf click: OOB class swap on the\npreviously focused pane, then the opened pane -- appended with its real\ndispatched content, or re-swapped focused (open-or-focus).")
 
 (define filmstrip/page
   (lambda
@@ -1526,67 +1440,13 @@ pane: a cross-desktop tree row must open VISIBLE, not 0x0). Returns\n(panes focu
           (list (cons "hx-request" "true"))))))
   "In-process partial dispatch of a pane route (HX-Request header on --\nthe route gate's existing fragment path, the hyper/visit seam).")
 
-;; ---- action glyphs (UI vocabulary, ONE table) ----
-;; borge/filmstrip.borg action-glyphs: verbs are GLYPHS in the row; the
-;; word survives as title + aria-label + data-verb (the queryable
-;; identity), never as the label. The default table lives HERE because
-;; the LIB renders the pane head too -- a host that wants another glyph
-;; set redefines this one function (same seam as filmstrip/apps), no
-;; renderer fork. Narrow viewports and a missing/invalid glyph both
-;; fall back to the word, so the shell degrades to the old behavior
-;; instead of rendering a blank button.
-(define filmstrip/act-glyphs
-  (list
-    (list "focus" "⦿")
-    (list "pin" "⤒")
-    (list "unpin" "⤓")
-    (list "width" "⇆")
-    (list "close" "⌄")
-    (list "restore" "⌃")
-    (list "destroy" "✕")
-    (list "switch" "⇥")
-    (list "collapse" "⇱")
-    (list "single" "⛶")
-    (list "move" "⇢"))
-  "Verb word -> glyph pairs (the UI vocabulary table). A verb with no
-entry (or an entry whose glyph is empty) renders its WORD -- glyphs
-are an improvement over words, never a hard requirement.")
-
-(define filmstrip/act-glyph-lookup
-  (lambda (word table)
-    (if (null? table)
-        ""
-        (if (string-eq (car (car table)) word)
-            (as-str (car (cdr (car table))))
-            (filmstrip/act-glyph-lookup word (cdr table)))))
-  "The glyph for word in table, or \"\" when the table has no entry.")
-
-(define filmstrip/act-glyph
-  (lambda (word)
-    (let ((g (filmstrip/act-glyph-lookup (as-str word) filmstrip/act-glyphs)))
-      (if (string-eq g "") (as-str word) g)))
-  "Action glyph for a verb word; the WORD when the table has no glyph
-(so an unknown verb renders as itself -- never an empty button).")
-
-(define filmstrip/verb-hint
-  (lambda (w)
-    (if (string-eq w "move") "move: to the next desktop (cycles)"
-    (if (string-eq w "to0") "move this pane to desktop 0"
-    (if (string-eq w "to1") "move this pane to desktop 1"
-    (if (string-eq w "to2") "move this pane to desktop 2"
-    (if (string-eq w "focus") "focus this pane"
-    (if (string-eq w "pin") "pin to the rail (dock; body stays live)"
-    (if (string-eq w "unpin") "unpin (back to the main strip)"
-    (if (string-eq w "width") "width: cycle third / half / full"
-    (if (string-eq w "close") "close: shelve the pane (restore it from the shelf)"
-    (if (string-eq w "restore") "restore from the shelf"
-    (if (string-eq w "destroy") "destroy the pane for good"
-    (if (string-eq w "switch") "switch this desktop"
-    (if (string-eq w "collapse") "fold everything back"
-    w))))))))))))))
-  "The TOOLTIP text for a verb word (title attr). A glyph is not
-self-explanatory -- every action button carries its words here and its
-word in aria-label/data-verb, so the glyph is purely visual chrome.")
+(define filmstrip/pane-desk
+  (lambda (p)
+    (let
+      ((v (dict-get p "desktop")))
+      (if (null? v) 0 (parse-int (as-str v)))))
+  "Pane record desktop index (0 when unset — pre-v2 records ride
+desktop 0).")
 
 (define filmstrip/pane-head
   (lambda
@@ -1606,103 +1466,80 @@ word in aria-label/data-verb, so the glyph is purely visual chrome.")
               "button"
               (html/attrs
                 (list
-                  (html/attr "class" "fs-btn fs-act")
-                  (html/attr
-                    "title"
-                    (if
-                      (string-eq (filmstrip/pane-region p) "rail")
-                      "unpin (back to the main strip)"
-                      "pin to the rail (dock; body stays live)"))
-                  (html/attr
-                    "aria-label"
-                    (if
-                      (string-eq (filmstrip/pane-region p) "rail")
-                      "unpin"
-                      "pin"))
-                  (html/attr "data-verb" (if
-                      (string-eq (filmstrip/pane-region p) "rail")
-                      "unpin"
-                      "pin"))
-                  (html/attr "hx-post" "/filmstrip/pin")
-                  (html/attr
-                    "hx-vals"
-                    (string-append "{\"id\":\"" id "\"}"))
-                  (html/attr "hx-target" "#fs-sink")
-                  (html/attr "hx-swap" "innerHTML")))
-              (html/text (filmstrip/act-glyph
-                (if (string-eq (filmstrip/pane-region p) "rail")
-                    "unpin"
-                    "pin"))))
-            (html/tag
-              "button"
-              (html/attrs
-                (list
-                  (html/attr "class" "fs-btn fs-act")
-                  (html/attr "title" "width: cycle third / half / full")
-                  (html/attr "aria-label" "cycle width")
-                  (html/attr "data-verb" "width")
+                  (html/attr "class" "fs-btn")
+                  (html/attr "title" "cycle width (third/half/full)")
                   (html/attr "hx-post" "/filmstrip/width")
                   (html/attr
                     "hx-vals"
                     (string-append "{\"id\":\"" id "\"}"))
                   (html/attr "hx-target" "#fs-sink")
                   (html/attr "hx-swap" "innerHTML")))
-              (html/text (filmstrip/act-glyph "width")))
+              "width")
             (html/tag
               "button"
               (html/attrs
                 (list
-                  (html/attr "class" "fs-btn fs-act")
-                  (html/attr "title"
-                    (if (filmstrip/pane-single p)
-                        "strip: back to the row (unstage from one-up)"
-                        "one-up: stage this pane alone on the strip"))
-                  (html/attr "aria-label"
-                    (if (filmstrip/pane-single p) "back to strip" "one-up"))
-                  (html/attr "data-verb" "single")
-                  (html/attr "hx-post" "/filmstrip/single")
-                  (html/attr "hx-vals"
-                    (string-append "{\"id\":\"" id "\"}"))
-                  (html/attr "hx-target" "#fs-sink")
-                  (html/attr "hx-swap" "innerHTML")))
-              (html/text (filmstrip/act-glyph "single")))
-            (html/tag
-              "button"
-              (html/attrs
-                (list
-                  (html/attr "class" "fs-btn fs-act")
-                  (html/attr "title" (filmstrip/verb-hint "move"))
-                  (html/attr "aria-label" "move desktop")
-                  (html/attr "data-verb" "move")
-                  (html/attr "hx-post" "/filmstrip/move-to")
-                  (html/attr
-                    "hx-vals"
-                    (string-append "{\"id\":\"" id "\"}"))
-                  (html/attr "hx-target" "#fs-sink")
-                  (html/attr "hx-swap" "innerHTML")))
-              (html/text (filmstrip/act-glyph "move")))
-            (html/tag
-              "button"
-              (html/attrs
-                (list
-                  (html/attr "class" "fs-btn fs-act")
-                  (html/attr "title" "close: shelve the pane (restore from the rail's shelf)")
-                  (html/attr "aria-label" "close pane")
-                  (html/attr "data-verb" "close")
+                  (html/attr "class" "fs-btn")
+                  (html/attr "title" "close pane")
                   (html/attr "hx-post" "/filmstrip/close")
                   (html/attr
                     "hx-vals"
                     (string-append "{\"id\":\"" id "\"}"))
                   (html/attr "hx-target" "#fs-sink")
                   (html/attr "hx-swap" "innerHTML")))
-              (html/text (filmstrip/act-glyph "close"))))))))
-  "Pane title bar: route label + pin/unpin (region flip, v3) + width
-cycle + single (v5 one-up: stage the pane alone) + move (desktop cycle:
-/filmstrip/move-to with no d param advances to the next desktop) +
-close (shelve), all htmx POSTs, all GLYPHS. The pin and single buttons
-label by the pane's CURRENT state; every glyph carries a title (human
-tooltip), an aria-label (screen reader) and a data-verb (the queryable
-identity -- selectors never read the glyph).")
+              "close"))))))
+  "Pane title bar: route label + width cycle + close, all htmx POSTs.")
+
+(define filmstrip/pane-html
+  (lambda
+    (p focused? content)
+    (let
+      ((id (filmstrip/pane-id p)))
+      (html/tag
+        "section"
+        (html/attrs
+          (list
+            (html/attr
+              "class"
+              (string-append
+                "fs-pane"
+                " fs-"
+                (filmstrip/pane-width p)
+                (if focused? " focused" "")))
+            (html/attr "id" (string-append "fs-pane-" id))
+            (html/attr "data-pane" id)))
+        (html/join
+          (list
+            (filmstrip/pane-head p)
+            (html/tag
+              "div"
+              (html/attrs
+                (list
+                  (html/attr "class" "fs-body")
+                  (html/attr "id" (string-append "fs-body-" id))
+                  (html/attr "hx-preserve" "true")))
+              content))))))
+  "One pane section. content is the dispatched fragment (full page) or an\nempty hx-preserve placeholder (OOB class/width swaps keep the live DOM).")
+
+(define filmstrip/pane-id
+  (lambda (p) (as-str (dict-get p "id")))
+  "Pane record id.")
+
+(define filmstrip/pane-live?
+  (lambda (p)
+    (not (string-eq (filmstrip/pane-state p) "shelved")))
+  "True when the pane is not shelved (missing state counts live).")
+
+(define filmstrip/pane-region
+  (lambda (p)
+    (let
+      ((r (as-str (dict-get p "region"))))
+      (if (string-eq r "") "main" r)))
+  "Pane record region (v3 pin): main | rail. Empty = main — records\nfrom before the region field exist and stay main (main keeps the v2\nmodel: strip + one lifted focused pane). The ACCESSOR defaults, so\nselectors + JSON see \"main\" on legacy records, never an empty value.")
+
+(define filmstrip/pane-route
+  (lambda (p) (as-str (dict-get p "route")))
+  "Pane record route.")
 
 (define filmstrip/pane-sclass
   (lambda
@@ -1720,57 +1557,23 @@ identity -- selectors never read the glyph).")
 and the OOB swap cannot drift (v5 adds fs-single to width + focused +
 shelved).")
 
-(define filmstrip/pane-html
-  (lambda
-    (p focused? content)
-    (let
-      ((id (filmstrip/pane-id p)))
-      (html/tag
-        "section"
-        (html/attrs
-          (list
-            (html/attr "class" (filmstrip/pane-sclass p focused?))
-            (html/attr "id" (string-append "fs-pane-" id))
-            (html/attr "data-pane" id)
-            ;; tabindex -1: the section is programmatically focusable, so
-            ;; an OOB swap carrying autofocus scrolls it on-stage (v5
-            ;; focus-scroll; the scroll-margin peeks decide the landing).
-            (html/attr "tabindex" "-1")
-            (html/attr
-              "data-desktop"
-              (as-str (filmstrip/pane-desk p)))
-            (html/attr
-              "data-region"
-              (filmstrip/pane-region p))))
-        (html/join
-          (list
-            (filmstrip/pane-head p)
-            (html/tag
-              "div"
-              (html/attrs
-                (list
-                  (html/attr "class" "fs-body")
-                  (html/attr "id" (string-append "fs-body-" id))
-                  (html/attr "hx-preserve" "true")))
-              content))))))
-  "One pane section. content is the dispatched fragment (full page) or an\nempty hx-preserve placeholder (OOB class/width swaps keep the live DOM).\ndata-desktop feeds the shell's :has(#ws-desk.dsk-N) hiding; tabindex=-1\nlets the OOB path autofocus the section — the browser scrolls every\nscrollable ancestor so the focused column lands on-stage (v5).")
-
-(define filmstrip/pane-id
-  (lambda (p) (as-str (dict-get p "id")))
-  "Pane record id.")
-
-(define filmstrip/pane-route
-  (lambda (p) (as-str (dict-get p "route")))
-  "Pane record route.")
-
-(define filmstrip/pane-set-width
-  (lambda (p w) (dict-set p "width" w))
-  "Pane record with a new width preset.")
+(define filmstrip/pane-set-desk
+  (lambda (p d) (dict-set p "desktop" d))
+  "Pane record with a new desktop (AS A STRING -- dict values ride\nJSON/records as strings everywhere; filmstrip/pane-desk parse-ints on\nread, so both field shapes read identically).")
 
 (define filmstrip/pane-set-region
   (lambda (p r) (dict-set p "region" r))
   "Pane record with a new region (main | rail) — the field persists on
 the record like width/state, so it rides every writer below save-all.")
+
+(define filmstrip/pane-set-single
+  (lambda (p s) (dict-set p "single" s))
+  "Pane record with a new single value — the flag persists on the
+record like region/state and rides every writer below save-all.")
+
+(define filmstrip/pane-set-width
+  (lambda (p w) (dict-set p "width" w))
+  "Pane record with a new width preset.")
 
 (define filmstrip/pane-single
   (lambda (p)
@@ -1783,124 +1586,19 @@ the record like width/state, so it rides every writer below save-all.")
 or explicitly false — the flag READS through, so staging then
 unstaging (dict-set … #f) really turns it off (as-str #f = \"false\").")
 
-(define filmstrip/pane-set-single
-  (lambda (p s) (dict-set p "single" s))
-  "Pane record with a new single value — the flag persists on the
-record like region/state and rides every writer below save-all.")
-
-(define filmstrip/pane-view
-  (lambda (p) (as-str (dict-get p "view")))
-  "Pane record's river window key (empty for habitat panes).")
+(define filmstrip/pane-stamp
+  (lambda
+    (rec)
+    rec)
+  "Host hook on freshly-stamped pane records (default identity). A host\nmay add its own fields — glochid stamps the pane's desktop from the ws\nrow so an app-link open on desk>0 lands VISIBLE there (the lib must not\nread glochid row fields itself; same seam discipline as save-all).")
 
 (define filmstrip/pane-state
   (lambda (p) (as-str (dict-get p "state")))
   "Pane record state: live | shelved (v2 shelf). Empty = live — records\nfrom before the state field exist and stay live.")
 
-(define filmstrip/pane-region
-  (lambda (p)
-    (let
-      ((r (as-str (dict-get p "region"))))
-      (if (string-eq r "") "main" r)))
-  "Pane record region (v3 pin): main | rail. Empty = main — records\nfrom before the region field exist and stay main (main keeps the v2\nmodel: strip + one lifted focused pane). The ACCESSOR defaults, so\nselectors + JSON see \"main\" on legacy records, never an empty value.")
-
-(define filmstrip/pane-live?
-  (lambda (p)
-    (not (string-eq (filmstrip/pane-state p) "shelved")))
-  "True when the pane is not shelved (missing state counts live).")
-
-(define filmstrip/pane-desk
-  (lambda (p)
-    (let
-      ((v (dict-get p "desktop")))
-      (if (null? v) 0 (parse-int (as-str v)))))
-  "Pane record desktop index (0 when unset — pre-v2 records ride
-desktop 0).")
-
-(define filmstrip/first-live-index
-  (lambda (panes)
-    (filmstrip/find-index filmstrip/pane-live? panes 0))
-  "Index of the first live (not shelved) pane, else -1.")
-
-(define filmstrip/ws-desktop
-  (lambda ()
-    (let
-      ((v (dict-get (filmstrip/ws-fields) "desktop")))
-      (if (null? v) 0 (parse-int (as-str v)))))
-  "Current desktop from the workspace row's desktop field (0 when
-unset — hosts that don't model desktops ride 0). Read through THIS
-lib's own ws-fields seam, the same read the habitat shell's deskt
-wrapper does; the lib never touches host pane-row fields.")
-
-(define filmstrip/first-region-live
-  (lambda (panes i region d)
-    (if
-      (null? panes)
-      -1
-      (if
-        (and
-          (filmstrip/pane-live? (car panes))
-          (string-eq (filmstrip/pane-region (car panes)) region)
-          (if (string-eq region "rail")
-              #t
-              (= (filmstrip/pane-desk (car panes)) d)))
-        i
-        (filmstrip/first-region-live (cdr panes) (+ i 1) region d))))
-  "Index of the first LIVE pane of one region (else -1). MAIN panes
-are desktop-scoped (must sit on desktop d); RAIL panes are
-desktop-global (dock semantics — visible on every desktop, so the d
-check is skipped). Never a shelved pane.")
-
-(define filmstrip/close-heal
-  (lambda (panes i)
-    (let*
-      ((d (filmstrip/ws-desktop))
-        ;; v5 strip discipline: heal to the NEAREST live strip column —
-        ;; the closed pane's neighbors were peeking in, so attention is
-        ;; already there. Same visibility rule focus-step uses (live
-        ;; main on the current desktop, or a docked rail pane); the
-        ;; left neighbor wins a tied distance. Fallbacks keep v3's
-        ;; order: first live main on the desk, then rail, then first
-        ;; live anywhere.
-        (near-live?
-          (lambda (p)
-            (and
-              (filmstrip/pane-live? p)
-              (or
-                (string-eq (filmstrip/pane-region p) "rail")
-                (and
-                  (string-eq (filmstrip/pane-region p) "main")
-                  (= (filmstrip/pane-desk p) d))))))
-        (live-at
-          (lambda (j)
-            (let ((p (filmstrip/pane-at panes j)))
-              (if (if (null? p) #f (near-live? p)) j -1))))
-        (near
-          (letrec
-            ((out
-                (lambda (k)
-                  (if (>= k (length panes))
-                      -1
-                      (let ((l (live-at (- i k))))
-                        (if (>= l 0)
-                            l
-                            (let ((r2 (live-at (+ i k))))
-                              (if (>= r2 0) r2 (out (+ k 1))))))))))
-            (out 1)))
-        (m (filmstrip/first-region-live panes 0 "main" d))
-        (r (filmstrip/first-region-live panes 0 "rail" d)))
-      (cond
-        ((>= near 0) near)
-        ((>= m 0) m)
-        ((>= r 0) r)
-        (#t (filmstrip/first-live-index panes)))))
-  "Focus target after close shelved pane i (v5): the NEAREST live
-strip column — neighbors of the closed pane peek in, so attention is
-already there. Same visibility rule focus-step uses (live main on the
-current desktop, or a docked rail pane); the LEFT neighbor wins a
-tied distance. Fallbacks keep v3's order — first live main on the
-desk, first live rail pane, first live anywhere. Never a shelved
-pane (I2), never a pane the strip hides (I1 — the 0x0 heal lesson,
-generalized: hidden means NOT a heal target).")
+(define filmstrip/pane-view
+  (lambda (p) (as-str (dict-get p "view")))
+  "Pane record's river window key (empty for habitat panes).")
 
 (define filmstrip/pane-width
   (lambda
@@ -1943,6 +1641,40 @@ generalized: hidden means NOT a heal target).")
         (cons (cons k v) (filmstrip/parse-pairs (cdr pairs))))))
   "Parse kv strings into a dotted-pair alist.")
 
+(define filmstrip/pin
+  (lambda
+    ()
+    (let*
+      ((id (as-str (request-param "id")))
+        (row (filmstrip/row))
+        (cascade (nth row 0))
+        (panes (nth row 1))
+        (focus (nth row 2))
+        (i (filmstrip/find-pane-index panes id)))
+      (if
+        (< i 0)
+        (render-html
+          (filmstrip/oob-msg "filmstrip: no such pane"))
+        (let*
+          ((p2
+              (filmstrip/pane-set-region
+                (nth panes i)
+                (if
+                  (string-eq (filmstrip/pane-region (nth panes i)) "rail")
+                  "main"
+                  "rail")))
+            (panes2 (filmstrip/replace-at panes i p2)))
+          (seq
+            (filmstrip/save-all cascade panes2 focus)
+            (render-html
+              (html/join
+                (list
+                  (filmstrip/oob-msg "")
+                  (filmstrip/shelf-oob)
+                  (filmstrip/winbox-oob)
+                  (filmstrip/oob-section p2 (= i focus))))))))))
+  "POST /filmstrip/pin: id param -> trade the pane's region (main/rail\nv3 pin). Rail = dock semantics: the body stays LIVE inside the rail\n(glochid CSS shows [data-region=rail] bodies) beside the focused main\npane. Same grammar as filmstrip/width: OOB section swap (body DOM\npreserved via hx-preserve), plus winbox/shelf OOB refreshes (the win\nrow's pin word re-labels by region).")
+
 (define filmstrip/pkg-browse
   (lambda
     (pkg pkg-path)
@@ -1957,6 +1689,30 @@ generalized: hidden means NOT a heal target).")
           (calendar/browse pkg-path)
           (cons (list (list)) #f)))))
   "Dispatch the package browse; unknown packages get one empty column.")
+
+(define filmstrip/rail-focus-onto
+  (lambda
+    (panes old new)
+    (if
+      (= new old)
+      old
+      (if
+        (not
+          (string-eq
+            (filmstrip/pane-region (filmstrip/pane-at panes new))
+            "rail"))
+        new
+        (if
+          (filmstrip/lift-holds-live-main? panes old)
+          old
+          new))))
+  "Focused index for a focus attempt onto pane `new` (v3 region
+discipline): a rail-region target NEVER takes the fixed main slot. If
+a live main pane holds the lift, focus stays on it (only the caller's
+OOB ring moves onto the rail pane); when no live main pane is lifted,
+the rail pane becomes the persisted focus itself — a focused rail pane
+visible in the rail satisfies I1 (no forced main pane). Main-region
+targets behave exactly as before (take the focus).")
 
 (define filmstrip/remove-at
   (lambda
@@ -1984,9 +1740,64 @@ generalized: hidden means NOT a heal target).")
           (filmstrip/replace-at (cdr xs) (- i 1) x)))))
   "Copy of xs with the element at index i replaced by x.")
 
+(define filmstrip/restore
+  (lambda
+    ()
+    (let*
+      ((id (as-str (request-param "id")))
+        (row (filmstrip/row))
+        (cascade (nth row 0))
+        (panes (nth row 1))
+        (focus (nth row 2))
+        (i (filmstrip/find-pane-index panes id)))
+      (if
+        (< i 0)
+        (render-html
+          (filmstrip/oob-msg "filmstrip: no such pane"))
+        (let*
+          ((p2 (dict-set (nth panes i) "state" "live"))
+            (panes2 (filmstrip/replace-at panes i p2))
+            (focus2
+              (if
+                (or
+                  (< focus 0)
+                  (string-eq
+                    (filmstrip/pane-state (filmstrip/pane-at panes focus))
+                    "shelved"))
+                i
+                focus)))
+          (seq
+            (filmstrip/save-all cascade panes2 focus2)
+            (render-html
+              (html/join
+                (list
+                  (filmstrip/oob-msg "")
+                  (filmstrip/shelf-oob)
+                  (filmstrip/winbox-oob)
+                  (filmstrip/oob-section p2 (= i focus2))
+                  (if
+                    (if (>= focus 0) (not (= focus2 focus)) #f)
+                    (filmstrip/oob-section
+                      (filmstrip/pane-at panes2 focus)
+                      #f)
+                    "")))))))))
+  "POST /filmstrip/restore: id param -> state=live, the pane returns to\nits position; OOB class swap brings the section back; focus heals onto\nthe restored pane when nothing live holds focus (a shelved pane's\n.focused class is cleared by the same swap).")
+
 (define filmstrip/route?
   (lambda (s) (string-starts-with? (as-str s) "/"))
   "True when a cascade target is a route (leaf) rather than a crumb.")
+
+(define filmstrip/routes-str
+  (lambda
+    (rs)
+    (if
+      (null? rs)
+      ""
+      (string-append
+        (car rs)
+        (if (null? (cdr rs)) "" " ")
+        (filmstrip/routes-str (cdr rs)))))
+  "Space-joined routes string.")
 
 (define filmstrip/row
   (lambda
@@ -2267,6 +2078,10 @@ generalized: hidden means NOT a heal target).")
       ""))
   "Invisible trigger element: an htmx key filter on the body that POSTs a\nshell event (vals carries the dir param). Zero javascript files (D3) --\nthe filter expression is htmx.")
 
+(define filmstrip/shelf-oob
+  (lambda () "")
+  "OOB payload re-rendering the shelf controlbox after\nclose/restore/destroy. Default empty -- the plain habitat shell has\nno shelf rail yet; glochid redefines it to swap its #fs-shelf rows.")
+
 (define filmstrip/shell-html
   (lambda
     (cascade panes focus)
@@ -2299,6 +2114,38 @@ generalized: hidden means NOT a heal target).")
                     (html/attr "class" "fs-sink")))
                 "")))))))
   "The whole shell: style + cascade strip over launcher + content strip,\nkey sentinels, and the invisible OOB sink. The HTTP gate wraps this\nfragment in chrome on full-page requests.")
+
+(define filmstrip/single
+  (lambda
+    ()
+    (let*
+      ((id (as-str (request-param "id")))
+        (row (filmstrip/row))
+        (cascade (nth row 0))
+        (panes (nth row 1))
+        (focus (nth row 2))
+        (i (filmstrip/find-pane-index panes id)))
+      (if
+        (< i 0)
+        (render-html
+          (filmstrip/oob-msg "filmstrip: no such pane"))
+        (let*
+          ((p2 (filmstrip/pane-set-single (nth panes i)
+                 (if (filmstrip/pane-single (nth panes i)) #f #t)))
+            (panes2 (filmstrip/replace-at panes i p2)))
+          (seq
+            (filmstrip/save-all cascade panes2 focus)
+            (render-html
+              (html/join
+                (list
+                  (filmstrip/oob-msg "")
+                  (filmstrip/oob-section p2 (= i focus))))))))))
+  "POST /filmstrip/single: id param -> v5 ONE-UP: toggle the pane's
+single flag. Staged single, the pane rides the strip alone (full
+width, neighbors hidden by CSS while a focused single exists); off,
+it rejoins the strip at its preset width. Same grammar as width: OOB
+section swap, pane body preserved. The flag persists in the workspace
+row (niri singling as declared state).")
 
 (define filmstrip/split-query
   (lambda
@@ -2343,75 +2190,406 @@ generalized: hidden means NOT a heal target).")
       (cons (car xs) (filmstrip/take (cdr xs) (- n 1)))))
   "First n elements of a list.")
 
-(define filmstrip/pin
-  (lambda
-    ()
+(define filmstrip/tree
+  (lambda ()
     (let*
-      ((id (as-str (request-param "id")))
-        (row (filmstrip/row))
-        (cascade (nth row 0))
-        (panes (nth row 1))
-        (focus (nth row 2))
-        (i (filmstrip/find-pane-index panes id)))
-      (if
-        (< i 0)
-        (render-html
-          (filmstrip/oob-msg "filmstrip: no such pane"))
-        (let*
-          ((p2
-              (filmstrip/pane-set-region
-                (nth panes i)
-                (if
-                  (string-eq (filmstrip/pane-region (nth panes i)) "rail")
-                  "main"
-                  "rail")))
-            (panes2 (filmstrip/replace-at panes i p2)))
-          (seq
-            (filmstrip/save-all cascade panes2 focus)
-            (render-html
-              (html/join
-                (list
-                  (filmstrip/oob-msg "")
-                  (filmstrip/shelf-oob)
-                  (filmstrip/winbox-oob)
-                  ;; v5: a region flip MOVES the section between
-                  ;; containers -- the region move answers re-rendering
-                  ;; the whole pane area; bodies preserved via
-                  ;; hx-preserve placeholders.
-                  (filmstrip/oob-content-strip panes2 focus)))))))))
-  "POST /filmstrip/pin: id param -> trade the pane's region (main/rail\nv3 pin). Rail = dock semantics: the body stays LIVE beside the strip\n(glochid keeps rail panes in its rail box). v5: the answer is the\noob-content-strip OOB (the pane MOVED containers — hosts re-render\ntheir pane area, bodies preserved), plus winbox/shelf OOB refreshes\n(the win row's pin word re-labels by region).")
+      ((id (as-str (request-param "root")))
+        (node (filmstrip/url-dec (as-str (request-param "node"))))
+        (root (filmstrip/tree-find-root (filmstrip/tree-roots) id)))
+      (if (null? root)
+          (render-html (filmstrip/oob-msg (string-append "filmstrip: no tree root " id)))
+          (render-html
+            (filmstrip/tree-level id ((car (cdr (cdr root))) node))))))
+  "GET /filmstrip/tree?root=<id>&node=<path>: ONE level of the named\nroot, as the li splice payload (native 200 fragment; a missing root\nanswers the status line only).")
 
-(define filmstrip/single
+(define filmstrip/tree-box
+  (lambda (root)
+    (let*
+      ((id (as-str (car root)))
+        (title (as-str (car (cdr root))))
+        (levelfn (car (cdr (cdr root)))))
+      (html/tag
+        "div"
+        (html/attrs
+          (list
+            (html/attr "id" (string-append "fs-tree-" id))
+            (html/attr "class" "fs-cbox fs-rmode")
+            (html/attr "data-rmode" id)))
+        (html/join
+          (list
+            (html/span (html/attr "class" "fs-title") (html/text title))
+            (html/tag
+              "button"
+              (html/attrs
+                (list
+                  (html/attr "class" "fs-btn fs-act")
+                  (html/attr "title" "fold everything back (one POST; state is DOM)")
+                  (html/attr "aria-label" "collapse all")
+                  (html/attr "data-verb" "collapse")
+                  (html/attr "hx-post" "/filmstrip/tree/collapse")
+                  (html/attr "hx-vals" (string-append "{\"root\":\"" id "\"}"))
+                  (html/attr "hx-target" "#fs-sink")
+                  (html/attr "hx-swap" "innerHTML")))
+              (html/text (filmstrip/act-glyph "collapse")))
+            (html/tag
+              "ul"
+              (html/attrs
+                (list
+                  (html/attr "id" (string-append "fs-tree-" id "-root"))
+                  (html/attr "class" "fs-tr-kids fs-tr-root")))
+              (filmstrip/tree-level id (filmstrip/tree-lazy (levelfn "")))))))))
+  "One rail tree controlbox: title + collapse-all word + level 0. All
+geometry from classes; the level-0 UL id (fs-tree-<id>-root) is the
+mutation OOB seam -- the head never changes, so only rows re-render.")
+
+(define filmstrip/tree-closed
+  (lambda (nodes)
+    (list/map
+      (lambda (n)
+        (dict-set (dict-set n "kids" "") "expand" ""))
+      nodes))
+  "The FULLY-CLOSED projection (collapse-all only): kids emptied AND
+expand cleared, so the pressure valve folds the default-open dirs too
+-- the one sanctioned way the server touches expansion state (v4).
+Everything else in the shell keeps tree-lazy semantics: expand nodes
+arrive open with their eager kids.")
+
+(define filmstrip/tree-collapse
   (lambda
     ()
     (let*
-      ((id (as-str (request-param "id")))
-        (row (filmstrip/row))
-        (cascade (nth row 0))
-        (panes (nth row 1))
-        (focus (nth row 2))
-        (i (filmstrip/find-pane-index panes id)))
+      ((id (as-str (request-param "root")))
+        (root
+          (filmstrip/tree-find-root (filmstrip/tree-roots) id)))
       (if
-        (< i 0)
+        (null? root)
         (render-html
-          (filmstrip/oob-msg "filmstrip: no such pane"))
-        (let*
-          ((p2 (filmstrip/pane-set-single (nth panes i)
-                 (if (filmstrip/pane-single (nth panes i)) #f #t)))
-            (panes2 (filmstrip/replace-at panes i p2)))
-          (seq
-            (filmstrip/save-all cascade panes2 focus)
-            (render-html
-              (html/join
+          (filmstrip/oob-msg
+            (string-append "filmstrip: no tree root " id)))
+        (render-html
+          (html/join
+            (list (filmstrip/oob-msg "") (filmstrip/tree-oob root)))))))
+  "POST /filmstrip/tree/collapse: the DOM pressure valve -- one POST\nOOB-swaps the box back to head + level 0 (the ONLY sanctioned way the\nserver touches expansion state).")
+
+(define filmstrip/tree-find-root
+  (lambda (roots id)
+    (if (null? roots)
+        (list)
+        (if (string-eq (as-str (car (car roots))) id)
+            (car roots)
+            (filmstrip/tree-find-root (cdr roots) id))))
+  "The root row (id title levelfn) matching id, or the empty list.")
+
+(define filmstrip/tree-lazy
+  (lambda
+    (nodes)
+    (list/map (lambda (n) (dict-set n "kids" "")) nodes))
+  "Boot-lazy projection of a level: eager kids are EMPTIED so the head\nrender stays level-0-only (the request budget is a whole shared shell\n-- an eager head over the fs made the boot shell bust the 400k step\nceiling). The DOM rule still holds at boot: folding pulls the level\nfresh via toggle-once, and the SPLICE renders whatever eager kids the\nhost chose (a GET answers a small subtree in one response). Pane faces\nrender the level directly and honor kids -- one template, two\nmaterialization points. Node dicts ride JSON strings (v4 make-note:\ndict-set* refuses non-strings), so dict-set applies cleanly.")
+
+(define filmstrip/tree-level
+  (lambda (root-id nodes)
+    (html/join (list/map (lambda (n) (filmstrip/tree-node-li root-id n)) nodes)))
+  "One LEVEL of a tree as a joined li fragment (the splice payload).")
+
+(define filmstrip/tree-node-li
+  (lambda
+    (root-id n)
+    (let*
+      ((label (as-str (dict-get n "label")))
+        (kind (as-str (dict-get n "kind")))
+        (path (as-str (dict-get n "node")))
+        (open
+          (let
+            ((o (dict-get n "open")))
+            (if (null? o) "" (as-str o))))
+        (verbs
+          (let
+            ((raw (dict-get n "verbs")))
+            (if
+              (null? raw)
+              (list)
+              (let
+                ((s (as-str raw)))
+                (if (string-eq s "") (list) (json-parse s))))))
+        (is-dir (string-eq kind "dir"))
+        (kids
+          (let
+            ((k (dict-get n "kids")))
+            (if (null? k) "" (as-str k))))
+        (eager (and is-dir (not (string-eq kids ""))))
+        (label-word
+          (if
+            (string-eq open "")
+            (html/span
+              (html/attr "class" "fs-tr-open")
+              (html/text label))
+            (html/tag
+              "button"
+              (html/attrs
                 (list
-                  (filmstrip/oob-msg "")
-                  (filmstrip/oob-section p2 (= i focus))))))))))
-  "POST /filmstrip/single: id param -> v5 ONE-UP: toggle the pane's
-single flag. Staged single, the pane rides the strip alone (full
-width, neighbors hidden by CSS while a focused single exists); off,
-it rejoins the strip at its preset width. Same grammar as width: OOB
-section swap, pane body preserved. The flag persists in the workspace
-row (niri singling as declared state).")
+                  (html/attr "class" "fs-btn fs-applink fs-tr-open")
+                  (html/attr
+                    "title"
+                    (string-append "open-or-focus " label))
+                  (html/attr "hx-post" "/filmstrip/open")
+                  (html/attr
+                    "hx-vals"
+                    (string-append "{\"route\":\"" open "\"}"))
+                  (html/attr "hx-target" "#fs-sink")
+                  (html/attr "hx-swap" "innerHTML")))
+              (html/text label))))
+        (verb-text
+          (lambda (v) (filmstrip/verb-hint (as-str (car v)))))
+        (verb-glyph
+          (lambda
+            (v)
+            (let
+              ((g
+                (if
+                  (< (count v) 4)
+                  ""
+                  (as-str (car (cdr (cdr (cdr v))))))))
+              (if (string-eq g "") (as-str (car v)) g))))
+        (verb-glyph-or
+          (lambda
+            (v)
+            (let
+              ((g (verb-glyph v)))
+              (if
+                (string-eq g (as-str (car v)))
+                (filmstrip/act-glyph (as-str (car v)))
+                g))))
+        (verb-btn
+          (lambda
+            (v ?act)
+            (html/tag
+              "button"
+              (html/attrs
+                (list
+                  (html/attr
+                    "class"
+                    (if ?act "fs-btn fs-act" "fs-btn fs-tr-verb"))
+                  (html/attr "title" (verb-text v))
+                  (html/attr "aria-label" (as-str (car v)))
+                  (html/attr "data-verb" (as-str (car v)))
+                  (html/attr "hx-post" (as-str (car (cdr v))))
+                  (html/attr "hx-vals" (as-str (car (cdr (cdr v)))))
+                  (html/attr "hx-target" "#fs-sink")
+                  (html/attr "hx-swap" "innerHTML")))
+              (html/text (verb-glyph-or v)))))
+        (verb-word (lambda (v) (verb-btn v #f)))
+        (verb-act (lambda (v) (verb-btn v #t)))
+        (action-li
+          (lambda
+            (v)
+            (html/tag
+              "li"
+              (html/attr "class" "fs-tr-item fs-tr-actrow")
+              (verb-act v))))
+        (actions-fold
+          (if
+            (null? verbs)
+            ""
+            (html/tag
+              "ul"
+              (html/attr "class" "fs-tr-acts-ul")
+              (html/join (list/map action-li verbs)))))
+        (details-attrs
+          (append
+            (list (html/attr "class" "fs-tr-node"))
+            (if
+              (or (not is-dir) eager)
+              (list)
+              (list
+                (html/attr
+                  "hx-get"
+                  (string-append
+                    "/filmstrip/tree?root="
+                    root-id
+                    "&node="
+                    (filmstrip/url-enc path)))
+                (html/attr "hx-trigger" "toggle once")
+                (html/attr "hx-target" "find .fs-tr-kids")
+                (html/attr "hx-swap" "innerHTML")))))
+        (row-els
+          (list
+            (html/span
+              (html/attr "class" "fs-tr-fold")
+              (html/text "▸"))
+            label-word
+            (html/join (list/map verb-word verbs)))))
+      (html/tag
+        "li"
+        (html/attrs
+          (list
+            (html/attr "class" "fs-tr-item")
+            (html/attr "data-node" path)))
+        (html/tag
+          "details"
+          (html/attrs details-attrs)
+          (html/join
+            (append
+              (list
+                (html/tag
+                  "summary"
+                  (html/attr "class" "fs-tr-row")
+                  (html/join row-els)))
+              (if
+                (not is-dir)
+                (list)
+                (list
+                  (html/tag
+                    "ul"
+                    (html/attr "class" "fs-tr-kids")
+                    (if
+                      eager
+                      (filmstrip/tree-level root-id (json-parse kids))
+                      ""))))
+              (list actions-fold)))))))
+  "One node row: li[data-node] > details > summary(fold arrow + label\n+ verb GLYPHS) [+ kids ul for dirs: EAGER (pre-walked level rendered\ninline, no pull attrs) when the node carries a non-empty kids JSON\nstring, else the lazy toggle-once level GET] [+ a narrow-only actions\nul when the node carries verbs -- the SAME glyphs as children, never\na second summary or a duplicate list]. Leaf details are fold-only.\nZero JS beyond the htmx attrs.")
+
+(define filmstrip/tree-oob
+  (lambda (root)
+    (let*
+      ((id (as-str (car root)))
+        (levelfn (car (cdr (cdr root)))))
+      (html/tag
+        "ul"
+        (html/attrs
+          (list
+            (html/attr "id" (string-append "fs-tree-" id "-root"))
+            (html/attr "class" "fs-tr-kids fs-tr-root")
+            (html/attr "hx-swap-oob" "innerHTML")))
+        (filmstrip/tree-level id (filmstrip/tree-lazy (levelfn ""))))))
+  "OOB (hx-swap-oob innerHTML on the level-0 UL) re-render of one
+tree's ROWS -- the mutation refresh seam. The box head never changes,
+so the div itself is never swapped (swapping it made htmx drop
+listeners for subsequently spliced levels); expansion state above the
+mutated rows now survives mutations, which is the truer v4 story.")
+
+;; ---- 5. RAIL TREES (v4: ONE tree renderer, N roots) ----
+;; borge/filmstrip.borg rail-trees-v4: a tree is a GEOMETRY RULE over
+;; controlboxes, not a third primitive. A node row is an acme tag-line:
+;; leading fold word (its own hitbox), LABEL word (open-or-focus via
+;; POST /filmstrip/open), trailing VERB words (mutation POSTs). The
+;; host supplies EVERYTHING tree-shaped: filmstrip/tree-roots is a list
+;; of (id title levelfn) where levelfn: path -> list of node dicts
+;; (label kind node open verbs kids). The lib renders ONE LEVEL per
+;; response, EXCEPT where the host pre-walked a small subtree (the
+;; optional kids field renders inline with no pull attrs -- the
+;; threshold is host policy, never lib state); expansion state is
+;; NATIVE <details> DOM state -- splice never swap; the server never
+;; knows which nodes are open.
+(define filmstrip/tree-roots
+  (lambda () (list))
+  "Host seam: list of (id title levelfn). A levelfn takes a node path
+string (\"\" = the root level) and answers a list of node dicts:
+(label kind node open verbs kids) -- kind dir|leaf, node the lazy-kids
+key, open a route string or empty (label verb, open-or-focus), verbs a
+list of (word route vals-json) mutation words, kids an OPTIONAL JSON
+string of a pre-walked child level (eager dir: fold pulls nothing),
+expand the OPTIONAL default-open seed (\"true\" renders the <details>
+open -- pair it WITH kids: a parsed-open dir never fires its
+\"toggle once\" pull).
+Hosts redefine; default empty (a rootless shell renders no rail trees).")
+
+(define filmstrip/url-dec
+  (lambda (s)
+    (filmstrip/url-dec-go s 0 ""))
+  "Inverse of filmstrip/url-enc for the SAME six escapees (unknown %xx
+passes through verbatim as %xx -- never throw inside a renderer).")
+
+(define filmstrip/url-dec-ch
+  (lambda (hex)
+    (if (string-eq hex "20") " "
+    (if (string-eq hex "25") "%"
+    (if (string-eq hex "3F") "?"
+    (if (string-eq hex "26") "&"
+    (if (string-eq hex "23") "#"
+    (if (string-eq hex "2B") "+"
+    (string-append "%" hex))))))))
+  "One filmstrip/url-dec escapee, or verbatim %xx passthrough.")
+
+(define filmstrip/url-dec-go
+  (lambda (s i acc)
+    (if (>= i (string-length s))
+        acc
+        (if (string-eq (substring s i 1) "%")
+            (if (< (+ i 3) (string-length s))
+                (filmstrip/url-dec-go s (+ i 3)
+                  (string-append acc
+                    (filmstrip/url-dec-ch (substring s (+ i 1) 2))))
+                (filmstrip/url-dec-go s (+ i 1)
+                  (string-append acc (substring s i 1))))
+            (filmstrip/url-dec-go s (+ i 1)
+              (string-append acc (substring s i 1))))))
+  "filmstrip/url-dec's accumulator walk (named define, not letrec).")
+
+(define filmstrip/url-enc
+  (lambda (s)
+    (if (or (string-contains? s "%")
+            (string-contains? s " ")
+            (string-contains? s "?")
+            (string-contains? s "&")
+            (string-contains? s "#")
+            (string-contains? s "+"))
+        (filmstrip/url-enc-go s 0 "")
+        s))
+  "Minimal percent-encoding for a tree node path riding a query param
+(same six escapees filmstrip/url-dec inverts; everything else passes).
+FAST PATH: a per-char Nopales walk costs ~10 steps/char, which the
+eager trees multiplied into whole budget levels; the OCaml
+string-contains? probes settle the no-escapee case in one prim and
+the walk only runs when an escapee is present.")
+
+(define filmstrip/url-enc-ch
+  (lambda (c)
+    (if (string-eq c "%") "%25"
+    (if (string-eq c " ") "%20"
+    (if (string-eq c "?") "%3F"
+    (if (string-eq c "&") "%26"
+    (if (string-eq c "#") "%23"
+    (if (string-eq c "+") "%2B" c)))))))
+  "One char of filmstrip/url-enc: the six escapees, else identity.")
+
+(define filmstrip/url-enc-go
+  (lambda (s i acc)
+    (if (>= i (string-length s))
+        acc
+        (filmstrip/url-enc-go s (+ i 1)
+          (string-append acc
+            (filmstrip/url-enc-ch (substring s i 1))))))
+  "filmstrip/url-enc's accumulator walk (named define, not letrec).")
+
+(define filmstrip/verb-hint
+  (lambda
+    (w)
+    (if
+      (string-eq w "focus")
+      "focus this pane"
+      (if
+        (string-eq w "pin")
+        "pin to the rail (dock; body stays live)"
+        (if
+          (string-eq w "unpin")
+          "unpin (back to the main strip)"
+          (if
+            (string-eq w "width")
+            "width: cycle third / half / full"
+            (if
+              (string-eq w "close")
+              "close: shelve the pane (restore it from the shelf)"
+              (if
+                (string-eq w "restore")
+                "restore from the shelf"
+                (if
+                  (string-eq w "destroy")
+                  "destroy the pane for good"
+                  (if
+                    (string-eq w "switch")
+                    "switch this desktop"
+                    (if (string-eq w "collapse") "fold everything back" w))))))))))
+  "The TOOLTIP text for a verb word (title attr). A glyph is not\nself-explanatory -- every action button carries its words here and its\nword in aria-label/data-verb, so the glyph is purely visual chrome.")
 
 (define filmstrip/width
   (lambda
@@ -2465,6 +2643,10 @@ row (niri singling as declared state).")
 (define filmstrip/widths
   (list "third" "half" "full"))
 
+(define filmstrip/winbox-oob
+  (lambda () "")
+  "OOB payload re-rendering the windows controlbox after\nclose/restore/destroy (a pane leaving or rejoining the live set\nchanges its rows). Default empty -- the plain habitat shell has no\nwindows rail yet; glochid redefines it to swap its #fs-winbox rows.")
+
 (define filmstrip/ws-cascade
   (lambda
     (fields)
@@ -2491,6 +2673,16 @@ row (niri singling as declared state).")
         "focus"
         "content:-1")))
   "Empty workspace fields: no crumbs, no panes, no focus.")
+
+(define filmstrip/ws-desktop
+  (lambda ()
+    (let
+      ((v (dict-get (filmstrip/ws-fields) "desktop")))
+      (if (null? v) 0 (parse-int (as-str v)))))
+  "Current desktop from the workspace row's desktop field (0 when
+unset — hosts that don't model desktops ride 0). Read through THIS
+lib's own ws-fields seam, the same read the habitat shell's deskt
+wrapper does; the lib never touches host pane-row fields.")
 
 (define filmstrip/ws-fields
   (lambda
@@ -2546,463 +2738,77 @@ row (niri singling as declared state).")
 (define filmstrip/ws-type
   "filmstrip-ws")
 
-;; ---- 5. RAIL TREES (v4: ONE tree renderer, N roots) ----
-;; borge/filmstrip.borg rail-trees-v4: a tree is a GEOMETRY RULE over
-;; controlboxes, not a third primitive. A node row is an acme tag-line:
-;; leading fold word (its own hitbox), LABEL word (open-or-focus via
-;; POST /filmstrip/open), trailing VERB words (mutation POSTs). The
-;; host supplies EVERYTHING tree-shaped: filmstrip/tree-roots is a list
-;; of (id title levelfn) where levelfn: path -> list of node dicts
-;; (label kind node open verbs kids). The lib renders ONE LEVEL per
-;; response, EXCEPT where the host pre-walked a small subtree (the
-;; optional kids field renders inline with no pull attrs -- the
-;; threshold is host policy, never lib state); expansion state is
-;; NATIVE <details> DOM state -- splice never swap; the server never
-;; knows which nodes are open.
-(define filmstrip/tree-roots
-  (lambda () (list))
-  "Host seam: list of (id title levelfn). A levelfn takes a node path
-string (\"\" = the root level) and answers a list of node dicts:
-(label kind node open verbs kids) -- kind dir|leaf, node the lazy-kids
-key, open a route string or empty (label verb, open-or-focus), verbs a
-list of (word route vals-json) mutation words, kids an OPTIONAL JSON
-string of a pre-walked child level (eager dir: fold pulls nothing),
-expand the OPTIONAL default-open seed (\"true\" renders the <details>
-open -- pair it WITH kids: a parsed-open dir never fires its
-\"toggle once\" pull).
-Hosts redefine; default empty (a rootless shell renders no rail trees).")
+(define notes/browse
+  (lambda
+    (path)
+    (filmstrip/browse-walk
+      notes/browse-headings
+      (list (notes/browse-docs))
+      path))
+  "notes cascade: docs -> outline headings. Heading entries leaf to\n/notes?slug=<doc> (headings have no route of their own).")
 
-(define filmstrip/url-enc-ch
-  (lambda (c)
-    (if (string-eq c "%") "%25"
-    (if (string-eq c " ") "%20"
-    (if (string-eq c "?") "%3F"
-    (if (string-eq c "&") "%26"
-    (if (string-eq c "#") "%23"
-    (if (string-eq c "+") "%2B" c)))))))
-  "One char of filmstrip/url-enc: the six escapees, else identity.")
+(define notes/browse-docs
+  (lambda
+    ()
+    (list/map
+      (lambda (r) (list (nth r 2) (nth r 3)))
+      (notes/list-light)))
+  "Column of docs: (title . slug).")
 
-(define filmstrip/url-enc-go
-  (lambda (s i acc)
-    (if (>= i (string-length s))
-        acc
-        (filmstrip/url-enc-go s (+ i 1)
-          (string-append acc
-            (filmstrip/url-enc-ch (substring s i 1))))))
-  "filmstrip/url-enc's accumulator walk (named define, not letrec).")
-
-(define filmstrip/url-enc
-  (lambda (s)
-    (if (or (string-contains? s "%")
-            (string-contains? s " ")
-            (string-contains? s "?")
-            (string-contains? s "&")
-            (string-contains? s "#")
-            (string-contains? s "+"))
-        (filmstrip/url-enc-go s 0 "")
-        s))
-  "Minimal percent-encoding for a tree node path riding a query param
-(same six escapees filmstrip/url-dec inverts; everything else passes).
-FAST PATH: a per-char Nopales walk costs ~10 steps/char, which the
-eager trees multiplied into whole budget levels; the OCaml
-string-contains? probes settle the no-escapee case in one prim and
-the walk only runs when an escapee is present.")
-
-(define filmstrip/url-dec-ch
-  (lambda (hex)
-    (if (string-eq hex "20") " "
-    (if (string-eq hex "25") "%"
-    (if (string-eq hex "3F") "?"
-    (if (string-eq hex "26") "&"
-    (if (string-eq hex "23") "#"
-    (if (string-eq hex "2B") "+"
-    (string-append "%" hex))))))))
-  "One filmstrip/url-dec escapee, or verbatim %xx passthrough.")
-
-(define filmstrip/url-dec-go
-  (lambda (s i acc)
-    (if (>= i (string-length s))
-        acc
-        (if (string-eq (substring s i 1) "%")
-            (if (< (+ i 3) (string-length s))
-                (filmstrip/url-dec-go s (+ i 3)
-                  (string-append acc
-                    (filmstrip/url-dec-ch (substring s (+ i 1) 2))))
-                (filmstrip/url-dec-go s (+ i 1)
-                  (string-append acc (substring s i 1))))
-            (filmstrip/url-dec-go s (+ i 1)
-              (string-append acc (substring s i 1))))))
-  "filmstrip/url-dec's accumulator walk (named define, not letrec).")
-
-(define filmstrip/url-dec
-  (lambda (s)
-    (filmstrip/url-dec-go s 0 ""))
-  "Inverse of filmstrip/url-enc for the SAME six escapees (unknown %xx
-passes through verbatim as %xx -- never throw inside a renderer).")
-
-(define filmstrip/tree-find-root
-  (lambda (roots id)
-    (if (null? roots)
+(define notes/browse-headings
+  (lambda
+    (slug)
+    (let
+      ((n (notes/get slug)))
+      (if
+        (null? n)
         (list)
-        (if (string-eq (as-str (car (car roots))) id)
-            (car roots)
-            (filmstrip/tree-find-root (cdr roots) id))))
-  "The root row (id title levelfn) matching id, or the empty list.")
+        (list/map
+          (lambda
+            (kid)
+            (list
+              (as-str (outline/body kid))
+              (string-append "/notes?slug=" slug)))
+          (outline/kids (notes/get-outline n))))))
+  "Top-level outline headings of one doc, each a leaf to the doc view.")
 
-(define filmstrip/tree-node-li
-  (lambda (root-id n0)
-    (let* ((n (if (string? n0) (json-parse n0) n0))
-      ;; json-values-alist: the node rides as an ALIST (parsed eager
-      ;; kids) or legacy JSON text — dict-get answers both. Structured
-      ;; fields (verbs, kids) arrive as native lists on alists and as
-      ;; JSON text on legacy rows.
-      (label (as-str (dict-get n "label")))
-      (kind (as-str (dict-get n "kind")))
-      (path (as-str (dict-get n "node")))
-      (open (let ((o (dict-get n "open"))) (if (null? o) "" (as-str o))))
-      (verbs (let ((raw (dict-get n "verbs")))
-               (if (null? raw)
-                   (list)
-                   (if (string? raw)
-                       (if (string-eq raw "") (list) (json-parse raw))
-                       raw))))
-        (is-dir (string-eq kind "dir"))
-        ;; DEFAULT-EXPANDED dirs (host policy, not lib state): a node
-        ;; carrying "expand":"true" renders its <details> already OPEN.
-        ;; The DOM-state rule still holds -- this seeds the state, the
-        ;; operator folds it like any other row; the mutation OOB
-        ;; re-render re-seeds it. expand RIDES kids: a parsed-open
-        ;; details never fires "toggle once", so expand WITHOUT kids
-        ;; must ALSO render eager (an empty kids ul, no pull attrs) --
-        ;; otherwise an expanded-but-empty dir carries a lazy pull that
-        ;; can never fire (the desktop tree's empty desks did exactly
-        ;; this: open="open" + hx-get="toggle once").
-        (expanded (let ((e (dict-get n "expand")))
-                    (and is-dir (not (null? e))
-                         (string-eq (as-str e) "true"))))
-        ;; EAGER MODE (rail-trees-v4 amendment): a dir node MAY carry
-        ;; "kids" -- a JSON string of its walked child level. The fold
-        ;; then needs NO toggle-once pull (pure <details>, zero XHRs);
-        ;; a non-expand dir with absent/empty kids keeps the lazy level
-        ;; GET exactly as v4 shipped it. Whether to pre-walk is the
-        ;; HOST's threshold decision -- the lib only renders what it is
-        ;; handed.
-        (kids (let ((k (dict-get n "kids")))
-                (if (null? k)
-                    ""
-                    (if (string? k) k (json-emit k)))))
-        (eager (and is-dir (or expanded (not (string-eq kids "")))))
+(define todo/browse
+  (lambda
+    (path)
+    (filmstrip/browse-walk
+      todo/browse-items
+      (list (todo/browse-lists))
+      path))
+  "todo cascade: lists -> items. Item entries leaf to /todos?id=<item>\n(the only granularity /todos serves; lists drill to the item column).")
 
-        (label-word
-          (if (string-eq open "")
-              (html/span (html/attr "class" "fs-tr-open") (html/text label))
-              (html/tag
-                "button"
-                (html/attrs
-                  (list
-                    (html/attr "class" "fs-btn fs-applink fs-tr-open")
-                    (html/attr "title" (string-append "open-or-focus " label))
-                    ;; EXPLICIT click — htmx triggers inherit: without a
-                    ;; declared trigger this button (and every verb
-                    ;; button) inherits "toggle once" from any ancestor
-                    ;; lazy <details hx-trigger="toggle once"> (the
-                    ;; shelf), and a button never fires toggle => dead
-                    ;; rows. The compat ext turns implicitInheritance ON
-                    ;; (htmx-2-compat.min.js), so declared triggers are
-                    ;; mandatory on all tree buttons.
-                    (html/attr "hx-trigger" "click")
-                    (html/attr "hx-post" "/filmstrip/open")
-                    (html/attr "hx-vals"
-                      ;; RAW route, not url-enc'd: vals ride the POST
-                      ;; body (htmx json-parses the attr), and
-                      ;; filmstrip/open route-matches via split-query --
-                      ;; an encoded %3F reads as literal text there and
-                      ;; breaks every query-bearing route (the fs face's
-                      ;; /code?path=... panes could not open from tree
-                      ;; labels under the v4 draft). url-enc stays for
-                      ;; GET URLs (hx-get querystrings), where ?& must
-                      ;; not delimit.
-                      (string-append "{\"route\":\"" open "\"}"))
-                    (html/attr "hx-target" "#fs-sink")
-                    (html/attr "hx-swap" "innerHTML")))
-                (html/text label))))
-        (verb-text
-          (lambda (v) (filmstrip/verb-hint (as-str (car v)))))
-        (verb-glyph
-          (lambda (v)
-            (let ((g (if (< (count v) 4) "" (as-str (car (cdr (cdr (cdr v))))))))
-              (if (string-eq g "")
-                  (as-str (car v))
-                  g))))
-        (verb-glyph-or
-          (lambda (v)
-            (let ((g (verb-glyph v)))
-              (if (string-eq g (as-str (car v)))
-                  (filmstrip/act-glyph (as-str (car v)))
-                  g))))
-        (verb-vals
-          (lambda (v)
-            ;; The vals element rides the row array STRUCTURED (the
-            ;; json-emit {/[ heuristic keeps the vals object intact), so
-            ;; under json-values-alist json-parse hands back an ALIST —
-            ;; re-emit it as the hx-vals JSON text. Legacy rows carry the
-            ;; text directly.
-            (let ((raw (car (cdr (cdr v)))))
-              (if (string? raw) raw (json-emit raw)))))
-        (verb-btn
-          (lambda (v ?act)
-            (html/tag
-              "button"
-              (html/attrs
-                (list
-                  (html/attr
-                    "class"
-                    (if ?act "fs-btn fs-act" "fs-btn fs-tr-verb"))
-                  (html/attr "title" (verb-text v))
-                  (html/attr "aria-label" (as-str (car v)))
-                  (html/attr "data-verb" (as-str (car v)))
-                  ;; EXPLICIT click — see the tree-label button note:
-                  ;; inherited "toggle once" from a lazy ancestor kills
-                  ;; the verb (the shelf subtree bug).
-                  (html/attr "hx-trigger" "click")
-                  (html/attr "hx-post" (as-str (car (cdr v))))
-                  (html/attr "hx-vals" (verb-vals v))
-                  (html/attr "hx-target" "#fs-sink")
-                  (html/attr "hx-swap" "innerHTML")))
-              (html/text (verb-glyph-or v)))))
-        (verb-word (lambda (v) (verb-btn v #f)))
-        (verb-act (lambda (v) (verb-btn v #t)))
-        (action-li
-          (lambda (v)
-            (html/tag
-              "li"
-              (html/attr "class" "fs-tr-item fs-tr-actrow")
-              (verb-act v))))
-        ;; The actions fold is the NARROW-ONLY demotion of the row's
-        ;; glyphs: a PLAIN ul child of the node's own <details> (no
-        ;; nested summary, no duplicate row) -- CSS hides it at rail
-        ;; width and reveals it past the breakpoint, where the inline
-        ;; .fs-tr-verb glyphs are hidden instead.
-        (actions-fold
-          (if (null? verbs)
-              ""
-              (html/tag
-                "ul"
-                (html/attr "class" "fs-tr-acts-ul")
-                (html/join (list/map action-li verbs)))))
-        (details-attrs
-          (append
-            (list (html/attr "class" "fs-tr-node"))
-            (if expanded (list (html/attr "open" "open")) (list))
-            (if (or (not is-dir) eager)
-                (list)
-                (list
-                  (html/attr "hx-get"
-                    (string-append "/filmstrip/tree?root=" root-id
-                      "&node=" (filmstrip/url-enc path)))
-                  (html/attr "hx-trigger" "toggle once")
-                  (html/attr "hx-target" "find .fs-tr-kids")
-                  (html/attr "hx-swap" "innerHTML")
-                  ;; BARRIER — the lazy pull's attrs must stay on THIS
-                  ;; node only. htmx's implicit inheritance (forced ON
-                  ;; by htmx-2-compat.min.js) otherwise hands hx-get AND
-                  ;; hx-trigger down to every descendant button of the
-                  ;; pulled level: a leaf verb then fires the DETAILS'
-                  ;; pull request instead of its own POST (a button
-                  ;; never fires "toggle", so the shelf subtree's
-                  ;; restore/destroy/open rows were dead). Nested lazy
-                  ;; dirs keep their own barrier per node.
-                  (html/attr "hx-disinherit" "hx-get hx-trigger")))))
-        (row-els
-          (list
-            (html/span (html/attr "class" "fs-tr-fold") (html/text "▸"))
-            label-word
-            (html/join (list/map verb-word verbs)))))
-      (html/tag
-        "li"
-        (html/attrs
-          (list
-            (html/attr "class" "fs-tr-item")
-            (html/attr "data-node" path)))
-        (html/tag
-          "details"
-          (html/attrs details-attrs)
-          (html/join
-            (append
-              (list
-                (html/tag
-                  "summary"
-                  (html/attr "class" "fs-tr-row")
-                  (html/join row-els)))
-              (if (not is-dir)
-                  (list)
-                  (list
-                    (html/tag
-                      "ul"
-                      (html/attr "class" "fs-tr-kids")
-                      (if
-                        eager
-                        (filmstrip/tree-level root-id
-                          (if (string-eq kids "") (list) (json-parse kids)))
-                        ""))))
-              (list actions-fold)))))))
-  "One node row: li[data-node] > details > summary(fold arrow + label\n+ verb GLYPHS) [+ kids ul for dirs: EAGER (pre-walked level rendered\ninline, no pull attrs) when the node carries a non-empty kids JSON\nstring, else the lazy toggle-once level GET] [+ a narrow-only actions\nul when the node carries verbs -- the SAME glyphs as children, never\na second summary or a duplicate list]. Leaf details are fold-only.\nZero JS beyond the htmx attrs.")
-
-(define filmstrip/tree-level
-  (lambda (root-id nodes)
-    (html/join (list/map (lambda (n) (filmstrip/tree-node-li root-id n)) nodes)))
-  "One LEVEL of a tree as a joined li fragment (the splice payload).")
-
-(define filmstrip/tree-lazy
-  (lambda (nodes)
+(define todo/browse-items
+  (lambda
+    (list-id)
     (list/map
-      (lambda (n)
-        (let ((e (dict-get n "expand")))
-          (if (and (not (null? e)) (string-eq (as-str e) "true"))
-              n
-              (dict-set n "kids" ""))))
-      nodes))
-  "Boot-lazy projection of a level: eager kids are EMPTIED so the head
-render stays level-0-only (the request budget is a whole shared shell
--- an eager head over the fs made the boot shell bust the 400k step
-ceiling) -- EXCEPT on expand-marked nodes, whose eager kids ride the
-head (and the mutation OOB) render: default-open dirs carry their
-children by policy (host threshold; a small tree only). The DOM rule
-still holds at boot for everything else: folding pulls the level
-fresh via toggle-once, and the SPLICE renders whatever eager kids the
-host chose (a GET answers a small subtree in one response). Pane faces
-render the level directly and honor kids -- one template, two
-materialization points. Node dicts ride JSON strings (v4 make-note:
-dict-set* refuses non-strings), so dict-set applies cleanly.")
+      (lambda
+        (row)
+        (let
+          ((f (cdr row)))
+          (list
+            (as-str (dict-get f "title"))
+            (string-append "/todos?id=" (as-str (car row))))))
+      (list/filter
+        (lambda
+          (row)
+          (string-eq
+            (as-str (dict-get (cdr row) "list_id"))
+            list-id))
+        (todo/item/all))))
+  "Items of one list; each entry is a leaf to the item's /todos detail.")
 
-(define filmstrip/tree-closed
-  (lambda (nodes)
+(define todo/browse-lists
+  (lambda
+    ()
     (list/map
-      (lambda (n)
-        (dict-set (dict-set n "kids" "") "expand" ""))
-      nodes))
-  "The FULLY-CLOSED projection (collapse-all only): kids emptied AND
-expand cleared, so the pressure valve folds the default-open dirs too
--- the one sanctioned way the server touches expansion state (v4).
-Everything else in the shell keeps tree-lazy semantics: expand nodes
-arrive open with their eager kids.")
-
-(define filmstrip/tree-box
-  (lambda (root)
-    (let*
-      ((id (as-str (car root)))
-        (title (as-str (car (cdr root))))
-        (levelfn (car (cdr (cdr root)))))
-      (html/tag
-        "div"
-        (html/attrs
-          (list
-            (html/attr "id" (string-append "fs-tree-" id))
-            (html/attr "class" "fs-cbox fs-rmode")
-            (html/attr "data-rmode" id)))
-        (html/join
-          (list
-            (html/span (html/attr "class" "fs-title") (html/text title))
-            (html/tag
-              "button"
-              (html/attrs
-                (list
-                  (html/attr "class" "fs-btn fs-act")
-                  (html/attr "title" "fold everything back (one POST; state is DOM)")
-                  (html/attr "aria-label" "collapse all")
-                  (html/attr "data-verb" "collapse")
-                  (html/attr "hx-post" "/filmstrip/tree/collapse")
-                  (html/attr "hx-vals" (string-append "{\"root\":\"" id "\"}"))
-                  (html/attr "hx-target" "#fs-sink")
-                  (html/attr "hx-swap" "innerHTML")))
-              (html/text (filmstrip/act-glyph "collapse")))
-            (html/tag
-              "ul"
-              (html/attrs
-                (list
-                  (html/attr "id" (string-append "fs-tree-" id "-root"))
-                  (html/attr "class" "fs-tr-kids fs-tr-root")))
-              (filmstrip/tree-level id (filmstrip/tree-lazy (levelfn "")))))))))
-  "One rail tree controlbox: title + collapse-all word + level 0. All
-geometry from classes; the level-0 UL id (fs-tree-<id>-root) is the
-mutation OOB seam -- the head never changes, so only rows re-render.")
-
-(define filmstrip/tree-oob
-  (lambda (root)
-    (let*
-      ((id (as-str (car root)))
-        (levelfn (car (cdr (cdr root)))))
-      (html/tag
-        "ul"
-        (html/attrs
-          (list
-            (html/attr "id" (string-append "fs-tree-" id "-root"))
-            (html/attr "class" "fs-tr-kids fs-tr-root")
-            (html/attr "hx-swap-oob" "innerHTML")))
-        (filmstrip/tree-level id (filmstrip/tree-lazy (levelfn ""))))))
-  "OOB (hx-swap-oob innerHTML on the level-0 UL) re-render of one
-tree's ROWS -- the mutation refresh seam. The box head never changes,
-so the div itself is never swapped (swapping it made htmx drop
-listeners for subsequently spliced levels); expansion state above the
-mutated rows now survives mutations, which is the truer v4 story.")
-
-(define filmstrip/tree
-  (lambda ()
-    (let*
-      ((id (as-str (request-param "root")))
-        (node (filmstrip/url-dec (as-str (request-param "node"))))
-        (root (filmstrip/tree-find-root (filmstrip/tree-roots) id)))
-      (if (null? root)
-          (render-html (filmstrip/oob-msg (string-append "filmstrip: no tree root " id)))
-          (render-html
-            (filmstrip/tree-level id ((car (cdr (cdr root))) node))))))
-  "GET /filmstrip/tree?root=<id>&node=<path>: ONE level of the named\nroot, as the li splice payload (native 200 fragment; a missing root\nanswers the status line only).")
-
-(define filmstrip/tree-collapse
-  (lambda ()
-    (let*
-      ((id (as-str (request-param "root")))
-        (root (filmstrip/tree-find-root (filmstrip/tree-roots) id)))
-      (if (null? root)
-          (render-html (filmstrip/oob-msg (string-append "filmstrip: no tree root " id)))
-          (render-html
-            (html/join
-              (list
-                (filmstrip/oob-msg "")
-                (html/tag
-                  "ul"
-                  (html/attrs
-                    (list
-                      (html/attr "id" (string-append "fs-tree-" id "-root"))
-                      (html/attr "class" "fs-tr-kids fs-tr-root")
-                      (html/attr "hx-swap-oob" "innerHTML")))
-                  (filmstrip/tree-level id
-                    (filmstrip/tree-closed
-                      ((car (cdr (cdr root))) ""))))))))))
-  "POST /filmstrip/tree/collapse: the DOM pressure valve -- one POST
-OOB-swaps the box back to head + level 0, FULLY CLOSED (expand seeds
-cleared too -- the only server render where default-open dirs fold;
-the tree-closed projection, in the same ul OOB seam tree-oob uses).")
-
-;; tree css appended to the strip sheet: rows are tag-line rows (fold\nword is its own hitbox), k indent per level, verbs fade on narrow.
-
-;; ---- route bindings (vault, additive at load/boot-seed) ----
-;; filmstrip.borg filmstrip-shell: the shell is the DEFAULT habitat
-;; view, so a fresh habitat (boot seed loads libs/filmstrip onto
-;; system/main additively) must come up with its routes live — no
-;; live-only route pins. Handlers stay PRIVATE (login required): the
-;; shell is never an anonymous surface.
-(route "/filmstrip" "filmstrip/page")
-(route "/filmstrip/open" "filmstrip/open")
-(route "/filmstrip/close" "filmstrip/close")
-(route "/filmstrip/cascade" "filmstrip/cascade")
-(route "/filmstrip/focus" "filmstrip/focus")
-(route "/filmstrip/focus-id" "filmstrip/focus-id")
-(route "/filmstrip/move" "filmstrip/move")
-(route "/filmstrip/move-to" "filmstrip/move-to")
-(route "/filmstrip/width" "filmstrip/width")
-(route "/filmstrip/pin" "filmstrip/pin")
-(route "/filmstrip/restore" "filmstrip/restore")
-(route "/filmstrip/single" "filmstrip/single")
-(route "/filmstrip/tree" "filmstrip/tree")
-(route "/filmstrip/tree/collapse" "filmstrip/tree-collapse")
+      (lambda
+        (row)
+        (let
+          ((f (cdr row)))
+          (list (as-str (dict-get f "title")) (as-str (car row)))))
+      (todo/list/all)))
+  "Column of todo lists: (title . list-id).")

@@ -116,5 +116,3 @@
                 (html/a
                   "/dabar?book=John&chapter=3&verse=16"
                   "Dabar study")))))))))
-
-(route "/strongs" "strongs/page")

@@ -10,12 +10,12 @@
 (define html/attr
   (lambda
     (k v)
-    "Render one HTML attribute as k="v", escaping v."
     (string-append
       (as-str k)
       "=\""
       (html-escape (as-str v))
-      "\"")))
+      "\""))
+  "One HTML attribute k=\"escaped-v\".")
 
 (define html/attrs
   (lambda
@@ -30,6 +30,57 @@
           (string-append acc " " (as-str a))))
       ""
       xs)))
+
+;; O(1) membership for the render hot path (2026-09-19 obituary: the
+;; recursive list walk cost ~233k interpreter steps per glochid shell
+;; render — 58% of the whole render, blowing the 400k request budget).
+;; html/block-lookup is the SAME one-time fold, but DELAYED
+;; (lisp-interpreter.lazy-env-thunks): the body binds without
+;; evaluating, so define time never calls the html/block-tags sibling
+;; (the seed-sources no-define-time gate — a warm additive skip would
+;; otherwise raise unbound); first (force) per session memoizes the
+;; dict, so the render hot path still pays the fold ONCE. dict-get on
+;; it returns the tag or () — same exact-lowercase-match semantics,
+;; same truthy value, and the walk stays for anything that calls
+;; block-member? raw.
+(define html/block-lookup
+  (delay
+    (list/foldl
+      (lambda (acc name) (dict-set acc name name))
+      "{}"
+      html/block-tags)))
+
+(define html/block-member?
+  (lambda
+    (n tags)
+    "Internal: the first block tag equal to n, else ()."
+    (if
+      (null? tags)
+      ()
+      (if
+        (string-eq n (car tags))
+        n
+        (html/block-member? n (cdr tags))))))
+
+(define html/block-tag?
+  (lambda
+    (name)
+    "True when name is in the block-level tag set (exact lowercase match)."
+    (dict-get (force html/block-lookup) (as-str name))))
+
+;; --- block-level whitespace (product-experience.html-builders) ---
+;; Mirrors libs/std (the live authority): block-level elements get ONE
+;; newline before the open tag and ONE after the close tag; newlines sit
+;; only OUTSIDE tag boundaries, so nothing lands inside
+;; pre/textarea/script/style content and rendering is unchanged.
+(define html/block-tags
+  (list
+    "div" "p" "h1" "h2" "h3" "h4" "h5" "h6"
+    "ul" "ol" "li" "dl" "dt" "dd"
+    "table" "thead" "tbody" "tfoot" "tr"
+    "section" "header" "footer" "main" "nav" "article"
+    "form" "fieldset" "blockquote" "figure" "figcaption" "aside"
+    "pre" "hr"))
 
 (define html/button
   (lambda (attrs body) "A button tag with the given attrs and body." (html/tag "button" attrs body)))
@@ -148,56 +199,14 @@
 (define html/strong
   (lambda (body) "A strong tag with escaped text body." (html/tag "strong" "" (html/text body))))
 
-;; --- block-level whitespace (product-experience.html-builders) ---
-;; Mirrors libs/std (the live authority): block-level elements get ONE
-;; newline before the open tag and ONE after the close tag; newlines sit
-;; only OUTSIDE tag boundaries, so nothing lands inside
-;; pre/textarea/script/style content and rendering is unchanged.
-(define html/block-tags
-  (list
-    "div" "p" "h1" "h2" "h3" "h4" "h5" "h6"
-    "ul" "ol" "li" "dl" "dt" "dd"
-    "table" "thead" "tbody" "tfoot" "tr"
-    "section" "header" "footer" "main" "nav" "article"
-    "form" "fieldset" "blockquote" "figure" "figcaption" "aside"
-    "pre" "hr"))
-
-(define html/block-member?
+(define html/tag
   (lambda
-    (n tags)
-    "Internal: the first block tag equal to n, else ()."
-    (if
-      (null? tags)
-      ()
-      (if
-        (string-eq n (car tags))
-        n
-        (html/block-member? n (cdr tags))))))
-
-;; O(1) membership for the render hot path (2026-09-19 obituary: the
-;; recursive list walk cost ~233k interpreter steps per glochid shell
-;; render — 58% of the whole render, blowing the 400k request budget).
-;; html/block-lookup is the SAME one-time fold, but DELAYED
-;; (lisp-interpreter.lazy-env-thunks): the body binds without
-;; evaluating, so define time never calls the html/block-tags sibling
-;; (the seed-sources no-define-time gate — a warm additive skip would
-;; otherwise raise unbound); first (force) per session memoizes the
-;; dict, so the render hot path still pays the fold ONCE. dict-get on
-;; it returns the tag or () — same exact-lowercase-match semantics,
-;; same truthy value, and the walk stays for anything that calls
-;; block-member? raw.
-(define html/block-lookup
-  (delay
-    (list/foldl
-      (lambda (acc name) (dict-set acc name name))
-      "{}"
-      html/block-tags)))
-
-(define html/block-tag?
-  (lambda
-    (name)
-    "True when name is in the block-level tag set (exact lowercase match)."
-    (dict-get (force html/block-lookup) (as-str name))))
+    (name attrs body)
+    "Wrap body in an opening/closing tag, adding attrs when non-empty. Block-level names emit one newline around the open/close boundary — never inside the element, so pre/textarea/script/style content is untouched."
+    (html/tag-emit
+      (as-str name)
+      (as-str attrs)
+      (as-str body))))
 
 (define html/tag-core
   (lambda
@@ -216,15 +225,6 @@
       (html/block-tag? n)
       (string-append "\n" (html/tag-core n a b) "\n")
       (html/tag-core n a b))))
-
-(define html/tag
-  (lambda
-    (name attrs body)
-    "Wrap body in an opening/closing tag, adding attrs when non-empty. Block-level names emit one newline around the open/close boundary — never inside the element, so pre/textarea/script/style content is untouched."
-    (html/tag-emit
-      (as-str name)
-      (as-str attrs)
-      (as-str body))))
 
 (define html/text
   (lambda (s) "HTML-escapes the string s." (html-escape s)))
@@ -273,4 +273,3 @@
         ""
         (html/join
           (list (html/h1 (html/text title)) (html/div "" body)))))))
-

@@ -1,4 +1,4 @@
-;; package roam -- exported from live branch admin/personal
+;; package roam -- exported from live branch system/main
 ;; Sync: scripts/pp_sync.py pull|push
 
 (define roam/at-open?
@@ -392,4 +392,3 @@
           (string-trim
             (substring s (+ i 1) (- (string-length s) (+ i 1)))))
         (roam/split-label-at s (+ i 1))))))
-

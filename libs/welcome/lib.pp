@@ -1,8 +1,4 @@
 ;; package welcome -- exported from live branch system/main
-
-(define welcome/blank?
-  (lambda (s) "True if trimmed s is empty." (string-eq (string-trim (as-str s)) "")))
-
 ;; Sync: scripts/pp_sync.py pull|push
 
 (define welcome/background
@@ -56,7 +52,10 @@
             (list
               (html/a "/roadmap" (html/text "roadmap"))
               (html/text " · ")
-              (html/a "/welcome" (html/text "welcome")))))))))
+              (html/a "/welcome" (html/text "welcome")))))))));; package welcome -- exported from live branch system/main
+
+(define welcome/blank?
+  (lambda (s) "True if trimmed s is empty." (string-eq (string-trim (as-str s)) "")))
 
 (define welcome/book
   (lambda
@@ -513,10 +512,3 @@
               (html/a "/background" (html/text "background"))
               (html/text " · ")
               (html/a "/welcome" (html/text "welcome")))))))))
-
-;; Public release-face routes (hard-public in image/lib/http.ml).
-;; Must be public-route so anonymous GET/POST resolve the handlers.
-(public-route "/welcome" "welcome/page")
-(public-route "/background" "welcome/background")
-(public-route "/roadmap" "welcome/roadmap")
-(public-route "/guestbook" "welcome/guestbook")

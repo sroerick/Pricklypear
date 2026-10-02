@@ -322,4 +322,3 @@
       (or
         (bookmarks/starts-with? u "https://")
         (bookmarks/starts-with? u "http://")))))
-

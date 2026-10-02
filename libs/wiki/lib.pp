@@ -11,7 +11,6 @@
         (cdr ents)
         source-slug
         (wiki/apply-entity (car ents) source-slug touched)))))
-  "Apply each entity to the wiki, accumulating touched slugs."
 
 (define wiki/apply-entity
   (lambda
@@ -21,10 +20,7 @@
         (title (as-str (dict-get ent "title")))
         (body (as-str (dict-get ent "body")))
         (kind (as-str (dict-get ent "kind"))))
-      ;; let* (not parallel let): t's value references sibling s bound
-      ;; in the same group — parallel `let` evaluates bindings in the outer
-      ;; env, so s was unbound when title was empty (threw `unbound: s`).
-      (let*
+      (let
         ((s (if (string-eq slug "") (wiki/slugify title) slug))
           (t (if (string-eq title "") s title))
           (b
@@ -47,7 +43,6 @@
         (seq
           (wiki/upsert-page s t b k)
           (append touched (list s)))))))
-  "Apply one entity to the wiki: upsert the page and add its slug to touched."
 
 (define wiki/ask
   (lambda
@@ -55,10 +50,15 @@
     (let
       ((sid
         (agent-session-new
-          "You help maintain a personal knowledge wiki. Reply with plain text or JSON as asked. Do not call tools."
+          (ai/seed+verse-range
+            "You help maintain a personal knowledge wiki. Reply with plain text or JSON as asked. Do not call tools."
+            "Prov"
+            25
+            2
+            2)
           #f)))
-      (agent-say sid (as-str prompt)))))
-  "Ask the wiki agent a prompt; returns its text reply."
+      (agent-say sid (as-str prompt))))
+  "Ask the wiki agent a prompt; returns its text reply. Seed closes with Prov 25:2 (the glory of kings to search it out) via ai/seed+verse-range.")
 
 (define wiki/corpus-index
   (lambda
@@ -83,7 +83,6 @@
               "]])\\n"))))
       ""
       (notes/doc/index-list))))
-  "Markdown bullet index of note titles/kinds with [[slug]] links."
 
 (define wiki/default-schema
   (string-append
@@ -97,7 +96,6 @@
 
 (define wiki/events
   (lambda () (rows (quote wiki-event) 100)))
-  "Most recent wiki-event rows (up to 100)."
 
 (define wiki/extract-json
   (lambda
@@ -105,7 +103,6 @@
     (let
       ((t (as-str s)))
       (wiki/extract-json-scan t 0 () ()))))
-  "Extract the first balanced {...} JSON object from a string; \"{}\" when none."
 
 (define wiki/extract-json-scan
   (lambda
@@ -129,7 +126,6 @@
             (string-eq c "}")
             (wiki/extract-json-scan s (+ i 1) start i)
             (wiki/extract-json-scan s (+ i 1) start end)))))))
-  "Scan helper for extract-json; tracks brace start/end indices."
 
 (define wiki/ingest-from-source
   (lambda
@@ -175,7 +171,6 @@
                         (as-str (count touched))
                         " pages"))
                     (list src-slug touched raw)))))))))))
-  "Ingest a source text: create a source page, ask for a plan, apply entities; returns (source-slug touched raw)."
 
 (define wiki/ingest-prompt
   (lambda
@@ -193,7 +188,6 @@
       "{\"summary\":\"...\",\"entities\":[{\"slug\":\"...\",\"title\":\"...\","
       "\"body\":\"... with [[links]]\",\"kind\":\"entity|concept\"}]}\\n"
       "Create 1-5 entities/concepts. Bodies may include [[slug]] links.\\n")))
-  "Build the ingest prompt asking the agent for a JSON plan."
 
 (define wiki/lint
   (lambda
@@ -203,7 +197,6 @@
       (seq
         (wiki/log-event "lint" "wiki/lint" "" "lint pass")
         report))))
-  "Run a wiki lint pass via the agent; returns the report."
 
 (define wiki/lint-prompt
   (lambda
@@ -218,7 +211,6 @@
       "3. Contradictions or stale claims\\n"
       "4. Suggested new sources or questions\\n"
       "Be concise. Use bullet lists.\\n")))
-  "Build the lint prompt over the corpus index."
 
 (define wiki/log-event
   (lambda
@@ -238,15 +230,12 @@
           (wiki/now)
           "summary"
           (as-str summary))))))
-  "Create a wiki-event row recording kind, op, slug, timestamp and summary."
 
 (define wiki/now
   (lambda () (as-str (date-today))))
-  "Today's date as a string."
 
 (define wiki/parse-plan
   (lambda (text) (json-parse (wiki/extract-json text))))
-  "Parse the agent JSON plan text into a dict."
 
 (define wiki/plan-list
   (lambda
@@ -262,7 +251,6 @@
             (pair? parsed)
             parsed
             (if (null? parsed) (list) (list))))))))
-  "List value for a plan key (parsed); () when absent or empty."
 
 (define wiki/prune-events
   (lambda
@@ -288,7 +276,6 @@
                 n))))
         0
         (wiki/events)))))
-  "Delete wiki-event rows older than days (default 30); returns count deleted."
 
 (define wiki/query
   (lambda
@@ -308,7 +295,6 @@
               (string-length (as-str question))
               80)))
         answer))))
-  "Ask the wiki a question; logs a query event and returns the answer."
 
 (define wiki/query-prompt
   (lambda
@@ -322,7 +308,6 @@
       "\\n\\n"
       "Answer using the corpus. Cite pages as [[slug]]. "
       "If you create a synthesis, say so. Plain prose is fine.\\n")))
-  "Build a question prompt over the corpus index."
 
 (define wiki/schema
   (lambda
@@ -347,7 +332,6 @@
             "wiki")
           wiki/default-schema)
         (outline/body (notes/doc/outline n))))))
-  "The wiki schema outline text; seeds the default schema note if missing."
 
 (define wiki/slugify
   (lambda
@@ -365,7 +349,6 @@
             t
             0
             (if (< (string-length t) 32) (string-length t) 32)))))))
-  "Derive a wiki page slug from a title (truncated, w- prefix); unique fallback when empty."
 
 (define wiki/upsert-page
   (lambda
@@ -422,5 +405,3 @@
                 (update-field (quote note) (car row) "updated_by" "llm")
                 (update-field (quote note) (car row) "source_count" sc)
                 slug))))))))
-  "Create or update a wiki page by slug; returns the slug."
-

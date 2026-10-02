@@ -38,6 +38,25 @@
             (html/text title))
           (html/div (html/attr "class" "layout-card-body") body))))))
 
+
+(define layout/card-css
+  (lambda
+    ()
+    "Render the layout component stylesheet (extracted from ui/theme)."
+    (css/sheet
+      (list
+        (css/rule
+          ".card"
+          (list
+            "background"
+            "var(--panel)"
+            "border"
+            "2px solid #000"
+            "padding"
+            ".75rem"
+            "margin"
+            "0 0 .75rem"))))))
+
 (define layout/cards
   (lambda
     (card-htmls)
@@ -45,6 +64,41 @@
     (html/div
       (html/attr "class" "layout-cards")
       (html/join card-htmls))))
+
+(define layout/css
+  (lambda
+    ()
+    "Face handler for /css/layout.css: serve the rendered layout theme\n     sheet as text/css. When ?v= matches the sheet sha1 the response is\n     immutable-cacheable (a year); otherwise re-validate. Neither css\n     render nor sha1 re-runs per session — the sheet memoizes via\n     layout/style-text."
+    (let
+      ((sheet (force layout/style-text)))
+      (let
+        ((tag (sha1 sheet)))
+        (bytes-response
+          "text/css; charset=utf-8"
+          (if
+            (string-eq (as-str (request-param "v")) tag)
+            "31536000"
+            "0")
+          sheet)))))
+
+(define layout/css-link
+  (lambda
+    ()
+    "A versioned <link> tag for /css/layout.css."
+    (html/void
+      "link"
+      (html/attrs
+        (list
+          (html/attr "rel" "stylesheet")
+          (html/attr "href" (layout/css-url)))))))
+
+(define layout/css-url
+  (lambda
+    ()
+    "Cache-busted URL of the layout stylesheet face."
+    (string-append
+      "/css/layout.css?v="
+      (sha1 (force layout/style-text)))))
 
 (define layout/cta
   (lambda
@@ -298,30 +352,30 @@
 (define layout/page
   (lambda
     (parts)
-    "Render a full neocities page from a list of HTML parts."
     (render-html
       (html/join
         (list
-          (layout/css-link)
+          (layout/style)
           (layout/neocities-style)
           (layout/neocities-top)
           (html/div
             (html/attr "class" "layout-page")
             (html/join
               (list (layout/neocities-banner) (html/join parts))))
-          (layout/neocities-foot))))))
+          (layout/neocities-foot)))))
+  "Render a full neocities page from a list of HTML parts.")
 
 (define layout/page-with-css
   (lambda
     (parts)
-    "Render a page from parts with only the base stylesheet."
     (render-html
       (html/join
         (list
-          (layout/css-link)
+          (layout/style)
           (html/div
             (html/attr "class" "layout-page")
-            (html/join parts)))))))
+            (html/join parts))))))
+  "Render a page from parts with only the base stylesheet.")
 
 (define layout/section
   (lambda
@@ -342,13 +396,35 @@
 (define layout/style
   (lambda
     ()
-    "Render the base layout theme as a <style> element. Force of the memoized layout/style-text (no per-call re-render)."
-    (html/tag "style" "" (force layout/style-text))))
+    (html/tag "style" "" (css/render (layout/theme))))
+  "Render the base layout theme as a <style> element.")
+
+;; ---- Stylesheet face (product-experience.html-builders layout.css-face)
+;; Cacheable, content-addressed alternative to the inline <style> that
+;; layout/style used to put on every page. Path is /css/* NOT /assets/*:
+;; the kernel asset Prefix route intercepts /assets/* before the user-route
+;; catch-all, so a Nopales-registered /assets face would never resolve.
+;; LAZY MEMOIZED ASSEMBLY (lisp-interpreter.lazy-env-thunks): the sheet is
+;; a DELAYED top-level define — (delay …) binds without evaluating, so
+;; (force) renders the theme sheet ONCE per session and memoizes it.
+;; css/render over the theme tree costs ~20k budget steps; inside a
+;; per-call lambda it was paid on EVERY page render (budget-exceeded on
+;; near-cap pages, 2026-12-30). As a delay define it is paid once per
+;; session, off whichever request touches it first. Define-time sibling
+;; calls are forbidden (image.seed-sources S8: additive skip leaves
+;; siblings unbound on warm boots) — delay is the exempt pattern.
+;; Dynamic scope note: the thunk forces against the session env at force
+;; time, so personal-branch layout/theme overrides resolve per-user;
+;; redefining layout/theme in the SAME session leaves the memo stale
+;; until that session rehydrates (an outside change stamps staleness
+;; normally). The url hash re-sha1s the memoized string per call — one
+;; kernel hash over ~2KB, negligible next to the page assembly.
+(define layout/style-text
+  (delay (css/render (layout/theme))))
 
 (define layout/theme
   (lambda
     ()
-    "Return the base layout CSS stylesheet."
     (css/sheet
       (list
         (css/rule
@@ -494,69 +570,6 @@
           ".layout-section-body"
           (list "line-height" "1.55" "max-width" "40rem"))
         (css/rule
-          ".ast-table"
-          (list
-            "border-collapse"
-            "collapse"
-            "margin"
-            "1rem 0"
-            "max-width"
-            "40rem"
-            "width"
-            "100%"))
-        (css/rule
-          ".ast-table th"
-          (list
-            "text-align"
-            "left"
-            "border"
-            "1px solid #808080"
-            "padding"
-            ".3rem .5rem"
-            "background"
-            "#f0ece6"
-            "font-family"
-            "monospace"
-            "font-size"
-            ".8rem"))
-        (css/rule
-          ".ast-table td"
-          (list
-            "border"
-            "1px solid #808080"
-            "padding"
-            ".3rem .5rem"
-            "vertical-align"
-            "top"
-            "font-family"
-            "monospace"
-            "font-size"
-            ".8rem"))
-        (css/rule
-          ".ast-table pre"
-          (list
-            "margin"
-            "0"
-            "white-space"
-            "pre-wrap"
-            "word-break"
-            "break-word"))
-        (css/rule
-          "pre"
-          (list
-            "background"
-            "#f6f3ee"
-            "border"
-            "1px solid #c9c2b6"
-            "padding"
-            ".6rem"
-            "overflow-x"
-            "auto"
-            "font-size"
-            ".82rem"
-            "line-height"
-            "1.4"))
-        (css/rule
           ".layout-page"
           (list
             "max-width"
@@ -588,7 +601,8 @@
               (list "padding" "1.5rem .75rem 1.25rem"))
             (css/rule
               ".layout-hero-title"
-              (list "font-size" "1.55rem"))))))))
+              (list "font-size" "1.55rem")))))))
+  "Return the base layout CSS stylesheet.")
 
 (define layout/theme-vars
   (lambda
@@ -613,86 +627,3 @@
             "#1a1a1a"
             "--cactus-shadow"
             "4px 4px 0 #1a1a1a"))))))
-
-
-(define layout/card-css
-  (lambda
-    ()
-    "Render the layout component stylesheet (extracted from ui/theme)."
-    (css/sheet
-      (list
-        (css/rule
-          ".card"
-          (list
-            "background"
-            "var(--panel)"
-            "border"
-            "2px solid #000"
-            "padding"
-            ".75rem"
-            "margin"
-            "0 0 .75rem"))))))
-
-;; ---- Stylesheet face (product-experience.html-builders layout.css-face)
-;; Cacheable, content-addressed alternative to the inline <style> that
-;; layout/style used to put on every page. Path is /css/* NOT /assets/*:
-;; the kernel asset Prefix route intercepts /assets/* before the user-route
-;; catch-all, so a Nopales-registered /assets face would never resolve.
-;; LAZY MEMOIZED ASSEMBLY (lisp-interpreter.lazy-env-thunks): the sheet is
-;; a DELAYED top-level define — (delay …) binds without evaluating, so
-;; (force) renders the theme sheet ONCE per session and memoizes it.
-;; css/render over the theme tree costs ~20k budget steps; inside a
-;; per-call lambda it was paid on EVERY page render (budget-exceeded on
-;; near-cap pages, 2026-12-30). As a delay define it is paid once per
-;; session, off whichever request touches it first. Define-time sibling
-;; calls are forbidden (image.seed-sources S8: additive skip leaves
-;; siblings unbound on warm boots) — delay is the exempt pattern.
-;; Dynamic scope note: the thunk forces against the session env at force
-;; time, so personal-branch layout/theme overrides resolve per-user;
-;; redefining layout/theme in the SAME session leaves the memo stale
-;; until that session rehydrates (an outside change stamps staleness
-;; normally). The url hash re-sha1s the memoized string per call — one
-;; kernel hash over ~2KB, negligible next to the page assembly.
-(define layout/style-text
-  (delay (css/render (layout/theme))))
-"Rendered layout stylesheet, memoized per session: (force layout/style-text)."
-
-(define layout/css-url
-  (lambda
-    ()
-    "Cache-busted URL of the layout stylesheet face."
-    (string-append
-      "/css/layout.css?v="
-      (sha1 (force layout/style-text)))))
-
-(define layout/css-link
-  (lambda
-    ()
-    "A versioned <link> tag for /css/layout.css."
-    (html/void
-      "link"
-      (html/attrs
-        (list
-          (html/attr "rel" "stylesheet")
-          (html/attr "href" (layout/css-url)))))))
-
-(define layout/css
-  (lambda
-    ()
-    "Face handler for /css/layout.css: serve the rendered layout theme\n     sheet as text/css. When ?v= matches the sheet sha1 the response is\n     immutable-cacheable (a year); otherwise re-validate. Neither css\n     render nor sha1 re-runs per session — the sheet memoizes via\n     layout/style-text."
-    (let
-      ((sheet (force layout/style-text)))
-      (let
-        ((tag (sha1 sheet)))
-        (bytes-response
-          "text/css; charset=utf-8"
-          (if
-            (string-eq (as-str (request-param "v")) tag)
-            "31536000"
-            "0")
-          sheet)))))
-
-;; Public so anonymous page loads can fetch the sheet; authed loads
-;; resolve the same route through the user's branch chain, so personal
-;; layout/theme overrides flow through the ?v= hash naturally.
-(public-route "/css/layout.css" "layout/css")
