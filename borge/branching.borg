@@ -1124,6 +1124,31 @@
          live until pp-sync status reports body-stale: 0 for its
          packages. That is the honest check that the .pp half of a
          release deployed.
+
+         EXPORTER MEMBERSHIP (i-vault-exporter, 2026-10-02): a snapshot
+         mirrors live main by calling (export-package pkg), which finds
+         a package's bindings. The OLD rule matched names by the
+         `pkg/`-prefix, which is wrong for any package whose defines do
+         not share its name — std defines list/…, html/…, css/…; each
+         theme-asNNN defines theme/…; memory defines mem/…. For those,
+         export-package returned an EMPTY body (export list only) and a
+         snapshot wrote it over the vault: libs/std would have gone 69
+         defines -> 0, and every theme-asNNN 35 -> 0. Membership now
+         comes from function_defs.package PROVENANCE (the (package …)
+         form's stamp, set at load), which records the declaring
+         package regardless of name shape; the prefix match survives
+         only as a fallback for unstamped legacy rows. Same fix
+         strengthens (package-bindings pkg) and describe.
+
+         SNAPSHOT GUARD (same task): live main does not contain every
+         vault package. On-demand skins (theme-asNNN) are deliberately
+         never seeded (boot avoids thrashing in-memory theme/* before
+         rehydrate), and hand-authored files (libs/memory, a different
+         package from the seeded mem one) may define names no package
+         form claims. So a snapshot REFUSES to write a vault file with
+         strictly fewer defines than the file it would replace, naming
+         the counts; --force overrides for a deliberate deletion. This
+         turns a silent gutting into a loud, reviewable refusal.
     |))
    )
    (verify

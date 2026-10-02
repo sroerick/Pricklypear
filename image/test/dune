@@ -175,6 +175,11 @@
  (libraries pricklypear-image pricklypear-lisp alcotest eio_main pgx unix))
 
 (test
+ (name package_provenance_test)
+ (modules package_provenance_test)
+ (libraries pricklypear-image pricklypear-lisp alcotest eio_main pgx unix))
+
+(test
  (name envelope_test)
  (modules envelope_test)
  (libraries pricklypear-image pricklypear-lisp alcotest base64 mirage-crypto-rng.unix unix))
