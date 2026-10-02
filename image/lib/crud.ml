@@ -1336,8 +1336,18 @@ let get_row
 (** (node-path 'type id) -> VStr path. Space-aware path constructor:
     an admitted type reports its true data.s.<space>.* home (looked up in
     data_space_types — the pure Tree_store.datum_path mirror cannot see
-    dynamic admission), everything else routes exactly as the SQL
-    tree_datum_path does (seed -> shared; else user). *)
+    dynamic admission), a ROW-LEVEL space row (034, body "space") reports
+    its actual data.s.<space>.* home too, and everything else routes exactly
+    as the SQL tree_datum_path does (seed -> shared; else user). *)
+let uuid_label_id (id : string) : bool =
+  (* 32 hex (tree_uuid_label) or 36 dashed uuid. Guards the space_of_datum
+     ::uuid cast against placeholder ids like "new" / "". *)
+  let hexish c =
+    (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+  in
+  let s = String.concat "" (String.split_on_char '-' id) in
+  String.length s = 32 && String.for_all hexish s
+
 let node_path (store : Store.t) ~(type_name : string) ~(id : string) : value =
   let user = session_user () in
   (match Io_db.Db.current_conn store with
@@ -1345,7 +1355,13 @@ let node_path (store : Store.t) ~(type_name : string) ~(id : string) : value =
        (match space_of_type conn ~type_name with
         | Some sp ->
             VStr (Tree_store.datum_path ~space:(Some sp) ~type_name ~id ())
-        | None -> VStr (Tree_store.datum_path ~user ~type_name ~id ()))
+        | None ->
+            (match
+               (if uuid_label_id id then space_of_datum conn ~id else None)
+             with
+             | Some sp ->
+                 VStr (Tree_store.datum_path ~space:(Some sp) ~type_name ~id ())
+             | None -> VStr (Tree_store.datum_path ~user ~type_name ~id ())))
    | None -> VStr (Tree_store.datum_path ~user ~type_name ~id ()))
 
 (** (type-fields 'type) -> VList of VStr field names | VNil if undeclared. *)
