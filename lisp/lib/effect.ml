@@ -204,6 +204,7 @@ let read_db_prims = [
   "gen-now";  (* borge/tree-time.borg reads-as-of-gen ReadDb *)
   "gen-read"; "gen-diff";  (* borge/tree-time.borg reads-as-of-gen ReadDb *)
   "data-history";  (* borge/tree-time.borg S3 datum history ReadDb *)
+  "data-scope";  (* read-only effective data-scope probe (marcus/codex ask, 2f6dacd) *)
   (* code introspection / call graph (prims_code, prims_graph) +
      bumpers M5 discovery surfaces (borge/bumpers.borg discovery-surfaces):
      docs-missing lists visible bindings without docstrings, app-check
