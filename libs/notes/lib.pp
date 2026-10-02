@@ -1296,20 +1296,22 @@
                       (as-str kind)
                       "day"
                       (as-str day)))))
-              (seq
-                (notes/tree/ensure-folder (notes/tree/root) (whoami))
-                (tree/upsert path "note" "note" body)
-                (notes/tree/save-outline path outline)
-                (if
-                  (and
-                    (not (null? prev))
-                    (not (string-eq oldp ""))
-                    (not
-                      (string-eq (as-str folder) (notes/doc/row-folder prev))))
-                  (notes/doc/set-folder slug folder)
-                  0)
-                (roam/reindex (as-str slug) outline)
-                slug))))
+              (with-transaction
+                (lambda ()
+                  (seq
+                    (notes/tree/ensure-folder (notes/tree/root) (whoami))
+                    (tree/upsert path "note" "note" body)
+                    (notes/tree/save-outline path outline)
+                    (if
+                      (and
+                        (not (null? prev))
+                        (not (string-eq oldp ""))
+                        (not
+                          (string-eq (as-str folder) (notes/doc/row-folder prev))))
+                      (notes/doc/set-folder slug folder)
+                      0)
+                    (roam/reindex (as-str slug) outline)
+                    slug))))))
         ;; i-1790546235 item 3: RAISE, don't return a "refused: …"
         ;; string. A returned string is silently ignorable in (seq …),
         ;; so a multi-write handler could proceed past a refused
