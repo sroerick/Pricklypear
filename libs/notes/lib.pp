@@ -1182,6 +1182,20 @@
         (if (null? p) "" (as-str p)))))
   "Tree path of a row (empty when absent).")
 
+(define notes/doc/path
+  (lambda
+    (slug)
+    (let
+      ((row (notes/doc/row (as-str slug))))
+      (if (null? row) () (notes/doc/row-path row))))
+  "Live tree path of an EXISTING note, taken from its stored row (_path);
+   () when no note row exists. This is ADDRESS, not CONSTRUCT: it never
+   guesses a folder and never materializes a path. Use notes/tree/note-path
+   only for a genuinely new note or an explicit move target. Resolves the
+   note-path-resolution BUG (2026-10-03): a slug-addressed caller that
+   reconstructed <root>.<slug> silently targeted a DIFFERENT subtree for a
+   foldered note (e.g. the agents note at data.note.u.admin.wiki.agents).")
+
 (define notes/doc/search
   (lambda
     (q)
@@ -4832,7 +4846,17 @@
             parent-path
             ".h."
             (tree/path-label (outline/id node)))))
-      (seq
+        (if
+          (null? (tree/get parent-path))
+          (error
+            "no-note-parent"
+            (string-append
+              "notes/tree/write-heading: no tree node at "
+              (as-str parent-path)
+              " (refusing to upsert heading "
+              (as-str path)
+              "); a heading upsert never creates a note-shaped parent chain"))
+          (seq
         (tree/upsert
           path
           "heading"
@@ -4854,7 +4878,7 @@
             (seq (notes/tree/write-heading path kid) acc))
           0
           (outline/kids node))
-        path)))
+          path))))
   "Persist an outline node and its children under a parent path.")
 
 (define notes/tree/write-root-body
@@ -4864,7 +4888,12 @@
       ((cur (tree/get note-path)))
       (if
         (null? cur)
-        note-path
+        (error
+          "no-note-target"
+          (string-append
+            "notes/tree/write-root-body: no tree node at "
+            (as-str note-path)
+            " (refusing to materialize a note subtree)"))
         (let*
           ((n (notes/tree/parse cur)) (b (notes/tree/body n)))
           (seq
@@ -5006,14 +5035,15 @@
   (lambda
     ()
     (let
-      ((slug (as-str (request-param "slug")))
-        (n (notes/doc/get (as-str (request-param "slug")))))
+      ((slug (as-str (request-param "slug"))))
       (let
-        ((folder (notes/doc/folder n))
-          (path (notes/tree/note-path folder slug)))
-        (seq
-          (undo path)
-          (redirect (string-append "/notes?slug=" slug)))))))
+        ((path (notes/doc/path slug)))
+        (if
+          (null? path)
+          (redirect (string-append "/notes?slug=" slug))
+          (seq
+            (undo path)
+            (redirect (string-append "/notes?slug=" slug))))))))
 
 (define notes/ui/edit-form
   (lambda
