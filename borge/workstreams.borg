@@ -70,6 +70,24 @@
    (test "each workstream list carries the same column set as Board"
          "every open board card sits in a named column")))
 
+ (section shared-register
+  (doc "The issues register is a BOX surface, not the operator's garden. The Board list moves into a shared space so every authenticated user on the box can read the register and file cards into it, while pipeline/column transitions stay operator/worker-side. Single object per issue (the 09-28 convergence) is preserved — the card IS the issue; no ledger twin comes back.
+   STORAGE/SEMANTICS (kw rules):
+   - the Board list datum (0b21ffaa, and the 'Board' title resolution) moves to a SHARED space outside data.u.* and outside branch-chain inheritance — a card created by a guest must NOT pin a child-branch copy (that fork-local divergence is exactly the 2026-10-02 vanish);
+   - todo/list/all merges garden lists + shared lists, so notes/issues/board-list-id finds 'Board' for EVERY identity — the (todo/list/ensure-inbox) fallback is retired for the register path;
+   - writes: any AUTHENTICATED identity may create cards in the incoming lane (TODO); reads: open to all authenticated users on the box; anonymous stays denied (register content is box-internal);
+   - column/transition control stays operator/worker-side — guests file and follow, they do not triage (LAW 2 symmetry: the queue's one-way doors stay with the operator);
+   - every file ATTEMPT (ok or denied/failed) rows the activity ledger (product-experience.borg activity-ledger) — the 2026-10-02 case where an agent's report may have been attempted and silently vanished is the repro: a report is a knock, and knocks must never be silent;
+   - migration moves the existing Board into the shared space, list + card ids preserved.")
+  (status planned)
+  (* agent note (|2026-10-02 marcus codex test: with the register garden-scoped, a guest filing an issue writes their own garden Inbox — operator queue never sees it; gregor's 09-02 card documented the same semantic ("writes always persisted to the caller's garden"). Empirics from the test: marcus was asked to have his agent file; zero marcus-authored datums exist store-wide; the attempt is untraceable with today's observability. Filed as 2026-10-02 DESIGN card; spec'd here instead of patching lib.pp in place.|) *)
+  (verify
+   (test "a non-operator authenticated identity sees the Board in (todo/list/all) and (notes/issues/add …) lands ONE card ON that list — no garden fallback, single object per issue"
+         "every authenticated user on the box can read /issues; anonymous is denied"
+         "pipeline/column transitions of guest-filed cards remain operator/worker-side (guests create; they don't triage)"
+         "a denied or failed file attempt appears as an attributed ledger row — no silent vanish"
+         "existing list + card ids survive the move to the shared space")))
+
  (section stream-pipelines
   (doc "Per-stream pipelines for UI-affecting vs under-the-hood vs
    fully-mechanical work (2026-09-26 plan pass; AUTO lane added 2026-09-27

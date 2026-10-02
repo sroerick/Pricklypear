@@ -1140,15 +1140,18 @@
          only as a fallback for unstamped legacy rows. Same fix
          strengthens (package-bindings pkg) and describe.
 
-         SNAPSHOT GUARD (same task): live main does not contain every
-         vault package. On-demand skins (theme-asNNN) are deliberately
-         never seeded (boot avoids thrashing in-memory theme/* before
-         rehydrate), and hand-authored files (libs/memory, a different
-         package from the seeded mem one) may define names no package
-         form claims. So a snapshot REFUSES to write a vault file with
-         strictly fewer defines than the file it would replace, naming
-         the counts; --force overrides for a deliberate deletion. This
-         turns a silent gutting into a loud, reviewable refusal.
+         SNAPSHOT GUARD (same task, superseded 2026-10-02 by dropped-name
+         accounting but kept here for history): live main does not
+         contain every vault package. On-demand skins (theme-asNNN) are
+         deliberately never seeded (boot avoids thrashing in-memory
+         theme/* before rehydrate), and hand-authored files
+         (libs/memory) may define names no package form claims. The
+         original count-refusal (fewer defines than on disk) became
+         DROPPED-NAME ACCOUNTING (see THE ONE WRITE PATH): a name may
+         leave a file only while live main still binds it SOMEWHERE.
+         The original hazard (empty/broken export gutting
+         std/theme-as 69→0) still refuses — every dropped name is
+         unaccounted when the exporter is wrong.
 
          COMMENT-PRESERVING MERGE (i-vault-comments, 2026-10-02): the
          vault is LITERATE SOURCE — comment blocks explain non-obvious
@@ -1163,16 +1166,76 @@
          Forms match by NAME, so reordering is harmless. A changed form
          keeps its old LEADING prefix (section comment) but its interior
          comments are replaced by the new body — that is REPORTED by name
-         (changed_with_comments), never silent. Hand-authored files are
-         still refused outright (no 'exported from live branch' header);
-         --force bypasses merge+guards for a deliberate rewrite.
+         (changed_with_comments), never silent. Hand-authored files with
+         ZERO live defines are still refused outright; --force bypasses
+         merge+guards for a deliberate rewrite.
+
+         THE ONE WRITE PATH (2026-10-02 review): pull, snapshot, and
+         land all decide through ONE pure gate (Pp_sync_merge.plan_write,
+         driven by cli vault_write) — before, snapshot was guarded but
+         pull and land wrote RAW generator output (the blessed land
+         path stripped comments itself; a pull over 20 packages survived
+         only because they were comment-free). Gate order:
+         new file → raw write; hand-authored + zero live defines →
+         REFUSE; hand-authored + live content → MERGE keeping the old
+         first prefix (the custom header — the three-way hand-authored
+         distinction resolves by define count, not by header alone:
+         std merges, theme-* skins refuse); DROPPED-NAME ACCOUNTING
+         replaces the old count guard — a file may drop a name ONLY
+         while live main still binds it SOMEWHERE (a cross-package
+         re-homing like chat→ui of ui/bubble, or re-entry at root, is
+         an honest mirror edit, reported as removed); a name bound
+         NOWHERE on append-only main (no primitive deletes anything
+         from system/main) is an anomaly and REFUSES by name; otherwise
+         MERGE. --force is the reviewed override everywhere and warns
+         about the comment lines a raw overwrite destroys. The
+         accounting needs a full live-name set: snapshot unions every
+         export + (package-bindings "") (root) + the session env —
+         (list-bindings) alone is the lazily-bound session env, NOT
+         the binding table.
+
+         PREVIEW HONESTY: --dry-run runs every guard and merge against
+         the same paths a real run would touch and writes nothing.
+         `--out /tmp` previews bypassed every guard (no old file at
+         the out path to compare) — they can't approve a run.
+
+         STATUS TARGET: `pp-sync status` compares the vault against
+         system/main BY DEFAULT (the mirror source) — it checks out,
+         compares, restores. `--branch <ref>` is honored, labeled as
+         garden drift so personal-branch noise cannot masquerade as
+         vault drift (the 2026-10-02 hand-off's anomaly lists were
+         partly computed against admin/personal).
+
+         RESEED GUARD is two-sided (2026-10-02): live-only NAMES (the
+         delete hazard) AND same-name BODY drift (the rollback
+         hazard — reseed overwriting newer live bodies with stale
+         vault text, silently, because every name exists on both
+         sides). Natural recovery: pp-sync pull <pkg> (the guarded
+         merge), review, reseed; --force is the deliberate override.
+
+         BANNED FAMILIES (Pp_sync_vault.vault_banned): live main rows
+         that must never materialize a vault file — `list`, std's old
+         shape, deleted from libs/ twice (6ed8656 kernel-form seeding
+         abort, 628416f a pull-all resurrected it once). Discovery
+         skips banned families silently; explicit verbs refuse loudly.
+         The ban is POLICY, not cleanliness: deleting a define row
+         from system/main has no primitive yet (unbind refuses on the
+         inheritance root). When a guarded main-delete primitive
+         exists, delete the live duplicate rows and lift the ban —
+         until then main-hygiene decisions (theme zz-* strays, the
+         list/std duplicates) have no execution path on the live side.
     |))
    )
    (verify
     (build "dune build image cli")
     (smoke "pp-sync status reports body-stale when a live body differs from the vault")
     (smoke "pp-sync status --names-only skips the body diff")
-    (smoke "pp-sync status body-stale: 0 after a snapshot pulls live bodies into the vault"))
+    (smoke "pp-sync status body-stale: 0 after a snapshot pulls live bodies into the vault")
+    (smoke "pp-sync pull refuses a hand-authored file with zero live defines")
+    (smoke "pp-sync pull merges (does not strip) a hand-authored file with live content")
+    (smoke "pp-sync snapshot/pull/land refuse a name main binds nowhere, by name")
+    (smoke "pp-sync snapshot --dry-run prints the same report it would write")
+    (smoke "pp-sync reseed refuses same-name body drift without --force"))
   )
   (subsection promote
    (doc "Graduate garden/workshop code to system/main; optional vault export")
@@ -1326,6 +1389,54 @@
     (smoke "additive boot seed records no history rows")
     (smoke "rolled-back transaction leaves no history rows"))
   )
+  (subsection branch-resolved-reads
+   (doc "Every code-read prim gains the optional owner/branch ref that code-history already has — function-source, function-ast, find-code, code-diff — plus a data footprint on branch-changes — so the operator inspects a fork without checking out of their own chain.")
+   (status planned)
+   (* agent note (|2026-10-02: burn from the marcus codex recon — the only way to read another branch's pinned BODY today is checkout, and per-identity sessions make checkout re-point the WHOLE shared identity (the operator's browser included). code-history already takes owner/branch; code-diff and function-source do not, so fork bodies were literally unreadable without a global side effect. Also: branch-changes lists fn/route own rows but NOT datum rows, so a fork that only wrote data (a guest's notes/todo footprint) reads as EMPTY.|) *)
+   (details
+    (doc (|
+         WHY
+         Per-identity sessions mean checkout is an IDENTITY-WIDE
+         move: a shared admin session that checks out a guest
+         garden repoints every caller of that identity until
+         checked back. A global side effect is the wrong tool
+         for a read. code-history already proved the safe
+         shape (optional owner/branch, no checkout) — this
+         subsection makes every code-read prim use it.
+
+         WHAT GAINS THE REF
+         - (function-source name [owner/branch])
+         - (function-ast name [owner/branch])
+         - (find-code needle [owner/branch])
+         - (code-diff name n [owner/branch])
+         - (branch-changes [owner/branch]) GAINS a data
+           summary: typed datum rows authored on the branch
+           (type, count, authors, newest) — today a fork that
+           only wrote data shows as EMPTY and the operator
+           must guess at type names and probe readers.
+         Non-current-branch reads never populate the session
+         env: source reads only, no eval, no env pinning.
+
+         SCOPE GRAMMAR (a NORM owed after the same recon)
+         Read prims must DECLARE their scope, because today
+         they differ silently and it burns operator time:
+         find-code is chain-visible; find-rows-author is
+         whole-store under the admin RLS disjunct; find-text
+         and tree/find-by are garden-scoped with a prefix
+         escape. During the 2026-10-02 recon these three
+         answers gave three different replies to "does
+         marcus have data?". The (describe …) surface must
+         carry a SCOPE line for every read prim, and a new
+         reader may not introduce a fourth scoping kind
+         without a line here.
+
+         NON-GOALS
+         - no cross-branch writes (fork/merge/promote own that)
+         - no evaluation of foreign bodies (reads only)
+    |))
+   )
+  )
+
   (subsection land
    (doc "pp-sync land: promote + vault snapshot + git commit as one operator step")
    (status implemented)

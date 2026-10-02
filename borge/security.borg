@@ -121,6 +121,109 @@
    (doc "The quiet tick (wake-loop: no provider call when nothing changed) is a SECURITY property, not an efficiency trick. The cheapest attack on a habitat full of LLM users is not exfiltration — it is a BILL: make noise, trigger wakes, burn fifty humans' provider keys. Therefore: standing cost near zero, hard per-identity provider/token budgets, a hard wake-storm ceiling, and a cap on accumulated db_ms per eval. Complement: the eval has a STEP budget but NO wall-clock deadline (only example_eval has one), and sleep is now correctly classified Net (denied by gates) but with-transaction still wraps arbitrary lambdas — so a txn body holding a slow prim can pin a pgx connection and SERIALIZABLE txn, and the anonymous session is shared. See §open-gaps.")
    (status partial))
 
+  (subsection the-watched-machine
+   (doc "Operator visibility is a capability precondition for LAW 2, not an ops preference: the human who holds every one-way door must be able to SEE what is running. What is visible sorts by SUBJECT, not by plane — agents are processes, human tenants are persons, automation is an attacker until proven otherwise.")
+   (status partial)
+   (* agent note (|2026-10-02: doctrine converged during the marcus guest-user test — the operator could not answer "who did what today?" from any product surface, though the raw data existed (auth_log, function_stat.author, tree_versions). Sorted by subject per roerick: agents get NONE ambient (processes, not persons); human tenants tiered; automation structure-only; and SELF-HOSTING IS the privacy tier ("if they want privacy they can self host") — which makes §exit security-critical, not a convenience feature. Implemented today: the 033 admin disjunct, auth_log, per-eval budgets. The mechanisms (ledger, console, holds) are owned by product-experience.borg §activity-ledger.|) *)
+   (details
+    (doc (|
+         WHY — LAW 2'S PRECONDITION
+         LAW 2 says no agent holds an irreversible trigger; the
+         human is the only non-prompt-injectable component, so
+         the human holds every one-way door. A human who cannot
+         see is a human who cannot hold the doors — blind
+         oversight is not oversight. This subsection states what
+         the operator may see, under what auditing, and why the
+         same machine knuckles itself.
+
+         THE LADDER, SORTED BY SUBJECT
+         - OPERATOR → AGENT: ambient, frictionless, total.
+           Agents are processes, not persons — nobody gave a
+           batch job privacy from the systems programmer.
+           Sessions/transcripts, eval stream, targets touched,
+           spend, job submissions, token mints: operator-visible
+           by default, no content-read ceremony. No process has
+           privacy from its OS.
+         - OPERATOR → HUMAN TENANT: tiered by deployment shape.
+           The 033 admin disjunct is the standing door (hand-
+           granted, attribution-preserving: maintenance never
+           rebinds author, admin writes create AS admin);
+           deliberate reads of another's content become audited
+           the day §activity-ledger lands (admin.content-read
+           rows); a LONELY habitat (one human on the box) skips
+           the ceremony entirely. The CRYPTO-FLOOR ("operator
+           mathematically cannot read") is NOT a pricklypear
+           tier: it breaks the 033 maintenance case by design,
+           and on any box the operator owns it is a lie.
+         - AUTOMATION → ANYONE: structure only, always (LAW 1 +
+           LAW 3). A monitor loop that reads content to decide
+           containment is injectable BY that content, and the
+           monitor itself can be the attacker — the attacker's
+           cheapest defensive exploit is a sentence. Automated
+           response to misbehavior is deterministic quota/rate
+           locks (§budgets-are-security); escalation beyond
+           that is a HUMAN act. LLM enrichment of filed
+           incidents reads structure + samples, never fires.
+         - AGENT → AGENT: cotenant isolation RETAINED. Agent A
+           reading agent B's scratchpad is the last leg of the
+           trifecta (cross-agent contamination is untrusted
+           content in an effect loop); operator sight changes
+           nothing about their mutual blindness.
+
+         TWO-SIDED AUDIT (what makes total agent visibility a
+         safety case instead of a surveillance story)
+         Every deliberate operator act writes the ledger it
+         reads: admin.content-read, admin.hold, admin.knock,
+         admin.revoke. The watched machine watches its
+         watchers — the RACF discipline: an admin dataset open
+         was ITSELF a type-80 record, and an operator who
+         needed your content ran an event-driven, audited
+         dump, never ambient browsing.
+
+         KNOCKS AND HOLDS
+         A knock to a human is a chat DM; a "knock" to a
+         process is a HOLD — reversible containment (revoke
+         token, revoke sessions, cancel job, disable package;
+         every verb already exists, the console puts them one
+         click from the live feed). The policy layer SUGGESTS
+         (deterministic thresholds filing one incident), the
+         human decides. LAW 2: no agent holds the trigger.
+         LAW 1: the suggestion never depends on a model
+         noticing. Non-admin token.mint and promote.attempt
+         always knock.
+
+         KNOCKS GO BOTH WAYS
+         A watched machine must be knockable. The report
+         channel is a box surface, not a favor: an issues
+         register that lands a guest's report in the guest's
+         own garden is a door nobody inside can hear knocked
+         on — exactly what happened 2026-10-02 (marcus's
+         agent's filed report vanished into the garden
+         scoping; a card exists with the receipt). Guest
+         reports reach the operator queue attributed,
+         ledgered, and read-visible to the box
+         (workstreams.borg shared-register). A guest with
+         no knock has only exit as a voice — and a machine
+         that hears nothing it doesn't own gets departures
+         instead of reports.
+
+         SOVEREIGNTY IS THE PRIVACY TIER
+         The mainframe compact was "you cannot leave." Ours is
+         "you always can." Exit — not operator blindness — is
+         what makes a watched machine legitimate. Anyone who
+         wants an unwatched habitat self-hosts one (the binary
+         is the whole product); anyone on a communal box can
+         take their subtree and go. §exit (signed offline
+         export/ingest) and the existing lens pulls are
+         therefore SECURITY infrastructure: sovereignty is only
+         a perimeter while leaving is operational. If leaving
+         is one verb, self-hosting for privacy is a real
+         answer; if leaving is a favor you ask the operator
+         for, it is theater.
+    |))
+   )
+  )
+
   (subsection origin-authenticated-verbs
    (doc "Raw-HTML-on-a-user-route is the product (render-html is the app model); the consequence is that any identity's public page is same-origin script under a visitor's cookie. /api/eval accepts the session cookie, and HttpOnly+SameSite=Lax does not stop a same-site script from fetching it. With CSP limited to frame-ancestors, one-click impersonation via an injected same-site script is available to any authenticated user; PP_BASE_DOMAIN subdomain scoping widens the reach. The fix is to authenticate the ORIGIN of state-changing browser requests: a full default-src 'self' CSP (nonce'd where inline is required) plus a CSRF token or a required custom header on kernel endpoints. OPEN.")
    (status planned))
@@ -223,6 +326,12 @@
     - §budgets-are-security: per-identity provider-spend caps and a
       wake-storm ceiling.
     - Canary layer: no marker/attribution surface exists today.
+    - §the-watched-machine: the activity ledger is unbuilt —
+      auth_log and the 033 admin disjunct exist but have NO
+      reader surface, so an operator cannot answer "who did
+      what, when" from the product (2026-10-02 marcus test).
+      Mechanism spec'd in product-experience.borg
+      §activity-ledger.
     - Defensive quorum: independence and threshold policy undefined.
 
     HIGH / future
