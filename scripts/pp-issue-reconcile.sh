@@ -9,7 +9,10 @@
 #   card-id  state  matched-commits
 #
 # Heuristic: commits cite only the SHORT `i-<epoch>` prefix, not the full UUID,
-# so match the short form first and the full id as a fallback. NO board writes.
+# so match the short form first and the full id as a fallback. ALSO match the
+# card id: the 2026-10-01 audit found most shipped fixes cite the card id
+# (e.g. "card 8dff7c9e"), not the issue_id, so an issue_id-only grep missed
+# them entirely. NO board writes.
 #
 # Usage: scripts/pp-issue-reconcile.sh [list-id]
 # Env: PP_EVAL (default _build/.../pp_eval.exe); PP_URL/PP_USER/PP_PASS for the
@@ -49,13 +52,19 @@ for cid, v in sorted(items.items()):
     if v.get("state") == "DONE" or v.get("list_id") != list_id:
         continue
     iid = v.get("issue_id", "")
-    if not iid:
-        continue
-    short = "-".join(iid.split("-")[:2])
-    hits = commits([short, iid])
+    short = "-".join(iid.split("-")[:2]) if iid else ""
+    short_cid = cid[:8]
+    # Always search the card-id: many cards have no issue_id at all (the
+    # 2026-10-01 audit's stale closures were filed as cards), and the fixes
+    # for others cite the card, not the issue_id.
+    needles = [n for n in (short, iid, short_cid) if n]
+    hits = commits(needles)
     if hits:
         rows += 1
-    for i, h in enumerate(hits or ["(no commit match for %s)" % short]):
+    else:
+        label = " / ".join(needles) if needles else short_cid
+        hits = ["(no commit match for %s)" % label]
+    for i, h in enumerate(hits):
         print("%-8s  %-12s  %s" % (cid[:8] if i == 0 else "", v.get("state", ""), h))
 print("\n%d card(s) with commit matches (READ-ONLY; human confirms closure)." % rows)
 PY
