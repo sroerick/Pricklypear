@@ -1959,6 +1959,20 @@ let tree_children_html (store : Store.t) ~(prefix : string) ~(garden_root : stri
        let html = render_children_html conn ~prefix ~garden_root () in
        (VStr html))
 
+(* product-experience §activity-ledger: a datum UPSERT is a data.write
+   event, exactly like create/update/delete. This is the register's own
+   write path (notes/issues/add -> todo/item/add-space -> todo/tree/create
+   -> tree/upsert), so without it a guest's filed card is a SILENT
+   VANISH — the 2026-10-02 repro that workstreams.borg §shared-register
+   forbids ("a report is a knock, and knocks must never be silent").
+   Target is the PATH (never a body); push is a queue op, zero DB work. *)
+let emit_tree_write ~(caller : string) ~(target : string) ~(outcome : string)
+    : unit =
+  if caller <> "" && caller <> "unknown" then
+    ignore
+      (Activity_ledger.push ~actor:caller ~cls:"data.write"
+         ~target:(Activity_ledger.path_target target) ~outcome ())
+
 let tree_upsert_outcome (store : Store.t) ~(path : string) ~(kind : string)
     ~(type_name : string) ~(body_json : string) ~(author : string)
     : (string, string) result =
@@ -1968,11 +1982,18 @@ let tree_upsert_outcome (store : Store.t) ~(path : string) ~(kind : string)
        id when the path's id label is a placeholder). one-tree.tree-datum-prims. *)
     let reject = check_type_fields store ~type_name ~fields_json:body_json in
     (match reject with
-     | Some msg -> (Error msg)
+     | Some msg ->
+         emit_tree_write ~caller:author ~target:path ~outcome:"error";
+         (Error msg)
      | None ->
      with_tree_tx store ~none:(fun () -> no_db "tree/upsert") (fun conn ->
-       Tree_store.upsert_datum conn ~path ~type_name ~body_json ~author
-         ~rank:None))
+       let r =
+         Tree_store.upsert_datum conn ~path ~type_name ~body_json ~author
+           ~rank:None
+       in
+       emit_tree_write ~caller:author ~target:path
+         ~outcome:(match r with Ok _ -> "ok" | Error _ -> "error");
+       r))
   else
     with_tree_tx store ~none:(fun () -> no_db "tree/upsert") (fun conn ->
       Tree_store.upsert_hier conn ~path ~kind ~type_name ~body_json ~author

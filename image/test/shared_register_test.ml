@@ -20,6 +20,7 @@ module S = Pricklypear_image_lib.Store
 module Session = Pricklypear_image_lib.Session
 module M = Pricklypear_common.Manifest
 module Db = Pricklypear_image_lib.Store_db
+module Al = Pricklypear_image_lib.Activity_ledger
 open Pricklypear_lisp.Ast
 
 let main_id = "00000000-0000-0000-0000-000000000001"
@@ -356,6 +357,54 @@ let test_anonymous_denied () =
           in
           Alcotest.(check string) "empty board files nothing" "" empty))
 
+(* 5. a file ATTEMPT rows the ledger — no silent vanish. The register
+   writes through tree/upsert (todo/item/add-space -> todo/tree/create),
+   NOT through the (create) prim, so the ledger emit must live on the
+   tree_upsert datum path. Drain the in-process ring and assert the guest's
+   filing produced attributed data.write rows with PATH targets. *)
+let test_file_attempt_rows_ledger () =
+  with_store (fun store ->
+      point_pp_libs_dir ();
+      let operator = uniq "op" in
+      let guest = uniq "guest" in
+      let board_id = make_board store ~operator in
+      let scratch = scratch_branch store ~owner:guest in
+      let card_ids = ref [] in
+      Fun.protect
+        ~finally:(fun () ->
+          cleanup store ~ids:(board_id :: !card_ids);
+          drop_branch store ~branch_id:scratch)
+        (fun () ->
+          let t = make_session_on store ~username:guest ~branch_id:scratch in
+          load_product t;
+          ignore (Al.drain ());
+          let cid =
+            eval_str t
+              "(notes/issues/add \"BUG\" \"trace me\" \"no silent vanish\")"
+          in
+          card_ids := [ cid ];
+          let writes =
+            List.filter
+              (fun (e : Al.entry) ->
+                e.Al.actor = guest && e.Al.cls = "data.write")
+              (Al.drain ())
+          in
+          Alcotest.(check bool)
+            "the file attempt emitted at least one attributed data.write" true
+            (List.length writes >= 1);
+          let has_path =
+            List.exists
+              (fun (e : Al.entry) ->
+                match e.Al.target with
+                | Some tg -> String.length tg > 0 && tg <> cid
+                | None -> false)
+              writes
+          in
+          Alcotest.(check bool) "targets are PATHS, not bodies" true has_path;
+          Alcotest.(check bool)
+            "the successful filing outcome is ok" true
+            (List.exists (fun (e : Al.entry) -> e.Al.outcome = "ok") writes)))
+
 let () =
   Alcotest.run "shared_register"
     [ ( "shared-register",
@@ -365,5 +414,7 @@ let () =
             test_guest_files_one_shared_card_no_garden_fallback;
           Alcotest.test_case "ids survive" `Quick test_ids_survive;
           Alcotest.test_case "anonymous denied" `Quick test_anonymous_denied;
+          Alcotest.test_case "file attempt rows the ledger" `Quick
+            test_file_attempt_rows_ledger;
         ] )
     ]
