@@ -321,7 +321,8 @@ let prim_summary (name : string) : string =
   | "merge" -> "merge branches"
   | "checkout" -> "switch branch"
   | "route" -> "bind URL to function"
-  | "deftype" -> "declare a data type"
+  | "deftype" ->
+      "declare a data type on a branch you own (admin owns system/*)"
   | "get" -> "read one data row"
   | "create" -> "insert data row → id"
   | "update" -> "replace row fields JSON"

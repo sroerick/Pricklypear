@@ -248,7 +248,13 @@ let safe_sort_sql ~(prim : string) ~(sort : string) : string =
     The first arg is the type name, then zero or more field names —
     each as a quoted symbol (e.g. (deftype 'user 'name 'email 'age))
     so they arrive as VStr (quote of a bare symbol evaluates to VStr).
-    Bare symbols would be looked up as variables and fail. *)
+    Bare symbols would be looked up as variables and fail.
+
+    PERMISSION: a code/schema write, gated by branch ownership — the
+    caller may declare when the session's CURRENT branch is one they own
+    (admin for system/*, the tenant for their own garden). Anonymous is
+    denied; delegated sessions are denied (schema authority is
+    code-adjacent). See borge/security.borg §code-write-authorization. *)
 let deftype (store : Store.t) ~(args : value list)
     ~(author : string) : value =
   let field_strs =
