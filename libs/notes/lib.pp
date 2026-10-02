@@ -886,6 +886,31 @@
             (as-str (nth row 5))
             (as-str (nth row 6))))))))
 
+(define notes/doc/coerce-outline
+  (lambda
+    (outline)
+    (if
+      (string? outline)
+      (let
+        ((parsed
+           (guard
+             (lambda (e) ())
+             (json-parse (as-str outline)))))
+        (if
+          (if (null? parsed) #f (outline/valid? parsed))
+          parsed
+          outline))
+      outline))
+  "Accept an outline as EITHER a decoded tree OR its encoded JSON string.
+     The natural read-modify-write idiom — (outline/encode (notes/doc/outline
+     ...)) fed straight back into notes/doc/upsert — used to fail: upsert
+     validated the STRING with outline/valid?, got (), and returned
+     'refused: outline is malformed' even though the tree was fine (the
+     2026-10-02 agents-naming-scratch incident). Coercing here makes the
+     round-trip an identity from the caller's point of view. A string that
+     does not parse to a valid node is returned unchanged, so upsert-in
+     still refuses it — silent data loss is never an option.")
+
 (define notes/doc/daily
   (lambda
     (day)
@@ -1214,31 +1239,6 @@
 (define notes/doc/title
   (lambda (n) (car (cdr (cdr n))))
   "Extract the title field from a decoded note row.")
-
-(define notes/doc/coerce-outline
-  (lambda
-    (outline)
-    (if
-      (string? outline)
-      (let
-        ((parsed
-           (guard
-             (lambda (e) ())
-             (json-parse (as-str outline)))))
-        (if
-          (if (null? parsed) #f (outline/valid? parsed))
-          parsed
-          outline))
-      outline))
-  "Accept an outline as EITHER a decoded tree OR its encoded JSON string.
-     The natural read-modify-write idiom — (outline/encode (notes/doc/outline
-     ...)) fed straight back into notes/doc/upsert — used to fail: upsert
-     validated the STRING with outline/valid?, got (), and returned
-     'refused: outline is malformed' even though the tree was fine (the
-     2026-10-02 agents-naming-scratch incident). Coercing here makes the
-     round-trip an identity from the caller's point of view. A string that
-     does not parse to a valid node is returned unchanged, so upsert-in
-     still refuses it — silent data loss is never an option.")
 
 (define notes/doc/upsert
   (lambda
@@ -1815,15 +1815,20 @@
 (define notes/issues/cards
   (lambda
     ()
-    (list/filter
-      (lambda
-        (row)
-        (not
-          (or
-            (todo/state/archived? (todo/item/state (cdr row)))
-            (string-eq (as-str (dict-get (cdr row) "kind")) ""))))
-      (todo/item/all)))
-  "Todo-item rows tagged with an issue kind (kind != \"\") — the /issues\n     convergence: cards carry a kind (BUG/DESIGN/SMELL/CLEANUP) convention and\n     /issues reads them AS ISSUE ROWS through the shared pipeline\n     (borge/workstreams.borg pipeline-model). Archived cards are excluded\n     (archived is closed). The legacy note-ledger stays a frozen archive; this\n     is the live issue face (no corpus migration in this task).")
+    (let
+      ((own
+        (list/filter
+          (lambda
+            (row)
+            (not
+              (or
+                (todo/state/archived? (todo/item/state (cdr row)))
+                (string-eq (as-str (dict-get (cdr row) "kind")) ""))))
+          (todo/item/all))))
+      (append
+        own
+        (if (is-admin?) (notes/issues/foreign-cards own) (list)))))
+  "Todo-item rows tagged with an issue kind (kind != \"\") — the /issues\n     convergence: cards carry a kind (BUG/DESIGN/SMELL/CLEANUP) convention and\n     /issues reads them AS ISSUE ROWS through the shared pipeline\n     (borge/workstreams.borg pipeline-model). Archived cards are excluded\n     (archived is closed). The legacy note-ledger stays a frozen archive; this\n     is the live issue face (no corpus migration in this task).\n\n     EXTENSION 2026-10-03 (knock-vanish fix, interim): the pool was\n     CALLER-GARDEN-ONLY — (todo/item/all) -> (todo/tree/rows) ->\n     (node-path caller type) — so a non-operator's filed issue existed but was\n     invisible to the operator register: the 2026-10-02 marcus/codex test\n     stranded NINE real issue cards in a guest garden for 12+ hours with no\n     observable trace (Board card 7372cb3c; they were imported 2026-10-03\n     with provenance). For an ADMIN caller the pool now also joins\n     notes/issues/foreign-cards (kind-tagged, non-archived todo-item datum\n     nodes from other identity gardens, via the admin RLS disjunct), so every\n     authenticated knock is at least VISIBLE to triage. Guest sessions keep\n     the plain own-garden pool (RLS-honest). This is NOT the shared-register\n     space design — that remains the durable fix (cards land on the shared\n     Board at write time); this bridge only ends the SILENT part of the\n     vanish, and remains correct after that design lands (garden stragglers\n     stay visible until adopted).")
 
 (define notes/issues/cards-html
   (lambda
@@ -1911,6 +1916,32 @@
           "")
         (car found))))
   "ensure the register exists via ONE find-by (was: full doc/get walk, 100-300s under DB degradation).\n     Arity fix 2026-09-27: this call passed EIGHT args to the six-arg\n     notes/doc/upsert (a duplicated slug and a stray \"\") and would have\n     raised 'arity mismatch' the first time the register had to be created\n     from scratch — latent, because the register already exists on every\n     live habitat. tags/kind/day now match notes/issues/upsert, the\n     register's other writer ('log' / 'issue' / ''), so a fresh register\n     is shaped identically to a repaired one.")
+
+(define notes/issues/foreign-cards
+  (lambda
+    (own)
+    (let
+      ((mine (node-path "todo-item" "")))
+      (list/map
+        todo/tree/node->pair
+        (list/filter
+          (lambda
+            (nj)
+            (let
+              ((fields (dict-get nj "body")))
+              (and
+                (string-eq (as-str (dict-get nj "type")) "todo-item")
+                (not
+                  (string-eq
+                    (substring
+                      (as-str (dict-get nj "path"))
+                      0
+                      (string-length mine))
+                    mine))
+                (not (todo/state/archived? (todo/item/state fields)))
+                (not (string-eq (as-str (dict-get fields "kind")) "")))))
+          (tree/list "data.u" 3 5000)))))
+  "Read-bridge helper for notes/issues/cards (the operator register): todo-item\n     datum nodes from OTHER identity gardens — kind-tagged and not archived —\n     as (id . fields) rows. Admin-only by construction (called from the\n     is-admin? branch of notes/issues/cards; the cross-garden walk rides the\n     admin RLS disjunct, migration 033). Own-garden rows are excluded by the\n     caller's node-path prefix so todo/item/all never double-counts.\n\n     2026-10-03 INTERIM BRIDGE (see the OBITUARY on notes/issues/cards): a\n     guest file lands in the CALLER's garden, invisible to the operator pool;\n     this helper makes the knock VISIBLE for triage without moving anyone's\n     data. The durable fix is the shared-register SPACE design\n     (borge/workstreams.borg shared-register, planned) which homes register\n     cards in data.s at WRITE time; this bridge stays additive to it (it\n     keeps seeing cross-garden stragglers until/unless that design retires\n     it).")
 
 (define notes/issues/form
   (lambda
