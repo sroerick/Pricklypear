@@ -327,6 +327,73 @@ let test_routing_and_guard () =
       expect_denied "removed member create denied" (fun () ->
           Crud.create store ~type_name:ty ~fields_json:"{\"n\":3}" ~author:"bob"))
 
+(* ---------------- row-level routing (migration 034, shared Board) ----- *)
+
+(* 034: a datum whose body carries "space":"<open space>" lands at
+   data.s.<space>.<type>.<id> even though its TYPE is not admitted; every
+   authenticated identity can read/write it, anonymous is denied. A
+   follow-up write that OMITS the space field stays in the row's space
+   (no silent garden relocation). ids are preserved. *)
+let test_row_level_routing () =
+  with_s2 (fun store ~sp ~ty ->
+      let conn = Option.get (S.conn_of store) in
+      ignore (Crud.space_create store ~caller:"alice" ~name:sp ~open_:true ());
+      (* NO space_admit — routing is row-level via the body field. *)
+      let fields = Printf.sprintf "{\"n\":1,\"space\":\"%s\"}" sp in
+      let id =
+        match Crud.create store ~type_name:ty ~fields_json:fields ~author:"alice" with
+        | Ast.VStr id -> id
+        | _ -> Alcotest.fail "row-space create did not return id"
+      in
+      let want =
+        Printf.sprintf "data.s.%s.%s." (TS.enc_label sp) (TS.enc_label ty)
+      in
+      let got = path_of conn ~id in
+      Alcotest.(check bool)
+        (Printf.sprintf "row-level space path (got %s)" got)
+        true
+        (String.length got > String.length want
+         && String.sub got 0 (String.length want) = want);
+      (* node-path resolves the existing row's space without a space_admit *)
+      (match Crud.node_path store ~type_name:ty ~id with
+       | Ast.VStr np ->
+           Alcotest.(check bool) ("node-path " ^ np) true
+             (String.length np > String.length want
+              && String.sub np 0 (String.length want) = want)
+       | _ -> Alcotest.fail "node-path not VStr");
+      (* a non-member AUTHENTICATED identity shares the open space *)
+      (match
+         Crud.create store ~type_name:ty ~fields_json:fields ~author:"carol"
+       with
+       | Ast.VStr _ -> ()
+       | _ -> Alcotest.fail "open row-space create by carol denied");
+      (* anonymous is denied *)
+      expect_denied "anonymous row-space create denied" (fun () ->
+          Crud.create store ~type_name:ty ~fields_json:fields
+            ~author:"anonymous");
+      (* a space-omitting update stays in the space (fallback in the mirror) *)
+      (match
+         Crud.update_guarded store ~type_name:ty ~id
+           ~fields_json:"{\"n\":2}" ~caller:"bob"
+       with
+       | Ast.VStr _ -> ()
+       | _ -> Alcotest.fail "space-omitting update failed");
+      let got2 = path_of conn ~id in
+      Alcotest.(check string) "id/path preserved across update" got got2;
+      (* explicit tree/upsert at the resolved node-path also stays put *)
+      let np =
+        match Crud.node_path store ~type_name:ty ~id with
+        | Ast.VStr p -> p
+        | _ -> Alcotest.fail "node-path not VStr"
+      in
+      (match
+         Crud.tree_upsert store ~path:np ~kind:"datum" ~type_name:ty
+           ~body_json:"{\"n\":3}" ~author:"bob"
+       with
+       | Ast.VStr p ->
+           Alcotest.(check string) "tree/upsert at node-path stays" got p
+       | _ -> Alcotest.fail "tree/upsert failed"))
+
 (* ---------------- S3: the log consumer (data-history) ---------------- *)
 
 (* S3: member edits produce per-author before-images, newest-first;
@@ -457,6 +524,11 @@ let () =
         [
           Alcotest.test_case "data-history: per-author before-images" `Quick
             test_history;
+        ] );
+      ( "row-level space routing (034)",
+        [
+          Alcotest.test_case "body space routes; open write; id survives" `Quick
+            test_row_level_routing;
         ] );
       ( "open spaces",
         [
