@@ -655,7 +655,7 @@ let export_package (t : t) (pkg : string) : string =
   let buf = Buffer.create 4096 in
   Buffer.add_string buf
     (Printf.sprintf
-       ";; package %s -- exported from live branch %s\n;; Sync: scripts/pp_sync.py pull|push\n\n"
+       ";; package %s -- exported from live branch %s\n;; Sync: scripts/pp-sync.sh status|pull|snapshot\n\n"
        label t.manifest.branch_name);
   let reg =
     if pkg = "" || pkg = "(root)" then None

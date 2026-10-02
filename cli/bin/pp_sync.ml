@@ -1,13 +1,25 @@
 (** pp-sync — sync libs/*.pp with live function_defs (OCaml, no Python).
 
-      pp-sync status [pkg]
-      pp-sync pull <pkg>
-      pp-sync push <pkg>
-      pp-sync pull-all
-      pp-sync reseed <pkg>          admin: upsert libs → system/main
-      pp-sync snapshot [--branch R] [--out DIR]
+      pp-sync status [pkg] [--branch R]   vault↔system/main drift (default R)
+      pp-sync pull <pkg>                 guarded merge of live main → vault
+      pp-sync push <pkg>                 load vault file onto the live
+                                        CURRENT session branch (garden)
+      pp-sync pull-all                   pull every vaulted package
+      pp-sync reseed <pkg>               admin: upsert libs → system/main
+                                        (refuses on live-only names OR
+                                        body drift without --force)
+      pp-sync snapshot [--branch R] [--out DIR] [--dry-run]
       pp-sync land <pkg> [name ...] [--from owner/branch]
-*)
+                                        promote live → main, then export
+                                        back into the vault (guarded merge)
+
+    ONE write authority (borge/branching.borg vault-authority): the
+    vault mirrors live system/main. pull / snapshot / land all funnel
+    through Pp_sync_merge.plan_write — hand-authored refusal, gut
+    refusal, comment-preserving merge — so the guards cannot differ
+    per verb. status/pull/snapshot default to comparing branch
+    system/main (the vault's mirror source), not whatever branch the
+    operator's session happens to be on. *)
 
 open Cmdliner
 
@@ -137,25 +149,7 @@ let body_divergence = Pp_sync_diff.divergence
 let pp_body_json = Pp_sync_diff.pp_body
 
 let unwrap_list_of_strings (printed : string) : string list =
-  let re = Re.Perl.compile_pat {|"([^"]+)"|} in
-  let quoted =
-    Re.all re printed
-    |> List.filter_map (fun g ->
-           try Some (Re.Group.get g 1) with Not_found -> None)
-  in
-  if quoted <> [] then quoted
-  else
-    let inner = String.trim printed in
-    let inner =
-      if
-        String.length inner >= 2
-        && inner.[0] = '('
-        && inner.[String.length inner - 1] = ')'
-      then String.sub inner 1 (String.length inner - 2) |> String.trim
-      else inner
-    in
-    if inner = "" then []
-    else String.split_on_char ' ' inner |> List.filter (( <> ) "")
+  Pp_sync_diff.unwrap_quoted_names printed
 
 let live ~url ~user ~password ~timeout expr =
   Pp_client.eval_expr ~base_url:url ~user ~password ~expr
@@ -187,7 +181,11 @@ let discover_packages ~url ~user ~password ~timeout =
      dirs + live binding names collapsed to FIRST path segment (one
      family, one file). The old rindex spelling inferred sub-packages
      (notes/capture from notes/capture/add) so pull-all exported stale
-     nested dumps the boot seed never reads. *)
+     nested dumps the boot seed never reads.
+     BANNED families (Pp_sync_vault.vault_banned) are dropped silently:
+     their live rows are known duplicates whose vault file is
+     deliberately gone (libs/list is std's old shape, deleted twice by
+     hand) — an EXPLICIT pull/reseed/land still refuses loudly. *)
   let ld = libs_dir () in
   let dirs =
     if Sys.file_exists ld then
@@ -197,6 +195,7 @@ let discover_packages ~url ~user ~password ~timeout =
              Sys.is_directory p
              && name <> "_root"
              && Sys.file_exists (Filename.concat p "lib.pp"))
+      |> List.filter (fun name -> Pp_sync_vault.vault_banned name = None)
     else []
   in
   let bindings =
@@ -205,6 +204,7 @@ let discover_packages ~url ~user ~password ~timeout =
     | Error _ -> []
   in
   Pp_sync_vault.packages_of ~dirs ~bindings
+  |> List.filter (fun p -> Pp_sync_vault.vault_banned p = None)
 
 let cmd_status ~url ~user ~password ~timeout ~verbose ~names_only ~branch package =
   match (if package <> "" then Pp_sync_vault.vault_refusal package else None) with
@@ -213,25 +213,23 @@ let cmd_status ~url ~user ~password ~timeout ~verbose ~names_only ~branch packag
       2
   | None ->
   (* VAULT AUTHORITY (card 8dff7c9e): the vault mirrors system/main, so
-     the drift view must read main, not whatever branch the operator's
-     session happens to be on. When --branch is given, checkout it for
-     the comparison and restore the prior branch after — the snapshot
-     pattern. Default stays the current branch (no surprise mutation). *)
+     the drift view reads MAIN by default — not whatever branch the
+     operator's session happens to be on (the 2026-10-02 review: the
+     plain run compared against admin/personal and inflated drift).
+     The comparison branch is checked out for the export pass and
+     restored afterward — the snapshot pattern. An explicit --branch is
+     still honored, labeled, and restored. *)
   let prev_branch =
     match current_branch ~url ~user ~password ~timeout with
     | s -> String.trim s
     | exception _ -> ""
   in
-  let target =
-    if branch <> "" then branch
-    else if prev_branch <> "" then prev_branch
-    else "system/main"
-  in
+  let target = if branch <> "" then branch else "system/main" in
   let restore () =
-    if branch <> "" && prev_branch <> "" && prev_branch <> target then
+    if prev_branch <> "" && prev_branch <> target then
       ignore (checkout_ref ~url ~user ~password ~timeout prev_branch)
   in
-  if branch <> "" && target <> prev_branch then
+  if target <> prev_branch then
     match checkout_ref ~url ~user ~password ~timeout target with
     | Ok () -> ()
     | Error e ->
@@ -243,8 +241,11 @@ let cmd_status ~url ~user ~password ~timeout ~verbose ~names_only ~branch packag
     if package <> "" then [ package ]
     else discover_packages ~url ~user ~password ~timeout
   in
-  if branch <> "" && target <> prev_branch then
-    Printf.printf "(comparing vault against %s)\n" target;
+  if target <> prev_branch then
+    Printf.printf "(comparing vault against %s — the vault mirrors \
+                    system/main; other branches show garden drift)\n"
+      target
+  else Printf.printf "(comparing vault against %s)\n" target;
   let rc = ref 0 in
   (try
      List.iter
@@ -342,14 +343,122 @@ let cmd_status ~url ~user ~password ~timeout ~verbose ~names_only ~branch packag
   restore ();
   !rc
 
-let cmd_pull ~url ~user ~password ~timeout package =
+(* Fetch the union of binding names for the currently-checked-out branch
+   as completely as the eval API allows: every package's bindings from
+   the registry (list-packages → package-bindings each) plus the root
+   set. Used as the LAST-RESORT accounting set for dropped names ("does
+   live main bind this name anywhere?"), because (list-bindings) is the
+   SESSION env (353-odd names incl. prims) — NOT the store's binding
+   table, and package names are lazily bound. Slow (~one eval per
+   package); only runs when a vault write is refused over unaccounted
+   drops, never on the happy path. Package-binding "" is the ROOT set
+   (bare names — REPL debris, unresolved seed blockers live there). *)
+let sweep_live_names ~url ~user ~password ~timeout base =
+  let add_from_expr expr acc =
+    match live ~url ~user ~password ~timeout expr |> live_value with
+    | Ok s -> List.rev_append (unwrap_list_of_strings s) acc
+    | Error _ -> acc
+  in
+  let pkgs =
+    match
+      live ~url ~user ~password ~timeout "(list-packages)" |> live_value
+    with
+    | Ok s -> unwrap_list_of_strings s
+    | Error _ -> []
+  in
+  List.fold_left
+    (fun acc pkg ->
+      add_from_expr (Printf.sprintf "(package-bindings %S)" pkg) acc)
+    (add_from_expr "(package-bindings \"\")" base)
+    pkgs
+  |> List.sort_uniq String.compare
+
+(* THE ONE VAULT WRITE (2026-10-02 review): every path that puts live
+   export text into a vault file — pull, snapshot, land — funnels through
+   [vault_write]: same refusals (hand-authored with no live content /
+   gut / unaccounted drops / unparseable), same comment-preserving
+   merge, same reporting. Before this, snapshot was guarded but
+   pull/land wrote RAW generator output (pull overwrote 20 packages on
+   2026-10-01/02 and only escaped comment loss because they happened to
+   be comment-free). [~verb] labels messages; [~dry] computes and
+   reports everything without touching disk; [~live_names] is the
+   dropped-name accounting base; [~sweep] (optional) fetches a wider
+   live-name set for one retry when a refusal is about unaccounted
+   drops. Returns process exit code: 0 wrote (or would), 2 refusal —
+   guards are load-bearing, never "best effort". *)
+let vault_write ~(sweep : unit -> string list) ~verb ~path ~new_text ~live_names
+    ~force ~dry : int =
+  let old_text =
+    if Sys.file_exists path then read_file path else ""
+  in
+  let rec attempt ~live_names =
+    Pp_sync_merge.plan_write ~old_text ~new_text ~live_names ~force
+  in
+  let report outcome =
+    match outcome with
+    | Pp_sync_merge.Refused reason ->
+        Printf.eprintf "  REFUSED %s %s: %s\n%!" verb path reason;
+        2
+    | Pp_sync_merge.Write wr ->
+      if dry then
+        Printf.printf "  DRY %s %s (%d bytes would be written): %s\n%!" verb
+          path (String.length wr.text)
+          (Pp_sync_merge.describe_write
+             (Pp_sync_merge.Write wr))
+      else begin
+        write_file path wr.text;
+        Printf.printf "  %s %s (%d bytes): %s\n%!" verb path
+          (String.length wr.text)
+          (Pp_sync_merge.describe_write (Pp_sync_merge.Write wr))
+      end;
+      let rep = wr.report in
+      if wr.raw && old_text <> "" then
+        (* a raw overwrite (only via --force) has no comment knowledge —
+           warn loudly if the file it replaces has interior comments *)
+        Printf.printf "    note: raw write replaces a file with %d \
+                       comment lines — they will be LOST.\n%!"
+          (Pp_sync_merge.count_comment_lines old_text);
+      if rep.removed <> [] then
+        Printf.printf "    note: %d name(s) removed from this file — live \
+                       main still binds them (re-homed to another \
+                       package or root) — the vault keeps ONE file per \
+                       family: %s\n%!"
+          (List.length rep.removed) (String.concat ", " rep.removed);
+      if wr.hand then
+        Printf.printf "    note: hand-authored file MERGED — custom header \
+                       kept, unchanged forms kept verbatim.\n%!";
+      (match (not wr.raw, rep.changed_with_comments) with
+       | true, names when names <> [] ->
+           Printf.printf "    %-26s %s the vault still has old comments to \
+                          re-attach by hand: %s\n%!"
+             "changed-with-comments:"
+             (string_of_int (List.length names))
+             (String.concat ", " names)
+       | _ -> ());
+      0
+  in
+  (* first attempt with the caller's base names; the sweep (pull/land
+     only, and only when the base says a drop is unaccounted) fetches a
+     WIDER live-name set once and retries — it can only widen, never
+     narrow; a refusal after the sweep is what gets printed. The root
+     set + session env in the base keep the common path cheap. *)
+  (match attempt ~live_names with
+   | Pp_sync_merge.Refused _ ->
+       let wider = sweep () in
+       attempt ~live_names:(live_names @ wider) |> report
+   | outcome -> report outcome)
+
+let cmd_pull ~url ~user ~password ~timeout ~force ~dry package =
   (* vault-hygiene (i-1788671623-1, i-1788671331-d): refusals are checked
      BEFORE any network call, so a refused name cannot write the vault.
      The (root) namespace is not a package (root-branch lens dumps belong
      in gitignored backups/ via `pp-sync snapshot --branch <ref>`);
-     sub-prefix names (notes/capture, …) are not packages either — pull
+     sub-prefix names (notes/capture, ...) are not packages either — pull
      used to export them as stale nested libs/<pkg>/<sub>/lib.pp dumps
-     that boot never seeds and that drifted against the family monolith. *)
+     that boot never seeds and that drifted against the family monolith.
+     2026-10-02: pull is a guarded MERGE (vault_write), no longer a raw
+     overwrite — a capture verb must not strip interior comments it
+     can preserve. --force restores the old raw clobber. *)
   if package = "" then begin
     prerr_endline "pull: need package name";
     2
@@ -359,6 +468,30 @@ let cmd_pull ~url ~user ~password ~timeout package =
       prerr_endline ("pull: " ^ msg);
       2
   | None ->
+  (* VAULT AUTHORITY: the vault mirrors system/main, so a pull READS main
+     (checkout + restore), not whatever garden branch the session is
+     on — capturing a garden branch into libs/ would write personal
+     state into the mirror (use `snapshot --branch <ref> --out
+     backups/<ref>/` for that). *)
+  let prev_branch =
+    match current_branch ~url ~user ~password ~timeout with
+    | s -> String.trim s
+    | exception _ -> ""
+  in
+  let restore () =
+    if prev_branch <> "" && prev_branch <> "system/main" then
+      ignore (checkout_ref ~url ~user ~password ~timeout prev_branch)
+  in
+  let checkout_rc =
+    if prev_branch = "system/main" then 0
+    else
+      match checkout_ref ~url ~user ~password ~timeout "system/main" with
+      | Ok () -> 0
+      | Error e -> prerr_endline ("pull: checkout system/main: " ^ e); 1
+  in
+  if checkout_rc <> 0 then begin restore (); 2 end
+  else begin
+    Printf.printf "(pulling %s from system/main — the vault mirrors main)\n%!" package;
     match
       live ~url ~user ~password ~timeout
         (Printf.sprintf "(export-package %S)" package)
@@ -366,12 +499,45 @@ let cmd_pull ~url ~user ~password ~timeout package =
     with
     | Error e ->
         prerr_endline e;
+        restore ();
         1
     | Ok text ->
         let path = pkg_path package in
-        write_file path text;
-        Printf.printf "wrote %s (%d bytes)\n" path (String.length text);
-        0
+        (* live_names base for dropped-name accounting: the names in THIS
+           export + the root set (package-bindings "" — bare REPL/seed
+           names live there) + the session env as harmless extra. A drop
+         still unaccounted triggers one sweep (sweep_live_names) —
+         (list-bindings) alone is NOT the store binding set (session env,
+         lazily bound: 353 names incl. prims, not the ~1k function rows). *)
+        let base =
+          let of_text =
+            List.map (fun (n, _) -> n) (bodies_of_export text)
+          in
+          let root =
+            match
+              live ~url ~user ~password ~timeout "(package-bindings \"\")"
+              |> live_value
+            with
+            | Ok s -> unwrap_list_of_strings s
+            | Error _ -> []
+          in
+          let session =
+            match
+              live ~url ~user ~password ~timeout "(list-bindings)" |> live_value
+            with
+            | Ok s -> unwrap_list_of_strings s
+            | Error _ -> []
+          in
+          List.rev_append of_text (List.rev_append root session)
+        in
+        let code =
+          vault_write
+            ~sweep:(fun () -> sweep_live_names ~url ~user ~password ~timeout [])
+            ~verb:"pull" ~path ~new_text:text ~live_names:base ~force ~dry
+        in
+        restore ();
+        code
+  end
 
 let cmd_push ~url ~user ~password ~timeout package =
   if package = "" then begin
@@ -414,12 +580,12 @@ let cmd_push ~url ~user ~password ~timeout package =
           Printf.printf "pushed %s → live via load-string\n" path;
           0
 
-let cmd_pull_all ~url ~user ~password ~timeout =
+let cmd_pull_all ~url ~user ~password ~timeout ~force ~dry =
   let pkgs = discover_packages ~url ~user ~password ~timeout in
   List.fold_left
     (fun rc pkg ->
       Printf.printf "--- pull %s ---\n" pkg;
-      let code = cmd_pull ~url ~user ~password ~timeout pkg in
+      let code = cmd_pull ~url ~user ~password ~timeout ~force ~dry pkg in
       if code <> 0 then code else rc)
     0 pkgs
 
@@ -439,14 +605,18 @@ let cmd_reseed ~url ~user ~password ~timeout ~force package =
       2
   | None ->
     (* Vault-drift guard (card 8dff7c9e): reseed is an explicit clobber of
-       system/main from libs/. A live-only define (bound on main but absent
-       from the vault) would be DESTROYED silently. Diff the live
-       package-bindings against the vault file first, and refuse (listing
-       the names) unless the operator passes --force. The natural recovery
-       is `pp-sync snapshot` to pull the live-only rows into the vault, then
-       reseed. Read-only when it refuses. *)
+       system/main from libs/. TWO refusals, both keying the same
+       hazard — reseed overwrites live with vault text on purpose, so
+       the vault must be PROVEN not-stale in both directions:
+         (a) live-only NAMES (bound on main, absent from the vault) —
+             reseed would delete them;
+         (b) same-name BODY drift (2026-10-02) — live bodies newer than
+             vault bodies; reseed would silently roll them back.
+       Read-only when refusing; --force is the deliberate override;
+       natural recovery is `pp-sync pull %s` (merges live into the
+       vault, guarded) then reseed. *)
+    let path = pkg_path_under (libs_dir ()) package in
     let live_only =
-      let path = pkg_path_under (libs_dir ()) package in
       let local =
         if Sys.file_exists path then parse_local_defines (read_file path)
         else []
@@ -463,39 +633,84 @@ let cmd_reseed ~url ~user ~password ~timeout ~force package =
           |> List.filter (fun n -> not (List.mem n local_set))
           |> List.sort_uniq String.compare
     in
+    let proceed () =
+      match
+        live ~url ~user ~password ~timeout
+          (Printf.sprintf "(reseed-package %S)" package)
+        |> live_value
+      with
+      | Error e ->
+          prerr_endline e;
+          2
+      | Ok msg ->
+          print_endline msg;
+          0
+    in
     if live_only <> [] && not force then begin
       Printf.eprintf
         "reseed: REFUSED — %s has %d live-only define(s) absent from the vault.\n\
-         Reseeding would DELETE them. Run `pp-sync snapshot` first to pull\n\
+         Reseeding would DELETE them. Run `pp-sync pull %s` first to merge\n\
          them into libs/, or pass --force to clobber anyway.\n\
          live-only: %s\n%!"
-        package (List.length live_only)
+        package (List.length live_only) package
         (String.concat ", " live_only);
       2
-    end else
-    match
-      live ~url ~user ~password ~timeout
-        (Printf.sprintf "(reseed-package %S)" package)
-      |> live_value
-    with
-    | Error e ->
-        prerr_endline e;
-        1
-    | Ok msg ->
-        print_endline msg;
-        0
+    end
+    else if not force then begin
+      (* BODY guard (2026-10-02 review): the live-only guard was half
+         blind. When the SAME names sit on both sides with different
+         CANONICAL bodies — the habitat-fewer fix clobber — reseed
+         overwrites live main with the vault text, SILENTLY. Run the
+         body drift view (canned by `pp-sync status <pkg>`); if live
+         bodies differ, merge them into the vault first (`pull %s`) or
+         review; reseed is then a no-op refresh the boot seed cannot
+         give existing names. --force stands for "the vault is truly
+         newer, clobber live on purpose". *)
+      let body_stale =
+        match
+          live ~url ~user ~password ~timeout
+            (Printf.sprintf "(export-package %S)" package)
+          |> live_value
+        with
+        | Error _ -> []  (* a live error must not silently permit a
+                            clobber — unknown ≠ clean; refuse to guess *)
+        | Ok text ->
+            let local_bodies =
+              if Sys.file_exists path then
+                match parse_local_bodies (read_file path) with
+                | Some bs -> bs
+                | None -> []
+              else []
+            in
+            body_divergence ~local:local_bodies
+              ~live:(bodies_of_export text)
+            |> (fun (changed, _, _) -> changed)
+      in
+      (match body_stale with
+       | (n, _, _) :: _ ->
+           Printf.eprintf
+             "reseed: REFUSED — %d same-name live body(ies) DIFFER from the\n\
+              vault (e.g. %s). Live is usually NEWER (habitat-side fixes —\n\
+              the vault-authority point); reseed would clobber them with\n\
+              vault text. Run `pp-sync pull %s` to merge live into the\n\
+              vault, review with `pp-sync status -v`, then reseed.\n\
+              --force to clobber anyway.\n%!"
+             (List.length body_stale) n package;
+           2
+       | [] -> proceed ())
+    end
+    else proceed ()
 
-let cmd_snapshot ~url ~user ~password ~timeout ~branch ~out_dir ~force =
+let cmd_snapshot ~url ~user ~password ~timeout ~branch ~out_dir ~force ~dry =
   let prev_branch =
     match live ~url ~user ~password ~timeout "(current-branch)" |> live_value with
     | Ok s -> String.trim s
     | Error _ -> ""
   in
-  let target =
-    if branch <> "" then branch
-    else if prev_branch <> "" then prev_branch
-    else "system/main"
-  in
+  (* VAULT AUTHORITY: a snapshot writes the mirror of one branch.
+     Default target = system/main (the vault's mirror source); a
+     personal/dev ref dumps to backups/<ref>/ (never libs/). *)
+  let target = if branch <> "" then branch else "system/main" in
   let out_root =
     if out_dir <> "" then
       if Filename.is_relative out_dir then
@@ -516,23 +731,46 @@ let cmd_snapshot ~url ~user ~password ~timeout ~branch ~out_dir ~force =
           (Printf.sprintf "(checkout %S)" target)
         |> live_value
       with
-      | Error e ->
-          prerr_endline ("snapshot checkout: " ^ e);
-          1
+      | Error e -> prerr_endline ("snapshot checkout: " ^ e); 1
       | Ok msg ->
           if String.trim msg = "checked out" then 0
-          else begin
-            prerr_endline ("snapshot checkout: " ^ msg);
-            1
-          end
+          else begin prerr_endline ("snapshot checkout: " ^ msg); 1 end
   in
   if checkout_rc <> 0 then checkout_rc
   else begin
-    Printf.printf "snapshot branch=%s → %s\n%!" target out_root;
+    Printf.printf "snapshot branch=%s → %s%s\n%!" target out_root
+      (if dry then " (DRY RUN — nothing will be written)" else "");
     let pkgs = discover_packages ~url ~user ~password ~timeout in
-    let rc =
+    (* PASS 1 (exports first): every export text is collected AND its
+       define names folded into the live-name accounting base. (list-bindings)
+       is the lazily-bound session env (~353 names incl. prims) — NOT
+       the store's binding table — so the export sweep plus the root set
+       (package-bindings "" = bare REPL/seed names) is what makes
+       dropped-name accounting complete: a re-homed name (ui/badge
+       moving lookbook→ui) merges with its drop reported, a vault-only
+       name refuses BY NAME. *)
+    let root_and_session =
+      let root =
+        match
+          live ~url ~user ~password ~timeout "(package-bindings \"\")"
+          |> live_value
+        with
+        | Ok s -> unwrap_list_of_strings s
+        | Error _ -> []
+      in
+      let session =
+        match
+          live ~url ~user ~password ~timeout "(list-bindings)" |> live_value
+        with
+        | Ok s -> unwrap_list_of_strings s
+        | Error _ -> []
+      in
+      List.rev_append root session
+    in
+    let fetch_rc = ref 0 in
+    let exports =
       List.fold_left
-        (fun rc pkg ->
+        (fun acc pkg ->
           match
             live ~url ~user ~password ~timeout
               (Printf.sprintf "(export-package %S)" pkg)
@@ -540,88 +778,46 @@ let cmd_snapshot ~url ~user ~password ~timeout ~branch ~out_dir ~force =
           with
           | Error e ->
               Printf.eprintf "%s: %s\n%!" pkg e;
-              if rc <> 0 then rc else 1
-          | Ok text ->
-              if String.trim text = "" then rc
-              else begin
-                let path = pkg_path_under out_root pkg in
-                (* SNAPSHOT WRITE (card 8dff7c9e): three protections, in
-                   order.
-                   1. A hand-authored vault file (no 'exported from live
-                      branch' header) is CURATED SOURCE — never replace
-                      it with generator output.
-                   2. A live export with fewer defines than the file would
-                      GUT it (on-demand skins libs/theme-* are never
-                      seeded; export-package cannot see them).
-                   3. Otherwise MERGE: forms whose AST is unchanged keep
-                      the OLD text verbatim (comments + formatting), only
-                      genuinely changed forms take the new text. The old
-                      generator write discarded every interior comment
-                      (filmstrip 146 -> 2). --force overrides 1 and 2. *)
-                let count_defines s =
-                  let re = Re.Perl.compile_pat {|\(define[ \t\(]|} in
-                  List.length (Re.all re s)
-                in
-                let generated re = Pp_sync_merge.is_generated re in
-                let new_defs = count_defines text in
-                let old_text =
-                  if Sys.file_exists path then read_file path else ""
-                in
-                let old_defs = count_defines old_text in
-                let hand_authored =
-                  old_text <> "" && not (generated old_text)
-                in
-                if (not force) && hand_authored then begin
-                  Printf.eprintf
-                    "  REFUSED %s: hand-authored vault file (no 'exported from \
-                     live branch' header) — a snapshot would replace curated \
-                     source with generator output. Edit it by hand, or use \
-                     --force to overwrite deliberately.\n%!"
-                    path;
-                  if rc = 0 then 2 else rc
-                end
-                else if (not force) && new_defs < old_defs then begin
-                  Printf.eprintf
-                    "  REFUSED %s: live export has %d define(s), vault file \
-                     has %d — a snapshot would GUT it. Live main is probably \
-                     missing this package (on-demand skin / hand-authored \
-                     file). Use --force to overwrite deliberately.\n%!"
-                    path new_defs old_defs;
-                  if rc = 0 then 2 else rc
-                end else begin
-                  let out_text, rep =
-                    if old_text = "" || force then (text, Pp_sync_merge.empty_report)
-                    else Pp_sync_merge.merge ~old_text ~new_text:text
-                  in
-                  write_file path out_text;
-                  Printf.printf
-                    "  wrote %s (%d bytes, %d defines; %d forms kept verbatim)" path
-                    (String.length out_text) new_defs rep.reused;
-                  if rep.changed <> [] then
-                    Printf.printf ", %d changed" (List.length rep.changed);
-                  if rep.changed_with_comments <> [] then
-                    Printf.printf
-                      ", %d changed form(s) lost old comments: %s"
-                      (List.length rep.changed_with_comments)
-                      (String.concat ", " rep.changed_with_comments);
-                  Printf.printf "\n%!";
-                  if rep.removed <> [] then
-                    Printf.printf "    note: %d name(s) no longer on live main \
-                                   (kept? no — dropped): %s\n%!"
-                      (List.length rep.removed) (String.concat ", " rep.removed);
-                  rc
-                end
-              end)
-        0 pkgs
+              if !fetch_rc = 0 then fetch_rc := 1;
+              acc
+          | Ok text -> (pkg, text) :: acc)
+        [] pkgs
     in
+    let live_names =
+      List.fold_left
+        (fun acc (_, text) ->
+          List.fold_left
+            (fun a (n, _) -> n :: a) acc (bodies_of_export text))
+        root_and_session exports
+      |> List.sort_uniq String.compare
+    in
+    (* PASS 2 (the writes): THE ONE WRITE PATH — snapshot / pull / land
+       all decide through vault_write (hand-authored zero-live refusal,
+       unaccounted-drop refusal, gut refusal, comment-preserving merge
+       with a custom header KEPT — the std case). DRY RUN compares
+       against the file at the same path a real run would touch, so its
+       report IS the report you would get (an `--out /tmp` preview
+       bypassed every guard: no old file there to compare). *)
+    let write_rc = ref 0 in
+    List.iter
+      (fun (pkg, text) ->
+        if String.trim text = "" then ()
+        else begin
+          let path = pkg_path_under out_root pkg in
+          let code =
+            vault_write ~sweep:(fun () -> []) ~verb:"snapshot" ~path
+              ~new_text:text ~live_names ~force ~dry
+          in
+          if code <> 0 && !write_rc = 0 then write_rc := code
+        end)
+      (List.rev exports);
     (* Restore previous branch when we switched. *)
     (if prev_branch <> "" && prev_branch <> target then
        ignore
          (live ~url ~user ~password ~timeout
             (Printf.sprintf "(checkout %S)" prev_branch)));
-    rc
+    if !write_rc <> 0 then !write_rc else !fetch_rc
   end
-
 
 let git_run ~cwd args : (int * string) =
   let prev = Sys.getcwd () in
@@ -761,9 +957,42 @@ let cmd_land ~url ~user ~password ~timeout ~from_ref ~package ~names =
                           1
                       | Ok text ->
                           let path = pkg_path package in
-                          write_file path text;
-                          Printf.printf "land step3: wrote %s (%d bytes)\n%!"
-                            path (String.length text);
+                          (* ONE WRITE PATH (2026-10-02 review): land used
+                             to write RAW export output over the vault —
+                             the blessed promote path stripped comments
+                             itself (filmstrip would lose 144 of its 146
+                             lines here). Same guarded merge as snapshot /
+                             pull; a REFUSED vault file (e.g. live export
+                             empty for a hand-authored package) leaves
+                             main promoted and the vault untouched — say
+                             so loudly rather than silently gut libs/. *)
+                          let live_names =
+                            (* full main binding set, post-promote: the
+                               just-landed names must all be bound (they
+                               were); every name accounts. [] on fetch
+                               failure = conservative. *)
+                            (match
+                               live ~url ~user ~password ~timeout "(list-bindings)"
+                               |> live_value
+                             with
+                             | Ok s -> unwrap_list_of_strings s
+                             | Error _ -> [])
+                          in
+                          let code =
+                            vault_write
+                              ~sweep:(fun () -> sweep_live_names ~url ~user ~password ~timeout [])
+                              ~verb:"land" ~path ~new_text:text ~live_names
+                              ~force:false ~dry:false
+                          in
+                          if code <> 0 then begin
+                            Printf.eprintf
+                              "land: vault NOT refreshed (refused) — main IS \
+                               promoted; run `pp-sync pull %s` after review\n%!"
+                              package;
+                            restore ();
+                            1
+                          end else begin
+                          Printf.printf "land step3: wrote %s\n%!" path;
                           let root = repo_root () in
                           let rel = "libs/" ^ package ^ "/lib.pp" in
                           let names_msg =
@@ -830,6 +1059,7 @@ let cmd_land ~url ~user ~password ~timeout ~from_ref ~package ~names =
                                   (if sha = "" then "?" else sha);
                                 restore ();
                                 0
+                          end
                 end
 
 let env_url =
@@ -843,7 +1073,7 @@ let env_timeout =
   | None -> 180.
 
 let main command package names verbose names_only url user password password_file timeout
-    branch out_dir from_ref force =
+    branch out_dir from_ref force dry =
   let password =
     Pp_client.resolve_password ~password ~password_file
   in
@@ -857,12 +1087,12 @@ let main command package names verbose names_only url user password password_fil
     | "status" ->
         cmd_status ~url ~user ~password ~timeout ~verbose ~names_only ~branch
           package
-    | "pull" -> cmd_pull ~url ~user ~password ~timeout package
+    | "pull" -> cmd_pull ~url ~user ~password ~timeout ~force ~dry package
     | "push" -> cmd_push ~url ~user ~password ~timeout package
-    | "pull-all" -> cmd_pull_all ~url ~user ~password ~timeout
+    | "pull-all" -> cmd_pull_all ~url ~user ~password ~timeout ~force ~dry
     | "reseed" -> cmd_reseed ~url ~user ~password ~timeout ~force package
     | "snapshot" ->
-        cmd_snapshot ~url ~user ~password ~timeout ~branch ~out_dir ~force
+        cmd_snapshot ~url ~user ~password ~timeout ~branch ~out_dir ~force ~dry
     | "land" ->
         cmd_land ~url ~user ~password ~timeout ~from_ref ~package ~names
     | _ ->
@@ -908,7 +1138,8 @@ let timeout =
 
 let branch =
   let doc =
-    "Branch ref for snapshot / status (default: current; e.g. system/main). \
+    "Branch ref for snapshot / status (default: system/main — the vault \
+     mirrors main; other refs show garden drift and dump to backups/). \
      status restores the session branch after the comparison."
   in
   Arg.(value & opt string "" & info [ "branch"; "b" ] ~docv:"REF" ~doc)
@@ -929,17 +1160,28 @@ let from_ref =
 
 let force =
   let doc =
-    "reseed: clobber system/main even when the package has live-only \
-     defines absent from the vault (which reseed would delete). snapshot: \
-     allow writing a vault file smaller than the one it replaces (only for \
-     a deliberate deletion)."
+    "THE deliberate override of the vault guards (they exist because the \
+     danger is silent data loss): pull/snapshot/land write RAW generator \
+     output ignoring the hand-authored / gut refusals; reseed clobbers \
+     main past live-only names and body drift. Always review the refusal \
+     message first — --force means you read it and chose anyway."
   in
   Arg.(value & flag & info [ "force" ] ~doc)
+
+let dry =
+  let doc =
+    "pull / pull-all / snapshot: compute every guard + merge report and \
+     write NOTHING (a true dry run — the report is against the same paths \
+     a real run would touch, unlike an --out /tmp preview, which bypassed \
+     the guards)."
+  in
+  Arg.(value & flag & info [ "dry-run" ] ~doc)
 
 let term =
   Term.(
     const main $ command $ package $ names $ verbose $ names_only $ url $ user
-    $ password $ password_file $ timeout $ branch $ out_dir $ from_ref $ force)
+    $ password $ password_file $ timeout $ branch $ out_dir $ from_ref $ force
+    $ dry)
 
 let cmd =
   let doc =

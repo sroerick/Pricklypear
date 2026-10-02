@@ -49,7 +49,12 @@ let test_packages_of () =
   Alcotest.(check (list string)) "dirs alone" [ "notes" ]
     (packages_of ~dirs:[ "notes" ] ~bindings:[]);
   Alcotest.(check (list string)) "bindings alone" [ "todo" ]
-    (packages_of ~dirs:[] ~bindings:[ "todo/item/add" ])
+    (packages_of ~dirs:[] ~bindings:[ "todo/item/add" ]);
+  (* main binds a stray define literally named "/" (REPL debris): its
+     family is EMPTY — discovery must not invent family ""→_root
+     (2026-10-02 dry-run found libs/_root would be written) *)
+  Alcotest.(check (list string)) "stray '/' cannot invent _root"
+    [] (packages_of ~dirs:[] ~bindings:[ "/"; "/x/" ])
 
 let test_vault_refusal () =
   let refused p =
@@ -61,6 +66,9 @@ let test_vault_refusal () =
     (refused "todo/item/assign");
   Alcotest.(check bool) "family passes" false (refused "notes");
   Alcotest.(check bool) "plain package passes" false (refused "todo");
+  (* banned families refuse loudly on explicit verbs (their live rows
+     are known duplicates: libs/list was deleted — 6ed8656, 628416f) *)
+  Alcotest.(check bool) "banned 'list' refused" true (refused "list");
   (match vault_refusal "notes/capture" with
    | Some msg ->
        Alcotest.(check bool) "refusal points at the family file" true
