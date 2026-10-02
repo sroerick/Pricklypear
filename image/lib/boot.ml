@@ -368,6 +368,18 @@ let start_eio ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t) : unit =
       with exn ->
         Printf.eprintf "[boot] function_stats flush fiber exited: %s\n%!"
           (Printexc.to_string exn));
+  (* product-experience.activity-ledger: identity-attributed,
+     structure-only event stream (migration 035). Same 031 shape as
+     function_stats — the request path pushes to an in-process ring, this
+     fiber flushes with plain INSERTs and prunes set-based. Never tree
+     datums. *)
+  Eio.Fiber.fork ~sw (fun () ->
+      try
+        Activity_ledger.flush_loop ~clock:(Eio.Stdenv.clock env)
+          ~store:session.store
+      with exn ->
+        Printf.eprintf "[boot] activity_ledger flush fiber exited: %s\n%!"
+          (Printexc.to_string exn));
   (* image.per-identity-sessions: HTTP requests run on per-identity
      sessions (own env, own pgx connection); the boot session keeps the
      REPL endpoint + auth lookups. *)
