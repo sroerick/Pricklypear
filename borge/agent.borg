@@ -367,17 +367,17 @@
     |))))
 
   (subsection filmstrip-shell
-   (doc "The glochid shell IS a filmstrip (filmstrip.borg, working on the agent host): a cascade strip (interface PICKER — column 0 entries are route leaves over the agent's OWN surfaces) above an niri-style content strip of ordinary route panes — with a persisted AXIS toggle (strip ⇆ / rail ⇅): horizontal film row (default) or a LEFT-RAIL mode — the shell collapses to a ~20rem sidebar (trees: windows / code / prims per filmstrip.borg rail-trees-v4 + sidebar-main-dichotomy) and the FOCUSED main pane is lifted into the main window (position:fixed — open-or-focus jumps it there). Same seam as the habitat shell — Nopales fragments on the agent route table — with two host seams swapped: the workspace row persists to a LOCAL file (fs prims), and the cascade column 0 is the agent's own surfaces (chat/code/bindings/sessions/settings, all leaves — trees, not menu walks), not by todo/notes/calendar.")
+   (doc "The glochid shell IS a filmstrip (filmstrip.borg, working on the agent host): a LEFT-RAIL sidebar shell — the cascade strip and the AXIS toggle are retired on this host (operator decisions 2026-09-19/2026-09-20). The rail's first controlbox word is a zero-JS <details> START MENU (entries POST /filmstrip/open, open-or-focus) in place of the old separate cascade/launchbar column; the start menu reads the agent's OWN surfaces (chat/code/bindings/sessions/settings, all leaves). The FOCUSED main pane is lifted into the main window (position:fixed — open-or-focus jumps it there). The shell axis is pinned to col (sidebar); glochid/axis returns col unconditionally and the #fs-axis sentinel stays inert (CSS :has keys the sidebar layout off it). Same seam as the habitat shell — Nopales fragments on the agent route table — with two host seams swapped: the workspace row persists to a LOCAL file (fs prims), and the app list is the agent's own surfaces, not by todo/notes/calendar. SCOPE GUARD: glochid HOST only — the habitat shell keeps its axis toggle and cascade unless a separate decision removes them there.")
    (status implemented)
    (implements agent/lib/surface.ml agent/lib/http_ui.ml libs/filmstrip/lib.pp libs/css/lib.pp)
    (verify
-    (smoke "GET / renders the shell: #fs-cascade + #fs-content + rail tabs + tree boxes + key sentinels, zero <script> tags")
-    (smoke "cascade leaf click (or POST /filmstrip/open) /code -> pane appears with the dispatched code fragment + .focused; workspace round-trips through .agent/workspace.json on reload")
+    (smoke "GET / renders the sidebar shell: #fs-content + rail tabs (with the START MENU as the first controlbox word) + tree boxes + key sentinels, zero <script> tags")
+    (smoke "start-menu entry (or POST /filmstrip/open) /code -> pane appears with the dispatched code fragment + .focused; workspace round-trips through .agent/workspace.json on reload")
     (smoke "trees in the sidebar: the windows tree lists panes under their desktop rows (switch action) + the shelf subtree; the code tree walks fs/ls; the prims tree walks the habitat grammar — no launcher, no pane-tag strip, no desktop switcher controlbox (sidebar-main-dichotomy)")
     (smoke "every rail-tree action and pane-head action renders a GLYPH carrying its verb word as tooltip + aria-label + data-verb (filmstrip.borg action-glyphs); no verb words are rendered as button labels and the actions fold is narrow-only")
     (smoke "alt+arrow focus POSTs answer OOB class swaps; close answers OOB delete + focus hand-off")
     (smoke "POST /filmstrip/* dispatch through the route-table POST fallback; hx-vals form params reach request-param")
-    (smoke "POST /filmstrip/orient toggles the persisted axis; OOB sentinel+button swap keeps live pane DOM; reload renders the stored axis; width presets become height presets in the rail (CSS flex-direction flip)"))
+    (smoke "glochid/axis returns col; POST /filmstrip/orient is GONE for this host (retired 2026-09-19); the #fs-axis sentinel is present and inert"))
    (details
     (doc (|
          HOST SEAMS (what differs from the habitat shell:
@@ -467,7 +467,9 @@
          dialect gotchas apply (let* single-body; exact-match routes;
          cons-pair counting for length).
 
-         AXIS TOGGLE (v addition, 2026-09-11): POST /filmstrip/orient
+         AXIS TOGGLE (v addition, 2026-09-11; RETIRED for the glochid
+         host 2026-09-19 per operator decision BORGE-1789879934):
+         POST /filmstrip/orient
          flips the ws row's \"axis\" field (row=horizontal film, col=
          LEFT RAIL — the shell narrows to a sidebar; the cascade stacks
          as a vertical interface menu; trees render beneath, purely via
