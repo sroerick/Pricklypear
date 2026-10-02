@@ -268,13 +268,28 @@ curl -sS "$PP_URL/agent.txt" | head
   on main, so editing an EXISTING define is committed but never deployed.
   Work the habitat (personal/dev) → promote;  refresh the vault with
   `pp-sync snapshot`. Kernel changes still ship through the release.
-- **Drift view:** `pp-sync status -b system/main <pkg>` compares
-  canonical AST **bodies**, not just names. `body-stale` names are the
+- **Drift view:** `pp-sync status [pkg]` compares the vault against
+  **system/main by default** (checkout + restore) — canonical AST
+  **bodies**, not just names. `body-stale` names are the
   git-has-the-fix / main-does-not signal; `only-local`/`only-live` are
   name-set drift. `--names-only` is the fast blind pass. Run it before
-  trusting that a `.pp` change deployed (`body-stale: 0` = honestly live).
-  Never `reseed` a drifted package to "land" a fix — that clobbers every
-  live-only define (the reseed guard refuses without `--force`).
+  trusting that a `.pp` change deployed (`body-stale: 0` = honestly
+  live).
+  Never `reseed` a drifted package to "land" a fix — the reseed guard
+  refuses on live-only names AND same-name body drift (both mean
+  "converge first": `pull` the package, review, then reseed; `--force`
+  is the deliberate clobber).
+- **ONE guarded write path (2026-10-02 review):** `pull`, `snapshot`
+  and `land` all write the vault through the same gate
+  (`Pp_sync_merge.plan_write`): refuse hand-authored files with zero
+  live content, MERGE hand-authored files WITH live content keeping
+  the custom header (std merges, theme-* skins refuse), refuse to
+  drop a name live main binds nowhere (dropped-name accounting — main
+  is append-only so a vault-only name is an anomaly, refused by name),
+  otherwise comment-preserving merge. `--force` overrides loudly; `--dry-run` previews honestly
+  (`--out /tmp` previews bypass guards — don't use them to approve).
+  `land <pkg>` = promote to main + vault refresh + commit in one.
+  Full workflow doc: `docs/pp-sync-workflow.md`.
 - **Snapshot is comment-preserving** (branching.vault-authority,
   2026-10-02). The vault is literate source; `export-package` emits no
   interior comments, so `pp-sync snapshot` MERGES: unchanged forms keep
