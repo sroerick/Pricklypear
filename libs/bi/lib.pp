@@ -34,13 +34,11 @@
                 snap
                 "updated_at"
                 now))))))))
-  "Refresh the cached metrics snapshot row (create or update)."
 
 (define bi/dashboard
   (lambda
     ()
     (seq (bi/seed-sample-data) (bi/dashboard-html))))
-  "Seed sample data if empty, then render the dashboard HTML page."
 
 (define bi/dashboard-html
   (lambda
@@ -83,16 +81,15 @@
               (list
                 (html/text "API: ")
                 (html/code "(bi/metrics-snapshot)")
-                (html/text " · ")
+                (html/text " &middot; ")
                 (html/code "(bi/dashboard/source)")
-                (html/text " · ")
+                (html/text " &middot; ")
                 (html/a "/bi" (html/text "refresh"))))))))))
-  "Render the full P&L dashboard HTML page from the live metrics snapshot."
 
 (define bi/dashboard/preview-note
   (lambda
     ()
-    "Branch preview: (fork \"bi-preview\") (checkout \"…/bi-preview\") then edit bi/dashboard-html; merge when ready. Metrics functions stay on main and are read-only to layout agents."))
+    "Branch preview: (fork \"bi-preview\") (checkout \"&hellip;/bi-preview\") then edit bi/dashboard-html; merge when ready. Metrics functions stay on main and are read-only to layout agents."))
 
 (define bi/dashboard/publish
   (lambda
@@ -117,7 +114,6 @@
             "created_at"
             (date-today))))
       "published")))
-  "Install a new bi/dashboard-html source body and record a dashboard-revision; returns \"published\"."
 
 (define bi/dashboard/read
   (lambda
@@ -131,15 +127,12 @@
         (bi/dashboard/source)
         "route"
         "/bi"))))
-  "API summary dict: metrics snapshot, dashboard source, and route."
 
 (define bi/dashboard/source
   (lambda () (function-source "bi/dashboard-html")))
-  "The current bi/dashboard-html function source as a string."
 
 (define bi/fmt-money
   (lambda (n) (string-append "$" (as-str n))))
-  "Format n as a $-prefixed amount string."
 
 (define bi/join-json-array
   (lambda
@@ -150,7 +143,6 @@
         (if (string-eq acc "") x (string-append acc "," x)))
       ""
       xs)))
-  "Join a list of JSON fragments into one comma-separated array body."
 
 (define bi/metric-card
   (lambda
@@ -165,7 +157,6 @@
           (html/div
             (html/attr "class" "bi-card-value")
             (html/text (as-str value))))))))
-  "HTML card div showing one labeled metric value."
 
 (define bi/metric/expense-by-category
   (lambda
@@ -185,19 +176,16 @@
                 (if (null? prev) amt (+ (bi/parse-amount prev) amt)))))))
       "{}"
       (rows (quote bi-expense) 500))))
-  "Dict of category -> total expense amount from bi-expense rows."
 
 (define bi/metric/expense-total
   (lambda
     ()
     (bi/sum-amounts (rows (quote bi-expense) 500))))
-  "Total of all bi-expense amounts."
 
 (define bi/metric/profit
   (lambda
     ()
     (- (bi/metric/revenue-total) (bi/metric/expense-total))))
-  "Revenue total minus expense total."
 
 (define bi/metric/profit-margin
   (lambda
@@ -205,13 +193,11 @@
     (let
       ((rev (bi/metric/revenue-total)))
       (if (= rev 0.0) 0.0 (div (bi/metric/profit) rev)))))
-  "Profit as a fraction of revenue; 0.0 when revenue is zero."
 
 (define bi/metric/revenue-total
   (lambda
     ()
     (bi/sum-amounts (rows (quote bi-revenue) 500))))
-  "Total of all bi-revenue amounts."
 
 (define bi/metrics-snapshot
   (lambda
@@ -229,7 +215,6 @@
         (as-str (bi/metric/profit-margin))
         "by_category"
         (bi/metric/expense-by-category)))))
-  "Dict of current BI metrics (revenue, expenses, profit, margin, by_category)."
 
 (define bi/parse-amount
   (lambda
@@ -237,13 +222,11 @@
     (let
       ((f (parse-float (as-str s))))
       (if (null? f) 0.0 f))))
-  "Parse s as a float; 0.0 when not parseable."
 
 (define bi/row-amount
   (lambda
     (row)
     (bi/parse-amount (dict-get (cdr row) "amount"))))
-  "Numeric amount of a (id . fields) data row."
 
 (define bi/seed-sample-data
   (lambda
@@ -351,7 +334,6 @@
           0)
         0)
       "seeded")))
-  "Insert sample expense/revenue rows when empty; returns \"seeded\"."
 
 (define bi/spec-expense-bars
   (lambda
@@ -384,7 +366,6 @@
             "\"x\":{\"field\":\"category\",\"type\":\"nominal\",\"title\":\"Category\"},"
             "\"y\":{\"field\":\"amount\",\"type\":\"quantitative\",\"title\":\"Amount\"}"
             "}}"))))))
-  "Vega-Lite bar-chart spec JSON for expenses by category."
 
 (define bi/sum-amounts
   (lambda
@@ -393,7 +374,6 @@
       (lambda (acc row) (+ acc (bi/row-amount row)))
       0.0
       rows)))
-  "Sum the amounts of the given (id . fields) rows."
 
 (define bi/vega-cdn
   (lambda
@@ -416,7 +396,6 @@
             "src"
             "https://cdn.jsdelivr.net/npm/vega-embed@6")
           "")))))
-  "The Vega/Vega-Lite/Vega-Embed CDN script tags."
 
 (define bi/vega-lite
   (lambda
@@ -441,5 +420,3 @@
               spec
               ",{actions:false}).catch(function(e){el.textContent=String(e);});}"
               "else{setTimeout(go,50);}}go();})();")))))))
-  "HTML div plus script embedding a Vega-Lite chart from its spec JSON."
-

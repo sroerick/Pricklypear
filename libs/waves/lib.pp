@@ -1,117 +1,50 @@
-;; package waves -- superposition of waves, explained in pure Nopales.
-;;
-;; A notebook-style PUBLIC page at /waves. Every number and every curve
-;; on the page is computed by the Nopales interpreter at render time:
-;;
-;;   * the teaching cells run LIVE through the restricted example-eval
-;;     prim (the same engine as the book's run buttons -- the source you
-;;     read IS the source that was evaluated), and
-;;   * the SVG figures are sampled + assembled by waves/points, a pure
-;;     Nopales string fold. No JavaScript anywhere.
-;;
-;; Load: (load-library "waves")  (boot seed also auto-discovers libs/*).
-;; Sync: scripts/pp_sync.py pull|push
-;;
-;; Keep every string ASCII-safe (see weather header): use HTML entities
-;; like &pi; &omega; &Delta; in prose, never raw UTF-8 glyphs.
 
-;; ------------------------------------------------------------ math
-;;
-;; The physics. y(x,t) = a * sin(k*x - w*t + p):
-;;   a  amplitude          k  wavenumber (2*pi / wavelength)
-;;   w  angular frequency  p  phase offset
-;;
-;; Wave 1 is fixed at a=1, k=1, p=0; wave 2's a2/k2/p2 come from the
-;; query string so a reader can steer the experiment. Both share
-;; waves/omega; the figures are SNAPSHOTS at time t (also a param).
 
-(define waves/pi
-  (lambda () (* 4 (atan 1)))
-  "Pi straight from the machine: 4*atan(1).")
+;; ---------- notebook cells (live via example-eval) ----------
 
-(define waves/omega 0.5
-  "Shared angular frequency for both waves (radians per unit time).")
+(define waves/cell
+  (lambda (src)
+    (let ((out (guard
+                 (lambda (e) (string-append "(could not run: " (as-str e) ")"))
+                 (waves/show (example-eval src)))))
+      (html/div
+        (html/attr "class" "nb-cell")
+        (html/join
+          (list
+            (html/pre (html/text src))
+            (html/div
+              (html/attr "class" "nb-out")
+              (string-append "<span class=\"nb-arrow\">=&gt;</span> "
+                             (html/text out))))))))
+  "Notebook cell: the SOURCE you read is evaluated live, right now, by
+the restricted example-eval prim (read-only, budget-capped -- the same
+engine as the book's run buttons). Output appears under the code.")
 
-(define waves/y
-  (lambda (a k w p x t)
-    (* a (sin (+ p (- (* k x) (* w t))))))
-  "Displacement of a traveling sinusoid: y(x,t) = a*sin(k*x - w*t + p).
-Keep the DISPLAY copy waves/y-src in sync with this define.")
+(define waves/cell2
+  (lambda (a b) (html/join (list (waves/cell a) (waves/cell b))))
+  "Two cells back to back.")
 
-(define waves/y-src
-  "(define (waves/y a k w p x t)\n  (* a (sin (+ p (- (* k x) (* w t))))))"
-  "Verbatim display copy of waves/y for the notebook (kept in sync by hand).")
-
-(define waves/sum-at
-  (lambda (a1 k1 p1 a2 k2 p2 x t)
-    (+ (waves/y a1 k1 waves/omega p1 x t)
-       (waves/y a2 k2 waves/omega p2 x t)))
-  "The principle of superposition, as code: the net displacement at any
-(x, t) is the pointwise SUM of the two displacements. Nothing else happens.")
-
-;; ---------- numeric helpers ----------
-
-(define waves/r2
-  (lambda (x) (/ (round (* x 100)) 100.0))
-  "Round to 2 decimals (round yields int; divide by a float to keep decimals).")
-
-(define waves/r3
-  (lambda (x) (/ (round (* x 1000)) 1000.0))
-  "Round to 3 decimals.")
-
-(define waves/rounds
-  (lambda (xs) (map waves/r3 xs))
-  "Round each element of xs to 3 decimals.")
-
-(define waves/num-str
-  (lambda (x)
-    (let ((s (as-str x)))
-      (if (string-eq (substring s (- (string-length s) 1) 1) ".")
-          (string-append s "0")
-          s)))
-  "Plain number string with a trailing dot patched to .0 -- the OCaml
-printer renders whole floats as \"1.\", which neither the Nopales reader
-nor SVG/CSS number syntax accepts when spliced back into text.")
-
-;; ---------- snapshot rows (teaching cells) ----------
-
-(define waves/series
-  (lambda (a k p t n)
-    (waves/rounds
-      (map (lambda (i) (waves/y a k waves/omega p (/ i 2.0) t))
-           (list/range n))))
-  "Snapshot row: rounded displacements at x = 0, 1/2, 1, ... (n-1)/2,
-at time t. This is what one horizontal row of the medium is doing.")
-
-;; ---------- SVG: sampling + assembling, all pure Nopales ----------
-
-(define waves/wpoints
-  (lambda (f n)
-    (let ((xmax (* 4 (waves/pi)))
-          (dn (- n 1.0)))
-      (foldl
-        (lambda (acc i)
-          (let ((x (* xmax (/ i dn))))
-            (string-append acc
-              (waves/num-str (waves/r3 x)) ","
-              (waves/num-str (waves/r3 (f x))) " ")))
-        ""
-        (list/range n))))
-  "Sample f(x) over x in [0, 4*pi] at n points and fold into an SVG
-polyline points string in WORLD coordinates (x in length units, y in
-displacement units). World coords + a <g transform> in waves/figure
-mean one sampling is reused by every figure -- this is the step-budget
-lever that keeps the page inside its 100k-step render budget.")
-
-(define waves/polyline
-  (lambda (color width pts)
-    (string-append
-      "<polyline points=\"" pts
-      "\" fill=\"none\" stroke=\"" color
-      "\" stroke-width=\"" (as-str width)
-      "\" vector-effect=\"non-scaling-stroke\"/>"))
-  "One SVG polyline element; non-scaling stroke keeps line width in
-pixels even inside the world->pixel <g transform>.")
+(define waves/css
+  (lambda ()
+    (html/tag
+      "style"
+      ""
+      (html/join
+        (list
+          ".nb-cell{border:1px solid #ddd;border-radius:8px;margin:.6rem 0;overflow:hidden}"
+          ".nb-cell pre{margin:0;padding:.55rem .8rem;background:rgba(127,127,127,.10);font-size:.88rem;overflow-x:auto;white-space:pre-wrap}"
+          ".nb-out{padding:.45rem .8rem;border-top:1px dashed #ccc;font-family:ui-monospace,monospace;font-size:.88rem;word-break:break-word}"
+          ".nb-arrow{color:#999;margin-right:.35rem}"
+          ".wave-fig{margin:.4rem 0 1rem}"
+          ".wave-fig svg{width:100%;height:auto;border:1px solid #e0e0e0;border-radius:8px;background:#fff}"
+          ".wave-leg{display:flex;gap:1.3rem;flex-wrap:wrap;font-size:.85rem;margin:.1rem 0 .5rem}"
+          ".sw{display:inline-block;width:1.5em;height:.28em;border-radius:2px;vertical-align:middle;margin-right:.35em}"
+          ".fig-cap{font-size:.85rem;color:#666;margin:.3rem .1rem 0}"
+          ".wave-form{display:flex;gap:.9rem;flex-wrap:wrap;align-items:flex-end;margin:.6rem 0 .4rem}"
+          ".wave-form label{display:flex;flex-direction:column;font-size:.78rem;color:#555;gap:.15rem}"
+          ".wave-form input{width:6.5rem}"
+          ".wave-note{font-size:.85rem;color:#777}"))))
+  "Page-local styles (inline, ASCII-safe).")
 
 (define waves/figure
   (lambda (curves w h amp caption)
@@ -141,74 +74,12 @@ pixels even inside the world->pixel <g transform>.")
 per (color width points) triple in curves (world-coord points, mapped
 to pixels by one <g transform>), plus a caption.")
 
-;; ---------- notebook cells (live via example-eval) ----------
-
-(define waves/cell
-  (lambda (src)
-    (let ((out (guard
-                 (lambda (e) (string-append "(could not run: " (as-str e) ")"))
-                 (waves/show (example-eval src)))))
-      (html/div
-        (html/attr "class" "nb-cell")
-        (html/join
-          (list
-            (html/pre (html/text src))
-            (html/div
-              (html/attr "class" "nb-out")
-              (string-append "<span class=\"nb-arrow\">=&gt;</span> "
-                             (html/text out))))))))
-  "Notebook cell: the SOURCE you read is evaluated live, right now, by
-the restricted example-eval prim (read-only, budget-capped -- the same
-engine as the book's run buttons). Output appears under the code.")
-
-(define waves/show
-  (lambda (v) (waves/num-str v))
-  "Display string for a cell result. example-eval already stringifies
-its result; as-str inside num-str passes VStrs through untouched, and
-the trailing-dot patch still fixes whole floats like 1. -> 1.0")
-
-(define waves/cell2
-  (lambda (a b) (html/join (list (waves/cell a) (waves/cell b))))
-  "Two cells back to back.")
-
-;; ---------- page params ----------
-
-(define waves/num-param
-  (lambda (name default)
-    (let ((v (request-param name)))
-      (if (blank? v)
-          default
-          (guard (lambda (e) default) (parse-float v)))))
-  "Query param as a float, default when absent or unparseable.")
-
 ;; ---------- prose + chrome ----------
 
 (define waves/h2
   (lambda (n title)
     (html/tag "h2" "" (string-append (html/text n) ". " (html/text title))))
   "Numbered section heading.")
-
-(define waves/css
-  (lambda ()
-    (html/tag
-      "style"
-      ""
-      (html/join
-        (list
-          ".nb-cell{border:1px solid #ddd;border-radius:8px;margin:.6rem 0;overflow:hidden}"
-          ".nb-cell pre{margin:0;padding:.55rem .8rem;background:rgba(127,127,127,.10);font-size:.88rem;overflow-x:auto;white-space:pre-wrap}"
-          ".nb-out{padding:.45rem .8rem;border-top:1px dashed #ccc;font-family:ui-monospace,monospace;font-size:.88rem;word-break:break-word}"
-          ".nb-arrow{color:#999;margin-right:.35rem}"
-          ".wave-fig{margin:.4rem 0 1rem}"
-          ".wave-fig svg{width:100%;height:auto;border:1px solid #e0e0e0;border-radius:8px;background:#fff}"
-          ".wave-leg{display:flex;gap:1.3rem;flex-wrap:wrap;font-size:.85rem;margin:.1rem 0 .5rem}"
-          ".sw{display:inline-block;width:1.5em;height:.28em;border-radius:2px;vertical-align:middle;margin-right:.35em}"
-          ".fig-cap{font-size:.85rem;color:#666;margin:.3rem .1rem 0}"
-          ".wave-form{display:flex;gap:.9rem;flex-wrap:wrap;align-items:flex-end;margin:.6rem 0 .4rem}"
-          ".wave-form label{display:flex;flex-direction:column;font-size:.78rem;color:#555;gap:.15rem}"
-          ".wave-form input{width:6.5rem}"
-          ".wave-note{font-size:.85rem;color:#777}"))))
-  "Page-local styles (inline, ASCII-safe).")
 
 (define waves/legend
   (lambda (amp)
@@ -220,6 +91,29 @@ the trailing-dot patch still fixes whole floats like 1. -> 1.0")
           (html/span "" "<span class=\"sw\" style=\"background:#b0402a\"></span>wave 2")
           (html/span "" "<span class=\"sw\" style=\"background:#177a3c\"></span>superposition (the sum)")))))
   "Color legend for the combined figure.")
+
+;; ---------- page params ----------
+
+(define waves/num-param
+  (lambda (name default)
+    (let ((v (request-param name)))
+      (if (blank? v)
+          default
+          (guard (lambda (e) default) (parse-float v)))))
+  "Query param as a float, default when absent or unparseable.")
+
+(define waves/num-str
+  (lambda (x)
+    (let ((s (as-str x)))
+      (if (string-eq (substring s (- (string-length s) 1) 1) ".")
+          (string-append s "0")
+          s)))
+  "Plain number string with a trailing dot patched to .0 -- the OCaml
+printer renders whole floats as \"1.\", which neither the Nopales reader
+nor SVG/CSS number syntax accepts when spliced back into text.")
+
+(define waves/omega 0.5
+  "Shared angular frequency for both waves (radians per unit time).")
 
 ;; ---------- the page ----------
 
@@ -381,6 +275,110 @@ the trailing-dot patch still fixes whole floats like 1. -> 1.0")
                   "This page is itself a Nopales program living in this "
                   "image -- introspect it with (describe \"waves\") at the "
                   "REPL, or read the source at /code (libs/waves/lib.pp).")))))))))
-  "Public explainer page: superposition, computed live in pure Nopales.")
+  "Public explainer page: superposition, computed live in pure Nopales.");; package waves -- superposition of waves, explained in pure Nopales.
+;;
+;; A notebook-style PUBLIC page at /waves. Every number and every curve
+;; on the page is computed by the Nopales interpreter at render time:
+;;
+;;   * the teaching cells run LIVE through the restricted example-eval
+;;     prim (the same engine as the book's run buttons -- the source you
+;;     read IS the source that was evaluated), and
+;;   * the SVG figures are sampled + assembled by waves/points, a pure
+;;     Nopales string fold. No JavaScript anywhere.
+;;
+;; Load: (load-library "waves")  (boot seed also auto-discovers libs/*).
+;; Sync: scripts/pp_sync.py pull|push
+;;
+;; Keep every string ASCII-safe (see weather header): use HTML entities
+;; like &pi; &omega; &Delta; in prose, never raw UTF-8 glyphs.
 
-(public-route "/waves" "waves/page")
+;; ------------------------------------------------------------ math
+;;
+;; The physics. y(x,t) = a * sin(k*x - w*t + p):
+;;   a  amplitude          k  wavenumber (2*pi / wavelength)
+;;   w  angular frequency  p  phase offset
+;;
+;; Wave 1 is fixed at a=1, k=1, p=0; wave 2's a2/k2/p2 come from the
+;; query string so a reader can steer the experiment. Both share
+;; waves/omega; the figures are SNAPSHOTS at time t (also a param).
+
+(define waves/pi
+  (lambda () (* 4 (atan 1)))
+  "Pi straight from the machine: 4*atan(1).")
+
+(define waves/polyline
+  (lambda (color width pts)
+    (string-append
+      "<polyline points=\"" pts
+      "\" fill=\"none\" stroke=\"" color
+      "\" stroke-width=\"" (as-str width)
+      "\" vector-effect=\"non-scaling-stroke\"/>"))
+  "One SVG polyline element; non-scaling stroke keeps line width in
+pixels even inside the world->pixel <g transform>.")
+
+;; ---------- numeric helpers ----------
+
+(define waves/r2
+  (lambda (x) (/ (round (* x 100)) 100.0))
+  "Round to 2 decimals (round yields int; divide by a float to keep decimals).")
+
+(define waves/r3
+  (lambda (x) (/ (round (* x 1000)) 1000.0))
+  "Round to 3 decimals.")
+
+(define waves/rounds
+  (lambda (xs) (map waves/r3 xs))
+  "Round each element of xs to 3 decimals.")
+
+;; ---------- snapshot rows (teaching cells) ----------
+
+(define waves/series
+  (lambda (a k p t n)
+    (waves/rounds
+      (map (lambda (i) (waves/y a k waves/omega p (/ i 2.0) t))
+           (list/range n))))
+  "Snapshot row: rounded displacements at x = 0, 1/2, 1, ... (n-1)/2,
+at time t. This is what one horizontal row of the medium is doing.")
+
+(define waves/show
+  (lambda (v) (waves/num-str v))
+  "Display string for a cell result. example-eval already stringifies
+its result; as-str inside num-str passes VStrs through untouched, and
+the trailing-dot patch still fixes whole floats like 1. -> 1.0")
+
+(define waves/sum-at
+  (lambda (a1 k1 p1 a2 k2 p2 x t)
+    (+ (waves/y a1 k1 waves/omega p1 x t)
+       (waves/y a2 k2 waves/omega p2 x t)))
+  "The principle of superposition, as code: the net displacement at any
+(x, t) is the pointwise SUM of the two displacements. Nothing else happens.")
+
+;; ---------- SVG: sampling + assembling, all pure Nopales ----------
+
+(define waves/wpoints
+  (lambda (f n)
+    (let ((xmax (* 4 (waves/pi)))
+          (dn (- n 1.0)))
+      (foldl
+        (lambda (acc i)
+          (let ((x (* xmax (/ i dn))))
+            (string-append acc
+              (waves/num-str (waves/r3 x)) ","
+              (waves/num-str (waves/r3 (f x))) " ")))
+        ""
+        (list/range n))))
+  "Sample f(x) over x in [0, 4*pi] at n points and fold into an SVG
+polyline points string in WORLD coordinates (x in length units, y in
+displacement units). World coords + a <g transform> in waves/figure
+mean one sampling is reused by every figure -- this is the step-budget
+lever that keeps the page inside its 100k-step render budget.")
+
+(define waves/y
+  (lambda (a k w p x t)
+    (* a (sin (+ p (- (* k x) (* w t))))))
+  "Displacement of a traveling sinusoid: y(x,t) = a*sin(k*x - w*t + p).
+Keep the DISPLAY copy waves/y-src in sync with this define.")
+
+(define waves/y-src
+  "(define (waves/y a k w p x t)\n  (* a (sin (+ p (- (* k x) (* w t))))))"
+  "Verbatim display copy of waves/y for the notebook (kept in sync by hand).")

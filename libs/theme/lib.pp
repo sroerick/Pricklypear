@@ -1,4 +1,4 @@
-;; package theme -- exported from live branch admin/personal
+;; package theme -- exported from live branch system/main
 ;; Sync: scripts/pp_sync.py pull|push
 
 (package theme
@@ -18,6 +18,9 @@
     theme/vars
     theme/extra
 ))
+
+(define hi-page
+  (lambda () (render-html "<h1>Hello</h1>")))
 
 (define theme/archived-bg
   "#eeeeee")
@@ -177,13 +180,13 @@
   "#a32020")
 
 (define theme/extra
-  (lambda () (css/sheet (list))))
-
-(define theme/font-mono
-  "\"Courier New\",\"Lucida Console\",Monaco,\"DejaVu Sans Mono\",monospace")
-
-(define theme/font-sans
-  "Geneva,\"Lucida Grande\",\"DejaVu Sans\",Verdana,sans-serif")
+  (lambda
+    ()
+    (css/sheet
+      (list
+        (css/rule
+          ".menu-drop-panel .menu-drop[open]>summary::before"
+          (list "display" "none"))))))
 
 (define theme/find
   (lambda
@@ -199,6 +202,12 @@
             acc))
         ()
         theme/catalog))))
+
+(define theme/font-mono
+  "\"Courier New\",\"Lucida Console\",Monaco,\"DejaVu Sans Mono\",monospace")
+
+(define theme/font-sans
+  "Geneva,\"Lucida Grande\",\"DejaVu Sans\",Verdana,sans-serif")
 
 (define theme/ink
   "#1c1916")
@@ -457,3 +466,18 @@
 
 (define theme/waiting-bg
   "#e0e8ff")
+
+(define zz-dot-test
+  (lambda () "Pricklypear · hosted · · release"))
+
+(define zz-list
+  (lambda () (list "café" "αβγ" "♥")))
+
+(define zz-raw
+  (lambda
+    ()
+    (render-html
+      "<b>café</b> — αβ «→» <i>a&b<i> ♥")))
+
+(define zz-unicode-handler
+  (lambda () "café — αβγ «→» ♥"))

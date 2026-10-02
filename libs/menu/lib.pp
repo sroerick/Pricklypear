@@ -20,6 +20,9 @@
 (define menu/raw
   (lambda (html-str) "A menu item that renders raw HTML." (list "raw" (as-str html-str) "")))
 
+(define menu/render
+  (lambda (item) "Render a menu item at top level." (menu/render-d item 0)))
+
 ;; depth-aware renderer: d=0 top-level nav, d>0 nested fly-out.
 ;; Top-level groups share name="pp-nav" so the browser's native
 ;; <details name> accordion auto-closes siblings (replaces the old
@@ -62,7 +65,3 @@
                       (lambda (k) (menu/render-d k (+ d 1)))
                       rest))))))
           (if (string-eq kind "raw") label ""))))))
-
-(define menu/render
-  (lambda (item) "Render a menu item at top level." (menu/render-d item 0)))
-

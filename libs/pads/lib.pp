@@ -413,16 +413,3 @@
           (pads/text-content (car kids))
           (pads/text-content-kids (cdr kids))))))
   "Text content folded over kids.")
-
-;; ---------- re-merged after 2026-10-03 pull ----------
-;; Local-only vault defs that are not part of the live package
-;; (kept by merge during pp-sync pull; may be vault-only work).
-
-(define pad
-  (lambda (tag attrs &rest kids)
-    "Build one pad node: (tag attrs kid...). attrs is a symbol-keyed
-alist (string or list values); each kid is a string (text run), a pad
-node, or a proper list of kids to splice (dwim, one level — the map
-case). Layers 1+2 only: no macro sugar (D6, quote-compounds edge-case)."
-    (cons tag (cons attrs (pads/flatten-kids kids)))))
-

@@ -446,6 +446,3 @@
           (update type (car (car rs)) fields-json))
         id)))
   "Create-or-replace a row by mid with caller-built fields JSON\n(graft-drain primitive: the caller owns the complete field set).\nReturns id.")
-
-(route "/memories" "mem/page")
-(route "/memories/view" "mem/detail-page")

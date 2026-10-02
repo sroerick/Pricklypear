@@ -1,4 +1,4 @@
-;; package tree -- exported from live branch admin/personal
+;; package tree -- exported from live branch system/main
 ;; Sync: scripts/pp_sync.py pull|push
 
 (define tree
@@ -470,4 +470,3 @@
           (string-eq s "true")
           (string-eq s "yes")
           (string-eq s "on"))))))
-

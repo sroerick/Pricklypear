@@ -1,4 +1,12 @@
-;; package hello -- pads hello dual-render spike (plan:
+
+
+(define hello/box-a
+  "Fixed box"
+  "First text box: fixed-sized (flex:0 0 240px on web, fixed:240 in scene).")
+
+(define hello/box-b
+  "Growing box"
+  "Second text box: growing (flex:1 on web, grow:1 in scene).");; package hello -- pads hello dual-render spike (plan:
 ;; archive/plans/pads-hello-dualrender.md). One card, two renders:
 ;; hello/page is the legacy string-pipeline ORACLE (libs/html);
 ;; hello/view is the SAME card as a pad tree (libs/pads); V1 is proven
@@ -10,18 +18,6 @@
 (define hello/greeting
   "Hello, pads"
   "The greeting text — the single V3 edit point shared by BOTH renders.")
-
-(define hello/subline
-  "One authoring surface, two renders."
-  "Subline text under the greeting (both renders).")
-
-(define hello/box-a
-  "Fixed box"
-  "First text box: fixed-sized (flex:0 0 240px on web, fixed:240 in scene).")
-
-(define hello/box-b
-  "Growing box"
-  "Second text box: growing (flex:1 on web, grow:1 in scene).")
 
 ;; ---------- V1 oracle: legacy string pipeline ----------
 
@@ -53,6 +49,19 @@ mirror pads/box-style / pads/size-flex canonical order."
                     (html/attr "style" "flex:1")
                     (html/text hello/box-b)))))))))))
 
+;; ---------- V2: native scene ----------
+
+(define hello/scene
+  (lambda ()
+    "Scene JSON v0 for soil-hello (V2): (pads/render-scene (hello/view)).
+Two consumption paths — --scene FILE and loopback eval — must yield the
+same bytes for the same tree."
+    (pads/render-scene (hello/view))))
+
+(define hello/subline
+  "One authoring surface, two renders."
+  "Subline text under the greeting (both renders).")
+
 ;; ---------- the one authoring surface: pad tree ----------
 
 (define hello/view
@@ -67,14 +76,3 @@ padding/gap set; the exact card hello/page hand-writes."
       (pad 'row (list (cons 'gap "12"))
         (pad 'text (list (cons 'size (list 'fixed 240))) hello/box-a)
         (pad 'text (list (cons 'size (list 'grow 1))) hello/box-b)))))
-
-;; ---------- V2: native scene ----------
-
-(define hello/scene
-  (lambda ()
-    "Scene JSON v0 for soil-hello (V2): (pads/render-scene (hello/view)).
-Two consumption paths — --scene FILE and loopback eval — must yield the
-same bytes for the same tree."
-    (pads/render-scene (hello/view))))
-
-(route "/hello" "hello/page")

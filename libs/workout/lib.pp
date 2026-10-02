@@ -939,6 +939,18 @@
         "[]")))
   "Session doc. Day: LCCJ (A) / C / J (B).")
 
+(define workout/ksf-doc-elapsed-min
+  (lambda
+    (session-id)
+    (let
+      ((doc (workout/parse-session-doc session-id)))
+      (if
+        (null? doc)
+        0
+        (workout/as-int
+          (dict-get (workout/doc-progress doc) "elapsed_min")))))
+  "Progress.elapsed_min from the session doc, 0 when absent.")
+
 (define workout/ksf-duration-min
   (lambda
     (session-id)
@@ -967,18 +979,6 @@
      every session scored short and the pattern never advanced (stalls
      incremented forever). Verified live 2026-09-27: no session had a
      Duration row. The doc was already the authority; read it first.")
-
-(define workout/ksf-doc-elapsed-min
-  (lambda
-    (session-id)
-    (let
-      ((doc (workout/parse-session-doc session-id)))
-      (if
-        (null? doc)
-        0
-        (workout/as-int
-          (dict-get (workout/doc-progress doc) "elapsed_min")))))
-  "Progress.elapsed_min from the session doc, 0 when absent.")
 
 (define workout/ksf-duration-sum
   (lambda

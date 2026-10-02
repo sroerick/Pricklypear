@@ -1,4 +1,4 @@
-;; package todo -- exported from live branch admin/personal
+;; package todo -- exported from live branch system/main
 ;; Sync: scripts/pp_sync.py pull|push
 
 (package todo
@@ -45,26 +45,6 @@
     todo/state/next-for-item
     todo/state/options-for-item
 ))
-
-;; Declare the card-thread datum types as BARE top-level deftype forms
-;; (the edit/suno/upsets convention) — deliberately NOT as a call to
-;; todo/comments-init!.
-;;
-;; WHY (prod 2026-09-27): a top-level CALL is unsafe in a seed package.
-;; libs/todo/lib.pp is 3000+ lines and loads under the boot-seed skip,
-;; which skips every define whose name already exists on system/main.
-;; A tail-position (todo/comments-init!) therefore depends on both
-;;   (a) every earlier form evaluating — one reader error anywhere above
-;;       aborts the package mid-file (rb's unbalanced paren did exactly
-;;       that: the load died at form 102 and the deftypes never landed,
-;;       so every card write raised `unbound: todo/comments-init!`), and
-;;   (b) the seed NOT skipping the define three lines above it, which is
-;;       false on any warm branch (`form 2 failed: unbound`).
-;; deftype is an allowed top-level head, is never skipped, needs no
-;; sibling binding, and a non-admin load degrades to a soft "denied"
-;; string instead of aborting. Placed FIRST so nothing can precede it.
-(deftype 'todo-comment 'item_id 'body)
-(deftype 'todo-event 'item_id 'from_state 'to_state)
 
 (define todo/active-items
   (lambda
@@ -206,46 +186,59 @@
 (define todo/archived?
   (lambda (s) (string-eq (as-str s) "ARCHIVED")))
 
-(define todo/browse
+(define todo/comment/add
   (lambda
-    (path)
-    (filmstrip/browse-walk
-      todo/browse-items
-      (list (todo/browse-lists))
-      path))
-  "todo cascade: lists -> items. Item entries leaf to /todos?id=<item>\n(the only granularity /todos serves; lists drill to the item column).")
+    (item body)
+    "Append a comment datum to card item; returns the comment id. Author +
+     ts ride the row metadata (session user / created_at)."
+    (todo/comments-init!)
+    (as-str
+      (todo/tree/create
+        "todo-comment"
+        (dict-set*
+          "{}"
+          (list "item_id" (as-str item) "body" (as-str body)))))))
 
-(define todo/browse-items
+(define todo/comment/list
   (lambda
-    (list-id)
-    (list/map
-      (lambda
-        (row)
-        (let
-          ((f (cdr row)))
-          (list
-            (as-str (dict-get f "title"))
-            (string-append "/todos?id=" (as-str (car row))))))
-      (list/filter
-        (lambda
-          (row)
-          (string-eq
-            (as-str (dict-get (cdr row) "list_id"))
-            list-id))
-        (todo/item/all))))
-  "Items of one list; each entry is a leaf to the item's /todos detail.")
+    (item)
+    "All comment node-JSONs for card item, newest first."
+    (todo/datum/rows-for-item "todo-comment" item 200)))
 
-(define todo/browse-lists
+;; ------------------------------------------------------------------
+;; comment + event datums (card detail v2 feed) — borge/workstreams.borg
+;; card-comments. Two datum types seeded on load (guarded, idempotent):
+;;   todo-comment (item_id, body) — author + timestamps come from the ROW
+;;     METADATA (node author / created_at), not body fields, per spec: the
+;;     datum itself is deliberately minimal.
+;;   todo-event   (item_id, from_state, to_state) — auto-written by every
+;;     real card-state transition. Wired (task 3): todo/set-state,
+;;     todo/item/set-state, todo/save, todo/item/save all route through
+;;     todo/event/transition! (record only when the state actually changed),
+;;     so todo/cycle, todo/item/cycle, archive, the /todos detail form, and
+;;     the future move writers all append events for free. The kanban
+;;     move-card renumber (a position-reorder in libs/kanban) writes state
+;;     directly via tree/upsert and is intentionally out of scope here (the
+;;     kanban lib is off-limits this loop).
+;; todo/feed interleaves events + comments chronologically (Linear-style
+;; activity feed) for card detail v2.
+;; ------------------------------------------------------------------
+
+(define todo/comments-init!
   (lambda
     ()
-    (list/map
-      (lambda
-        (row)
-        (let
-          ((f (cdr row)))
-          (list (as-str (dict-get f "title")) (as-str (car row)))))
-      (todo/list/all)))
-  "Column of todo lists: (title . list-id).")
+    "Ensure the todo-comment / todo-event datum types exist. Guarded so a
+     re-load (load-library) is safe and a non-admin load degrades to a no-op
+     value instead of an error; boot seeds these onto system/main as admin."
+    (seq
+      (if
+        (null? (type-fields (quote todo-comment)))
+        (deftype (quote todo-comment) (quote item_id) (quote body))
+        "todo-comment ok")
+      (if
+        (null? (type-fields (quote todo-event)))
+        (deftype (quote todo-event) (quote item_id) (quote from_state) (quote to_state))
+        "todo-event ok"))))
 
 (define todo/count-all-in
   (lambda
@@ -523,6 +516,79 @@
               id
               (todo/state/next-for-item cur id)))))))
   "Advance item id to its next state; () when missing. Cycles within the\n     item's OWN effective pipeline (own `pipeline` override > list columns >\n     global default) — borge/workstreams.borg pipeline-model, so /todos and\n     /kanban agree and a card on its own pipeline never leaves it.")
+
+(define todo/datum/feed-entry
+  (lambda
+    (kind n)
+    "One feed entry dict (JSON string) from a datum node-JSON: kind + id + ts
+     + author from row metadata, plus the payload fields the kind needs."
+    (let
+      ((b (dict-get n "body")))
+      (if
+        (string-eq kind "comment")
+        (dict-set*
+          "{}"
+          (list
+            "kind" "comment"
+            "id" (as-str (dict-get n "id"))
+            "ts" (as-str (dict-get n "created_at"))
+            "author" (as-str (dict-get n "author"))
+            "text" (as-str (dict-get b "body"))))
+        (dict-set*
+          "{}"
+          (list
+            "kind" "event"
+            "id" (as-str (dict-get n "id"))
+            "ts" (as-str (dict-get n "created_at"))
+            "author" (as-str (dict-get n "author"))
+            "from_state" (as-str (dict-get b "from_state"))
+            "to_state" (as-str (dict-get b "to_state"))))))))
+
+(define todo/datum/insert-by-ts
+  (lambda
+    (e sorted)
+    "Insert feed entry e into a ts-ascending sorted list (oldest first). The
+     node created_at strings are PG timestamptz text, uniformly shaped, so a
+     lexicographic compare IS chronological order."
+    (if
+      (null? sorted)
+      (list e)
+      (if
+        (string<?
+          (as-str (dict-get e "ts"))
+          (as-str (dict-get (car sorted) "ts")))
+        (cons e sorted)
+        (cons
+          (car sorted)
+          (todo/datum/insert-by-ts e (cdr sorted)))))))
+
+(define todo/datum/merge-by-ts
+  (lambda
+    (a b)
+    "Merge two feed-entry lists (ANY order) into one ts-ascending list.
+     Walks both through the sorted insetter from an empty list, so the
+     result is chronological regardless of the helpers' own ordering.
+     (rows-for-item feeds NEWEST-first; this rebuilds oldest-first.)"
+    (list/foldl
+      (lambda (acc e) (todo/datum/insert-by-ts e acc))
+      (list)
+      (append a b))))
+
+(define todo/datum/rows-for-item
+  (lambda
+    (type item limit)
+    "Raw node-JSONs (id/path/kind/type/body/author/created_at/updated_at/rank)
+     of all `type` datums whose body.item_id === item, in store order (callers
+     that need chronology sort by created_at — see todo/datum/insert-by-ts)."
+    (list/filter
+      (lambda
+        (n)
+        (let
+          ((b (dict-get n "body")))
+          (let
+            ((i (if (null? b) () (dict-get b "item_id"))))
+            (and (not (null? i)) (string-eq (as-str i) (as-str item))))))
+      (tree/list (todo/tree/prefix type) 1 limit))))
 
 (define todo/db/create
   (lambda
@@ -845,6 +911,56 @@
               "true")))
         (car found)))))
 
+(define todo/event/list
+  (lambda
+    (item)
+    "All event node-JSONs for card item, newest first."
+    (todo/datum/rows-for-item "todo-event" item 200)))
+
+(define todo/event/record
+  (lambda
+    (item from to)
+    "Record a card state transition datum (item_id, from_state, to_state);
+     returns the event id. Private-ish: user code should call
+     todo/event/transition!, which records ONLY on a real change."
+    (todo/comments-init!)
+    (as-str
+      (todo/tree/create
+        "todo-event"
+        (dict-set*
+          "{}"
+          (list
+            "item_id" (as-str item)
+            "from_state" (as-str from)
+            "to_state" (as-str to)))))))
+
+(define todo/event/transition!
+  (lambda
+    (id from to)
+    "Record a todo-event for card id when the state actually changed
+     (from != to); no-op otherwise. Returns the event id, or () when the
+     states are equal. THE choke point every card-state writer calls:
+     todo/set-state, todo/item/set-state, todo/save, todo/item/save."
+    (if
+      (string-eq (as-str from) (as-str to))
+      ()
+      (todo/event/record id from to))))
+
+(define todo/feed
+  (lambda
+    (item)
+    "Chronological activity feed for card item: todo-event transitions and
+     todo-comment rows interleaved by created_at, oldest first. Returns a
+     list of feed-entry dicts (JSON strings) tagged kind = comment | event."
+    (todo/comments-init!)
+    (todo/datum/merge-by-ts
+      (list/map
+        (lambda (n) (todo/datum/feed-entry "comment" n))
+        (todo/comment/list item))
+      (list/map
+        (lambda (n) (todo/datum/feed-entry "event" n))
+        (todo/event/list item)))))
+
 (define todo/find-default-in
   (lambda
     (xs)
@@ -863,6 +979,119 @@
 
 (define todo/find-default-list
   (lambda () (todo/find-default-in (todo/lists))))
+
+;; ------------------------------------------------------------------
+;; flow/brief — the executor brief (borge/workstreams.borg
+;; claim-brief-protocol). todo/flow-brief renders card + column recipe +
+;; context (repo path, build/tests invocation, target host, write-back eval
+;; snippet) into ONE self-contained text prompt: the plan file for a ralph
+;; loop, the task string for a subagent. NAMING NOTE (orchestration task 7
+;; resolution): the plan named this flow/brief; a `libs/flow` package would be
+;; a NEW family file, and the Do-NOT rule limits this loop to todo/standup/
+;; workstreams libs — so it lives in the todo family as todo/flow-brief.
+;; ------------------------------------------------------------------
+
+(define todo/flow-brief
+  (lambda
+    (card-id)
+    (let
+      ((fields (todo/tree/get "todo-item" (as-str card-id))))
+      (if
+        (null? fields)
+        ()
+        (let
+          ((cid (as-str card-id))
+            (title (todo/item/title fields))
+            (state (todo/item/state fields))
+            (list-id (todo/item/list-id fields))
+            (acceptance (todo/item/acceptance fields))
+            (branch (todo/item/branch fields))
+            (branch-kind (todo/item/branch-kind fields))
+            (assignee (todo/item/assignee fields)))
+          (let
+            ((lname
+              (if
+                (string-eq list-id "")
+                "(no list)"
+                (let
+                  ((lf (todo/tree/get "todo-list" list-id)))
+                  (if
+                    (null? lf)
+                    list-id
+                    (todo/list/title lf))))))
+            (string-append
+              "PRICKLYPEAR EXECUTOR BRIEF — claim/brief protocol (borge/workstreams.borg)\n"
+              "Self-contained task: work the card below on the laptop repo. Follow the column\n"
+              "recipe. Do not promote to prod. YOU DO NOT WRITE BACK — pp-flow owns the card\n"
+              "transition and will move the card one column + post your evidence comment when\n"
+              "you exit 0. Your only job is the work + a clear EVIDENCE section.\n\n== CARD ==\n"
+              "  card id:    "
+              cid
+              "\n  title:      "
+              title
+              "\n  state:      "
+              state
+              "\n  list:       "
+              lname
+              " ("
+              list-id
+              ")\n  assignee:   "
+              assignee
+              "\n  acceptance: "
+              (if (string-eq acceptance "") "(none)" acceptance)
+              "\n  branch:     "
+              (if
+                (string-eq branch "")
+                "(none)"
+                (if
+                  (string-eq branch-kind "")
+                  (string-append branch "  [DOMAIN UNSET]")
+                  (string-append branch "  [" branch-kind "]")))
+              "\n\n== COLUMN RECIPE ("
+              state
+              ") ==\n"
+              (todo/recipe list-id state)
+              "\n\n== BRANCH DOMAIN (read this) ==\n"
+              "  Pricklypear has TWO branch systems; `branch` above names one of them:\n"
+              "  * git     — a git branch in the laptop repo (master, a feature branch).\n"
+              "              Repo-side work: .borg spec, OCaml, scripts. Commit + push there.\n"
+              "  * habitat — a Nopales/Postgres branch ON the habitat (system/main,\n"
+              "              <user>/personal, <user>/dev). Define/route/promote there; it\n"
+              "              is NEVER a git branch and does not exist in the repo.\n"
+              (if
+                (string-eq branch "")
+                "  This card names no branch — work on the repo default and say so in your EVIDENCE.\n"
+                (if
+                  (string-eq branch-kind "")
+                  (string-append
+                    "  DOMAIN UNSET: is \""
+                    branch
+                    "\" a git branch or a habitat branch? Do NOT guess — if the work\n"
+                    "  you are about to do does not make the answer obvious, STOP and post a\n"
+                    "  comment asking, rather than committing to the wrong domain.\n")
+                  (if
+                    (string-eq branch-kind "git")
+                    "  Domain: git — commit to this branch in the laptop repo.\n"
+                    "  Domain: habitat — a Nopales/Postgres branch; do NOT git-commit to it.\n")))
+              "\n== CONTEXT ==\n"
+              "  repo:    /home/roerick/dev/wyo.tech/pricklypear\n"
+              "  build:   eval $(opam env --switch=poohstack --set-switch); dune build\n"
+              "  tests:   dune runtest lisp; dune runtest common\n"
+              "  spec:    the .borg book is the spec + source of truth; run `borge drift` after spec edits\n\n"
+              "== EVIDENCE (what pp-flow will post on your behalf) ==\n"
+              "  End your output with an EVIDENCE block:\n"
+              "  EVIDENCE: <what you did + how you verified it (build/tests/live smoke;\n"
+              "  keep under ~200 chars, will be trimmed to 500 by the driver)>.\n"
+              "  pp-flow moves the card ONE column and posts this as your comment on the\n"
+              "  card thread. If the recipe demands a different destination than ONE\n"
+              "  forward column (e.g. a review FAIL stays/backtracks), write:\n"
+              "  DESTINATION: <COLUMN> — and pp-flow will use that instead."))))))
+  "Render card + column recipe + context into ONE self-contained text prompt
+     (the executor brief). Includes the card title/state/list/acceptance/
+     branch/assignee, the effective column recipe (todo/recipe), repo + build
+     context, and the write-back eval snippet (advance one column + post a
+     comment). Returns () for a missing card. For a ralph loop this IS the
+     plan file; for a subagent it's the task.")
 
 (define todo/get-item
   (lambda (id) (todo/tree/get "todo-item" id)))
@@ -1038,6 +1267,22 @@
 (define todo/item-title
   (lambda (fields) (as-str (dict-get fields "title"))))
 
+;; acceptance + branch fields — borge/workstreams.borg acceptance. These ride
+;; the todo-item datum like notes/assignee: todo/add + todo/item/add seed them
+;; (default ""), the save writers preserve them via dict-set* on the existing
+;; fields, and kanban's dict-set* reorders/renames also preserve them. New
+;; cards created by libs/kanban/make-card (a fresh body) simply have "" until
+;; set with todo/item/set-acceptance / todo/item/set-branch. Setters write via
+;; tree/set-field — a content edit, NOT a state transition, so they deliberately
+;; do NOT mint a todo-event.
+(define todo/item/acceptance
+  (lambda
+    (fields)
+    "The acceptance criteria body of item fields; empty when absent."
+    (let
+      ((a (dict-get fields "acceptance")))
+      (if (null? a) "" (as-str a)))))
+
 (define todo/item/active
   (lambda
     (items)
@@ -1101,6 +1346,72 @@
         (todo/state/archived? (todo/item/state (cdr row))))
       (todo/item/all))))
 
+;; ------------------------------------------------------------------
+;; assignment (claim) + priority/queue — ported from gregor's
+;; todo-assignment branch (0f1b9a4 + b7059e6) into master's single
+;; libs/todo/lib.pp. Provides the claim/queue prims the workstreams
+;; orchestration protocol depends on. (The kanban make-card/move-card/
+;; stale + /kanban-review functions from 133b228/89e5ddf already live in
+;; libs/kanban/lib.pp and are not duplicated here.)
+;; ------------------------------------------------------------------
+
+(define todo/item/assign
+  (lambda
+    (id user)
+    "Assign item id to user (empty user clears). Returns id, or () when the item is missing."
+    (let
+      ((row (todo/tree/get "todo-item" (as-str id))))
+      (if
+        (null? row)
+        ()
+        (seq
+          (todo/tree/set-field "todo-item" (as-str id) "assignee" (as-str user))
+          (as-str id))))))
+
+(define todo/item/assignee
+  (lambda
+    (fields)
+    "The assignee field of item fields; empty when absent."
+    (let
+      ((a (dict-get fields "assignee")))
+      (if
+        (null? a)
+        ""
+        (as-str a)))))
+
+(define todo/item/branch
+  (lambda
+    (fields)
+    "The target branch for the work; empty when absent. The NAME alone is
+     ambiguous — pair it with todo/item/branch-kind (git | habitat) per
+     borge/workstreams.borg branch-domain, or set both with set-target."
+    (let
+      ((b (dict-get fields "branch")))
+      (if (null? b) "" (as-str b)))))
+
+;; branch DOMAIN (branch_kind) — borge/workstreams.borg branch-domain.
+;; Pricklypear has TWO branch systems and `branch` alone is ambiguous:
+;;   "git"     — a git branch in the laptop repo (master, a feature branch);
+;;               the executor commits/pushes there. Repo-side work (.borg,
+;;               OCaml, scripts).
+;;   "habitat" — a Nopales/Postgres branch on the habitat (system/main,
+;;               <user>/personal, <user>/dev); the executor defines/routes/
+;;               promotes there. NEVER a git branch.
+;; An agent given a bare "admin/dev" cannot know which repo/domain to touch
+;; (2026-09-27: a repo-side card was tagged with a habitat branch, and the
+;; executor committed to git master — correct, but only by luck). The brief
+;; renders the domain explicitly and FLAGS an unset one. Content edit via
+;; tree/set-field, NOT a state transition (no todo-event), like branch above.
+(define todo/item/branch-kind
+  (lambda
+    (fields)
+    "The branch DOMAIN of item fields: \"git\" (laptop repo branch) or
+     \"habitat\" (Nopales/Postgres branch); empty when unset — callers must
+     treat empty as AMBIGUOUS, not as a default."
+    (let
+      ((k (dict-get fields "branch_kind")))
+      (if (null? k) "" (as-str k)))))
+
 (define todo/item/count-all
   (lambda
     (items)
@@ -1163,6 +1474,18 @@
               (if (string-eq fl "") (string-eq lid inbox-id) #f))))
         (todo/item/all)))))
 
+(define todo/item/for-user
+  (lambda
+    (user)
+    "All items assigned to user, as rows."
+    (let
+      ((u (as-str user)))
+      (list/filter
+        (lambda
+          (row)
+          (string-eq (todo/item/assignee (cdr row)) u))
+        (todo/item/all)))))
+
 (define todo/item/get
   (lambda (id) (todo/tree/get "todo-item" id)))
 
@@ -1211,6 +1534,22 @@
               (list/take
                 (todo/item/active (todo/item/for-list view))
                 150))))))))
+
+;; kind field — borge/workstreams.borg pipeline-model issues-convergence:
+;; a todo-item with a kind tag (BUG/DESIGN/SMELL/CLEANUP) is READ AS AN
+;; ISSUE ROW on /issues, rendered through the shared state pipeline (own
+;; override > list columns > global default). Body builders seed "";
+;; set-kind is a content edit via tree/set-field (not a state transition,
+;; no todo-event), mirroring acceptance/branch above.
+(define todo/item/kind
+  (lambda
+    (fields)
+    "The issue-kind tag of item fields (BUG/DESIGN/SMELL/CLEANUP); empty when
+     absent. A non-empty kind is the /issues convergence flag: the card shows
+     up as an issue row through the shared pipeline."
+    (let
+      ((k (dict-get fields "kind")))
+      (if (null? k) "" (as-str k)))))
 
 (define todo/item/list-id
   (lambda
@@ -1369,6 +1708,111 @@
       ((n (dict-get fields "notes")))
       (if (null? n) "" (as-str n)))))
 
+(define todo/item/prio-insert
+  (lambda
+    (sorted row)
+    "Insert row into a prio-ordered list (insertion sort step)."
+    (if
+      (null? sorted)
+      (list row)
+      (if
+        (todo/item/prio-le? row (car sorted))
+        (cons row sorted)
+        (cons (car sorted) (todo/item/prio-insert (cdr sorted) row))))))
+
+(define todo/item/prio-le?
+  (lambda
+    (a b)
+    "True when row a sorts before or equal to row b by (priority rank, position, id)."
+    (let
+      ((ra (todo/item/prio-rank (cdr a)))
+        (rb (todo/item/prio-rank (cdr b))))
+      (if
+        (< ra rb)
+        #t
+        (if
+          (> ra rb)
+          #f
+          (let
+            ((pa (todo/item/prio-pos (cdr a)))
+              (pb (todo/item/prio-pos (cdr b))))
+            (if
+              (< pa pb)
+              #t
+              (if
+                (> pa pb)
+                #f
+                (string<=? (car a) (car b))))))))))
+
+(define todo/item/prio-pos
+  (lambda
+    (fields)
+    "The position field as a number; 0 when absent or non-numeric."
+    (let
+      ((pos (dict-get fields "position")))
+      (if
+        (null? pos)
+        0
+        (let
+          ((s (as-str pos)))
+          (if
+            (string-eq s "")
+            0
+            (parse-int s)))))))
+
+(define todo/item/prio-rank
+  (lambda
+    (fields)
+    "Numeric work rank of the priority field: P0=0 .. P3=3, unknown or empty = 4."
+    (let
+      ((p (todo/item/priority fields)))
+      (if
+        (string-eq p "P0")
+        0
+        (if
+          (string-eq p "P1")
+          1
+          (if
+            (string-eq p "P2")
+            2
+            (if
+              (string-eq p "P3")
+              3
+              4)))))))
+
+(define todo/item/prio-sorted
+  (lambda
+    (rows)
+    "Rows ordered by priority rank, then position, then id (insertion sort; no sort prim in-image)."
+    (list/foldl todo/item/prio-insert () rows)))
+
+(define todo/item/priority
+  (lambda
+    (fields)
+    "The priority field of item fields (P0..P3); empty when absent."
+    (let
+      ((p (dict-get fields "priority")))
+      (if
+        (null? p)
+        ""
+        (as-str p)))))
+
+(define todo/item/queue
+  (lambda
+    (user)
+    "Open items in work order (priority, then position, then id). Empty user = all assignees."
+    (let
+      ((u (as-str user)))
+      (todo/item/prio-sorted
+        (list/filter
+          (lambda
+            (row)
+            (if
+              (string-eq u "")
+              #t
+              (string-eq (todo/item/assignee (cdr row)) u)))
+          (todo/item/active (todo/item/all)))))))
+
 (define todo/item/save
   (lambda
     (id title notes due state list-id)
@@ -1404,238 +1848,6 @@
                   lid)))
             (todo/event/transition! id prev next)))))))
 
-(define todo/item/set-state
-  (lambda
-    (id state)
-    "Set card state, recording a todo-event when it actually changes. Returns
-     the event id (real transition) or () (no change / missing card). The
-     choke point: todo/item/cycle, archive, the item save, and future move
-     writers all record transitions through here."
-    (let
-      ((cur (todo/tree/get "todo-item" (as-str id))))
-      (if
-        (null? cur)
-        (list)
-        (let
-          ((prev (todo/item/state cur))
-            (next (as-str state)))
-          (seq
-            (todo/tree/set-field "todo-item" (as-str id) "state" next)
-            (todo/event/transition! id prev next)))))))
-
-(define todo/item/state
-  (lambda
-    (fields)
-    (let
-      ((s (dict-get fields "state")))
-      (if
-        (null? s)
-        (let
-          ((d (dict-get fields "done")))
-          (if
-            (null? d)
-            "TODO"
-            (if (string-eq d "true") "DONE" "TODO")))
-        (as-str s)))))
-
-(define todo/item/title
-  (lambda (fields) (as-str (dict-get fields "title"))))
-
-;; ------------------------------------------------------------------
-;; assignment (claim) + priority/queue — ported from gregor's
-;; todo-assignment branch (0f1b9a4 + b7059e6) into master's single
-;; libs/todo/lib.pp. Provides the claim/queue prims the workstreams
-;; orchestration protocol depends on. (The kanban make-card/move-card/
-;; stale + /kanban-review functions from 133b228/89e5ddf already live in
-;; libs/kanban/lib.pp and are not duplicated here.)
-;; ------------------------------------------------------------------
-
-(define todo/item/assign
-  (lambda
-    (id user)
-    "Assign item id to user (empty user clears). Returns id, or () when the item is missing."
-    (let
-      ((row (todo/tree/get "todo-item" (as-str id))))
-      (if
-        (null? row)
-        ()
-        (seq
-          (todo/tree/set-field "todo-item" (as-str id) "assignee" (as-str user))
-          (as-str id))))))
-
-(define todo/item/assignee
-  (lambda
-    (fields)
-    "The assignee field of item fields; empty when absent."
-    (let
-      ((a (dict-get fields "assignee")))
-      (if
-        (null? a)
-        ""
-        (as-str a)))))
-
-(define todo/item/unassign
-  (lambda
-    (id)
-    "Clear item id's assignee."
-    (todo/item/assign id "")))
-
-(define todo/item/for-user
-  (lambda
-    (user)
-    "All items assigned to user, as rows."
-    (let
-      ((u (as-str user)))
-      (list/filter
-        (lambda
-          (row)
-          (string-eq (todo/item/assignee (cdr row)) u))
-        (todo/item/all)))))
-
-(define todo/item/priority
-  (lambda
-    (fields)
-    "The priority field of item fields (P0..P3); empty when absent."
-    (let
-      ((p (dict-get fields "priority")))
-      (if
-        (null? p)
-        ""
-        (as-str p)))))
-
-(define todo/item/set-priority
-  (lambda
-    (id p)
-    "Set item id's priority (P0 highest .. P3, empty clears). Returns id, or () when the item is missing."
-    (let
-      ((row (todo/tree/get "todo-item" (as-str id))))
-      (if
-        (null? row)
-        ()
-        (seq
-          (todo/tree/set-field "todo-item" (as-str id) "priority" (as-str p))
-          (as-str id))))))
-
-(define todo/item/prio-rank
-  (lambda
-    (fields)
-    "Numeric work rank of the priority field: P0=0 .. P3=3, unknown or empty = 4."
-    (let
-      ((p (todo/item/priority fields)))
-      (if
-        (string-eq p "P0")
-        0
-        (if
-          (string-eq p "P1")
-          1
-          (if
-            (string-eq p "P2")
-            2
-            (if
-              (string-eq p "P3")
-              3
-              4)))))))
-
-(define todo/item/prio-pos
-  (lambda
-    (fields)
-    "The position field as a number; 0 when absent or non-numeric."
-    (let
-      ((pos (dict-get fields "position")))
-      (if
-        (null? pos)
-        0
-        (let
-          ((s (as-str pos)))
-          (if
-            (string-eq s "")
-            0
-            (parse-int s)))))))
-
-(define todo/item/prio-le?
-  (lambda
-    (a b)
-    "True when row a sorts before or equal to row b by (priority rank, position, id)."
-    (let
-      ((ra (todo/item/prio-rank (cdr a)))
-        (rb (todo/item/prio-rank (cdr b))))
-      (if
-        (< ra rb)
-        #t
-        (if
-          (> ra rb)
-          #f
-          (let
-            ((pa (todo/item/prio-pos (cdr a)))
-              (pb (todo/item/prio-pos (cdr b))))
-            (if
-              (< pa pb)
-              #t
-              (if
-                (> pa pb)
-                #f
-                (string<=? (car a) (car b))))))))))
-
-(define todo/item/prio-insert
-  (lambda
-    (sorted row)
-    "Insert row into a prio-ordered list (insertion sort step)."
-    (if
-      (null? sorted)
-      (list row)
-      (if
-        (todo/item/prio-le? row (car sorted))
-        (cons row sorted)
-        (cons (car sorted) (todo/item/prio-insert (cdr sorted) row))))))
-
-(define todo/item/prio-sorted
-  (lambda
-    (rows)
-    "Rows ordered by priority rank, then position, then id (insertion sort; no sort prim in-image)."
-    (list/foldl todo/item/prio-insert () rows)))
-
-(define todo/item/queue
-  (lambda
-    (user)
-    "Open items in work order (priority, then position, then id). Empty user = all assignees."
-    (let
-      ((u (as-str user)))
-      (todo/item/prio-sorted
-        (list/filter
-          (lambda
-            (row)
-            (if
-              (string-eq u "")
-              #t
-              (string-eq (todo/item/assignee (cdr row)) u)))
-          (todo/item/active (todo/item/all)))))))
-
-;; acceptance + branch fields — borge/workstreams.borg acceptance. These ride
-;; the todo-item datum like notes/assignee: todo/add + todo/item/add seed them
-;; (default ""), the save writers preserve them via dict-set* on the existing
-;; fields, and kanban's dict-set* reorders/renames also preserve them. New
-;; cards created by libs/kanban/make-card (a fresh body) simply have "" until
-;; set with todo/item/set-acceptance / todo/item/set-branch. Setters write via
-;; tree/set-field — a content edit, NOT a state transition, so they deliberately
-;; do NOT mint a todo-event.
-(define todo/item/acceptance
-  (lambda
-    (fields)
-    "The acceptance criteria body of item fields; empty when absent."
-    (let
-      ((a (dict-get fields "acceptance")))
-      (if (null? a) "" (as-str a)))))
-
-(define todo/item/branch
-  (lambda
-    (fields)
-    "The target branch for the work; empty when absent. The NAME alone is
-     ambiguous — pair it with todo/item/branch-kind (git | habitat) per
-     borge/workstreams.borg branch-domain, or set both with set-target."
-    (let
-      ((b (dict-get fields "branch")))
-      (if (null? b) "" (as-str b)))))
-
 (define todo/item/set-acceptance
   (lambda
     (id text)
@@ -1664,29 +1876,6 @@
           (todo/tree/set-field "todo-item" (as-str id) "branch" (as-str branch))
           (as-str id))))))
 
-;; branch DOMAIN (branch_kind) — borge/workstreams.borg branch-domain.
-;; Pricklypear has TWO branch systems and `branch` alone is ambiguous:
-;;   "git"     — a git branch in the laptop repo (master, a feature branch);
-;;               the executor commits/pushes there. Repo-side work (.borg,
-;;               OCaml, scripts).
-;;   "habitat" — a Nopales/Postgres branch on the habitat (system/main,
-;;               <user>/personal, <user>/dev); the executor defines/routes/
-;;               promotes there. NEVER a git branch.
-;; An agent given a bare "admin/dev" cannot know which repo/domain to touch
-;; (2026-09-27: a repo-side card was tagged with a habitat branch, and the
-;; executor committed to git master — correct, but only by luck). The brief
-;; renders the domain explicitly and FLAGS an unset one. Content edit via
-;; tree/set-field, NOT a state transition (no todo-event), like branch above.
-(define todo/item/branch-kind
-  (lambda
-    (fields)
-    "The branch DOMAIN of item fields: \"git\" (laptop repo branch) or
-     \"habitat\" (Nopales/Postgres branch); empty when unset — callers must
-     treat empty as AMBIGUOUS, not as a default."
-    (let
-      ((k (dict-get fields "branch_kind")))
-      (if (null? k) "" (as-str k)))))
-
 (define todo/item/set-branch-kind
   (lambda
     (id kind)
@@ -1701,6 +1890,52 @@
         (seq
           (todo/tree/set-field "todo-item" (as-str id) "branch_kind" (as-str kind))
           (as-str id))))))
+
+(define todo/item/set-kind
+  (lambda
+    (id kind)
+    "Set card id's kind tag (empty clears — card leaves the /issues rows).
+     Returns id, or () when the item is missing."
+    (let
+      ((row (todo/tree/get "todo-item" (as-str id))))
+      (if
+        (null? row)
+        ()
+        (seq
+          (todo/tree/set-field "todo-item" (as-str id) "kind" (as-str kind))
+          (as-str id))))))
+
+(define todo/item/set-priority
+  (lambda
+    (id p)
+    "Set item id's priority (P0 highest .. P3, empty clears). Returns id, or () when the item is missing."
+    (let
+      ((row (todo/tree/get "todo-item" (as-str id))))
+      (if
+        (null? row)
+        ()
+        (seq
+          (todo/tree/set-field "todo-item" (as-str id) "priority" (as-str p))
+          (as-str id))))))
+
+(define todo/item/set-state
+  (lambda
+    (id state)
+    "Set card state, recording a todo-event when it actually changes. Returns
+     the event id (real transition) or () (no change / missing card). The
+     choke point: todo/item/cycle, archive, the item save, and future move
+     writers all record transitions through here."
+    (let
+      ((cur (todo/tree/get "todo-item" (as-str id))))
+      (if
+        (null? cur)
+        (list)
+        (let
+          ((prev (todo/item/state cur))
+            (next (as-str state)))
+          (seq
+            (todo/tree/set-field "todo-item" (as-str id) "state" next)
+            (todo/event/transition! id prev next)))))))
 
 (define todo/item/set-target
   (lambda
@@ -1720,470 +1955,29 @@
           (todo/tree/set-field "todo-item" (as-str id) "branch_kind" (as-str kind))
           (as-str id))))))
 
-;; kind field — borge/workstreams.borg pipeline-model issues-convergence:
-;; a todo-item with a kind tag (BUG/DESIGN/SMELL/CLEANUP) is READ AS AN
-;; ISSUE ROW on /issues, rendered through the shared state pipeline (own
-;; override > list columns > global default). Body builders seed "";
-;; set-kind is a content edit via tree/set-field (not a state transition,
-;; no todo-event), mirroring acceptance/branch above.
-(define todo/item/kind
+(define todo/item/state
   (lambda
     (fields)
-    "The issue-kind tag of item fields (BUG/DESIGN/SMELL/CLEANUP); empty when
-     absent. A non-empty kind is the /issues convergence flag: the card shows
-     up as an issue row through the shared pipeline."
     (let
-      ((k (dict-get fields "kind")))
-      (if (null? k) "" (as-str k)))))
-
-(define todo/item/set-kind
-  (lambda
-    (id kind)
-    "Set card id's kind tag (empty clears — card leaves the /issues rows).
-     Returns id, or () when the item is missing."
-    (let
-      ((row (todo/tree/get "todo-item" (as-str id))))
+      ((s (dict-get fields "state")))
       (if
-        (null? row)
-        ()
-        (seq
-          (todo/tree/set-field "todo-item" (as-str id) "kind" (as-str kind))
-          (as-str id))))))
-
-;; ------------------------------------------------------------------
-;; comment + event datums (card detail v2 feed) — borge/workstreams.borg
-;; card-comments. Two datum types seeded on load (guarded, idempotent):
-;;   todo-comment (item_id, body) — author + timestamps come from the ROW
-;;     METADATA (node author / created_at), not body fields, per spec: the
-;;     datum itself is deliberately minimal.
-;;   todo-event   (item_id, from_state, to_state) — auto-written by every
-;;     real card-state transition. Wired (task 3): todo/set-state,
-;;     todo/item/set-state, todo/save, todo/item/save all route through
-;;     todo/event/transition! (record only when the state actually changed),
-;;     so todo/cycle, todo/item/cycle, archive, the /todos detail form, and
-;;     the future move writers all append events for free. The kanban
-;;     move-card renumber (a position-reorder in libs/kanban) writes state
-;;     directly via tree/upsert and is intentionally out of scope here (the
-;;     kanban lib is off-limits this loop).
-;; todo/feed interleaves events + comments chronologically (Linear-style
-;; activity feed) for card detail v2.
-;; ------------------------------------------------------------------
-
-(define todo/comments-init!
-  (lambda
-    ()
-    "Ensure the todo-comment / todo-event datum types exist. Guarded so a
-     re-load (load-library) is safe and a non-admin load degrades to a no-op
-     value instead of an error; boot seeds these onto system/main as admin."
-    (seq
-      (if
-        (null? (type-fields (quote todo-comment)))
-        (deftype (quote todo-comment) (quote item_id) (quote body))
-        "todo-comment ok")
-      (if
-        (null? (type-fields (quote todo-event)))
-        (deftype (quote todo-event) (quote item_id) (quote from_state) (quote to_state))
-        "todo-event ok"))))
-
-(define todo/datum/rows-for-item
-  (lambda
-    (type item limit)
-    "Raw node-JSONs (id/path/kind/type/body/author/created_at/updated_at/rank)
-     of all `type` datums whose body.item_id === item, in store order (callers
-     that need chronology sort by created_at — see todo/datum/insert-by-ts)."
-    (list/filter
-      (lambda
-        (n)
+        (null? s)
         (let
-          ((b (dict-get n "body")))
-          (let
-            ((i (if (null? b) () (dict-get b "item_id"))))
-            (and (not (null? i)) (string-eq (as-str i) (as-str item))))))
-      (tree/list (todo/tree/prefix type) 1 limit))))
-
-(define todo/datum/feed-entry
-  (lambda
-    (kind n)
-    "One feed entry dict (JSON string) from a datum node-JSON: kind + id + ts
-     + author from row metadata, plus the payload fields the kind needs."
-    (let
-      ((b (dict-get n "body")))
-      (if
-        (string-eq kind "comment")
-        (dict-set*
-          "{}"
-          (list
-            "kind" "comment"
-            "id" (as-str (dict-get n "id"))
-            "ts" (as-str (dict-get n "created_at"))
-            "author" (as-str (dict-get n "author"))
-            "text" (as-str (dict-get b "body"))))
-        (dict-set*
-          "{}"
-          (list
-            "kind" "event"
-            "id" (as-str (dict-get n "id"))
-            "ts" (as-str (dict-get n "created_at"))
-            "author" (as-str (dict-get n "author"))
-            "from_state" (as-str (dict-get b "from_state"))
-            "to_state" (as-str (dict-get b "to_state"))))))))
-
-(define todo/datum/insert-by-ts
-  (lambda
-    (e sorted)
-    "Insert feed entry e into a ts-ascending sorted list (oldest first). The
-     node created_at strings are PG timestamptz text, uniformly shaped, so a
-     lexicographic compare IS chronological order."
-    (if
-      (null? sorted)
-      (list e)
-      (if
-        (string<?
-          (as-str (dict-get e "ts"))
-          (as-str (dict-get (car sorted) "ts")))
-        (cons e sorted)
-        (cons
-          (car sorted)
-          (todo/datum/insert-by-ts e (cdr sorted)))))))
-
-(define todo/datum/merge-by-ts
-  (lambda
-    (a b)
-    "Merge two feed-entry lists (ANY order) into one ts-ascending list.
-     Walks both through the sorted insetter from an empty list, so the
-     result is chronological regardless of the helpers' own ordering.
-     (rows-for-item feeds NEWEST-first; this rebuilds oldest-first.)"
-    (list/foldl
-      (lambda (acc e) (todo/datum/insert-by-ts e acc))
-      (list)
-      (append a b))))
-
-(define todo/comment/add
-  (lambda
-    (item body)
-    "Append a comment datum to card item; returns the comment id. Author +
-     ts ride the row metadata (session user / created_at)."
-    (todo/comments-init!)
-    (as-str
-      (todo/tree/create
-        "todo-comment"
-        (dict-set*
-          "{}"
-          (list "item_id" (as-str item) "body" (as-str body)))))))
-
-(define todo/event/record
-  (lambda
-    (item from to)
-    "Record a card state transition datum (item_id, from_state, to_state);
-     returns the event id. Private-ish: user code should call
-     todo/event/transition!, which records ONLY on a real change."
-    (todo/comments-init!)
-    (as-str
-      (todo/tree/create
-        "todo-event"
-        (dict-set*
-          "{}"
-          (list
-            "item_id" (as-str item)
-            "from_state" (as-str from)
-            "to_state" (as-str to)))))))
-
-(define todo/event/transition!
-  (lambda
-    (id from to)
-    "Record a todo-event for card id when the state actually changed
-     (from != to); no-op otherwise. Returns the event id, or () when the
-     states are equal. THE choke point every card-state writer calls:
-     todo/set-state, todo/item/set-state, todo/save, todo/item/save."
-    (if
-      (string-eq (as-str from) (as-str to))
-      ()
-      (todo/event/record id from to))))
-
-(define todo/comment/list
-  (lambda
-    (item)
-    "All comment node-JSONs for card item, newest first."
-    (todo/datum/rows-for-item "todo-comment" item 200)))
-
-(define todo/event/list
-  (lambda
-    (item)
-    "All event node-JSONs for card item, newest first."
-    (todo/datum/rows-for-item "todo-event" item 200)))
-
-(define todo/feed
-  (lambda
-    (item)
-    "Chronological activity feed for card item: todo-event transitions and
-     todo-comment rows interleaved by created_at, oldest first. Returns a
-     list of feed-entry dicts (JSON strings) tagged kind = comment | event."
-    (todo/comments-init!)
-    (todo/datum/merge-by-ts
-      (list/map
-        (lambda (n) (todo/datum/feed-entry "comment" n))
-        (todo/comment/list item))
-      (list/map
-        (lambda (n) (todo/datum/feed-entry "event" n))
-        (todo/event/list item)))))
-
-;; NOTE (2026-09-27): the two deftype forms run at the TOP of this file —
-;; see the comment there. They are deliberately NOT called here as
-;; (todo/comments-init!): a tail call executes only when every earlier
-;; form evaluated AND is not boot-seed-skipped, so one reader error
-;; anywhere above silently skipped the declarations (prod 2026-09-27).
-
-;; ------------------------------------------------------------------
-;; column recipes (workstreams.borg column-recipes) — the bridge between
-;; RECORD and EXECUTOR. The workstream list datum carries an optional
-;; `recipes` JSON dict field mapping COLUMN NAME -> instruction text (the
-;; per-column agent recipe). Reads fall back to the built-in default family
-;; (todo/recipes-default) so every list gets actionable instructions even
-;; before anyone configures it; recipe-set writes the explicit dict.
-;; NAMING NOTE (orchestration task 6 resolution): the plan originally named
-;; these kanban/recipes-for-list + kanban/recipe-set + kanban/recipe, but the
-;; kanban lib (libs/kanban/lib.pp) is OFF-LIMITS this loop (Do-NOT rule), and
-;; master's convention is one clean namespace per family file. These live in
-;; the todo family as todo/recipes-* (they operate on the todo-list datum);
-;; the shared column taxonomy they cover is SPEC/CODE/LOGIC-REVIEW/UI-REVIEW/
-;; HUMAN-REVIEW/DONE/PARKED (borge/work-triage.borg board).
-;; ------------------------------------------------------------------
-
-(define todo/recipes-default
-  (list
-    (cons "SPEC"
-      "You are the SPEC author for Pricklypear (Nopales/OCaml Lisp OS; the borge book is the spec and the source of truth — code drift means code is wrong). The card above is your work item; its acceptance criteria + target branch ride on the datum. Write/update the borge .borg chapter for it. Finish with `borge drift` clean and the spec committed on the target branch. Then move the card to CODE and post a comment: what you specified + how the reader verifies it.")
-    (cons "CODE"
-      "You are the IMPLEMENTER for Pricklypear (OCaml 5.4 / Nopales, dune build, borge spec). Implement the card above against its acceptance criteria, on its target branch, in /home/roerick/dev/wyo.tech/pricklypear. Build/test: eval $(opam env --switch=poohstack --set-switch); dune build; dune runtest (lisp/common at least). After .borg edits run `borge drift`. Live-smoke on the target host before write-back. When done, move the card to LOGIC-REVIEW and post a comment: what shipped + how you verified it.")
-    (cons "LOGIC-REVIEW"
-      "You are the LOGIC REVIEWER for Pricklypear. Review the card's work on its target branch against its acceptance criteria: read the change, check borge drift + build + the stated verification, judge logic. PASS -> move the card to HUMAN-REVIEW and comment your verdict + evidence. FAIL -> move it BACK to CODE with a comment listing exactly what to fix.")
-    (cons "UI-REVIEW"
-      "You are the UI REVIEWER for Pricklypear. Exercise the card's work on its target branch for interaction + rendering against its acceptance criteria (load the routes, click through). PASS -> move the card to HUMAN-REVIEW and comment. FAIL -> move it BACK to CODE with a comment of what to fix.")
-    (cons "HUMAN-REVIEW"
-      "ROERICK GATE — do NOT move this card yourself. It is ready for the human gate on its target branch; acceptance criteria are on the datum. Post any notes as comments; leave the state in HUMAN-REVIEW. Only the human passes this gate.")
-    (cons "DONE"
-      "This card is done. Nothing to execute. If it landed here by accident, move it back to the correct column and comment why.")
-    (cons "PARKED"
-      "This card is deliberately parked. Do not work it. If the park looks stale, comment and leave it — only the human unparks.")
-    (cons "TODO"
-      "Intake: place the card into the correct pipeline column — SPEC if it needs a spec/decision before code, CODE if it is executable now — set priority if useful, assign an owner if known, then comment where you placed it and why."))
-  "The built-in default recipe family per shared column (work-triage taxonomy).
-     todo/recipe falls back to these when a list has no explicit recipe for a
-     column. Columns without an entry fall to the generic fallback at read
-     time, so a brief always has instructions.")
-
-(define todo/recipes-for-list
-  (lambda
-    (list-id)
-    (let
-      ((lf (todo/tree/get "todo-list" (as-str list-id))))
-      (if
-        (null? lf)
-        (list)
-        (let
-          ((r (dict-get lf "recipes")))
+          ((d (dict-get fields "done")))
           (if
-            (null? r)
-            (list)
-            (list/map
-              (lambda
-                (k)
-                (cons
-                  (as-str k)
-                  (as-str (dict-get r (as-str k)))))
-              (dict-keys r)))))))
-  "The list's EXPLICIT `recipes` dict as an assoc list ((column . text) ...),
-     stored on the todo-list datum; () when the list is missing or has no
-     recipes field. Defaults are NOT mixed in — use todo/recipe for the
-     effective (fallback-aware) text of one column.")
+            (null? d)
+            "TODO"
+            (if (string-eq d "true") "DONE" "TODO")))
+        (as-str s)))))
 
-(define todo/recipe
+(define todo/item/title
+  (lambda (fields) (as-str (dict-get fields "title"))))
+
+(define todo/item/unassign
   (lambda
-    (list-id column)
-    (let
-      ((col (as-str column))
-        (explicit (assoc (as-str column) (todo/recipes-for-list list-id))))
-      (if
-        (if
-          explicit
-          (not (string-eq (as-str (cdr explicit)) ""))
-          #f)
-        (as-str (cdr explicit))
-        (let
-          ((dflt (assoc col todo/recipes-default)))
-          (if
-            dflt
-            (as-str (cdr dflt))
-            (string-append
-              col
-              ": work the card above on Pricklypear — follow its acceptance criteria and target branch; build/test with dune; verify; then advance the card one column and comment what you did + evidence."))))))
-  "The EFFECTIVE recipe instruction text for column in list-id: the list's
-     explicit recipe when set (non-empty), else the default family entry for
-     that column (todo/recipes-default), else a generic fallback. Never
-     returns () — every column in every list produces an instruction, so a
-     flow/brief always has text to hand the executor.")
-
-(define todo/recipes-drop
-  (lambda
-    (json key)
-    (let
-      ((k (as-str key)))
-      (list/foldl
-        (lambda
-          (acc jk)
-          (if
-            (string-eq (as-str jk) k)
-            acc
-            (dict-set acc (as-str jk) (as-str (dict-get json (as-str jk))))))
-        "{}"
-        (dict-keys json))))
-  "Rebuild a JSON dict without key (empty/absent dict stays {}). Helper for
-     todo/recipe-set removal — there is no dict-del prim, so drop = fold.")
-
-(define todo/recipe-set
-  (lambda
-    (list-id column text)
-    (let
-      ((lf (todo/tree/get "todo-list" (as-str list-id))))
-      (if
-        (null? lf)
-        "no such list"
-        (let
-          ((cur (dict-get lf "recipes")))
-          (let
-            ((base (if (null? cur) "" (as-str cur)))
-              (col (as-str column))
-              (tx (as-str text)))
-            (let
-              ((newr
-                (if
-                  (string-eq tx "")
-                  (todo/recipes-drop base col)
-                  (dict-set base col tx))))
-              (let
-                ((body (dict-set* lf (list "recipes" newr))))
-                (seq
-                  (tree/upsert
-                    (node-path (quote todo-list) (as-str list-id))
-                    "datum" "todo-list" body)
-                  (as-str list-id)))))))))
-  "Set the recipe instruction text for column on list-id (content edit of the
-     LIST datum via tree/upsert — NOT a card state transition, so no
-     todo-event is minted). Empty text REMOVES that column's entry. Returns
-     the list id, or a no-such-list message.")
-
-;; ------------------------------------------------------------------
-;; flow/brief — the executor brief (borge/workstreams.borg
-;; claim-brief-protocol). todo/flow-brief renders card + column recipe +
-;; context (repo path, build/tests invocation, target host, write-back eval
-;; snippet) into ONE self-contained text prompt: the plan file for a ralph
-;; loop, the task string for a subagent. NAMING NOTE (orchestration task 7
-;; resolution): the plan named this flow/brief; a `libs/flow` package would be
-;; a NEW family file, and the Do-NOT rule limits this loop to todo/standup/
-;; workstreams libs — so it lives in the todo family as todo/flow-brief.
-;; ------------------------------------------------------------------
-
-(define todo/flow-brief
-  (lambda
-    (card-id)
-    (let
-      ((fields (todo/tree/get "todo-item" (as-str card-id))))
-      (if
-        (null? fields)
-        ()
-        (let
-          ((cid (as-str card-id))
-            (title (todo/item/title fields))
-            (state (todo/item/state fields))
-            (list-id (todo/item/list-id fields))
-            (acceptance (todo/item/acceptance fields))
-            (branch (todo/item/branch fields))
-            (branch-kind (todo/item/branch-kind fields))
-            (assignee (todo/item/assignee fields)))
-          (let
-            ((lname
-              (if
-                (string-eq list-id "")
-                "(no list)"
-                (let
-                  ((lf (todo/tree/get "todo-list" list-id)))
-                  (if
-                    (null? lf)
-                    list-id
-                    (todo/list/title lf))))))
-            (string-append
-              "PRICKLYPEAR EXECUTOR BRIEF — claim/brief protocol (borge/workstreams.borg)\n"
-              "Self-contained task: work the card below on the laptop repo. Follow the column\n"
-              "recipe. Do not promote to prod. YOU DO NOT WRITE BACK — pp-flow owns the card\n"
-              "transition and will move the card one column + post your evidence comment when\n"
-              "you exit 0. Your only job is the work + a clear EVIDENCE section.\n\n== CARD ==\n"
-              "  card id:    "
-              cid
-              "\n  title:      "
-              title
-              "\n  state:      "
-              state
-              "\n  list:       "
-              lname
-              " ("
-              list-id
-              ")\n  assignee:   "
-              assignee
-              "\n  acceptance: "
-              (if (string-eq acceptance "") "(none)" acceptance)
-              "\n  branch:     "
-              (if
-                (string-eq branch "")
-                "(none)"
-                (if
-                  (string-eq branch-kind "")
-                  (string-append branch "  [DOMAIN UNSET]")
-                  (string-append branch "  [" branch-kind "]")))
-              "\n\n== COLUMN RECIPE ("
-              state
-              ") ==\n"
-              (todo/recipe list-id state)
-              "\n\n== BRANCH DOMAIN (read this) ==\n"
-              "  Pricklypear has TWO branch systems; `branch` above names one of them:\n"
-              "  * git     — a git branch in the laptop repo (master, a feature branch).\n"
-              "              Repo-side work: .borg spec, OCaml, scripts. Commit + push there.\n"
-              "  * habitat — a Nopales/Postgres branch ON the habitat (system/main,\n"
-              "              <user>/personal, <user>/dev). Define/route/promote there; it\n"
-              "              is NEVER a git branch and does not exist in the repo.\n"
-              (if
-                (string-eq branch "")
-                "  This card names no branch — work on the repo default and say so in your EVIDENCE.\n"
-                (if
-                  (string-eq branch-kind "")
-                  (string-append
-                    "  DOMAIN UNSET: is \""
-                    branch
-                    "\" a git branch or a habitat branch? Do NOT guess — if the work\n"
-                    "  you are about to do does not make the answer obvious, STOP and post a\n"
-                    "  comment asking, rather than committing to the wrong domain.\n")
-                  (if
-                    (string-eq branch-kind "git")
-                    "  Domain: git — commit to this branch in the laptop repo.\n"
-                    "  Domain: habitat — a Nopales/Postgres branch; do NOT git-commit to it.\n")))
-              "\n== CONTEXT ==\n"
-              "  repo:    /home/roerick/dev/wyo.tech/pricklypear\n"
-              "  build:   eval $(opam env --switch=poohstack --set-switch); dune build\n"
-              "  tests:   dune runtest lisp; dune runtest common\n"
-              "  spec:    the .borg book is the spec + source of truth; run `borge drift` after spec edits\n\n"
-              "== EVIDENCE (what pp-flow will post on your behalf) ==\n"
-              "  End your output with an EVIDENCE block:\n"
-              "  EVIDENCE: <what you did + how you verified it (build/tests/live smoke;\n"
-              "  keep under ~200 chars, will be trimmed to 500 by the driver)>.\n"
-              "  pp-flow moves the card ONE column and posts this as your comment on the\n"
-              "  card thread. If the recipe demands a different destination than ONE\n"
-              "  forward column (e.g. a review FAIL stays/backtracks), write:\n"
-              "  DESTINATION: <COLUMN> — and pp-flow will use that instead."))))))
-  "Render card + column recipe + context into ONE self-contained text prompt
-     (the executor brief). Includes the card title/state/list/acceptance/
-     branch/assignee, the effective column recipe (todo/recipe), repo + build
-     context, and the write-back eval snippet (advance one column + post a
-     comment). Returns () for a missing card. For a ralph loop this IS the
-     plan file; for a subagent it's the task.")
+    (id)
+    "Clear item id's assignee."
+    (todo/item/assign id "")))
 
 (define todo/items-for
   (lambda
@@ -3022,6 +2816,151 @@
         (open (todo/count-open-in items)))
       (string-append (as-str (- n open)) "/" (as-str n)))))
 
+(define todo/recipe
+  (lambda
+    (list-id column)
+    (let
+      ((col (as-str column))
+        (explicit (assoc (as-str column) (todo/recipes-for-list list-id))))
+      (if
+        (if
+          explicit
+          (not (string-eq (as-str (cdr explicit)) ""))
+          #f)
+        (as-str (cdr explicit))
+        (let
+          ((dflt (assoc col todo/recipes-default)))
+          (if
+            dflt
+            (as-str (cdr dflt))
+            (string-append
+              col
+              ": work the card above on Pricklypear — follow its acceptance criteria and target branch; build/test with dune; verify; then advance the card one column and comment what you did + evidence."))))))
+  "The EFFECTIVE recipe instruction text for column in list-id: the list's
+     explicit recipe when set (non-empty), else the default family entry for
+     that column (todo/recipes-default), else a generic fallback. Never
+     returns () — every column in every list produces an instruction, so a
+     flow/brief always has text to hand the executor.")
+
+(define todo/recipe-set
+  (lambda
+    (list-id column text)
+    (let
+      ((lf (todo/tree/get "todo-list" (as-str list-id))))
+      (if
+        (null? lf)
+        "no such list"
+        (let
+          ((cur (dict-get lf "recipes")))
+          (let
+            ((base (if (null? cur) "" (as-str cur)))
+              (col (as-str column))
+              (tx (as-str text)))
+            (let
+              ((newr
+                (if
+                  (string-eq tx "")
+                  (todo/recipes-drop base col)
+                  (dict-set base col tx))))
+              (let
+                ((body (dict-set* lf (list "recipes" newr))))
+                (seq
+                  (tree/upsert
+                    (node-path (quote todo-list) (as-str list-id))
+                    "datum" "todo-list" body)
+                  (as-str list-id)))))))))
+  "Set the recipe instruction text for column on list-id (content edit of the
+     LIST datum via tree/upsert — NOT a card state transition, so no
+     todo-event is minted). Empty text REMOVES that column's entry. Returns
+     the list id, or a no-such-list message.")
+
+;; NOTE (2026-09-27): the two deftype forms run at the TOP of this file —
+;; see the comment there. They are deliberately NOT called here as
+;; (todo/comments-init!): a tail call executes only when every earlier
+;; form evaluated AND is not boot-seed-skipped, so one reader error
+;; anywhere above silently skipped the declarations (prod 2026-09-27).
+
+;; ------------------------------------------------------------------
+;; column recipes (workstreams.borg column-recipes) — the bridge between
+;; RECORD and EXECUTOR. The workstream list datum carries an optional
+;; `recipes` JSON dict field mapping COLUMN NAME -> instruction text (the
+;; per-column agent recipe). Reads fall back to the built-in default family
+;; (todo/recipes-default) so every list gets actionable instructions even
+;; before anyone configures it; recipe-set writes the explicit dict.
+;; NAMING NOTE (orchestration task 6 resolution): the plan originally named
+;; these kanban/recipes-for-list + kanban/recipe-set + kanban/recipe, but the
+;; kanban lib (libs/kanban/lib.pp) is OFF-LIMITS this loop (Do-NOT rule), and
+;; master's convention is one clean namespace per family file. These live in
+;; the todo family as todo/recipes-* (they operate on the todo-list datum);
+;; the shared column taxonomy they cover is SPEC/CODE/LOGIC-REVIEW/UI-REVIEW/
+;; HUMAN-REVIEW/DONE/PARKED (borge/work-triage.borg board).
+;; ------------------------------------------------------------------
+
+(define todo/recipes-default
+  (list
+    (cons "SPEC"
+      "You are the SPEC author for Pricklypear (Nopales/OCaml Lisp OS; the borge book is the spec and the source of truth — code drift means code is wrong). The card above is your work item; its acceptance criteria + target branch ride on the datum. Write/update the borge .borg chapter for it. Finish with `borge drift` clean and the spec committed on the target branch. Then move the card to CODE and post a comment: what you specified + how the reader verifies it.")
+    (cons "CODE"
+      "You are the IMPLEMENTER for Pricklypear (OCaml 5.4 / Nopales, dune build, borge spec). Implement the card above against its acceptance criteria, on its target branch, in /home/roerick/dev/wyo.tech/pricklypear. Build/test: eval $(opam env --switch=poohstack --set-switch); dune build; dune runtest (lisp/common at least). After .borg edits run `borge drift`. Live-smoke on the target host before write-back. When done, move the card to LOGIC-REVIEW and post a comment: what shipped + how you verified it.")
+    (cons "LOGIC-REVIEW"
+      "You are the LOGIC REVIEWER for Pricklypear. Review the card's work on its target branch against its acceptance criteria: read the change, check borge drift + build + the stated verification, judge logic. PASS -> move the card to HUMAN-REVIEW and comment your verdict + evidence. FAIL -> move it BACK to CODE with a comment listing exactly what to fix.")
+    (cons "UI-REVIEW"
+      "You are the UI REVIEWER for Pricklypear. Exercise the card's work on its target branch for interaction + rendering against its acceptance criteria (load the routes, click through). PASS -> move the card to HUMAN-REVIEW and comment. FAIL -> move it BACK to CODE with a comment of what to fix.")
+    (cons "HUMAN-REVIEW"
+      "ROERICK GATE — do NOT move this card yourself. It is ready for the human gate on its target branch; acceptance criteria are on the datum. Post any notes as comments; leave the state in HUMAN-REVIEW. Only the human passes this gate.")
+    (cons "DONE"
+      "This card is done. Nothing to execute. If it landed here by accident, move it back to the correct column and comment why.")
+    (cons "PARKED"
+      "This card is deliberately parked. Do not work it. If the park looks stale, comment and leave it — only the human unparks.")
+    (cons "TODO"
+      "Intake: place the card into the correct pipeline column — SPEC if it needs a spec/decision before code, CODE if it is executable now — set priority if useful, assign an owner if known, then comment where you placed it and why."))
+  "The built-in default recipe family per shared column (work-triage taxonomy).
+     todo/recipe falls back to these when a list has no explicit recipe for a
+     column. Columns without an entry fall to the generic fallback at read
+     time, so a brief always has instructions.")
+
+(define todo/recipes-drop
+  (lambda
+    (json key)
+    (let
+      ((k (as-str key)))
+      (list/foldl
+        (lambda
+          (acc jk)
+          (if
+            (string-eq (as-str jk) k)
+            acc
+            (dict-set acc (as-str jk) (as-str (dict-get json (as-str jk))))))
+        "{}"
+        (dict-keys json))))
+  "Rebuild a JSON dict without key (empty/absent dict stays {}). Helper for
+     todo/recipe-set removal — there is no dict-del prim, so drop = fold.")
+
+(define todo/recipes-for-list
+  (lambda
+    (list-id)
+    (let
+      ((lf (todo/tree/get "todo-list" (as-str list-id))))
+      (if
+        (null? lf)
+        (list)
+        (let
+          ((r (dict-get lf "recipes")))
+          (if
+            (null? r)
+            (list)
+            (list/map
+              (lambda
+                (k)
+                (cons
+                  (as-str k)
+                  (as-str (dict-get r (as-str k)))))
+              (dict-keys r)))))))
+  "The list's EXPLICIT `recipes` dict as an assoc list ((column . text) ...),
+     stored on the todo-list datum; () when the list is missing or has no
+     recipes field. Defaults are NOT mixed in — use todo/recipe for the
+     effective (fallback-aware) text of one column.")
+
 (define todo/save
   (lambda
     (id title notes due state list-id)
@@ -3117,6 +3056,14 @@
 (define todo/state/archived?
   (lambda (s) (string-eq (as-str s) "ARCHIVED")))
 
+(define todo/state/columns-for-item
+  (lambda
+    (item-id)
+    (cdr (todo/state/item-pipeline (as-str item-id))))
+  "The effective pipeline (column-state list) for ONE item: its OWN `pipeline`
+     override when present, else its list's columns, else the global default.
+     A card can ride a different pipeline than its list's board.")
+
 (define todo/state/columns-for-list
   (lambda
     (list-id)
@@ -3134,37 +3081,6 @@
               ((cs (as-str cols)))
               (if (string-eq cs "") todo/state/list (json-parse cs))))))))
   "The state set (list of state strings) for a todo-list: the list's own\n     `columns` field when present and non-empty, else the global default\n     todo/state/list. THE per-list override kanban columns and the /todos\n     state machine both read through, so a list with custom columns cycles\n     only those states everywhere.")
-
-(define todo/state/list
-  (list "" "TODO" "DONE" "WAITING" "CANCELLED"))
-
-(define todo/state/next
-  (lambda
-    (cur)
-    (outline/todo-next-in todo/state/list (as-str cur))))
-
-(define todo/state/next-for-list
-  (lambda
-    (cur list-id)
-    (todo/state/todo-next-in
-      (todo/state/columns-for-list list-id)
-      (as-str cur)))
-  "Next state after cur within list-id's own state set (custom columns when\n     present, else the global default). Wraps around: last column -> first of\n     that same set.")
-
-(define todo/state/list-has-columns?
-  (lambda
-    (list-id)
-    (let
-      ((lf (get (quote todo-list) (as-str list-id))))
-      (if
-        (null? lf)
-        #f
-        (let
-          ((cols (dict-get lf "columns")))
-          (and
-            (not (null? cols))
-            (not (string-eq (as-str cols) "")))))))
-  "True when the todo-list datum carries its own non-empty `columns` field\n     (i.e. it IS its own pipeline per borge/workstreams.borg pipeline-model).")
 
 (define todo/state/item-pipeline
   (lambda
@@ -3191,20 +3107,28 @@
        b) the item's LIST `columns`, else
        c) the global todo/state/list.")
 
-(define todo/state/columns-for-item
-  (lambda
-    (item-id)
-    (cdr (todo/state/item-pipeline (as-str item-id))))
-  "The effective pipeline (column-state list) for ONE item: its OWN `pipeline`
-     override when present, else its list's columns, else the global default.
-     A card can ride a different pipeline than its list's board.")
+(define todo/state/list
+  (list "" "TODO" "DONE" "WAITING" "CANCELLED"))
 
-(define todo/state/pipeline-for-item
+(define todo/state/list-has-columns?
   (lambda
-    (item-id)
-    (car (todo/state/item-pipeline (as-str item-id))))
-  "Which branch supplied item-id's effective pipeline: 'own | 'list | 'default
-     (resolution order a/b/c of borge/workstreams.borg pipeline-model).")
+    (list-id)
+    (let
+      ((lf (get (quote todo-list) (as-str list-id))))
+      (if
+        (null? lf)
+        #f
+        (let
+          ((cols (dict-get lf "columns")))
+          (and
+            (not (null? cols))
+            (not (string-eq (as-str cols) "")))))))
+  "True when the todo-list datum carries its own non-empty `columns` field\n     (i.e. it IS its own pipeline per borge/workstreams.borg pipeline-model).")
+
+(define todo/state/next
+  (lambda
+    (cur)
+    (outline/todo-next-in todo/state/list (as-str cur))))
 
 (define todo/state/next-for-item
   (lambda
@@ -3215,6 +3139,14 @@
   "Next state after cur within item-id's OWN effective pipeline (own override >
      list columns > global default). Wraps around: last column -> first of that
      same set, so a card on its own pipeline never leaves it.")
+
+(define todo/state/next-for-list
+  (lambda
+    (cur list-id)
+    (todo/state/todo-next-in
+      (todo/state/columns-for-list list-id)
+      (as-str cur)))
+  "Next state after cur within list-id's own state set (custom columns when\n     present, else the global default). Wraps around: last column -> first of\n     that same set.")
 
 (define todo/state/open?
   (lambda
@@ -3253,16 +3185,6 @@
       selected
       (append todo/state/list (list "ARCHIVED")))))
 
-(define todo/state/options-for-list
-  (lambda
-    (selected list-id)
-    (todo/state/options-from
-      selected
-      (append
-        (todo/state/columns-for-list list-id)
-        (list "ARCHIVED"))))
-  "HTML options over list-id's own state set PLUS ARCHIVED, with selected\n     marked — the detail <select> for an item in that list. Uses the list's\n     custom columns when present, else the canonical options-all state set.")
-
 (define todo/state/options-for-item
   (lambda
     (selected item-id)
@@ -3275,6 +3197,16 @@
      selected marked — the card-detail <select>. Own `pipeline` override >
      list columns > global default, so a card on its own pipeline offers only
      its own states (plus ARCHIVED).")
+
+(define todo/state/options-for-list
+  (lambda
+    (selected list-id)
+    (todo/state/options-from
+      selected
+      (append
+        (todo/state/columns-for-list list-id)
+        (list "ARCHIVED"))))
+  "HTML options over list-id's own state set PLUS ARCHIVED, with selected\n     marked — the detail <select> for an item in that list. Uses the list's\n     custom columns when present, else the canonical options-all state set.")
 
 (define todo/state/options-from
   (lambda
@@ -3289,6 +3221,13 @@
             (html/option st lab (string-eq st (as-str selected))))))
       ""
       states)))
+
+(define todo/state/pipeline-for-item
+  (lambda
+    (item-id)
+    (car (todo/state/item-pipeline (as-str item-id))))
+  "Which branch supplied item-id's effective pipeline: 'own | 'list | 'default
+     (resolution order a/b/c of borge/workstreams.borg pipeline-model).")
 
 (define todo/state/todo-next-in
   (lambda
@@ -3492,101 +3431,6 @@
                           (html/attr "autocomplete" "off"))))
                     (html/button (html/attr "type" "submit") "Add")))))))))))
 
-;; ------------------------------------------------------------------
-;; card detail v2: interleaved activity feed + comment composer.
-;; borge/workstreams.borg card-comments / card-detail-v2. todo/feed gives
-;; chronological entries; these renderers turn them into <li>s and the
-;; composer POSTs action=comment back to the SAME /todos detail page
-;; (no route fork - the spec's card-detail-v2 shape). Author + timestamp
-;; ride the row metadata (todo/datum/feed-entry).
-;; ------------------------------------------------------------------
-
-(define todo/ui/feed-item-html
-  (lambda
-    (e)
-    "One feed <li> from a feed entry dict (JSON): events render as a
-     state-arrow line, comments as their body text. Oldest-first order
-     comes from todo/feed."
-    (let
-      ((kind (as-str (dict-get e "kind")))
-        (author (as-str (dict-get e "author")))
-        (ts (as-str (dict-get e "ts"))))
-      (let
-        ((stamp
-          (html/span
-            (html/attr "class" "muted todo-feed-stamp")
-            (html/text (string-append author " @ " ts)))))
-        (if
-          (string-eq kind "event")
-          (html/li
-            (html/attr "class" "todo-feed-item todo-feed-event")
-            (html/join
-              (list
-                stamp
-                (html/span
-                  (html/attr "class" "todo-feed-arrow")
-                  (html/text
-                    (string-append
-                      (as-str (dict-get e "from_state"))
-                      " -> "
-                      (as-str (dict-get e "to_state"))))))))
-          (html/li
-            (html/attr "class" "todo-feed-item todo-feed-comment")
-            (html/join
-              (list
-                stamp
-                (html/p (html/text (as-str (dict-get e "text"))))))))))))
-
-(define todo/ui/feed-html
-  (lambda
-    (id view)
-    "The card-detail v2 activity section: an h2 + <ul> of the interleaved
-     comment/event feed, then a comment composer. Plain POST action=comment
-     to /todos (same shape as the Save form) — todo/page posts the comment
-     then redirects back to the current view."
-    (let
-      ((entries (todo/feed id)))
-      (let
-        ((items
-          (if
-            (null? entries)
-            (html/p* (html/attr "class" "muted") "No activity yet.")
-            (html/ul
-              (html/attr "class" "todo-feed")
-              (html/join
-                (list/map
-                  (lambda (e) (todo/ui/feed-item-html e))
-                  entries))))))
-        (html/div
-          (html/attr "class" "todo-feed-section")
-          (html/join
-            (list
-              (html/h2 (html/text "Activity"))
-              items
-              (html/form
-                "POST"
-                "/todos"
-                (html/attrs
-                  (list
-                    (html/attr "class" "todo-comment-form")))
-                (html/join
-                  (list
-                    (html/hidden "action" "comment")
-                    (html/hidden "id" id)
-                    (html/hidden "view" view)
-                    (html/label (html/attr "for" "comment") "Comment")
-                    (html/textarea
-                      "comment"
-                      (html/attrs
-                        (list
-                          (html/attr "id" "comment")
-                          (html/attr "rows" "3")
-                          (html/attr "class" "todo-comment-input")))
-                      "")
-                    (html/div
-                      ""
-                      (html/button (html/attr "type" "submit") "Comment"))))))))))))
-
 (define todo/ui/detail
   (lambda
     (id view)
@@ -3704,6 +3548,101 @@
                                     (html/button (html/attr "type" "submit") "Save")
                                     " "
                                     (html/a (string-append "/todos?view=" view) "Cancel"))))))) (todo/ui/feed-html id view))))))))))))))
+
+(define todo/ui/feed-html
+  (lambda
+    (id view)
+    "The card-detail v2 activity section: an h2 + <ul> of the interleaved
+     comment/event feed, then a comment composer. Plain POST action=comment
+     to /todos (same shape as the Save form) — todo/page posts the comment
+     then redirects back to the current view."
+    (let
+      ((entries (todo/feed id)))
+      (let
+        ((items
+          (if
+            (null? entries)
+            (html/p* (html/attr "class" "muted") "No activity yet.")
+            (html/ul
+              (html/attr "class" "todo-feed")
+              (html/join
+                (list/map
+                  (lambda (e) (todo/ui/feed-item-html e))
+                  entries))))))
+        (html/div
+          (html/attr "class" "todo-feed-section")
+          (html/join
+            (list
+              (html/h2 (html/text "Activity"))
+              items
+              (html/form
+                "POST"
+                "/todos"
+                (html/attrs
+                  (list
+                    (html/attr "class" "todo-comment-form")))
+                (html/join
+                  (list
+                    (html/hidden "action" "comment")
+                    (html/hidden "id" id)
+                    (html/hidden "view" view)
+                    (html/label (html/attr "for" "comment") "Comment")
+                    (html/textarea
+                      "comment"
+                      (html/attrs
+                        (list
+                          (html/attr "id" "comment")
+                          (html/attr "rows" "3")
+                          (html/attr "class" "todo-comment-input")))
+                      "")
+                    (html/div
+                      ""
+                      (html/button (html/attr "type" "submit") "Comment"))))))))))))
+
+;; ------------------------------------------------------------------
+;; card detail v2: interleaved activity feed + comment composer.
+;; borge/workstreams.borg card-comments / card-detail-v2. todo/feed gives
+;; chronological entries; these renderers turn them into <li>s and the
+;; composer POSTs action=comment back to the SAME /todos detail page
+;; (no route fork - the spec's card-detail-v2 shape). Author + timestamp
+;; ride the row metadata (todo/datum/feed-entry).
+;; ------------------------------------------------------------------
+
+(define todo/ui/feed-item-html
+  (lambda
+    (e)
+    "One feed <li> from a feed entry dict (JSON): events render as a
+     state-arrow line, comments as their body text. Oldest-first order
+     comes from todo/feed."
+    (let
+      ((kind (as-str (dict-get e "kind")))
+        (author (as-str (dict-get e "author")))
+        (ts (as-str (dict-get e "ts"))))
+      (let
+        ((stamp
+          (html/span
+            (html/attr "class" "muted todo-feed-stamp")
+            (html/text (string-append author " @ " ts)))))
+        (if
+          (string-eq kind "event")
+          (html/li
+            (html/attr "class" "todo-feed-item todo-feed-event")
+            (html/join
+              (list
+                stamp
+                (html/span
+                  (html/attr "class" "todo-feed-arrow")
+                  (html/text
+                    (string-append
+                      (as-str (dict-get e "from_state"))
+                      " -> "
+                      (as-str (dict-get e "to_state"))))))))
+          (html/li
+            (html/attr "class" "todo-feed-item todo-feed-comment")
+            (html/join
+              (list
+                stamp
+                (html/p (html/text (as-str (dict-get e "text"))))))))))))
 
 (define todo/ui/handle-post
   (lambda

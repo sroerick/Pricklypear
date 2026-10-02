@@ -1,4 +1,16 @@
-;; package standup -- daily 09:00 Mountain standup brief (gregor)
+
+
+(define standup/brief
+  (lambda ()
+    (string-append
+      "Standup:\n"
+      (guard (lambda (e) "lobby: n/a") (standup/lobby-line))
+      "\n"
+      (guard (lambda (e) "open cards: n/a") (standup/todo-line))
+      (guard (lambda (e) "workstreams: n/a") (standup/workstreams-line))
+      (guard (lambda (e) "human review: n/a") (standup/review-line))
+      (guard (lambda (e) "moved: n/a") (standup/moved-line))
+      "\nhttps://pricklypear.rocks/chat")));; package standup -- daily 09:00 Mountain standup brief (gregor)
 ;; Delivery: multi-line brief to the lobby + one ntfy push. Data: lobby
 ;; chat history + gregor-visible todo-item rows (calendar and full board
 ;; coverage wait on shared-data-spaces S1/S2 grants).
@@ -31,25 +43,21 @@
   (lambda (l)
     (if (null? l) 0 (+ 1 (standup/count (cdr l))))))
 
-(define standup/short
-  (lambda (s n)
-    (if (> (string-length s) n)
-        (string-append (substring s 0 n) "...")
-        s)))
+;; ---- v2: workstreams + human-review + yesterday's transitions -----------
+;; borge/workstreams.borg standup-v2 (orchestration task 10). Reads the LIVE
+;; store; the workstreams-family sections are load-guarded so a host without
+;; the workstreams package (pre-promote deployment) degrades to nothing
+;; rather than breaking the brief.
 
-(define standup/titles
-  (lambda (l n)
-    (if (null? l)
-        ""
-        (if (< n 1)
-            ""
-            (let ((t (string-append
-                       "- "
-                       (standup/short
-                         (as-str (dict-get (cdr (car l)) "title")) 46))))
-              (if (if (null? (cdr l)) #t (< n 2))
-                  t
-                  (string-append t "\n" (standup/titles (cdr l) (- n 1)))))))))
+(define standup/date-prefix
+  (lambda (s)
+    (let ((t (as-str s)))
+      (if (>= (string-length t) 10) (substring t 0 10) t))))
+
+(define standup/ensure-workstreams
+  (lambda ()
+    "Bind the workstreams family in this session (job context; safe)."
+    (load-library "workstreams")))
 
 (define standup/filter-open
   (lambda (l)
@@ -60,15 +68,26 @@
               (standup/filter-open (cdr l))
               (cons (car l) (standup/filter-open (cdr l))))))))
 
-(define standup/todo-line
+(define standup/item-index
   (lambda ()
-    (let ((open (standup/filter-open (rows 'todo-item 200))))
-      (string-append
-        "Open cards: "
-        (as-str (standup/count open))
-        (if (> (standup/count open) 0)
-            (string-append "\n" (standup/titles open 3))
-            "")))))
+    "All todo-items as (id . title), id from the PATH tail. For resolving
+     rollup/event card ids to titles in the brief."
+    (list/map
+      (lambda (n)
+        (cons
+          (todo/tree/redash (todo/tree/tail (dict-get n "path")))
+          (as-str (dict-get (dict-get n "body") "title"))))
+      (tree/list (todo/tree/prefix "todo-item") 1 500))))
+
+(define standup/join-lines
+  (lambda (parts)
+    (if
+      (null? parts)
+      ""
+      (list/foldl
+        (lambda (acc p) (string-append acc (string-append "\n" p)))
+        (car parts)
+        (cdr parts)))))
 
 (define standup/last-other
   (lambda (l)
@@ -94,106 +113,6 @@
               (as-str (dict-get (cdr lastf) "from"))
               ": "
               (standup/short (as-str (dict-get (cdr lastf) "body")) 80)))))))
-
-;; ---- v2: workstreams + human-review + yesterday's transitions -----------
-;; borge/workstreams.borg standup-v2 (orchestration task 10). Reads the LIVE
-;; store; the workstreams-family sections are load-guarded so a host without
-;; the workstreams package (pre-promote deployment) degrades to nothing
-;; rather than breaking the brief.
-
-(define standup/date-prefix
-  (lambda (s)
-    (let ((t (as-str s)))
-      (if (>= (string-length t) 10) (substring t 0 10) t))))
-
-(define standup/join-lines
-  (lambda (parts)
-    (if
-      (null? parts)
-      ""
-      (list/foldl
-        (lambda (acc p) (string-append acc (string-append "\n" p)))
-        (car parts)
-        (cdr parts)))))
-
-(define standup/item-index
-  (lambda ()
-    "All todo-items as (id . title), id from the PATH tail. For resolving
-     rollup/event card ids to titles in the brief."
-    (list/map
-      (lambda (n)
-        (cons
-          (todo/tree/redash (todo/tree/tail (dict-get n "path")))
-          (as-str (dict-get (dict-get n "body") "title"))))
-      (tree/list (todo/tree/prefix "todo-item") 1 500))))
-
-(define standup/title-of
-  (lambda (id index)
-    "Title for a card id from the (id . title) index, else the id itself."
-    (if
-      (null? index)
-      (as-str id)
-      (if
-        (string-eq (as-str (car (car index))) (as-str id))
-        (as-str (cdr (car index)))
-        (standup/title-of id (cdr index))))))
-
-(define standup/ensure-workstreams
-  (lambda ()
-    "Bind the workstreams family in this session (job context; safe)."
-    (load-library "workstreams")))
-
-(define standup/stream-line
-  (lambda (stream)
-    "One stream's summary: title, non-zero column counts, open total, and a
-     STALE n flag when any open card is >3d old."
-    (let*
-      ((lid (car stream))
-        (title (cdr stream))
-        (counts (workstreams/column-counts lid))
-        (open (workstreams/len (workstreams/open-items lid)))
-        (stale (workstreams/len (workstreams/stale-items lid))))
-      (string-append
-        "• " title ": "
-        (if (null? counts) "no open work" (workstreams/counts-line counts))
-        " (" (as-str open) " open)"
-        (if (> stale 0) (string-append " · STALE " (as-str stale)) "")))))
-
-(define standup/workstreams-line
-  (lambda ()
-    (guard
-      (lambda (e) "")
-      (seq
-        (standup/ensure-workstreams)
-        (let ((streams (workstreams/stream-rows)))
-          (if
-            (null? streams)
-            ""
-            (string-append
-              "\nWorkstreams:\n"
-              (standup/join-lines (list/map standup/stream-line streams)))))))))
-
-(define standup/review-line
-  (lambda ()
-    (guard
-      (lambda (e) "")
-      (seq
-        (standup/ensure-workstreams)
-        (let*
-          ((index (standup/item-index))
-            (cards (workstreams/rollup "HUMAN-REVIEW")))
-          (if
-            (null? cards)
-            ""
-            (string-append
-              "\nReady for human review:\n"
-              (standup/join-lines
-                (list/map
-                  (lambda (c)
-                    (string-append
-                      "- " (standup/title-of (car c) index)
-                      " (" (cdr c) ")"))
-                  cards)))))))))
 
 (define standup/moved-line
   (lambda ()
@@ -225,23 +144,33 @@
                       " -> " (as-str (dict-get b "to_state")))))
                 dim))))))))
 
-(define standup/brief
-  (lambda ()
-    (string-append
-      "Standup:\n"
-      (guard (lambda (e) "lobby: n/a") (standup/lobby-line))
-      "\n"
-      (guard (lambda (e) "open cards: n/a") (standup/todo-line))
-      (guard (lambda (e) "workstreams: n/a") (standup/workstreams-line))
-      (guard (lambda (e) "human review: n/a") (standup/review-line))
-      (guard (lambda (e) "moved: n/a") (standup/moved-line))
-      "\nhttps://pricklypear.rocks/chat")))
-
 (define standup/ntfy-push
   (lambda (body)
     (seq
       (load-library "ntfy")
       (ntfy/send "Standup" body))))
+
+(define standup/review-line
+  (lambda ()
+    (guard
+      (lambda (e) "")
+      (seq
+        (standup/ensure-workstreams)
+        (let*
+          ((index (standup/item-index))
+            (cards (workstreams/rollup "HUMAN-REVIEW")))
+          (if
+            (null? cards)
+            ""
+            (string-append
+              "\nReady for human review:\n"
+              (standup/join-lines
+                (list/map
+                  (lambda (c)
+                    (string-append
+                      "- " (standup/title-of (car c) index)
+                      " (" (cdr c) ")"))
+                  cards)))))))))
 
 (define standup/run
   (lambda ()
@@ -253,3 +182,74 @@
             (if (dict-get resp "ok") resp (error "ntfy push failed")))
           (guard (lambda (e) e) (chat/say-in "lobby" b))
           (string-append b "\npush ok"))))))
+
+(define standup/short
+  (lambda (s n)
+    (if (> (string-length s) n)
+        (string-append (substring s 0 n) "...")
+        s)))
+
+(define standup/stream-line
+  (lambda (stream)
+    "One stream's summary: title, non-zero column counts, open total, and a
+     STALE n flag when any open card is >3d old."
+    (let*
+      ((lid (car stream))
+        (title (cdr stream))
+        (counts (workstreams/column-counts lid))
+        (open (workstreams/len (workstreams/open-items lid)))
+        (stale (workstreams/len (workstreams/stale-items lid))))
+      (string-append
+        "• " title ": "
+        (if (null? counts) "no open work" (workstreams/counts-line counts))
+        " (" (as-str open) " open)"
+        (if (> stale 0) (string-append " · STALE " (as-str stale)) "")))))
+
+(define standup/title-of
+  (lambda (id index)
+    "Title for a card id from the (id . title) index, else the id itself."
+    (if
+      (null? index)
+      (as-str id)
+      (if
+        (string-eq (as-str (car (car index))) (as-str id))
+        (as-str (cdr (car index)))
+        (standup/title-of id (cdr index))))))
+
+(define standup/titles
+  (lambda (l n)
+    (if (null? l)
+        ""
+        (if (< n 1)
+            ""
+            (let ((t (string-append
+                       "- "
+                       (standup/short
+                         (as-str (dict-get (cdr (car l)) "title")) 46))))
+              (if (if (null? (cdr l)) #t (< n 2))
+                  t
+                  (string-append t "\n" (standup/titles (cdr l) (- n 1)))))))))
+
+(define standup/todo-line
+  (lambda ()
+    (let ((open (standup/filter-open (rows 'todo-item 200))))
+      (string-append
+        "Open cards: "
+        (as-str (standup/count open))
+        (if (> (standup/count open) 0)
+            (string-append "\n" (standup/titles open 3))
+            "")))))
+
+(define standup/workstreams-line
+  (lambda ()
+    (guard
+      (lambda (e) "")
+      (seq
+        (standup/ensure-workstreams)
+        (let ((streams (workstreams/stream-rows)))
+          (if
+            (null? streams)
+            ""
+            (string-append
+              "\nWorkstreams:\n"
+              (standup/join-lines (list/map standup/stream-line streams)))))))))
