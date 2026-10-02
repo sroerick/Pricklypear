@@ -91,6 +91,14 @@ let launch (env : route_env) (page_fn : Session.t -> unit) : unit =
     env
   in
   Eio.Fiber.fork ~sw (fun () ->
+      (* Per-identity fair-share (card 1bdeb856): acquired BEFORE the
+         global cap so one tenant's slow evals cannot occupy every
+         global slot and starve others. The key is derived cheaply from
+         headers (auth/cookie) / source_ip — identity itself is not yet
+         attached, but the credential IS the identity for gating. *)
+      let gate_key = identity_gate_key ~headers ~source_ip in
+      let () = per_user_acquire gate_key in
+      Fun.protect ~finally:(fun () -> per_user_release gate_key) (fun () ->
       let () = inflight_acquire () in
       Fun.protect ~finally:(fun () -> inflight_release ()) (fun () ->
           (try
@@ -309,7 +317,7 @@ let launch (env : route_env) (page_fn : Session.t -> unit) : unit =
                in
                html_response reqd ~session ~status:`Internal_server_error body;
                ()
-             end)))
+             end))))
 
 (** habitat-book.web-renderer: kernel-dispatched book handlers
     (book/page, book/chapter-page, book/code-page in libs/book/lib.pp).
