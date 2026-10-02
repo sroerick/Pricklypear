@@ -487,8 +487,7 @@ let lambda_params (e : Pricklypear_lisp.Ast.expr) : string list option =
   | _ -> None
 
 let binding_annot ?(known_fn : Pricklypear_lisp.Effect.known_fn_lookup =
-  fun _ -> None) (t : t) (name : string) : string =
-  match Store.lookup_function t.store name with
+  fun _ -> None) (t : t) (name : string) : string =  match Store.lookup_function t.store name with
   | Some (body, _, _) ->
       (match Pricklypear_lisp.Ast.expr_of_body_json body with
        | Some e ->
@@ -510,6 +509,25 @@ let binding_annot ?(known_fn : Pricklypear_lisp.Effect.known_fn_lookup =
           (Pricklypear_lisp.Effect.EffSet.badge
              (Pricklypear_lisp.Effect.default_prim_lookup name))
       else name ^ " [?]"
+
+(** branching.branch-resolved-reads SCOPE grammar. Every read prim DECLARES
+    the visibility of its answer, because three readers silently differing
+    on "does marcus have data?" burned operator time. The closed vocabulary
+    is `chain` (branch-chain-visible), `garden` (own-branch/garden-scoped
+    with a prefix escape), `store` (whole-store under the admin RLS
+    disjunct). Stored Lisp defs default to `chain` (they cross the branch
+    chain); unknown prims get no line. A new reader may not introduce a
+    fourth kind without a line in the spec. *)
+let read_scope (t : t) (name : string) : string option =
+  match name with
+  | "find-code" | "function-source" | "function-ast" | "code-history"
+  | "code-diff" | "describe" | "branch-changes" -> Some "chain"
+  | "find-text" | "tree/find-by" -> Some "garden"
+  | "find-rows-author" -> Some "store"
+  | _ ->
+      (match Store.lookup_function t.store name with
+       | Some _ -> Some "chain"
+       | None -> None)
 
 (** Visible bindings without docstrings (bumpers M5; function-doc () =
     missing). [pkg] None → every visible binding; Some p → package
@@ -593,9 +611,14 @@ let describe (t : t) (needle : string) : string =
                  let b = Primitives.prim_summary needle in
                  if b = "built-in primitive" then "(no docstring)" else b)
       in
+      let scope_line =
+        match read_scope t needle with
+        | Some s -> Printf.sprintf "\n  scope: %s" s
+        | None -> ""
+      in
       (Printf.sprintf
-           "%s\n  doc: %s\n  next: (function-source %S) (function-ast %S)"
-           (binding_annot ~known_fn t needle) doc needle needle)
+           "%s\n  doc: %s%s\n  next: (function-source %S) (function-ast %S)"
+           (binding_annot ~known_fn t needle) doc scope_line needle needle)
     else if is_pkg then
       let exports = package_export_names t needle in
       let lines =
