@@ -2,3 +2,8 @@
  (name sync_vault_test)
  (modules sync_vault_test)
  (libraries pricklypear-cli.lib alcotest))
+
+(test
+ (name pp_sync_diff_test)
+ (modules pp_sync_diff_test)
+ (libraries pricklypear-cli.lib pricklypear-lisp alcotest))

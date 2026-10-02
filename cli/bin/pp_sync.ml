@@ -121,6 +121,21 @@ let parse_local_defines text =
         err;
       []
 
+(* Local define bodies, keyed by name (card 8dff7c9e Option 1): the
+   NAME-level diff in cmd_status cannot see a stale BODY — exactly the
+   "git has the fix, live main does not" case. Parsing + canonical body
+   comparison live in Pp_sync_diff (unit-tested, and shared with the
+   live-export side). *)
+let parse_local_bodies (text : string) : (string * string) list option =
+  Pp_sync_diff.parse_bodies text
+
+(* Bodies for a package on a branch, from its live export-package text. *)
+let bodies_of_export (text : string) : (string * string) list =
+  Pp_sync_diff.bodies_of_export text
+
+let body_divergence = Pp_sync_diff.divergence
+let pp_body_json = Pp_sync_diff.pp_body
+
 let unwrap_list_of_strings (printed : string) : string list =
   let re = Re.Perl.compile_pat {|"([^"]+)"|} in
   let quoted =
@@ -153,6 +168,20 @@ let live_value r =
   | { ok = false; error = Some e; _ } -> Error e
   | _ -> Error "empty result"
 
+let checkout_ref ~url ~user ~password ~timeout ref_ =
+  match
+    live ~url ~user ~password ~timeout (Printf.sprintf "(checkout %S)" ref_)
+    |> live_value
+  with
+  | Error e -> Error e
+  | Ok msg ->
+      if String.trim msg = "checked out" then Ok () else Error msg
+
+let current_branch ~url ~user ~password ~timeout =
+  match live ~url ~user ~password ~timeout "(current-branch)" |> live_value with
+  | Ok s -> String.trim s
+  | Error _ -> ""
+
 let discover_packages ~url ~user ~password ~timeout =
   (* vault-shape (i-1788671331-d): discovery lives in Pp_sync_vault —
      dirs + live binding names collapsed to FIRST path segment (one
@@ -177,63 +206,140 @@ let discover_packages ~url ~user ~password ~timeout =
   in
   Pp_sync_vault.packages_of ~dirs ~bindings
 
-let cmd_status ~url ~user ~password ~timeout ~verbose package =
+let cmd_status ~url ~user ~password ~timeout ~verbose ~names_only ~branch package =
   match (if package <> "" then Pp_sync_vault.vault_refusal package else None) with
   | Some msg ->
       prerr_endline ("status: " ^ msg);
       2
   | None ->
+  (* VAULT AUTHORITY (card 8dff7c9e): the vault mirrors system/main, so
+     the drift view must read main, not whatever branch the operator's
+     session happens to be on. When --branch is given, checkout it for
+     the comparison and restore the prior branch after — the snapshot
+     pattern. Default stays the current branch (no surprise mutation). *)
+  let prev_branch =
+    match current_branch ~url ~user ~password ~timeout with
+    | s -> String.trim s
+    | exception _ -> ""
+  in
+  let target =
+    if branch <> "" then branch
+    else if prev_branch <> "" then prev_branch
+    else "system/main"
+  in
+  let restore () =
+    if branch <> "" && prev_branch <> "" && prev_branch <> target then
+      ignore (checkout_ref ~url ~user ~password ~timeout prev_branch)
+  in
+  if branch <> "" && target <> prev_branch then
+    match checkout_ref ~url ~user ~password ~timeout target with
+    | Ok () -> ()
+    | Error e ->
+        prerr_endline ("status: checkout " ^ target ^ ": " ^ e);
+        restore ();
+        raise Exit
+  else ();
   let pkgs =
     if package <> "" then [ package ]
     else discover_packages ~url ~user ~password ~timeout
   in
+  if branch <> "" && target <> prev_branch then
+    Printf.printf "(comparing vault against %s)\n" target;
   let rc = ref 0 in
-  List.iter
-    (fun pkg ->
-      let path = pkg_path pkg in
-      let local =
-        if Sys.file_exists path then parse_local_defines (read_file path)
-        else []
-      in
-      let local_set = List.fold_left (fun s x -> x :: s) [] local in
-      match
-        live ~url ~user ~password ~timeout
-          (Printf.sprintf "(package-bindings %S)" pkg)
-        |> live_value
-      with
-      | Error e ->
-          Printf.eprintf "%s: live error: %s\n%!" pkg e;
-          rc := 1
-      | Ok s ->
-          let live_names = unwrap_list_of_strings s in
-          let only_local =
-            List.filter (fun n -> not (List.mem n live_names)) local_set
-            |> List.sort_uniq String.compare
-          in
-          let only_live =
-            List.filter (fun n -> not (List.mem n local_set)) live_names
-            |> List.sort_uniq String.compare
-          in
-          let both =
-            List.filter (fun n -> List.mem n live_names) local_set
-            |> List.sort_uniq String.compare
-          in
-          Printf.printf "== %s ==\n" (if pkg = "" then "(root)" else pkg);
-          Printf.printf "  local file: %s\n"
-            (if Sys.file_exists path then path else "(missing)");
-          Printf.printf
-            "  both: %d  only-local: %d  only-live: %d\n"
-            (List.length both) (List.length only_local)
-            (List.length only_live);
-          if only_local <> [] then
-            Printf.printf "  only-local: %s\n"
-              (String.concat ", " only_local);
-          if only_live <> [] then
-            Printf.printf "  only-live: %s\n" (String.concat ", " only_live);
-          if verbose && both <> [] then
-            Printf.printf "  both: %s\n" (String.concat ", " both);
-          if only_local <> [] || only_live <> [] then rc := 1)
-    pkgs;
+  (try
+     List.iter
+       (fun pkg ->
+         let path = pkg_path pkg in
+         let local =
+           if Sys.file_exists path then parse_local_defines (read_file path)
+           else []
+         in
+         let local_set = List.fold_left (fun s x -> x :: s) [] local in
+         (* Option 1 (card 8dff7c9e): also diff BODIES. package-bindings
+            only names a define, so a name whose git body differs from live
+            main looks "both" and healthy while the fix is undeployed.
+            Fetch the live export and compare canonical AST bodies. *)
+         let live_bodies = ref None in
+         (if not names_only then
+            match
+              live ~url ~user ~password ~timeout
+                (Printf.sprintf "(export-package %S)" pkg)
+              |> live_value
+            with
+            | Ok text -> live_bodies := Some (bodies_of_export text)
+            | Error _ -> ());
+         match
+           live ~url ~user ~password ~timeout
+             (Printf.sprintf "(package-bindings %S)" pkg)
+           |> live_value
+         with
+         | Error e ->
+             Printf.eprintf "%s: live error: %s\n%!" pkg e;
+             rc := 1
+         | Ok s ->
+             let live_names = unwrap_list_of_strings s in
+             let only_local =
+               List.filter (fun n -> not (List.mem n live_names)) local_set
+               |> List.sort_uniq String.compare
+             in
+             let only_live =
+               List.filter (fun n -> not (List.mem n local_set)) live_names
+               |> List.sort_uniq String.compare
+             in
+             let both =
+               List.filter (fun n -> List.mem n live_names) local_set
+               |> List.sort_uniq String.compare
+             in
+             let body_changed, _body_only_local, _body_only_live =
+               match !live_bodies with
+               | None -> ([], [], [])
+               | Some live_body_list ->
+                   let local_bodies =
+                     match parse_local_bodies (read_file path) with
+                     | Some bs -> bs
+                     | None -> []
+                   in
+                   body_divergence ~local:local_bodies ~live:live_body_list
+             in
+             Printf.printf "== %s ==\n" (if pkg = "" then "(root)" else pkg);
+             Printf.printf "  local file: %s\n"
+               (if Sys.file_exists path then path else "(missing)");
+             Printf.printf
+               "  both: %d  only-local: %d  only-live: %d"
+               (List.length both) (List.length only_local)
+               (List.length only_live);
+             if !live_bodies <> None then
+               Printf.printf "  body-stale: %d" (List.length body_changed);
+             Printf.printf "\n";
+             if only_local <> [] then
+               Printf.printf "  only-local: %s\n"
+                 (String.concat ", " only_local);
+             if only_live <> [] then
+               Printf.printf "  only-live: %s\n"
+                 (String.concat ", " only_live);
+             (* The load-bearing signal for Option 1: a name present both
+                places whose LIVE body differs from the vault body. These
+                are the fixes stuck in git that an additive boot seed never
+                deploys. *)
+             if body_changed <> [] then begin
+               Printf.printf "  body-stale (vault differs from live): %s\n"
+                 (String.concat ", "
+                    (List.map (fun (n, _, _) -> n) body_changed));
+               if verbose then
+                 List.iter
+                   (fun (n, lb, vb) ->
+                     Printf.printf
+                       "    %s:\n      vault: %s\n      live:  %s\n" n
+                       (pp_body_json lb) (pp_body_json vb))
+                   body_changed
+             end;
+             if verbose && both <> [] then
+               Printf.printf "  both: %s\n" (String.concat ", " both);
+             if only_local <> [] || only_live <> [] || body_changed <> [] then
+               rc := 1)
+       pkgs
+   with Exit -> ());
+  restore ();
   !rc
 
 let cmd_pull ~url ~user ~password ~timeout package =
@@ -486,20 +592,6 @@ let git_run ~cwd args : (int * string) =
     restore ();
     (127, Printexc.to_string exn)
 
-let checkout_ref ~url ~user ~password ~timeout ref_ =
-  match
-    live ~url ~user ~password ~timeout (Printf.sprintf "(checkout %S)" ref_)
-    |> live_value
-  with
-  | Error e -> Error e
-  | Ok msg ->
-      if String.trim msg = "checked out" then Ok () else Error msg
-
-let current_branch ~url ~user ~password ~timeout =
-  match live ~url ~user ~password ~timeout "(current-branch)" |> live_value with
-  | Ok s -> String.trim s
-  | Error _ -> ""
-
 let starts_with prefix s =
   let n = String.length prefix in
   String.length s >= n && String.sub s 0 n = prefix
@@ -688,7 +780,7 @@ let env_timeout =
   | Some s -> (try float_of_string s with _ -> 180.)
   | None -> 180.
 
-let main command package names verbose url user password password_file timeout
+let main command package names verbose names_only url user password password_file timeout
     branch out_dir from_ref force =
   let password =
     Pp_client.resolve_password ~password ~password_file
@@ -701,7 +793,8 @@ let main command package names verbose url user password password_file timeout
   end else
     match command with
     | "status" ->
-        cmd_status ~url ~user ~password ~timeout ~verbose package
+        cmd_status ~url ~user ~password ~timeout ~verbose ~names_only ~branch
+          package
     | "pull" -> cmd_pull ~url ~user ~password ~timeout package
     | "push" -> cmd_push ~url ~user ~password ~timeout package
     | "pull-all" -> cmd_pull_all ~url ~user ~password ~timeout
@@ -729,6 +822,13 @@ let package =
 let verbose =
   Arg.(value & flag & info [ "v"; "verbose" ] ~doc:"Verbose status.")
 
+let names_only =
+  let doc =
+    "status: skip the body-level diff and compare names only (fast, but \
+     blind to a stale body — the git-has-the-fix main-does-not case)."
+  in
+  Arg.(value & flag & info [ "names-only" ] ~doc)
+
 let url =
   Arg.(value & opt string env_url & info [ "url" ] ~docv:"URL" ~doc:"Image base URL.")
 
@@ -745,7 +845,10 @@ let timeout =
   Arg.(value & opt float env_timeout & info [ "timeout" ] ~docv:"SEC" ~doc:"Timeout seconds.")
 
 let branch =
-  let doc = "Branch ref for snapshot (default: current; e.g. system/main)." in
+  let doc =
+    "Branch ref for snapshot / status (default: current; e.g. system/main). \
+     status restores the session branch after the comparison."
+  in
   Arg.(value & opt string "" & info [ "branch"; "b" ] ~docv:"REF" ~doc)
 
 let out_dir =
@@ -771,8 +874,8 @@ let force =
 
 let term =
   Term.(
-    const main $ command $ package $ names $ verbose $ url $ user $ password
-    $ password_file $ timeout $ branch $ out_dir $ from_ref $ force)
+    const main $ command $ package $ names $ verbose $ names_only $ url $ user
+    $ password $ password_file $ timeout $ branch $ out_dir $ from_ref $ force)
 
 let cmd =
   let doc =
