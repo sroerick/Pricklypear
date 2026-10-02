@@ -351,6 +351,48 @@ let read_rows ~(store : Store.t) ~(caller : string) ~(is_admin : bool)
            (Printexc.to_string exn);
          [])
 
+(* —— knock policy scan —————————————————————————————————————————
+   Deterministic detection reads raw rows (structure only) in a
+   time window. [scan_events] mirrors [read_rows]' SQL but returns
+   [entry] records for the pure detector in [knock_policy.ml], so the
+   thresholds can be unit-tested without a DB. *)
+let scan_events ~(store : Store.t) ~(since : float) ~(limit : int)
+    () : entry list =
+  match Io_db.Db.current_conn store with
+  | None -> []
+  | Some conn ->
+      let sql =
+        "SELECT extract(epoch from at)::text, actor, class, target, \
+         outcome, source_ip::text FROM activity_ledger \
+         WHERE at >= to_timestamp($1) ORDER BY at DESC, id DESC LIMIT $2"
+      in
+      (try
+         Store_db.exec conn
+           ~params:[ Pgx.Value.of_float since; Pgx.Value.of_int (max 0 limit) ]
+           sql
+         |> List.filter_map (fun row ->
+                match row with
+                | [ at; actor; cls; target; outcome; source_ip ] ->
+                    let str v =
+                      match Pgx.Value.to_string v with Some s -> s | None -> ""
+                    in
+                    let opt v = Pgx.Value.to_string v in
+                    let at_f =
+                      match Pgx.Value.to_string at with
+                      | Some s -> (try float_of_string s with _ -> 0.0)
+                      | None -> 0.0
+                    in
+                    Some
+                      { at = at_f; actor = str actor; session_id = None;
+                        branch_id = None; cls = str cls; target = opt target;
+                        outcome = str outcome; cost_json = None;
+                        source_ip = opt source_ip }
+                | _ -> None)
+       with exn ->
+         Printf.eprintf "[activity_ledger] scan failed: %s\n%!"
+           (Printexc.to_string exn);
+         [])
+
 (** Background flush loop; fork once at boot. Uses the Eio clock — never
     route this through any run_lwt-style bridge (function_stats comment:
     concurrent bridge calls across fibers took the switch down). *)

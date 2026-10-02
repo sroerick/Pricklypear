@@ -525,6 +525,7 @@ let read_scope (t : t) (name : string) : string option =
   | "find-text" | "tree/find-by" -> Some "garden"
   | "find-rows-author" -> Some "store"
   | "ops/activity" -> Some "store"
+  | "ops/knock" -> Some "store"
   | _ ->
       (match Store.lookup_function t.store name with
        | Some _ -> Some "chain"

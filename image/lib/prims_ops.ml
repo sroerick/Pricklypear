@@ -91,3 +91,57 @@ let register (t : t) (tbl : Primitives.t) : unit =
           in
           (Pricklypear_lisp.Ast.VList
              (List.map (fun s -> Pricklypear_lisp.Ast.VStr s) rows)));
+
+  (* (ops/knock) -> JSON {knocks:[...], trifecta:[...]}. product-experience
+     §activity-ledger KNOCK SCHEMA + lethal-trifecta row.
+
+     ADMIN ONLY. Deterministic detection over STRUCTURE-ONLY ledger rows
+     in a 24h window, then files at most ONE open ops-incident per
+     (kind, actor) through the existing fingerprint queue — a repeat in a
+     later scan BUMPS the count, never files a second row. LAW 1: no
+     model in the loop; an LLM may later rewrite title/body, never counts.
+     The trifecta legs are CLASS COUNTS ONLY (never content). *)
+  Primitives.register tbl "ops/knock"
+    (fun _args ->
+      let is_admin = Prims_db_common.is_verified_admin ~t () in
+      if not is_admin then
+        (Pricklypear_lisp.Ast.VStr "ops/knock: denied: admin only")
+      else begin
+        let window = 86_400.0 in
+        let since = Unix.gettimeofday () -. window in
+        let events =
+          Activity_ledger.scan_events ~store:t.store ~since ~limit:5000 ()
+        in
+        let knocks = Knock_policy.detect events in
+        let filed =
+          List.map
+            (fun (k : Knock_policy.knock) ->
+              let id =
+                Ops_incidents.file_security_incident ~store:t.store
+                  ~fingerprint:k.fingerprint ~kind:k.kind ~actor:k.actor
+                  ~title:k.title ~count0:k.count
+              in
+              `Assoc
+                [ ("id", `String id); ("kind", `String k.kind);
+                  ("actor", `String k.actor); ("count", `Int k.count);
+                  ("title", `String k.title) ])
+            knocks
+        in
+        let tri =
+          List.map
+            (fun (r : Knock_policy.trifecta_row) ->
+              `Assoc
+                [ ("actor", `String r.actor);
+                  ("private_data", `Bool r.private_data);
+                  ("untrusted_ingest", `Bool r.untrusted_ingest);
+                  ("effect_channel", `Bool r.effect_channel);
+                  ("flag", `Bool r.flag) ])
+            (Knock_policy.trifecta events)
+        in
+        Pricklypear_lisp.Ast.VStr
+          (Yojson.Safe.to_string
+             (`Assoc
+                [ ("window_seconds", `Int (int_of_float window));
+                  ("scanned", `Int (List.length events));
+                  ("knocks", `List filed); ("trifecta", `List tri) ]))
+      end);
