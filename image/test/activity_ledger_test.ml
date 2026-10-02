@@ -508,6 +508,59 @@ let test_knock_files_once () =
           in
           Alcotest.(check string) "security severity class" "security" sev))
 
+(* IKEA test (spec verify): day rollups per (actor, class) survive a
+   365-day run. One event per UTC day for a full year, with increasing
+   steps, rolled up directly (no ring) so the [at] is controlled. The
+   rollups must be one row per (day, actor, class) — 365 of them — and
+   the steps/db_ms sums must be exact. Pins that the rollup key is the
+   DAY, not the flush time. *)
+let test_ikea_365_day_rollup () =
+  with_store (fun store ->
+      let actor = uniq "ikea" in
+      cleanup store ~actor;
+      let conn = Option.get (S.conn_of store) in
+      Fun.protect ~finally:(fun () -> cleanup store ~actor) (fun () ->
+          let now = Unix.gettimeofday () in
+          let entries =
+            List.init 365 (fun i ->
+                { (mk_entry ~actor ~cls:"api.eval" ~outcome:"ok") with
+                  Al.at = now -. (float_of_int i *. 86400.0);
+                  cost_json =
+                    Some (Al.budget_cost_json ~steps:(i + 1) ~prim_calls:1
+                            ~db_hits:2 ~db_ms:(float_of_int (i + 1))) })
+          in
+          Al.rollup_entries ~store entries;
+          let days =
+            q_int conn ~params:[ Pgx.Value.of_string actor ]
+              "SELECT count(distinct day)::text FROM activity_rollup_day \
+               WHERE actor=$1"
+          in
+          Alcotest.(check int) "one rollup row per UTC day" 365 days;
+          let rows =
+            q_int conn ~params:[ Pgx.Value.of_string actor ]
+              "SELECT count(*)::text FROM activity_rollup_day WHERE actor=$1"
+          in
+          Alcotest.(check int) "365 rollup rows total" 365 rows;
+          let steps =
+            q_int conn ~params:[ Pgx.Value.of_string actor ]
+              "SELECT coalesce(sum(steps),0)::text FROM activity_rollup_day \
+               WHERE actor=$1"
+          in
+          Alcotest.(check int) "steps sum over the year" (365 * 366 / 2) steps;
+          let hits =
+            q_int conn ~params:[ Pgx.Value.of_string actor ]
+              "SELECT coalesce(sum(db_hits),0)::text FROM activity_rollup_day \
+               WHERE actor=$1"
+          in
+          Alcotest.(check int) "db_hits sum over the year" (365 * 2) hits;
+          (* re-applying the SAME day accumulates, it never adds a row *)
+          Al.rollup_entries ~store [ List.nth entries 0 ];
+          let rows2 =
+            q_int conn ~params:[ Pgx.Value.of_string actor ]
+              "SELECT count(*)::text FROM activity_rollup_day WHERE actor=$1"
+          in
+          Alcotest.(check int) "same day upserts, no new row" 365 rows2))
+
 let () =
   Alcotest.run "activity_ledger"
     [ ( "activity-ledger",
@@ -534,5 +587,7 @@ let () =
             test_trifecta_from_classes;
           Alcotest.test_case "knock files exactly one security incident" `Quick
             test_knock_files_once;
+          Alcotest.test_case "IKEA: 365-day rollups survive" `Quick
+            test_ikea_365_day_rollup;
         ] )
     ]
