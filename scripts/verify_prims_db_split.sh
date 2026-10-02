@@ -41,7 +41,7 @@ EXPECTED_NAMES='[
   "propose-function", "replication/unit", "retention-delete-policy", "retention-policies",
   "retention-policy-set", "retention-run", "revoke-ssh-key", "revoke-token",
   "rotate-token", "rows", "schedule", "schedules", "select-for-update", "set-allow-agent-promote",
-  "set-llm-key", "set-user-type", "space-add-member", "space-admit", "space-create",
+  "set-llm-key", "set-password", "set-user-type", "space-add-member", "space-admit", "space-create",
   "space-exists?", "space-list", "space-members", "space-remove-member",
   "submit-job", "submit-job-at", "sync/plan", "sync/push", "tree/ancestors",
   "tree/child", "tree/children-html", "tree/children-of", "tree/delete",
@@ -54,7 +54,7 @@ EXPECTED_NAMES='[
   "update", "update-field", "verify-ssh-key"
 ]'
 
-EXPECTED_SERVER_ONLY='["create-user","is-admin?","retention-delete-policy","retention-policies","retention-policy-set","retention-run","set-user-type"]'
+EXPECTED_SERVER_ONLY='["create-user","is-admin?","retention-delete-policy","retention-policies","retention-policy-set","retention-run","set-password","set-user-type"]'
 
 fail() { print -u2 "FAIL: $*"; exit 1; }
 

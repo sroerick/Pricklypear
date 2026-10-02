@@ -694,6 +694,81 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
              | _ -> bad_args ())
         | _ -> bad_args ()));
 
+  (* (set-password user-id-or-username password) -> VStr "ok". Admin only;
+     server-only like create-user (account administration, never a
+     remote-proxy op). The spec (auth.user-management) lists
+     set_password(user_id, password) in the complete admin surface; this
+     exposes it as a prim so the stored credential can be reset without
+     delete+recreate (which would drop the user's sessions, agent children,
+     and space memberships). Accepts a uuid id or a username, mirroring the
+     ergonomic resolution of delete-user. Writes a fresh argon2id hash via
+     Auth_store.set_password and auth-logs admin_set_password; an existing
+     password credential is replaced (one per user). *) 
+  Primitives.register_server_only tbl "set-password"
+    (fun args ->
+      require_admin "set-password" (fun () ->
+        let arg_str = function
+          | Pricklypear_lisp.Ast.VStr s -> Some s
+          | Pricklypear_lisp.Ast.VSymbol s -> Some s
+          | _ -> None
+        in
+        let bad_args () =
+          (raise (Pricklypear_lisp.Ast.Interp_error
+                    (Pricklypear_lisp.Ast.Prim_error
+                       ("set-password",
+                        "need user-id-or-username and password",
+                        "bad-args"))))
+        in
+        match args with
+        | [ id_arg; pw_arg ] ->
+            (match arg_str id_arg, pw_arg with
+             | Some id_or_name, Pricklypear_lisp.Ast.VStr password ->
+                 let id_or_name = String.trim id_or_name in
+                 let username = String.lowercase_ascii id_or_name in
+                 if id_or_name = "" || password = "" then bad_args ()
+                 else
+                   let looks_like_uuid =
+                     String.length id_or_name = 36
+                     && String.contains id_or_name '-'
+                   in
+                   let resolved =
+                     match
+                       (if looks_like_uuid then
+                          Auth_store.get_user_by_id t.store id_or_name
+                        else None)
+                     with
+                     | Some u -> Some u
+                     | None ->
+                         Auth_store.get_user_by_username t.store username
+                   in
+                   (match resolved with
+                    | None ->
+                        (raise (Pricklypear_lisp.Ast.Interp_error
+                                  (Pricklypear_lisp.Ast.Prim_error
+                                     ("set-password",
+                                      "no such user: " ^ id_or_name,
+                                      "not-found"))))
+                    | Some u ->
+                        let r =
+                          Auth_store.set_password t.store
+                            ~user_id:u.Auth_store.id ~password
+                        in
+                        (match r with
+                         | Error e ->
+                             (raise (Pricklypear_lisp.Ast.Interp_error
+                                       (Pricklypear_lisp.Ast.Prim_error
+                                          ("set-password", e, "failed"))))
+                         | Ok () ->
+                             let () =
+                               Auth_store.log_auth t.store
+                                 ~user_id:u.Auth_store.id
+                                 ~kind:"admin_set_password"
+                                 ~success:true ()
+                             in
+                             (Pricklypear_lisp.Ast.VStr "ok")))
+             | _ -> bad_args ())
+        | _ -> bad_args ()));
+
   (* (promote [name...]) -> VStr count|error. Agent: promote own defs (or named)
      into parent's personal. Human: denied (use promote-to-main admin path). *)
   Primitives.register tbl "promote"
