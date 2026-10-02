@@ -323,3 +323,8 @@
  (name branch_resolved_reads_test)
  (modules branch_resolved_reads_test)
  (libraries pricklypear-image pricklypear-common pricklypear-lisp alcotest eio_main yojson pgx unix))
+
+(test
+ (name shared_register_test)
+ (modules shared_register_test)
+ (libraries pricklypear-image pricklypear-common pricklypear-lisp alcotest eio_main yojson pgx unix))
