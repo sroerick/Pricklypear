@@ -92,19 +92,30 @@ let visible_sql ~(user_param : int) : string =
     user_param user_param user_param
 
 (** If [type_name] is declared on the store's branch, validate [fields_json]
-    against its field list. Undeclared types are free-form (no schema).
-    Returns None on ok, Some error_message on reject. *)
+    against its field list. An UNDECLARED type is a clean rejection
+    (one-tree typed-nodes declared-type gate): a datum write must name a
+    type declared on the writer's branch, so a typo can no longer silently
+    mint an orphan type and its rows. A declared type with ZERO fields is
+    the deliberate schemaless case and stays free-form ([Some []] vs
+    [None] are distinct). Returns None on ok, Some error_message on reject. *)
 let check_type_fields (store : Store.t) ~(type_name : string)
     ~(fields_json : string) : string option =
-  let declared = Store.lookup_type_fields store ~name:type_name in
-  match declared with
-  | None -> None
-  | Some fields ->
-      (match Tree_store.validate_fields ~declared:fields fields_json with
-       | Ok () -> None
-       | Error msg ->
+  match Store.conn_of store with
+  | None -> None (* no DB: defer to the write prim's loud no-DB path *)
+  | Some _ ->
+      (match Store.lookup_type_fields store ~name:type_name with
+       | None ->
            Some
-             (Printf.sprintf "create/update %s: %s" type_name msg))
+             (Printf.sprintf
+                "create/update %s: undeclared type (declare it with (deftype '%s ...))"
+                type_name type_name)
+       | Some [] -> None
+       | Some fields ->
+           (match Tree_store.validate_fields ~declared:fields fields_json with
+            | Ok () -> None
+            | Error msg ->
+                Some
+                  (Printf.sprintf "create/update %s: %s" type_name msg)))
 
 let value_of_id cell : value =
   (* Pgx.Value.to_string returns string option; normalize to VStr/VNil *)
@@ -203,8 +214,11 @@ let safe_sort_sql ~(prim : string) ~(sort : string) : string =
     declared order). Per spec [storage.types]: type declarations are
     metadata; the actual data lives in datum nodes (tree_nodes, projected
     via tree_data_rows), user-scoped + shared seed (migration 013)
-    keyed by (type_name, id). Type declarations may
-    eventually drive field-level validation; for now they're documentation.
+    keyed by (type_name, id). Type declarations are load-bearing at the
+    datum write boundary: create/update/update-field and datum
+    tree/upsert/tree-move reject an UNDECLARED type_name (one-tree
+    declared-type write gate); a declared zero-field type stays
+    free-form.
 
     The first arg is the type name, then zero or more field names —
     each as a quoted symbol (e.g. (deftype 'user 'name 'email 'age))
@@ -758,28 +772,37 @@ let update_field_impl
     (store : Store.t) ~(type_name : string) ~(id : string)
     ~(field : string) ~(value : string) ~(caller : string)
     : value =
-  (* Typed-boundary validation for update-field (i-1789074821): check the
-     ONE field being written against the declared type's fields. The old
-     path built a throwaway single-field JSON and routed it through
-     Tree_store.validate_fields, which requires EVERY declared field to be
-     present - so update-field on any declared type with 2+ fields always
-     rejected ("missing fields") and callers fell back to full-row
-     updates. Parity with create/update: an undeclared type and a type
-     declared with no fields stay unconstrained. The VALUE is never
-     interpolated into validation JSON anymore - a value containing a
-     double quote used to reject as "invalid JSON" before the write was
-     reached. Value coercion still happens at write time below. *)
-  let reject =
-    match Store.lookup_type_fields store ~name:type_name with
-    | None | Some [] -> None
-    | Some declared ->
-        if List.mem field declared then None
-        else
-          Some
-            (Printf.sprintf
-               "update-field %s: unknown field \"%s\" (declared: %s)"
-               type_name field (String.concat ", " declared))
-  in
+    (* Typed-boundary validation for update-field (i-1789074821): check the
+       ONE field being written against the declared type's fields. The old
+       path built a throwaway single-field JSON and routed it through
+       Tree_store.validate_fields, which requires EVERY declared field to be
+       present - so update-field on any declared type with 2+ fields always
+       rejected ("missing fields") and callers fell back to full-row
+       updates. An UNDECLARED type is a clean rejection (one-tree
+       typed-nodes declared-type gate); a type declared with no fields
+       stays unconstrained. The VALUE is never interpolated into validation
+       JSON anymore - a value containing a double quote used to reject as
+       "invalid JSON" before the write was reached. Value coercion still
+       happens at write time below. *)
+    let reject =
+      match Store.conn_of store with
+      | None -> None (* no DB: defer to the update-field no-DB path *)
+      | Some _ ->
+          (match Store.lookup_type_fields store ~name:type_name with
+           | None ->
+               Some
+                 (Printf.sprintf
+                    "update-field %s: undeclared type (declare it with (deftype '%s ...))"
+                    type_name type_name)
+           | Some [] -> None
+           | Some declared ->
+               if List.mem field declared then None
+               else
+                 Some
+                   (Printf.sprintf
+                      "update-field %s: unknown field \"%s\" (declared: %s)"
+                      type_name field (String.concat ", " declared)))
+    in
   match reject with
   | Some msg -> VStr msg
   | None ->
@@ -1960,10 +1983,11 @@ let datum_path_type (path : string) : string option =
   | Some ty -> Tree_store.dec_label ty
 
 (** If [old_path] -> [new_path] is a datum move that changes type, validate
-    the moved node's body against the NEW type's declared fields. Returns
-    Some rejection-message (naming the missing fields) when it fails; None
-    when there is nothing to check (not a datum move, same type, undeclared
-    new type, node missing, or free-form body). *)
+    the moved node's body against the NEW type. Returns Some
+    rejection-message when it fails; None when there is nothing to check
+    (not a datum move, same type, or node missing). An UNDECLARED new type
+    is a clean rejection (one-tree typed-nodes declared-type gate); a
+    declared type with zero fields is free-form. *)
 let datum_move_type_reject (store : Store.t) ~(old_path : string)
     ~(new_path : string) : string option =
   match datum_path_type old_path, datum_path_type new_path with
@@ -1979,19 +2003,21 @@ let datum_move_type_reject (store : Store.t) ~(old_path : string)
                   | `Assoc _ -> Yojson.Safe.to_string node.body
                   | _ -> "{}"
                 in
-                let declared =
-                  match Store.lookup_type_fields store ~name:new_ty with
-                  | Some f -> f
-                  | None -> []
-                in
-                (match
-                   Tree_store.validate_fields ~declared body_json
-                 with
-                 | Ok () -> None
-                 | Error msg ->
+                (match Store.lookup_type_fields store ~name:new_ty with
+                 | None ->
                      Some
-                       (Printf.sprintf "type change %s -> %s: %s" old_ty
-                          new_ty msg))))
+                       (Printf.sprintf
+                          "type change %s -> %s: undeclared type (declare it with (deftype '%s ...))"
+                          old_ty new_ty new_ty)
+                 | Some declared ->
+                     (match
+                        Tree_store.validate_fields ~declared body_json
+                      with
+                      | Ok () -> None
+                      | Error msg ->
+                          Some
+                            (Printf.sprintf "type change %s -> %s: %s" old_ty
+                               new_ty msg)))))
   | _ -> None
 
 let tree_move (store : Store.t) ~(old_path : string) ~(new_path : string)

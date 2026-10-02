@@ -357,6 +357,86 @@ let test_move_type_change_ok () =
               | _ -> Alcotest.fail "move returned unexpected value")));
   ()
 
+(* ---- one-tree declared-type write gate: an UNDECLARED type_name is a
+        clean rejection naming the type and the (deftype) surface, and no
+        datum node / data_rows row is written ---- *)
+let test_undeclared_rejected () =
+  with_store (fun store ->
+      let ty = uniq "undeclared" in
+      let assert_reject what = function
+        | VStr msg ->
+            Alcotest.(check bool) (what ^ " names the type") true
+              (contains_sub msg "undeclared" && contains_sub msg ty);
+            Alcotest.(check bool) (what ^ " names the (deftype) surface") true
+              (contains_sub msg "deftype")
+        | _ -> Alcotest.fail (what ^ ": expected a rejection string")
+      in
+      assert_reject "create"
+        (C.create store ~type_name:ty ~fields_json:"{\"x\":1}"
+           ~author:"tester");
+      assert_reject "update-field"
+        (C.update_field store ~type_name:ty
+           ~id:("00000000-0000-0000-0000-00000000" ^ "0010")
+           ~field:"x" ~value:"1");
+      assert_reject "tree/upsert"
+        (C.tree_upsert store ~path:"data.u.tester.new" ~kind:"datum"
+           ~type_name:ty ~body_json:"{\"x\":1}" ~author:"tester");
+      match S.conn_of store with
+      | None -> ()
+      | Some conn ->
+          let n =
+            match
+              S.exec conn
+                ~params:[ Pgx.Value.of_string ty ]
+                "SELECT count(*)::text FROM data_rows WHERE type_name = $1"
+            with
+            | [ [ c ] ] ->
+                (match Pgx.Value.to_string c with Some s -> s | None -> "?")
+            | _ -> "?"
+          in
+          Alcotest.(check string) "no data_rows row for undeclared type" "0" n)
+
+(* ---- a declared type with ZERO fields stays free-form (schemaless) ---- *)
+let test_declared_empty_freeform () =
+  with_store (fun store ->
+      let ty = uniq "empty" in
+      declare_type store ~name:ty ~fields:[];
+      match
+        C.create store ~type_name:ty ~fields_json:"{\"anything\":[1,2,3]}"
+          ~author:"tester"
+      with
+      | VStr s ->
+          Alcotest.(check int) "declared-empty create returns a uuid" 36
+            (String.length s)
+      | _ -> Alcotest.fail "declared-empty create should return an id")
+
+(* ---- a datum type-change move to an UNDECLARED type is rejected ---- *)
+let test_move_undeclared_rejected () =
+  with_store (fun store ->
+      let ta = uniq "ta" in
+      declare_type store ~name:ta ~fields:[ "title" ];
+      let tb = uniq "tb" in
+      let id = "00000000-0000-0000-0000-00000000" ^ "0011" in
+      let old_path = T.datum_path ~user:"tester" ~type_name:ta ~id () in
+      let new_path = T.datum_path ~user:"tester" ~type_name:tb ~id () in
+      match S.conn_of store with
+      | None -> ()
+      | Some conn ->
+          (match
+             T.upsert_datum conn ~path:old_path ~type_name:ta
+               ~body_json:"{\"title\":\"x\"}" ~author:"tester" ~rank:None
+           with
+          | Error e -> Alcotest.fail ("create failed: " ^ e)
+          | Ok _ -> ());
+          (match C.tree_move store ~old_path ~new_path with
+          | VStr s ->
+              Alcotest.(check bool) "move rejects undeclared new type" true
+                (contains_sub (String.lowercase_ascii s) "undeclared")
+          | _ -> Alcotest.fail "move to undeclared type should reject");
+          (match T.get_by_path conn ~path:old_path with
+          | None -> Alcotest.fail "node disappeared after rejected move"
+          | Some _ -> ()))
+
 let () =
   Random.self_init ();
   Alcotest.run "tree_datum"
@@ -374,5 +454,11 @@ let () =
           Alcotest.test_case "move datum type change ok" `Quick
             test_move_type_change_ok;
           Alcotest.test_case "delete datum" `Quick test_delete_datum;
-          Alcotest.test_case "readers kind-agnostic" `Quick test_readers_kind_agnostic;
-        ] ) ]
+            Alcotest.test_case "readers kind-agnostic" `Quick test_readers_kind_agnostic;
+            Alcotest.test_case "undeclared type rejected" `Quick
+              test_undeclared_rejected;
+            Alcotest.test_case "declared empty free-form" `Quick
+              test_declared_empty_freeform;
+            Alcotest.test_case "move to undeclared type rejected" `Quick
+              test_move_undeclared_rejected;
+          ] ) ]

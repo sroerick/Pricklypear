@@ -413,24 +413,31 @@ let apply_client_node (store : Store.t) ~(env : Yojson.Safe.t) : (unit, string) 
   | Some p, Some "datum" ->
       (match type_name, body with
        | Some ty, Some b ->
-           (* typed-boundary validation: validate the client body against
-              the type the SERVER declares for it (the server is the
-              merge/index authority, not the client) so a body missing a
-              required field is rejected the same way a local create
-              would be — the client is a peer, not a bypass. *)
-           (let declared = Store.lookup_type_fields store ~name:ty in
-            match
-              match declared with
-              | None -> None
-              | Some fields ->
-                  (match
-                     Tree_store.validate_fields ~declared:fields
-                       (Yojson.Safe.to_string b)
-                   with
-                  | Ok () -> None
-                  | Error msg -> Some msg)
-            with
-           | Some msg -> Error msg
+             (* typed-boundary validation: validate the client body against
+                the type the SERVER declares for it (the server is the
+                merge/index authority, not the client) so a body missing a
+                required field is rejected the same way a local create
+                would be — the client is a peer, not a bypass. An
+                UNDECLARED type is a clean rejection (one-tree
+                typed-nodes declared-type gate); a declared type with zero
+                fields stays free-form. *)
+             (let reject =
+                match Store.lookup_type_fields store ~name:ty with
+                | None ->
+                    Some
+                      (Printf.sprintf
+                         "sync: undeclared type %s (declare it with (deftype '%s ...))"
+                         ty ty)
+                | Some fields ->
+                    (match
+                       Tree_store.validate_fields ~declared:fields
+                         (Yojson.Safe.to_string b)
+                     with
+                    | Ok () -> None
+                    | Error msg -> Some msg)
+              in
+              match reject with
+             | Some msg -> Error msg
            | None ->
                (match Store.conn_of store with
                 | None -> Error "sync: no DB"
