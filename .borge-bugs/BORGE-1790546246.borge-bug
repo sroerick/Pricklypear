@@ -1,12 +1,12 @@
 (borge-bug (id "BORGE-1790546246")
   (title "notes outline write path: durability follow-ons after BORGE-1790535211 (upsert-in is two atomic ops not one; tree/delete has no before-image so history is not a safety net for deletes; the malformed-outline refusal is a droppable string)")
-  (status triage)
+  (status closed)
   (created 2026-09-27)
   (filed-by roerick)
   (doc "The follow-ons recorded in BORGE-1790535211 (closed) that are NOT in the code or an open issue.
 
 1. notes/doc/upsert-in is TWO atomic operations, not one.
-   It writes the note row (tree/upsert path \"note\") and THEN calls
+   It writes the note row (tree/upsert path "note") and THEN calls
    notes/tree/save-outline. b4337b5 made save-outline itself atomic, so the
    destructive sequence is safe, but a failure BETWEEN the two steps leaves a
    NEW/updated note row with the OLD outline (title/tags/kind updated, headings
@@ -19,18 +19,18 @@
    from the last non-tombstone gen of the SAME path. A rename/move followed by
    a delete, or a recursive subtree delete over paths that never carried their
    own live gen, are NOT recoverable from tree_versions. The rule now says
-   \"do not rely on history for deletes\", which is honest but leaves no
+   "do not rely on history for deletes", which is honest but leaves no
    safety net. Options: (a) accept and keep the validation+ordering guard as
    the only defense; (b) give tree/delete an opt-in before-image capture;
    (c) make the recursive-delete path refuse when any descendant path lacks a
    live gen. Decide explicitly.
 
 3. notes/doc/upsert-in's guard returns a value, not a raise.
-   A malformed outline returns a \"refused: ...\" STRING, which a caller using
+   A malformed outline returns a "refused: ..." STRING, which a caller using
    (seq ...) can silently ignore (the AGENTS.md deny_anon comment calls out
-   exactly this hazard for a different case: \"a returned string is silently
+   exactly this hazard for a different case: "a returned string is silently
    dropped by (seq ...), so a multi-write handler could partially succeed past
-   an anonymous denial\"). Current callers (notes/ui/do-save) check it, but the
+   an anonymous denial"). Current callers (notes/ui/do-save) check it, but the
    safe shape is to RAISE (or return a distinguishable error value) so a
    future caller cannot ignore the refusal.
 
@@ -42,8 +42,8 @@
    clear-headings had already run, so any notes/doc/upsert on a note with
    kids emptied it — live cost then: the shared agents note, 93 nodes -> 0.
    Commit 8622096 fixed the TRIGGER (parallel let -> let*) and BORGE-1786860090
-   described BOTH the trigger and the ordering (\"clear-headings DELETES all kid
-   nodes first ... so kids are gone before the error\"), but the ordering itself
+   described BOTH the trigger and the ordering ("clear-headings DELETES all kid
+   nodes first ... so kids are gone before the error"), but the ordering itself
    was LEFT IN PLACE, so when the next trigger arrived (the alist body-boundary
    rejection in tree/upsert, BORGE-1790535211) the identical destruction
    recurred nine weeks later.
@@ -55,4 +55,5 @@
    time. save-outline is now write-then-sweep + atomic (b4337b5); this issue
    tracks what remains.
 ")
+  (resolution (when 1790927394) (how closed) (by roerick))
 )

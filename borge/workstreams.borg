@@ -579,6 +579,24 @@
      other pipelines — if we did that they just wouldn't show up under the
      kanban view.' This section is that model; the 'other bucket' already
      exists (kanban/other-bucket).|) *)
+  (* agent note (|2026-09-28 SINGLE-OBJECT ISSUES (shipped; reconciles the
+     CONVERGENCE paragraph above). The issue register is now ONE object: a
+     kind-tagged todo-item card on the shared Board IS the issue (kind
+     BUG/DESIGN/SMELL/CLEANUP/WANT; the card id IS the issue id since
+     2026-09-28, board card a21431be). There is no second ledger node and no
+     card<->node link to reconcile: notes/issues/add is card-only,
+     notes/issues/cards reads kind != "" rows, and /issues renders them live.
+     OBITUARY (what/why): the earlier twin-write minted a log/issues ledger
+     heading node AND a linked Board card (issue_id field), reconciled by every
+     writer; the sync tax was real (a ghost-card resync bug) and board
+     visibility needs ONE object per issue. The legacy log/issues note is now a
+     FROZEN ARCHIVE at /notes?slug=log/issues — its rows keep
+     resolve/reopen/delete so historical issue ids (i-<ts>-<uuid> referenced in
+     comments) still resolve, but nothing appends to it. PERF CONTRACT for the
+     /issues face: issue-card renders MUST memoize effective pipeline columns
+     per LIST (notes/issues/cols-map), never per-row
+     columns-for-item/pipeline-for-item — the per-row shape 500'd /issues on the
+     route budget.|) *)
   (verify
    (test "an item's effective pipeline = own override > list columns > global default"
          "a card on a non-board pipeline renders in the other bucket, never hidden"
