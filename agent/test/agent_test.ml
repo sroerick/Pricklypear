@@ -679,8 +679,12 @@ let test_rail_trees ~rt () =
      toggle-once pull in the box is the shelf's. *)
   Alcotest.(check bool) "tree box: desk dirs render already-open with eager kids" true
     (has "open=\"open\"" box && has "data-node=\"desk/0\"" box);
-  (* inside an empty workspace the ONLY toggle-once pull in the box is
-     the shelf's: everything before it (all three desk dirs) is eager *)
+  (* inside an empty workspace the ONLY lazy pull in the box is the
+     shelf's: everything before it (all three desk dirs) is eager. The
+     lazy marker is hx-get + hx-trigger="toggle once" -- NOT any
+     hx-trigger (the desk switch buttons carry hx-trigger="click",
+     added by the 750b494 shelf-verb fix, so the old bare-needle probe
+     went stale). Same proxy as probe_shell_sem M0b. *)
   Alcotest.(check bool) "tree box: desk dirs carry no lazy pull (expand rides kids)" true
     (let shelf_i =
        (try Str.search_forward (Str.regexp_string "data-node=\"shelf\"") box 0
@@ -688,7 +692,7 @@ let test_rail_trees ~rt () =
      in
      (try
         ignore
-          (Str.search_forward (Str.regexp_string "hx-trigger")
+          (Str.search_forward (Str.regexp_string "hx-get")
              (String.sub box 0 shelf_i) 0);
         false
       with Not_found -> true));
