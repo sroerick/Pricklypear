@@ -128,8 +128,9 @@ let build_fields_json
 
 let shared_data_banner () =
   HTML.p [HTML.class_ "meta"] [
-    txt "You see your own rows plus shared seed data (bible, strongs). ";
+    txt "You see your own rows, shared seed data (bible, strongs), and any member spaces. ";
     txt "Data is not versioned by branch. ";
+    txt "(data-scope) reports your effective scope. ";
     HTML.a [HTML.href "/types"] [txt "Type defs"];
     txt " · ";
     HTML.a [HTML.href "/data"] [txt "Your data"];

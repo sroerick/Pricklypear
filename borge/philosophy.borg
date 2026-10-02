@@ -46,10 +46,15 @@
            OCaml must not ship a silent second product skin;
            host/gate/emergency only (image.system-browser).
 
-        5. Branches, not namespaces. system/main is the package
-           baseline; each user has username/personal as an
-           inheriting garden. Code branches; shared data. Fork
-           is cheap; merge/promote is the careful operation.
+       5. Branches, not namespaces. system/main is the package
+          baseline; each user has username/personal as an
+          inheriting garden. Branches are CODE ONLY (lenses over the
+          one tree): they version functions, types and routes, not
+          your data. Rows are user-isolated (data.u.<user>.*), the
+          seed corpus is shared (data.shared.*), and collaboration
+          uses member spaces (data.s.<space>.*) or an explicit data
+          lens (data.l.*). Fork is cheap; merge/promote is the
+          careful operation.
 
         6. Multi-user by session and branch. Isolation is not
            per-process unikernels in v1. Many humans share one

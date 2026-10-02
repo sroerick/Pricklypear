@@ -583,7 +583,8 @@
          (see migrations.additive-only), and are visible to
          all branches immediately on next function lookup.
 
-         data_rows has no branch_id; type_defs are stored
+         Data is keyed by user/space/lens, not by branch (no
+         branch_id on rows); type_defs are stored
          per-branch but the underlying table shape is shared
          (see object-model). Branch code that ignores new
          fields reads a subset without error. Branch code

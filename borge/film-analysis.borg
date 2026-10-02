@@ -134,7 +134,8 @@
         NO shot-level table in v1 (shots matter for production, not
         for ring analysis; a shot type is a later subsection if the
         authoring workload arrives).
-        NO user ACL — data_rows are shared (existing habitat rule).
+         NO extra per-type user ACL — the RLS floor already scopes rows to
+         their author (data.u.<user>.*); isolation is not per-branch.
         NO media blobs, thumbnails, or waveforms. Ever. Paths/hashes
         in notes fields at most.
 

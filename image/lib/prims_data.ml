@@ -479,6 +479,47 @@ let register (t : t) (tbl : Primitives.t) : unit =
         Crud.space_list t.store ~caller:uname
           ~kernel_admin:(kernel_admin_of uname));
 
+  (* (data-scope) -> VStr JSON describing the caller's EFFECTIVE data
+     scope: the path prefixes this identity reads and writes, the shared
+     seed corpus, the member spaces, and the caller's data lenses. This is
+     the read-only verification companion the docs point at — an agent can
+     establish its isolation boundary before running an experiment instead
+     of inferring it from stale branch prose. Branches version CODE; they
+     do not version data (borge/one-tree.borg branching-interaction). *)
+  register_crud "data-scope"
+    (fun _args ->
+      let uname = actor () in
+      if uname = "anonymous" then deny_anon "data-scope"
+      else
+        let strings (v : Pricklypear_lisp.Ast.value) : string list =
+          match v with
+          | Pricklypear_lisp.Ast.VList vs ->
+              List.filter_map
+                (function
+                  | Pricklypear_lisp.Ast.VStr s -> Some s
+                  | _ -> None)
+                vs
+          | _ -> []
+        in
+        let spaces =
+          strings
+            (Crud.space_list t.store ~caller:uname
+               ~kernel_admin:(kernel_admin_of uname))
+        in
+        let lenses = strings (Crud.list_data_lenses t.store ()) in
+        let json =
+          `Assoc
+            [ ("user", `String uname)
+            ; ("user_root",
+               `String ("data.u." ^ Tree_store.enc_label uname))
+            ; ("shared_root", `String "data.shared")
+            ; ("note_root", `String (Tree_store.garden_root ~user:uname))
+            ; ("spaces", `List (List.map (fun s -> `String s) spaces))
+            ; ("data_lenses", `List (List.map (fun s -> `String s) lenses))
+            ]
+        in
+        Pricklypear_lisp.Ast.VStr (Yojson.Safe.to_string json));
+
   register_crud "space-members"
     (fun args ->
       let uname = actor () in

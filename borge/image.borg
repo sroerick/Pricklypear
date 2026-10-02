@@ -1287,12 +1287,12 @@
    )
   )
   (subsection data-browser
-   (doc "Generic OCaml system UI for full CRUD over shared data_rows by type")
+    (doc "Generic OCaml system UI for full CRUD over the one-tree datum namespace by type")
    (status implemented)
    (implements image/lib/http.ml image/lib/crud.ml image/lib/store.ml)
    (verify
     (build "dune build image")
-    (smoke "GET /data lists types with row counts; shared-data banner present")
+     (smoke "GET /data lists types with row counts; data-scope banner present")
     (smoke "GET /data/<type> lists rows (default limit 50) with declared columns")
     (smoke "GET /data/<type>?offset=50 pages next slice")
     (smoke "GET /data/<type>/new shows create form from type_defs fields")
@@ -1322,8 +1322,9 @@
            or broken gardens.
          - Mutations call existing Crud/Store SQL paths. Do not invent
            a second data access layer.
-         - data_rows are SHARED across branches (no branch_id). UI
-           must say so on every list/detail surface.
+         - Data lives in the one tree, keyed by user/space/lens, not by
+           branch. UI must report the effective data scope on every
+           list/detail surface.
 
          =========================================================
          ROUTES (full CRUD)
@@ -1335,7 +1336,8 @@
              - Types = visible type_defs on current branch (Store.list_types)
              - Also surface type_names that have data_rows but no
                type_def (orphan data) so nothing is invisible
-             - Banner: "Data rows are shared across branches"
+              - Banner: effective data scope (your rows / shared seed /
+                member spaces; /data-scope details it)
              - Link back/forward with /types (types = schema index;
                /data = instances)
 
@@ -1452,7 +1454,7 @@
          =========================================================
          - Same session gate as other authenticated system pages.
          - Not admin-only in v1 (any logged-in user can browse/mutate
-           shared data — matches Nopales CRUD prims today).
+           the rows their identity can see — matches Nopales CRUD prims today).
          - No CSRF token infrastructure in v1 (status quo for other
            POSTs); cookie session + same-site assumptions hold.
          - Never interpolate type/id into SQL strings.
@@ -1464,7 +1466,8 @@
          - Full-text search UI (find-text exists for Nopales; wire later)
          - Inline htmx row edit without full page (optional polish)
          - Bulk delete / CSV import-export
-         - Per-row branch scoping (data is shared by design)
+         - Per-row BRANCH scoping (isolation is by user / space / lens,
+           never by branch)
          - Nopales-redefinable browser UI
          - SPA / client-side routing
 
@@ -2248,7 +2251,7 @@
          =========================================================
 
          GOAL: read BSB from the live image via Nopales + /bible page.
-         Canon lives in Postgres data_rows (shared across branches).
+         Canon lives in the one-tree datum namespace (shared seed corpus).
          Functions live in package bible/ via load-library.
 
          DECISIONS:
