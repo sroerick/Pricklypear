@@ -960,6 +960,107 @@
    )
   )
 
+  (subsection note-path-resolution
+   (doc "Addressing an existing note resolves its live tree path; note-path is a constructor for new notes, never a slug lookup; writes refuse absent note parents")
+   (status planned)
+   (implements libs/notes/lib.pp)
+   (verify
+    (smoke "the agents note (folder wiki) resolves to its stored path: notes/doc/path returns data.note.u.admin.wiki.agents and (notes/tree/folder-of-path path) = \"wiki\"")
+    (smoke "(notes/tree/note-path \"\" \"agents\") is NOT a lookup: it returns data.note.u.admin.agents, a different subtree, and no caller addresses the foldered note through it")
+    (smoke "a heading write under a path whose note node is absent RAISES and materializes no parallel note subtree; the /notes face is unchanged")
+    (smoke "new-note creation with empty folder still lands at <garden-root>.<slug> and round-trips through notes/tree/folder-of-path")
+    (smoke "set-folder moves an existing note to the requested folder (old path from the row, new path from the argument) and a no-op move writes nothing")
+    (build "dune build image"))
+   (details
+    (doc (|
+         PROBLEM (BUG, live 2026-10-03):
+           notes/tree/note-path(folder, slug) is a PURE constructor. It
+           builds <garden-root> + (split-folder folder)… + <slug>. With
+           folder "" it returns <garden-root>.<slug>. That is the RIGHT
+           path only for a genuinely folderless / NEW note. For a slug
+           whose note actually lives in a folder it names a DIFFERENT,
+           usually non-existent subtree.
+
+           REPRO: the agents note lives at
+             data.note.u.admin.wiki.agents        (folder "wiki")
+           but
+             (notes/tree/note-path "" "agents")
+             -> data.note.u.admin.agents           (does not exist)
+           An agent that addressed the note by slug alone (the documented
+           read-modify-write idiom, and any caller that reconstructed a
+           path instead of reading the row) then called
+             (notes/tree/write-heading <wrong-path> …)
+           The heading upsert auto-materialized the parallel subtree; a
+           note-shaped node at <garden-root>.<slug> appeared that the
+           /notes face NEVER reads. Five sections written there were
+           invisible until spotted, and the subtree had to be deleted by
+           hand. Same misaddressed-write family as the 2026-09-27
+           save-outline incident (storage SAVE ORDERING CONTRACT).
+
+         ROOT CAUSE:
+           A single binding conflates two operations that must stay
+           separate:
+             CONSTRUCT — "path for a note that does not exist yet"
+                         (new note; explicit move target)
+             ADDRESS   — "where does THIS existing note live?"
+           note-path only constructs. Nothing resolves a note's live
+           path, so slug-addressing callers guess the folder — and "" is
+           the silent guess that lands in the wrong subtree.
+
+         CONTRACT:
+           1. CONSTRUCT is not ADDRESS. notes/tree/note-path(folder,
+              slug) is a constructor for a NEW note (or for a path whose
+              folder the caller explicitly owns, e.g. the set-folder
+              move target). It must never be used to look UP an existing
+              note by slug. Callers must not infer "folderless" from a
+              missing folder argument.
+           2. RESOLVE BY SLUG. Address an existing note through its row.
+              notes/tree/find-slug / notes/doc/row return the live node,
+              and the resolver notes/doc/path(slug) returns that row's
+              _path (notes/doc/row-path). When no note row exists it
+              returns () / raises — it never guesses a path.
+              (notes/doc/get already returns folder as its 8th element;
+              the documented agent idiom must use the row, not a literal
+              "".)
+           3. NO IMPLICIT NOTE SUBTREES. A write addressing a note must
+              target a path whose node already exists with kind note.
+              notes/tree/write-root-body must RAISE when tree/get of the
+              target is empty instead of silently returning (its current
+              no-op) and leaving the following write-heading to run.
+              notes/tree/write-heading must REFUSE to upsert when its
+              parent path is not an existing note node. Upserting a
+              heading must never create a note-shaped parent chain; an
+              absent note is an error surfaced to the caller, not a
+              parallel subtree.
+           4. EVERY EXISTING-NOTE WRITE RESOLVES. save-outline,
+              write-root-body, write-heading, undo and any tree/move
+              caller take the note path from the row (row-path /
+              notes/doc/path). note-path(folder, slug) remains
+              legitimate ONLY for upsert-in when no row exists yet, and
+              for the explicit new path computed by notes/doc/set-folder
+              (a deliberate move, where the requested folder IS the
+              target).
+           5. set-folder is an ADDRESS→CONSTRUCT move: it reads the old
+              path from the row (row-path) and the new path from the
+              explicitly requested folder; a no-op move (old = new)
+              writes nothing.
+
+         WHY note-path itself does NOT resolve:
+           Making note-path redirect to a slug's existing row would
+           break the two legitimate CONSTRUCT callers: a NEW note would
+           never be created at the requested folder, and set-folder
+           could never move a note to the root (the constructed
+           <root>.<slug> would snap back to the old foldered path).
+           Resolution is a separate, explicit binding.
+
+         ABI:
+           notes/tree/note-path(folder, slug) -> new path   (constructor)
+           notes/doc/path(slug)               -> live path | () | raise
+           notes/doc/row-path(row)            -> live path
+           notes/tree/folder-of-path(path)    -> folder (round-trip)
+    |))
+   )
+  )
   (subsection index-read-path
    (doc "Notes index reads resolve to the tree store exactly once; legacy data_rows fallback retired; interim read-layers removed")
    (status implemented)
