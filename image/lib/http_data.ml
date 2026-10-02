@@ -24,7 +24,8 @@ let list_types_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
       HTML.p [HTML.class_ "meta"] [
         txt "Declared shapes for Data rows. Browse/edit instances at ";
         HTML.a [HTML.href "/data"] [txt "/data"];
-        txt " or via (create 'type \"{...}\") in the REPL.";
+        txt " or via (create 'type \"{...}\") in the REPL. ";
+        txt "(deftype …) declares on the branch you own — system/* is admin-only.";
       ];
       (match types with
        | [] ->
@@ -194,7 +195,7 @@ let data_index_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
         (match rows @ orphan_rows with
          | [] ->
              HTML.p [] [
-               txt "(no data_rows yet; declare a type via (deftype …) or ";
+               txt "(no data_rows yet; declare a type via (deftype …) on your own branch — system/* is admin-only — or ";
                HTML.a [HTML.href "/types"] [txt "/types"];
                txt ")";
              ]

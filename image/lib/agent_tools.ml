@@ -1479,7 +1479,8 @@ let default_agent_seed (t : t) : string =
   "How to build a small app (dogfood pattern — copy todo/notes style):\n" ^
   "1) Persist with create/rows/get/update/delete on data_rows. " ^
   "Build fields JSON with (dict-set* \"{}\" (list \"name\" n \"email\" e ...)). " ^
-  "Optional init: (lambda () (deftype 'contact 'name 'email 'phone 'notes)).\n" ^
+  "Optional init: (lambda () (deftype 'contact 'name 'email 'phone 'notes)). " ^
+  "deftype declares on the branch you own (admin owns system/*).\n" ^
   "2) install_function name=pkg/page body=(lambda () ...) using html/* " ^
   "helpers: html/page, html/form method action attrs body, html/join, " ^
   "html/text-input, html/hidden, html/button. Never invent html/nil or " ^
