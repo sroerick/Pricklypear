@@ -393,6 +393,41 @@ let scan_events ~(store : Store.t) ~(since : float) ~(limit : int)
            (Printexc.to_string exn);
          [])
 
+(* —— rollup read face ———————————————————————————————————————
+   The console's per-identity spend/burst view. Summed from the day
+   rollups (kept forever), grouped by actor. Read-only. *)
+let rollup_rows ~(store : Store.t) ?(limit = 100) () : string list =
+  match Io_db.Db.current_conn store with
+  | None -> []
+  | Some conn ->
+      let sql =
+        "SELECT actor, count(*)::text, coalesce(sum(events),0)::text, \
+         coalesce(sum(steps),0)::text, coalesce(sum(db_hits),0)::text, \
+         coalesce(sum(db_ms),0)::text FROM activity_rollup_day \
+         GROUP BY actor ORDER BY sum(steps) DESC LIMIT $1"
+      in
+      (try
+         Store_db.exec conn ~params:[ Pgx.Value.of_int (max 1 limit) ] sql
+         |> List.filter_map (function
+              | [ actor; days; events; steps; hits; ms ] ->
+                  let s v =
+                    match Pgx.Value.to_string v with Some x -> x | None -> "0"
+                  in
+                  Some
+                    (Yojson.Safe.to_string
+                       (`Assoc
+                          [ ("actor", `String (s actor));
+                            ("days", `Int (int_of_string (s days)));
+                            ("events", `Int (int_of_string (s events)));
+                            ("steps", `Int (int_of_string (s steps)));
+                            ("db_hits", `Int (int_of_string (s hits)));
+                            ("db_ms", `Int (int_of_string (s ms))) ]))
+              | _ -> None)
+       with exn ->
+         Printf.eprintf "[activity_ledger] rollup read failed: %s\n%!"
+           (Printexc.to_string exn);
+         [])
+
 (** Background flush loop; fork once at boot. Uses the Eio clock — never
     route this through any run_lwt-style bridge (function_stats comment:
     concurrent bridge calls across fibers took the switch down). *)

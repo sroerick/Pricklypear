@@ -17,7 +17,7 @@
           boot_seed
           session
           session_registry
-          function_stats activity_ledger knock_policy
+          function_stats activity_ledger knock_policy presence
            crud media packages loader profile repl_endpoint
           ops_log ops_stats ops_incidents
           timing
