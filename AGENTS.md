@@ -262,6 +262,19 @@ curl -sS "$PP_URL/agent.txt" | head
 - Vault: `pp-sync pull <pkg>`, `pp-sync pull-all`,
   `pp-sync snapshot [--branch system/main] [--out backups/…]`.
   `libs/` = main vault (seed input); `backups/<ref>/` = non-main dumps.
+- **Vault is a generated MIRROR, not an authoring source**
+  (branching.vault-authority, 2026-10-02). Don't hand-edit `libs/*.pp`
+  to ship a product change: the additive boot seed only ADDS names absent
+  on main, so editing an EXISTING define is committed but never deployed.
+  Work the habitat (personal/dev) → promote;  refresh the vault with
+  `pp-sync snapshot`. Kernel changes still ship through the release.
+- **Drift view:** `pp-sync status -b system/main <pkg>` compares
+  canonical AST **bodies**, not just names. `body-stale` names are the
+  git-has-the-fix / main-does-not signal; `only-local`/`only-live` are
+  name-set drift. `--names-only` is the fast blind pass. Run it before
+  trusting that a `.pp` change deployed (`body-stale: 0` = honestly live).
+  Never `reseed` a drifted package to "land" a fix — that clobbers every
+  live-only define (the reseed guard refuses without `--force`).
 
 ## One-tree storage (default)
 
