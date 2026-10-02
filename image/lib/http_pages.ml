@@ -291,6 +291,14 @@ let emergency_home_content (session : Session.t) : Pure_html.node list =
   ]
 
 let home_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
+  (* filmstrip.borg filmstrip-shell: the filmstrip shell IS the default
+     habitat view. / redirects there for authenticated users (anonymous
+     never reaches here: require_login_redirect sends them to /welcome).
+     ui/home stays bound (and home_content below stays compiled) so a
+     rollback is this one redirect line. *)
+  redirect_response reqd "/filmstrip"
+
+let _home_page_legacy (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
   (* Nav comes from Session.ui_nav_html (refreshed in request launch). *)
   let home_html = try_ui_fn session "ui/home" in
   let content =

@@ -2980,3 +2980,24 @@ cleared too -- the only server render where default-open dirs fold;
 the tree-closed projection, in the same ul OOB seam tree-oob uses).")
 
 ;; tree css appended to the strip sheet: rows are tag-line rows (fold\nword is its own hitbox), k indent per level, verbs fade on narrow.
+
+;; ---- route bindings (vault, additive at load/boot-seed) ----
+;; filmstrip.borg filmstrip-shell: the shell is the DEFAULT habitat
+;; view, so a fresh habitat (boot seed loads libs/filmstrip onto
+;; system/main additively) must come up with its routes live — no
+;; live-only route pins. Handlers stay PRIVATE (login required): the
+;; shell is never an anonymous surface.
+(route "/filmstrip" "filmstrip/page")
+(route "/filmstrip/open" "filmstrip/open")
+(route "/filmstrip/close" "filmstrip/close")
+(route "/filmstrip/cascade" "filmstrip/cascade")
+(route "/filmstrip/focus" "filmstrip/focus")
+(route "/filmstrip/focus-id" "filmstrip/focus-id")
+(route "/filmstrip/move" "filmstrip/move")
+(route "/filmstrip/move-to" "filmstrip/move-to")
+(route "/filmstrip/width" "filmstrip/width")
+(route "/filmstrip/pin" "filmstrip/pin")
+(route "/filmstrip/restore" "filmstrip/restore")
+(route "/filmstrip/single" "filmstrip/single")
+(route "/filmstrip/tree" "filmstrip/tree")
+(route "/filmstrip/tree/collapse" "filmstrip/tree-collapse")

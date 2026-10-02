@@ -1079,13 +1079,14 @@ let post_login (session : Session.t) ?source_ip (reqd : Httpun.Reqd.t) : unit =
                         (* Prefer relative if already on garden host; else absolute. *)
                         let headers = header_list (Httpun.Reqd.request reqd) in
                         (match classify_host headers with
-                         | Host_garden g when g = user.Auth_store.username -> "/"
+                         | Host_garden g when g = user.Auth_store.username ->
+                             "/filmstrip"
                          | _ ->
                              (* garden_url is https — never bounce a fresh
                                 session cookie over plain http. *)
                              garden_url ~username:user.Auth_store.username
-                               ~path:"/")
-                    | None -> "/")
+                               ~path:"/filmstrip")
+                    | None -> "/filmstrip")
              in
              redirect_with_cookie reqd ~location
                ~set_cookie:
