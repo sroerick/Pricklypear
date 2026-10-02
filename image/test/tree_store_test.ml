@@ -10,6 +10,8 @@ let rt s =
   | Some r -> r
   | None -> fail ("decode failed for: " ^ s)
 
+let long n = String.make n 'a'   (* >=57 bytes -> base64 output wraps in PG *)
+
 let test_label_roundtrip () =
   check string "empty" "" (rt "");
   check string "plain" "greet" (rt "greet");
@@ -20,7 +22,9 @@ let test_label_roundtrip () =
   check string "spaces" "my type name" (rt "my type name");
   check string "pad2" "ab" (rt "ab");       (* 2 bytes -> 1 pad *)
   check string "pad1" "abc" (rt "abc");     (* 3 bytes -> 0 pad *)
-  check string "json" "{\"a\":1,\"b\":[2,3]}" (rt "{\"a\":1,\"b\":[2,3]}")
+  check string "json" "{\"a\":1,\"b\":[2,3]}" (rt "{\"a\":1,\"b\":[2,3]}");
+  check string "57 bytes (MIME wrap boundary)" (long 57) (rt (long 57));
+  check string "200 bytes" (long 200) (rt (long 200))
 
 let test_label_ltree_safe () =
   (* Encoded labels must be ltree-safe: [A-Za-z0-9_] and trailing pad digit *)
@@ -35,8 +39,9 @@ let test_label_ltree_safe () =
         if not ok then fail (Printf.sprintf "unsafe char %c in %s (from %s)" c e s))
       e
   in
-  List.iter check_safe [ ""; "greet"; "/notes/:id"; "notes/doc/get";
-                         "héllo"; "a:b+c/d"; "my type" ]
+  List.iter check_safe
+    [ ""; "greet"; "/notes/:id"; "notes/doc/get";
+      "héllo"; "a:b+c/d"; "my type"; long 57; long 76; long 200 ]
 
 let test_uuid_label () =
   check string "strips dashes" "00000000000000000000000000000001"
