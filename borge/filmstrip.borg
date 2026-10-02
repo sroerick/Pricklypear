@@ -190,12 +190,23 @@
        the walk-capable cascade and the launcher/open endpoint as
        primitives; the dichotomy is glochid's COMPOSITION of them —
        glochid's column 0 is all leaves, its shell has no launcher, no
-       pane-tag strip, and no desktop controlbox.")
+       pane-tag strip, and no desktop controlbox.
+
+       AMENDED 2026-09-19/20 (glochid host decisions, BORGE-1789879934 /
+       BORGE-1789890061): the glochid shell retires BOTH the AXIS toggle
+       (pinned to col / sidebar-only) and the separate CASCADE column —
+       the app list now lives INSIDE the rail as a zero-JS <details>
+       START MENU (first word of the #fs-railtabs controlbox; entries
+       POST /filmstrip/open, open-or-focus). glochid/axis returns col
+       unconditionally; the #fs-axis sentinel stays inert for CSS. The
+       framework primitives (cascade, walk-capable browse, orient) STAY
+       for the habitat shell, which keeps its axis toggle and cascade
+       until a separate decision removes them there.")
    (verify
-    (smoke "cascade column 0 entries are all route leaves; each open-or-focuses a main-window pane")
+    (smoke "cascade column 0 entries are all route leaves; each open-or-focuses a main-window pane (HABITAT shell; glochid retired its cascade column 2026-09-20, start menu on the rail instead)")
     (smoke "the col rail renders no pane-tag strip, desktop switcher controlbox, or launcher; the windows tree is the pane inventory")
     (smoke "an unfocused main pane is absent from the col rail; focusing its tree row (or a shelf restore) lifts or shows it -- AMENDED by main-strip-v5: in niri mode there is no lift; a tree-row focus scrolls the pane's column into stage")
-    (smoke "the axis toggle renders as a word on the rail tabs row and persists through reload"))
+    (smoke "HABITAT shell: the axis toggle renders as a word on the rail tabs row and persists through reload; GLOCHID shell: axis is pinned col (toggle retired 2026-09-19) and POST /filmstrip/orient is absent"))
    (status implemented)
   )
 
