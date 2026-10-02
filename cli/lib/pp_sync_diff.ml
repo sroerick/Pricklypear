@@ -81,3 +81,45 @@ let pp_body (body : string) : string =
   match Pricklypear_lisp.Ast.expr_of_body_json body with
   | Some e -> one_line (Pricklypear_lisp.Reader.pp_expr e)
   | None -> one_line body
+
+(* Unwrap a printed list of names (e.g. a package-bindings reply) into
+   its elements. Three shapes arrive over the wire:
+   - a JSON array of strings: ["todo/x","todo/y"] (prims print their
+     lists as JSON now) — including the EMPTY "[]", which the old
+     parser turned into a single bogus element named "[]" (status then
+     reported "only-live: 1" with an empty name list);
+   - a printed lisp list with quoted strings "a" "b";
+   - a whitelist of bare symbols (older replies).
+   Returns [] when nothing was printed. *)
+let unwrap_quoted_names (printed : string) : string list =
+  let t = String.trim printed in
+  if t = "" then []
+  else if t.[0] = '[' then
+    (* JSON array of strings — parse it as JSON, not with a regex *)
+    (match Yojson.Safe.from_string t with
+     | `List els ->
+         List.filter_map
+           (function `String s -> Some s | _ -> None)
+           els
+     | _ -> [])
+  else begin
+    let re = Re.Perl.compile_pat {|"([^"]+)"|} in
+    let quoted =
+      Re.all re t
+      |> List.filter_map (fun g ->
+             try Some (Re.Group.get g 1) with Not_found -> None)
+    in
+    (if quoted <> [] then quoted
+     else
+       let inner =
+         if
+           String.length t >= 2 && t.[0] = '('
+           && t.[String.length t - 1] = ')'
+         then String.sub t 1 (String.length t - 2) |> String.trim
+         else t
+       in
+       if inner = "" then []
+       else
+         String.split_on_char ' ' inner
+         |> List.filter (( <> ) ""))
+  end

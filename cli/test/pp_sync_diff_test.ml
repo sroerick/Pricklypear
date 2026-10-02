@@ -65,6 +65,17 @@ let test_pp_body_one_line () =
         (String.length pp > 0 && pp.[0] = '(')
   | _ -> Alcotest.fail "expected one define"
 
+let test_unwrap_quoted_names () =
+  (* prims print their lists as JSON now; the old parser turned "[]"
+     into a bogus element named "[]" (status showed "only-live: 1"
+     with an empty list). lisp-printed + bare-symbol forms still parse. *)
+  check_list "JSON empty" [] (unwrap_quoted_names "[]");
+  check_list "JSON array" [ "todo/a"; "todo/b" ]
+    (unwrap_quoted_names "[\"todo/a\",\"todo/b\"]");
+  check_list "lisp quoted" [ "a"; "b" ] (unwrap_quoted_names "\"a\" \"b\"");
+  check_list "lisp plain" [ "a"; "b" ] (unwrap_quoted_names "(a b)");
+  check_list "empty string" [] (unwrap_quoted_names "")
+
 let () =
   Alcotest.run "pp_sync_diff"
     [ ( "parse",
@@ -85,4 +96,7 @@ let () =
         [ Alcotest.test_case "one-line source shape" `Quick
             test_pp_body_one_line
         ] )
+    ; ( "unwrap",
+        [ Alcotest.test_case "quoted-name list shapes (JSON + lisp)" `Quick
+            test_unwrap_quoted_names ] )
     ]
