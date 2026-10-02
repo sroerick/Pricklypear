@@ -124,11 +124,16 @@ let value_of_id cell : value =
 
     Accepted grammar — 1 or 2 whitespace-separated tokens:
       column            := created_at | updated_at | id
-      field accessor    := fields->>'name'   (name: [A-Za-z0-9_-]{1,64})
-      direction (opt)   := ASC | DESC       (case-insensitive)
+      field accessor    := fields->>'name'          (name: [A-Za-z0-9_-]{1,64})
+      numeric field     := fields->>'name'::int     (integer ordering)
+      direction (opt)   := ASC | DESC               (case-insensitive)
     The SQL fragment is built only from the validated tokens; the raw
     string never reaches the query. Anything else raises a clean prim
-    error naming the accepted forms (loud, not a silent default). *)
+    error naming the accepted forms (loud, not a silent default).
+
+    The optional `::int` sorts a numeric-looking text field as an integer
+    (bible/chapter needs verse 2 before 10, which text order breaks) —
+    the cast is a fixed literal, so it adds no injection surface. *)
 let safe_sort_sql ~(prim : string) ~(sort : string) : string =
   let bad () =
     raise
@@ -136,7 +141,8 @@ let safe_sort_sql ~(prim : string) ~(sort : string) : string =
          (Prim_error
             ( prim,
               "sort must be \"created_at|updated_at|id\" or "
-              ^ "\"fields->>'field'\", optionally followed by ASC|DESC",
+              ^ "\"fields->>'field'[::int]\", optionally followed by "
+              ^ "ASC|DESC",
               "bad-args" )))
   in
   let is_field_char c =
@@ -155,23 +161,34 @@ let safe_sort_sql ~(prim : string) ~(sort : string) : string =
            | "desc" -> "DESC"
            | _ -> bad ())
     in
+    let field_expr token =
+      (* fields->>'name'[::int] — exact shape, identifier-strict name. *)
+      let prefix = "fields->>'" in
+      let plen = String.length prefix in
+      let int_suffix = "::int" in
+      let slen = String.length int_suffix in
+      let token, as_int =
+        let len = String.length token in
+        if len > slen && String.sub token (len - slen) slen = int_suffix then
+          (String.sub token 0 (len - slen), true)
+        else (token, false)
+      in
+      let len = String.length token in
+      if len >= plen + 2 && String.sub token 0 plen = prefix
+         && token.[len - 1] = '\''
+      then
+        let name = String.sub token plen (len - plen - 1) in
+        if name = "" || String.length name > 64
+           || not (String.for_all is_field_char name)
+        then bad ()
+        else if as_int then Printf.sprintf "(fields->>'%s')::int" name
+        else Printf.sprintf "fields->>'%s'" name
+      else bad ()
+    in
     let expr =
       (match token with
        | "created_at" | "updated_at" | "id" -> token
-       | _ -> (
-           (* fields->>'name' — exact shape, identifier-strict name. *)
-           let prefix = "fields->>'" in
-           let plen = String.length prefix in
-           let len = String.length token in
-           if len >= plen + 2 && String.sub token 0 plen = prefix
-              && token.[len - 1] = '\''
-           then
-             let name = String.sub token plen (len - plen - 1) in
-             if name = "" || String.length name > 64
-                || not (String.for_all is_field_char name)
-             then bad ()
-             else Printf.sprintf "fields->>'%s'" name
-           else bad ()))
+       | _ -> field_expr token)
     in
     Printf.sprintf " ORDER BY %s %s" expr dir_sql
   in

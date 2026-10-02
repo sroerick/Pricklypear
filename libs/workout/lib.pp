@@ -942,18 +942,43 @@
 (define workout/ksf-duration-min
   (lambda
     (session-id)
-    (list/foldl
-      (lambda
-        (acc row)
-        (let
-          ((f (workout/row-fields row)))
-          (if
-            (string-eq (workout/field f "exercise") "Duration")
-            (+ acc (workout/as-int (workout/field f "reps")))
-            acc)))
-      0
-      (workout/exercises session-id)))
-  "Duration in minutes from the Duration fact.")
+    (let
+      ((doc-min (workout/ksf-doc-elapsed-min session-id)))
+      (if
+        (> doc-min 0)
+        doc-min
+        (list/foldl
+          (lambda
+            (acc row)
+            (let
+              ((f (workout/row-fields row)))
+              (if
+                (string-eq (workout/field f "exercise") "Duration")
+                (+ acc (workout/as-int (workout/field f "reps")))
+                acc)))
+          0
+          (workout/exercises session-id)))))
+  "Session duration in minutes: the session doc's progress.elapsed_min
+     when present and nonzero (the normal KSF logger writes it —
+     ksf-progress-put), else the legacy Duration exercise-row sum.
+
+     OBITUARY (2026-10-02, BUG ksf-cleared?): the old body ONLY summed
+     Duration rows. The KSF run logger never emits a Duration row, so
+     every session scored short and the pattern never advanced (stalls
+     incremented forever). Verified live 2026-09-27: no session had a
+     Duration row. The doc was already the authority; read it first.")
+
+(define workout/ksf-doc-elapsed-min
+  (lambda
+    (session-id)
+    (let
+      ((doc (workout/parse-session-doc session-id)))
+      (if
+        (null? doc)
+        0
+        (workout/as-int
+          (dict-get (workout/doc-progress doc) "elapsed_min")))))
+  "Progress.elapsed_min from the session doc, 0 when absent.")
 
 (define workout/ksf-duration-sum
   (lambda

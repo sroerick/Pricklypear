@@ -36,7 +36,11 @@ let test_accepted () =
   ok "whitespace tolerated" "  created_at   DESC  "
     " ORDER BY created_at DESC";
   ok "name with dash/underscore" "fields->>'the-num_1'"
-    " ORDER BY fields->>'the-num_1' ASC"
+    " ORDER BY fields->>'the-num_1' ASC";
+  ok "numeric field cast" "fields->>'verse'::int ASC"
+    " ORDER BY (fields->>'verse')::int ASC";
+  ok "numeric field cast no dir" "fields->>'verse'::int"
+    " ORDER BY (fields->>'verse')::int ASC"
 
 let test_rejected () =
   (* Error-based exfiltration shapes from docs/security-review-2026-09.md. *)
@@ -55,7 +59,10 @@ let test_rejected () =
   bad "bad direction" "created_at UP";
   bad "empty field name" "fields->>''";
   bad "quote without close" "fields->>'verse";
-  bad "double-quote field" "fields->>\"verse\""
+  bad "double-quote field" "fields->>\"verse\"";
+  bad "bad cast type" "fields->>'verse'::text";
+  bad "cast on column" "created_at::int";
+  bad "injection via cast" "fields->>'a'::int OR 1=1 --"
 
 let () =
   let open Alcotest in

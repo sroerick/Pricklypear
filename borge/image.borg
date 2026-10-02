@@ -833,7 +833,7 @@
          Kernel I/O prims shipped (Effect.pure_prims / Net):
            http-get (Net; admin/agent), xml-parse, html-decode,
            parse-date, url-encode/decode, sha1, string helpers,
-           random-uuid, now, now-ms, sleep (Lwt, max 60s/call).
+           random-uuid, now, now-ms, now-iso, sleep (Lwt, max 60s/call).
          DEFERRED: Solo5 pgx path; host cron/scheduler table.
 
          define-docstring (lisp-interpreter): image registers
