@@ -4,32 +4,32 @@
 (define astro/date-parts
   (lambda
     (d)
-    "Split ISO date into (year month day)."
     (let
       ((ps (string-split d "-")))
       (list
         (parse-int (list-ref ps 0))
         (parse-int (list-ref ps 1))
-        (parse-int (list-ref ps 2))))))
+        (parse-int (list-ref ps 2)))))
+  "Split ISO date into (year month day).")
 
 (define astro/date-seq
   (lambda
     (start n)
-    "List of n consecutive dates starting at start."
     (if
       (<= n 0)
       (list)
       (cons
         start
-        (astro/date-seq (date-add-days start 1) (- n 1))))))
+        (astro/date-seq (date-add-days start 1) (- n 1)))))
+  "List of n consecutive dates starting at start.")
 
 (define astro/days-since-epoch
   (lambda
     (d)
-    "Decimal days since the new-moon epoch."
     (-
       (date-diff-days astro/new-moon-epoch d)
-      astro/epoch-frac)))
+      astro/epoch-frac))
+  "Decimal days since the new-moon epoch.")
 
 (define astro/default-label
   "Cody, WY")
@@ -43,10 +43,23 @@
 (define astro/epoch-frac
   0.7597)
 
+(define astro/fmt-date-short
+  (lambda
+    (d)
+    (let
+      ((parts (astro/date-parts d)))
+      (let
+        ((m (list-ref parts 1)))
+        (let
+          ((day (list-ref parts 2)))
+          (string-append
+            (list-ref astro/month-short-names (- m 1))
+            " "
+            (as-str day)))))))
+
 (define astro/forecast-row-html
   (lambda
     (d)
-    "HTML table row for one date's sun/moon forecast."
     (let
       ((parts (astro/date-parts d)))
       (let
@@ -70,24 +83,24 @@
                     " "
                     (astro/phase-name d)))
                 (astro/td
-                  (string-append (as-str (astro/illum-percent d)) "%"))))))))))
+                  (string-append (as-str (astro/illum-percent d)) "%")))))))))
+  "HTML table row for one date's sun/moon forecast.")
 
 (define astro/forecast-rows-html
   (lambda
     (dates)
-    "HTML rows for each date in the list."
     (if
       (null? dates)
       ""
       (html/join
         (list
           (astro/forecast-row-html (car dates))
-          (astro/forecast-rows-html (cdr dates)))))))
+          (astro/forecast-rows-html (cdr dates))))))
+  "HTML rows for each date in the list.")
 
 (define astro/forecast-table-html
   (lambda
     ()
-    "Full 7-day forecast table HTML."
     (let
       ((dates (astro/date-seq (date-today) 7)))
       (html/tag
@@ -109,24 +122,37 @@
                     (astro/th "Daylight")
                     (astro/th "Moon Phase")
                     (astro/th "Illum")))))
-            (html/tag "tbody" "" (astro/forecast-rows-html dates))))))))
+            (html/tag "tbody" "" (astro/forecast-rows-html dates)))))))
+  "Full 7-day forecast table HTML.")
+
+(define astro/format-date-short
+  (lambda
+    (d)
+    (let
+      ((ps (astro/date-parts d)))
+      (string-append
+        (astro/weekday-short
+          (date-weekday (car ps) (cadr ps) (caddr ps)))
+        ", "
+        (astro/month-name (cadr ps))
+        " "
+        (as-str (caddr ps))))))
 
 (define astro/help
   (lambda
     ()
-    "Help text describing the astro package API."
     (string-append
       "astro - sunrise/sunset + moon phase. "
       "Sun times are fetched client-side (Open-Meteo); moon is computed on the image. "
       "REPL: (astro/moon (date-today)) returns glyph+name+illum+age. "
       "Also: (astro/phase-name d) (astro/phase-glyph d) (astro/illum-percent d) "
       "(astro/phase-fraction d) (astro/phase-age d). "
-      "Web: /astro  -  embed: (astro/widget).")))
+      "Web: /astro  -  embed: (astro/widget)."))
+  "Help text describing the astro package API.")
 
 (define astro/historical-panel-html
   (lambda
     ()
-    "HTML panel for looking up a past date."
     (html/div
       (html/attr "class" "astro-historical")
       (html/join
@@ -153,12 +179,12 @@
                       (html/attr "name" "date")
                       (html/attr "value" (date-today)))))
                 (html/button (html/attr "type" "submit") "Look up"))))
-          (html/div (html/attr "id" "astro-hist-result") ""))))))
+          (html/div (html/attr "id" "astro-hist-result") "")))))
+  "HTML panel for looking up a past date.")
 
 (define astro/historical-script
   (lambda
     ()
-    "Client JS for the historical lookup panel."
     (html/tag
       "script"
       ""
@@ -207,21 +233,24 @@
         "if(form){form.addEventListener('submit',function(e){"
         "e.preventDefault();var q=(dateEl&&dateEl.value||'').trim();if(!q)return;lookup(q,loadLoc());"
         "});}"
-        "})();"))))
+        "})();")))
+  "Client JS for the historical lookup panel.")
 
 (define astro/illum-fraction
   (lambda
     (d)
-    "Illuminated fraction in 0..1 from phase fraction."
     (let
       ((theta (* astro/pi (astro/phase-fraction d))))
-      (let ((s (astro/sin-0-pi theta))) (* s s)))))
+      (let ((s (astro/sin-0-pi theta))) (* s s))))
+  "Illuminated fraction in 0..1 from phase fraction.")
 
 (define astro/illum-percent
-  (lambda (d) "Percent illumination, rounded." (round (* 100 (astro/illum-fraction d)))))
+  (lambda (d) (round (* 100 (astro/illum-fraction d))))
+  "Percent illumination, rounded.")
 
 (define astro/month-name
-  (lambda (m) "Month name by 1-based index." (list-ref astro/month-names (- m 1))))
+  (lambda (m) (list-ref astro/month-names (- m 1)))
+  "Month name by 1-based index.")
 
 (define astro/month-names
   (list
@@ -238,10 +267,24 @@
     "November"
     "December"))
 
+(define astro/month-short-names
+  (list
+    "Jan"
+    "Feb"
+    "Mar"
+    "Apr"
+    "May"
+    "Jun"
+    "Jul"
+    "Aug"
+    "Sep"
+    "Oct"
+    "Nov"
+    "Dec"))
+
 (define astro/moon
   (lambda
     (d)
-    "One-line description of the moon phase for d."
     (string-append
       (astro/phase-glyph d)
       " "
@@ -250,12 +293,12 @@
       (as-str (astro/illum-percent d))
       "% illuminated - age "
       (as-str (round (astro/phase-age d)))
-      " days")))
+      " days"))
+  "One-line description of the moon phase for d.")
 
 (define astro/moon-card-html
   (lambda
     (d)
-    "HTML card showing the moon phase for d."
     (html/div
       (html/attr "class" "astro-moon-big")
       (html/join
@@ -276,12 +319,12 @@
             (string-append
               "Age "
               (as-str (round (astro/phase-age d)))
-              " days")))))))
+              " days"))))))
+  "HTML card showing the moon phase for d.")
 
 (define astro/moon-for
   (lambda
     ()
-    "Moon card for the request date param (today when absent)."
     (let
       ((raw (request-param "date")))
       (let
@@ -290,15 +333,146 @@
             (or (null? raw) (string-eq (as-str raw) ""))
             (date-today)
             (as-str raw))))
-        (astro/moon-card-html d)))))
+        (astro/moon-card-html d))))
+  "Moon card for the request date param (today when absent).")
+
+(define astro/moon-widget
+  (lambda
+    ()
+    (let
+      ((d (date-today))
+        (next (astro/next-phase-info (date-today))))
+      (html/div
+        (html/attr "class" "card astro-card")
+        (html/join
+          (list
+            (html/h2 "Moon")
+            (html/div
+              (html/attr "class" "astro-moon-simple")
+              (html/join
+                (list
+                  (html/span
+                    (html/attr "class" "astro-glyph")
+                    (astro/phase-glyph d))
+                  (html/span
+                    (html/attr "class" "astro-mname")
+                    (astro/phase-name d))
+                  (html/span
+                    (html/attr "class" "astro-illum")
+                    (string-append
+                      (as-str (astro/illum-percent d))
+                      "% illuminated"))
+                  (html/span
+                    (html/attr "class" "astro-next")
+                    (string-append
+                      "Next "
+                      (cadr next)
+                      " - "
+                      (astro/format-date-short (car next)))))))
+            (html/tag
+              "style"
+              ""
+              (html/join
+                (list
+                  ".astro-moon-simple{display:flex;flex-direction:column;gap:.15rem}"
+                  ".astro-card .astro-glyph{font-size:3rem;line-height:1}"
+                  ".astro-card .astro-mname{font-weight:700}"
+                  ".astro-card .astro-illum{color:#444}"
+                  ".astro-card .astro-next{color:#666;font-size:.9rem;margin-top:.3rem}")))))))))
 
 (define astro/new-moon-epoch
   "2000-01-06")
 
+(define astro/next-full-moon-days
+  (lambda
+    (d)
+    (let
+      ((f (astro/phase-fraction d)))
+      (if
+        (< f 0.5)
+        (* (- 0.5 f) astro/synodic-month)
+        (* (- 1.5 f) astro/synodic-month)))))
+
+(define astro/next-new-moon-days
+  (lambda
+    (d)
+    (let
+      ((f (astro/phase-fraction d)))
+      (* (- 1.0 f) astro/synodic-month))))
+
+(define astro/next-phase-event
+  (lambda
+    ()
+    (let
+      ((today (date-today)))
+      (let
+        ((p (astro/phase-fraction today)))
+        (let
+          ((syn astro/synodic-month))
+          (let
+            ((threshold 1.5))
+            (let
+              ((raw-new (* (- 1.0 p) syn)))
+              (let
+                ((d-new
+                  (if (< raw-new threshold) (+ raw-new syn) raw-new)))
+                (let
+                  ((raw-full
+                    (if (< p 0.5) (* (- 0.5 p) syn) (* (- 1.5 p) syn))))
+                  (let
+                    ((d-full
+                      (if (< raw-full threshold) (+ raw-full syn) raw-full)))
+                    (if
+                      (< d-new d-full)
+                      (list
+                        "New Moon"
+                        (date-add-days today (round d-new))
+                        (round d-new))
+                      (list
+                        "Full Moon"
+                        (date-add-days today (round d-full))
+                        (round d-full)))))))))))))
+
+(define astro/next-phase-html
+  (lambda
+    ()
+    (let
+      ((ev (astro/next-phase-event)))
+      (let
+        ((name (list-ref ev 0)))
+        (let
+          ((date (list-ref ev 1)))
+          (let
+            ((days (list-ref ev 2)))
+            (html/div
+              (html/attr "class" "astro-next-phase")
+              (html/join
+                (list
+                  (html/div
+                    (html/attr "class" "astro-next-label")
+                    (string-append "Next " name))
+                  (html/div
+                    (html/attr "class" "astro-next-date")
+                    (string-append
+                      (astro/fmt-date-short date)
+                      " - "
+                      (as-str days)
+                      " days")))))))))))
+
+(define astro/next-phase-info
+  (lambda
+    (d)
+    (let
+      ((nd (astro/next-new-moon-days d))
+        (fd (astro/next-full-moon-days d)))
+      (if
+        (<= nd fd)
+        (list (date-add-days d (round nd)) "New Moon")
+        (list (date-add-days d (round fd)) "Full Moon")))))
+
 (define astro/page
   (lambda
     ()
-    "Full Sun & Moon page HTML."
     (html/page
       (list
         (html/h1 "Sun & Moon")
@@ -307,32 +481,33 @@
           "Sunrise & sunset via Open-Meteo (browser fetch). Moon phase computed on the image.")
         (astro/widget)
         (astro/historical-panel-html)
-        (astro/historical-script)))))
+        (astro/historical-script))))
+  "Full Sun & Moon page HTML.")
 
 (define astro/phase-age
   (lambda
     (d)
-    "Days since the last new moon."
     (let
       ((a (mod (astro/days-since-epoch d) astro/synodic-month)))
-      (if (< a 0) (+ a astro/synodic-month) a))))
+      (if (< a 0) (+ a astro/synodic-month) a)))
+  "Days since the last new moon.")
 
 (define astro/phase-fraction
   (lambda
     (d)
-    "Fractional position in the current lunation, 0..1."
     (let
       ((p
         (mod
           (div (astro/days-since-epoch d) astro/synodic-month)
           1.0)))
-      (if (< p 0) (+ p 1.0) p))))
+      (if (< p 0) (+ p 1.0) p)))
+  "Fractional position in the current lunation, 0..1.")
 
 (define astro/phase-glyph
   (lambda
     (d)
-    "Unicode glyph for the moon phase of d."
-    (list-ref astro/phase-glyphs (astro/phase-index d))))
+    (list-ref astro/phase-glyphs (astro/phase-index d)))
+  "Unicode glyph for the moon phase of d.")
 
 (define astro/phase-glyphs
   (list
@@ -348,16 +523,16 @@
 (define astro/phase-index
   (lambda
     (d)
-    "Bucket index 0..7 for the moon phase of d."
     (mod
       (floor (* (+ (astro/phase-fraction d) 0.0625) 8))
-      8)))
+      8))
+  "Bucket index 0..7 for the moon phase of d.")
 
 (define astro/phase-name
   (lambda
     (d)
-    "Human-readable name of the moon phase of d."
-    (list-ref astro/phase-names (astro/phase-index d))))
+    (list-ref astro/phase-names (astro/phase-index d)))
+  "Human-readable name of the moon phase of d.")
 
 (define astro/phase-names
   (list
@@ -371,7 +546,8 @@
     "Waning Crescent"))
 
 (define astro/phase-waxing?
-  (lambda (d) "True when the moon is waxing." (< (astro/phase-fraction d) 0.5)))
+  (lambda (d) (< (astro/phase-fraction d) 0.5))
+  "True when the moon is waxing.")
 
 (define astro/pi
   3.14159265359)
@@ -380,96 +556,47 @@
   9.86960440109)
 
 (define astro/probe
-  (lambda () "Probe helper returning 7." 7))
+  (lambda () 7)
+  "Probe helper returning 7.")
 
 (define astro/rp-null
   (lambda
     ()
-    "Test helper: \"null\" for missing request param."
-    (if (null? (request-param "nope")) "null" "notnull")))
+    (if (null? (request-param "nope")) "null" "notnull"))
+  "Test helper: \"null\" for missing request param.")
 
 (define astro/rp-test
   (lambda
     ()
-    "Test helper echoing the request date param."
-    (string-append "got=" (as-str (request-param "date")))))
+    (string-append "got=" (as-str (request-param "date"))))
+  "Test helper echoing the request date param.")
 
 (define astro/script
   (lambda
     (lat lon label)
-    "Client JS driving the live widget (geocode + Open-Meteo fetch)."
     (html/tag
       "script"
       ""
       (string-append
-        "(function(){"
-        "var root=document.getElementById('astro-widget');"
-        "if(!root)return;"
-        "var locEl=document.getElementById('astro-loc-label');"
-        "var form=document.getElementById('astro-loc-form');"
-        "var input=document.getElementById('astro-city');"
-        "var todaySr=document.getElementById('today-sr');"
-        "var todaySs=document.getElementById('today-ss');"
-        "var todayDl=document.getElementById('today-dl');"
-        "var errEl=document.getElementById('astro-err');"
-        "var upEl=document.getElementById('astro-updated');"
-        "var KEY='pp.astro.loc';"
-        "var def={lat:"
+        "(function(){var root=document.getElementById('astro-widget');if(!root)return;var locEl=document.getElementById('astro-loc-label');var form=document.getElementById('astro-loc-form');var input=document.getElementById('astro-city');var todaySr=document.getElementById('today-sr');var todaySs=document.getElementById('today-ss');var todayDl=document.getElementById('today-dl');var errEl=document.getElementById('astro-err');var upEl=document.getElementById('astro-updated');var KEY='pp.astro.loc';var def={lat:"
         (as-str lat)
         ",lon:"
         (as-str lon)
         ",label:"
         (json-emit (as-str label))
-        "};"
-        "function loadLoc(){try{var s=localStorage.getItem(KEY);if(s)return JSON.parse(s);}catch(e){}return def;}"
-        "function saveLoc(loc){try{localStorage.setItem(KEY,JSON.stringify(loc));}catch(e){}}"
-        "function fmtTime(iso){if(!iso)return '-';var t=String(iso).split('T')[1]||'';return t.slice(0,5);}"
-        "function fmtDur(sec){if(sec==null)return '-';sec=Math.round(sec);var h=Math.floor(sec/3600),m=Math.floor((sec%3600)/60);return h+'h '+m+'m';}"
-        "function fillRow(date,sr,ss,dl){"
-        "var a=document.getElementById('sr-'+date);var b=document.getElementById('ss-'+date);var c=document.getElementById('dl-'+date);"
-        "if(a)a.textContent=fmtTime(sr);if(b)b.textContent=fmtTime(ss);if(c)c.textContent=fmtDur(dl);"
-        "}"
-        "function renderToday(sr,ss,dl){if(todaySr)todaySr.textContent=fmtTime(sr);if(todaySs)todaySs.textContent=fmtTime(ss);if(todayDl)todayDl.textContent=fmtDur(dl);}"
-        "function fail(msg){if(errEl)errEl.textContent=msg;}"
-        "function fetchAstro(loc){"
-        "if(locEl)locEl.textContent=loc.label||(loc.lat+', '+loc.lon);"
-        "var url='https://api.open-meteo.com/v1/forecast?latitude='+encodeURIComponent(loc.lat)"
-        "+'&longitude='+encodeURIComponent(loc.lon)"
-        "+'&daily=sunrise,sunset,daylight_duration&timezone=auto&forecast_days=7';"
-        "fetch(url).then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})"
-        ".then(function(j){var d=j.daily||{};var ts=d.time||[];var sr=d.sunrise||[];var ss=d.sunset||[];var dl=d.daylight_duration||[];"
-        "if(ts.length){renderToday(sr[0],ss[0],dl[0]);}"
-        "for(var i=0;i<ts.length;i++){fillRow(ts[i],sr[i],ss[i],dl[i]);}"
-        "if(upEl)upEl.textContent='via Open-Meteo - local browser fetch';"
-        "})"
-        ".catch(function(e){fail('Sun data fetch failed: '+(e&&e.message?e.message:e));});"
-        "}"
-        "function geocode(q){"
-        "var url='https://geocoding-api.open-meteo.com/v1/search?name='+encodeURIComponent(q)+'&count=1&language=en&format=json';"
-        "return fetch(url).then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})"
-        ".then(function(j){if(!j.results||!j.results.length)throw new Error('place not found');"
-        "var p=j.results[0];var bits=[p.name,p.admin1,p.country_code].filter(Boolean);"
-        "return{lat:p.latitude,lon:p.longitude,label:bits.join(', ')};});"
-        "}"
-        "if(form){form.addEventListener('submit',function(e){"
-        "e.preventDefault();var q=(input&&input.value||'').trim();if(!q)return;"
-        "geocode(q).then(function(loc){saveLoc(loc);fetchAstro(loc);})"
-        ".catch(function(err){fail(err&&err.message?err.message:String(err));});"
-        "});}"
-        "fetchAstro(loadLoc());"
-        "})();"))))
+        "};function loadLoc(){try{var s=localStorage.getItem(KEY);if(s)return JSON.parse(s);}catch(e){}return def;}function saveLoc(loc){try{localStorage.setItem(KEY,JSON.stringify(loc));}catch(e){}}function fmtTime(iso){if(!iso)return '-';var t=String(iso).split('T')[1]||'';return t.slice(0,5);}function fmtDur(sec){if(sec==null)return '-';sec=Math.round(sec);var h=Math.floor(sec/3600),m=Math.floor((sec%3600)/60);return h+'h '+m+'m';}function renderToday(sr,ss,dl){if(todaySr)todaySr.textContent=fmtTime(sr);if(todaySs)todaySs.textContent=fmtTime(ss);if(todayDl)todayDl.textContent=fmtDur(dl);}function fail(msg){if(errEl)errEl.textContent=msg;}function fetchAstro(loc){if(locEl)locEl.textContent=loc.label||(loc.lat+', '+loc.lon);var url='https://api.open-meteo.com/v1/forecast?latitude='+encodeURIComponent(loc.lat)+'&longitude='+encodeURIComponent(loc.lon)+'&daily=sunrise,sunset,daylight_duration&timezone=auto&forecast_days=1';fetch(url).then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();}).then(function(j){var d=j.daily||{};var ts=d.time||[];var sr=d.sunrise||[];var ss=d.sunset||[];var dl=d.daylight_duration||[];if(ts.length){renderToday(sr[0],ss[0],dl[0]);}if(upEl)upEl.textContent='via Open-Meteo - local browser fetch';}).catch(function(e){fail('Sun data fetch failed: '+(e&&e.message?e.message:e));});}function geocode(q){var url='https://geocoding-api.open-meteo.com/v1/search?name='+encodeURIComponent(q)+'&count=1&language=en&format=json';return fetch(url).then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();}).then(function(j){if(!j.results||!j.results.length)throw new Error('place not found');var p=j.results[0];var bits=[p.name,p.admin1,p.country_code].filter(Boolean);return{lat:p.latitude,lon:p.longitude,label:bits.join(', ')};});}if(form){form.addEventListener('submit',function(e){e.preventDefault();var q=(input&&input.value||'').trim();if(!q)return;geocode(q).then(function(loc){saveLoc(loc);fetchAstro(loc);}).catch(function(err){fail(err&&err.message?err.message:String(err));});});}fetchAstro(loadLoc());})();"))))
 
 (define astro/sin-0-pi
   (lambda
     (theta)
-    "Parabolic approximation of sin over 0..pi."
     (let
       ((u (- astro/pi theta)))
       (let
         ((q (* theta u)))
         (let
           ((num (* 16 q)) (den (- (* 5 astro/pi-sq) (* 4 q))))
-          (div num den))))))
+          (div num den)))))
+  "Parabolic approximation of sin over 0..pi.")
 
 (define astro/stdin-probe
   (lambda () "stdin-ok"))
@@ -477,7 +604,6 @@
 (define astro/style
   (lambda
     ()
-    "Inline CSS for the astro widget."
     (html/tag
       "style"
       ""
@@ -491,15 +617,15 @@
           ".astro-card .astro-age{color:var(--muted,#666);font-size:.85rem}"
           ".astro-card .astro-sun-today .astro-sun-line{margin:.15rem 0}"
           ".astro-card .astro-sun-today .lbl{color:var(--muted,#666);display:inline-block;min-width:4.5rem}"
-          ".astro-card table.astro-table{width:100%;border-collapse:collapse;margin-top:1rem;font-size:.92rem}"
-          ".astro-card table.astro-table th,.astro-card table.astro-table td{text-align:left;padding:.3rem .5rem;border-bottom:1px solid var(--shadow,#eee)}"
-          ".astro-card table.astro-table th{background:var(--chrome,#f6f6f6)}"
           ".astro-card .astro-form{display:flex;gap:.35rem;flex-wrap:wrap;margin:.5rem 0}"
           ".astro-card .astro-form input[type=text]{flex:1 1 8rem;min-width:0}"
           ".astro-card .astro-form button{width:auto;min-width:4.5rem}"
           ".astro-card .astro-loc{font-weight:700;margin:.25rem 0}"
           ".astro-card .astro-err{color:var(--err,#800000);font-weight:700}"
           ".astro-card .astro-updated{font-size:.8rem;color:var(--muted,#555);margin-top:.35rem}"
+          ".astro-card .astro-next-phase{margin:.5rem 0;padding-top:.75rem;border-top:1px solid var(--shadow,#eee)}"
+          ".astro-card .astro-next-label{font-weight:700;color:var(--muted,#555);font-size:.85rem}"
+          ".astro-card .astro-next-date{font-size:1.1rem;margin-top:.15rem}"
           ".astro-card .astro-historical{margin-top:1.5rem;padding-top:1rem;border-top:1px solid var(--shadow,#eee)}"
           ".astro-card .astro-historical h3{margin:.25rem 0}"
           ".astro-card .astro-hist-card{display:flex;gap:1.5rem;flex-wrap:wrap;align-items:center;margin-top:.5rem}"
@@ -513,24 +639,31 @@
   29.530588853)
 
 (define astro/td
-  (lambda (content) "A table data cell." (html/tag "td" "" content)))
+  (lambda (content) (html/tag "td" "" content))
+  "A table data cell.")
 
 (define astro/td-id
   (lambda
     (id content)
-    "A table data cell with an id attribute."
     (html/tag
       "td"
       (html/attrs (list (html/attr "id" id)))
-      content)))
+      content))
+  "A table data cell with an id attribute.")
+
+(define astro/test-fn
+  (lambda (x) (+ x 1)))
+
+(define astro/test-val
+  42)
 
 (define astro/th
-  (lambda (content) "A table header cell." (html/tag "th" "" content)))
+  (lambda (content) (html/tag "th" "" content))
+  "A table header cell.")
 
 (define astro/today-card-html
   (lambda
     ()
-    "HTML card with today's moon + sun times."
     (let
       ((d (date-today)))
       (html/div
@@ -559,10 +692,12 @@
                     (html/join
                       (list
                         (html/span (html/attr "class" "lbl") "Daylight ")
-                        (html/span (html/attr "id" "today-dl") "-")))))))))))))
+                        (html/span (html/attr "id" "today-dl") "-"))))))))))))
+  "HTML card with today's moon + sun times.")
 
 (define astro/weekday-name
-  (lambda (i) "Full weekday name by index." (list-ref astro/weekday-names i)))
+  (lambda (i) (list-ref astro/weekday-names i))
+  "Full weekday name by index.")
 
 (define astro/weekday-names
   (list
@@ -575,7 +710,8 @@
     "Saturday"))
 
 (define astro/weekday-short
-  (lambda (i) "Abbreviated weekday name by index." (list-ref astro/weekday-short-names i)))
+  (lambda (i) (list-ref astro/weekday-short-names i))
+  "Abbreviated weekday name by index.")
 
 (define astro/weekday-short-names
   (list
@@ -590,7 +726,6 @@
 (define astro/widget
   (lambda
     ()
-    "Full embeddable sun & moon widget HTML."
     (html/div
       (html/attrs
         (list
@@ -598,7 +733,7 @@
           (html/attr "id" "astro-widget")))
       (html/join
         (list
-          (html/h2 "Sun & Moon")
+          (html/h2 "Moon")
           (html/div
             (html/attrs
               (list
@@ -631,7 +766,7 @@
                       (html/attr "autocomplete" "off"))))
                 (html/button (html/attr "type" "submit") "Set"))))
           (astro/today-card-html)
-          (astro/forecast-table-html)
+          (astro/next-phase-html)
           (html/div
             (html/attrs
               (list
@@ -643,4 +778,3 @@
             astro/default-lat
             astro/default-lon
             astro/default-label))))))
-

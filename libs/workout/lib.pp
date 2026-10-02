@@ -4,7 +4,6 @@
 (define workout/add-exercise-form
   (lambda
     (session-id)
-    "HTML card form to log an exercise into a session."
     (html/div
       (html/attr "class" "card")
       (html/join
@@ -57,18 +56,58 @@
                     (list
                       (html/attr "id" "we-n")
                       (html/attr "placeholder" "optional"))))
-                (html/button (html/attr "type" "submit") "Add")))))))))
+                (html/button (html/attr "type" "submit") "Add"))))))))
+  "HTML card form to log an exercise into a session.")
 
 (define workout/as-int
   (lambda
     (x)
-    "Parse x as an integer, 0 when blank."
-    (let ((s (as-str x))) (if (blank? s) 0 (parse-int s)))))
+    (let ((s (as-str x))) (if (blank? s) 0 (parse-int s))))
+  "Parse x as an integer, 0 when blank.")
+
+(define workout/cal-delete-ksk1-from
+  (lambda
+    (from-day)
+    (list/foldl
+      (lambda
+        (acc row)
+        (let
+          ((f (workout/row-fields row))
+            (rid (workout/row-id row)))
+          (if
+            (workout/str-lt? (workout/field f "day") from-day)
+            acc
+            (if
+              (string-eq
+                (nth (string-split (workout/field f "title") " ") 0)
+                "KSK1")
+              (seq (delete (quote calendar-event) rid) acc)
+              acc))))
+      ()
+      (rows (quote calendar-event) 500)))
+  "Delete KSK1 calendar events dated from-day or later.")
+
+(define workout/capture-facts
+  (lambda
+    (program session-id)
+    (let*
+      ((p (as-str program))
+        (doc (workout/parse-session-doc session-id)))
+      (cond
+        ((null? doc) ())
+        ((string-eq p "run5k")
+          (workout/run5k-capture-facts session-id doc))
+        ((string-eq p "sct") (workout/sct-facts session-id doc))
+        (else ()))))
+  "Project the prescription doc into facts (runs before gates).")
+
+(define workout/car-or-null
+  (lambda (xs) (if (null? xs) () (car xs)))
+  "First element or ().")
 
 (define workout/char-rank
   (lambda
     (c)
-    "Rank of a single char for custom string ordering."
     (let
       ((s (as-str c)))
       (cond
@@ -83,12 +122,142 @@
         ((string-eq s "8") 8)
         ((string-eq s "9") 9)
         ((string-eq s "-") 10)
-        (else 50)))))
+        (else 50))))
+  "Rank of a single char for custom string ordering.")
+
+(define workout/chart-data-js
+  (lambda
+    ()
+    (let*
+      ((all (workout/session-list ""))
+        (ksk (list/filter workout/ksk1? all))
+        (points (list/map workout/chart-point-js ksk)))
+      (string-append "[" (workout/join-csv points) "]"))))
+
+(define workout/chart-page
+  (lambda
+    ()
+    (html/page
+      (list
+        (html/h1 "Workout Progress")
+        (html/p*
+          (html/attr "class" "muted")
+          "KSK1 Snatch - reps per hand per session")
+        (html/a "/workout" "<- Back to Workout")
+        (html/div
+          (html/attr "style" "max-width:760px;margin:1em 0")
+          (html/tag "canvas" (html/attr "id" "workoutChart") ""))
+        (html/div
+          (html/attr "style" "margin:1em 0;font-size:14px")
+          "<span style=\"color:#3b82f6\">&#9632;</span> Day 1 &nbsp; <span style=\"color:#10b981\">&#9632;</span> Day 2 &nbsp; <span style=\"color:#f59e0b\">&#9632;</span> Day 3")
+        (html/tag
+          "script"
+          (html/attr
+            "src"
+            "https://cdn.jsdelivr.net/npm/chart.js@4.4.1")
+          "")
+        (html/tag
+          "script"
+          ""
+          (string-append
+            "const sessions="
+            (workout/chart-data-js)
+            ";"
+            "sessions.sort(function(a,b){return a.date.localeCompare(b.date);});"
+            "const dc={1:'#3b82f6',2:'#10b981',3:'#f59e0b'};"
+            "const labels=sessions.map(function(s){const d=new Date(s.date);return d.toLocaleDateString('en-US',{month:'short',day:'numeric'});});"
+            "const colors=sessions.map(function(s){return dc[s.day]||'#999';});"
+            "new Chart(document.getElementById('workoutChart'),{"
+            "type:'bar',"
+            "data:{labels:labels,datasets:[{label:'Reps per hand',data:sessions.map(function(s){return s.reps;}),backgroundColor:colors,borderRadius:4}]},"
+            "options:{responsive:true,plugins:{legend:{display:false},tooltip:{callbacks:{afterLabel:function(c){const s=sessions[c.dataIndex];return ['Day '+s.day+' ('+s.pattern+')',s.notes];}}}},scales:{y:{beginAtZero:true,title:{display:true,text:'Reps per hand'}},x:{title:{display:true,text:'Session date'}}}}"
+            "});"))))))
+
+(define workout/chart-point-js
+  (lambda
+    (row)
+    (let*
+      ((f (workout/row-fields row))
+        (doc (dict-get f "doc"))
+        (prog (dict-get doc "progress"))
+        (params (dict-get doc "params"))
+        (date (as-str (dict-get f "date")))
+        (reps
+          (as-str (workout/as-int (dict-get prog "reps_l"))))
+        (phase
+          (as-str (workout/as-int (dict-get params "phase"))))
+        (day (as-str (workout/as-int (dict-get params "day"))))
+        (pattern
+          (workout/js-escape (dict-get params "pattern")))
+        (notes (workout/js-escape (dict-get f "notes"))))
+      (string-append
+        "{date:\""
+        date
+        "\","
+        "reps:"
+        reps
+        ","
+        "phase:"
+        phase
+        ","
+        "day:"
+        day
+        ","
+        "pattern:\""
+        pattern
+        "\","
+        "notes:\""
+        notes
+        "\"}"))))
+
+(define workout/col-lower
+  (lambda
+    (col)
+    (let*
+      ((s (as-str col))
+        (pair (string-split s "x"))
+        (set-part (if (null? pair) "0" (nth pair 0)))
+        (rep-part (if (null? pair) "0" (nth pair 1)))
+        (set-tok (string-split set-part "-"))
+        (sets (workout/as-int (nth set-tok 0)))
+        (rep-clean
+          (if
+            (string-eq
+              "s"
+              (substring
+                rep-part
+                (- (string-length rep-part) 1)
+                (string-length rep-part)))
+            (substring rep-part 0 (- (string-length rep-part) 1))
+            rep-part))
+        (rep-tok (string-split rep-clean "-"))
+        (reps (workout/as-int (nth rep-tok 0))))
+      (* sets reps)))
+  "Lower-bound total of a column like 2-3x5-10 or 3x30s.")
+
+(define workout/completed-count
+  (lambda
+    (program)
+    (list/foldl
+      (lambda
+        (acc row)
+        (if
+          (string-eq
+            (workout/field (workout/row-fields row) "state")
+            "complete")
+          (+ acc 1)
+          acc))
+      0
+      (find-rows
+        (quote workout-session)
+        "program"
+        (as-str program)
+        500)))
+  "Number of completed sessions for a program.")
 
 (define workout/continue-card
   (lambda
     ()
-    "HTML card to resume any in-progress session."
     (let
       ((id (workout/session-in-progress ())))
       (if
@@ -120,19 +289,17 @@
                             (workout/ksk-program? prog)
                             (html/a run-href "Resume run")
                             "")
-                          (if
-                            (workout/ksk-program? prog)
-                            (html/text " · ")
-                            "")
-                          (html/a sess-href "Open session"))))))))))))))
+                          (if (workout/ksk-program? prog) (html/text " · ") "")
+                          (html/a sess-href "Open session")))))))))))))
+  "HTML card to resume any in-progress session.")
 
 (define workout/date-ge?
-  (lambda (a b) "True when date a is on/after date b." (string>=? (as-str a) (as-str b))))
+  (lambda (a b) (string>=? (as-str a) (as-str b)))
+  "True when date a is on/after date b.")
 
 (define workout/date-in-range?
   (lambda
     (day from to)
-    "True when day is within the optional from/to range."
     (let
       ((d (as-str day)))
       (if
@@ -143,21 +310,24 @@
               (if (blank? (as-str from)) #t (workout/date-ge? d from)))
             (ok-to
               (if (blank? (as-str to)) #t (workout/date-le? d to))))
-          (if ok-from ok-to #f))))))
+          (if ok-from ok-to #f)))))
+  "True when day is within the optional from/to range.")
 
 (define workout/date-le?
-  (lambda (a b) "True when date a is on/before date b." (string<=? (as-str a) (as-str b))))
+  (lambda (a b) (string<=? (as-str a) (as-str b)))
+  "True when date a is on/before date b.")
 
 (define workout/doc-params
-  (lambda (doc) "Params sub-dict of a session doc." (dict-get doc "params")))
+  (lambda (doc) (dict-get doc "params"))
+  "Params sub-dict of a session doc.")
 
 (define workout/doc-progress
-  (lambda (doc) "Progress sub-dict of a session doc." (dict-get doc "progress")))
+  (lambda (doc) (dict-get doc "progress"))
+  "Progress sub-dict of a session doc.")
 
 (define workout/empty-doc
   (lambda
     (program intensity)
-    "Fresh empty session doc for a program and intensity."
     (dict-set*
       "{}"
       (list
@@ -170,13 +340,14 @@
         "progress"
         "{}"
         "blocks"
-        "[]"))))
+        "[]")))
+  "Fresh empty session doc for a program and intensity.")
 
 (define workout/exercise-delete
   (lambda
     (id)
-    "Delete a workout-exercise row by id."
-    (delete (quote workout-exercise) (as-str id))))
+    (delete (quote workout-exercise) (as-str id)))
+  "Delete a workout-exercise row by id.")
 
 (define workout/exercise-fields
   (lambda
@@ -187,7 +358,6 @@
       reps
       notes
       detail)
-    "Dict of fields for a workout-exercise row."
     (dict-set*
       "{}"
       (list
@@ -204,12 +374,12 @@
         "notes"
         (as-str notes)
         "detail"
-        (as-str detail)))))
+        (as-str detail))))
+  "Dict of fields for a workout-exercise row.")
 
 (define workout/exercise-li
   (lambda
     (row)
-    "HTML list item for an exercise row, with delete form."
     (let
       ((id (workout/row-id row)) (f (workout/row-fields row)))
       (let
@@ -234,8 +404,7 @@
               (list
                 (html/div
                   ""
-                  (html/strong
-                    (string-append ex " — " r " reps" load)))
+                  (html/strong (string-append ex " — " r " reps" load)))
                 (if
                   (blank? n)
                   ""
@@ -249,7 +418,8 @@
                       (html/hidden "action" "delete-exercise")
                       (html/hidden "id" sid)
                       (html/hidden "exercise_id" id)
-                      (html/button (html/attr "type" "submit") "Delete"))))))))))))
+                      (html/button (html/attr "type" "submit") "Delete")))))))))))
+  "HTML list item for an exercise row, with delete form.")
 
 (define workout/exercise-log
   (lambda
@@ -260,7 +430,6 @@
       reps
       notes
       detail)
-    "Create a workout-exercise row; () when the name is blank."
     (let
       ((name (workout/normalize-exercise exercise)))
       (if
@@ -275,12 +444,12 @@
             unit
             (if (blank? (as-str reps)) "0" (as-str reps))
             (if (null? notes) "" notes)
-            (if (null? detail) "" detail)))))))
+            (if (null? detail) "" detail))))))
+  "Create a workout-exercise row; () when the name is blank.")
 
 (define workout/exercise-names
   (lambda
     (limit)
-    "Distinct normalized exercise names, up to limit."
     (let
       ((lim (if (null? limit) 100 (workout/as-int limit))))
       (list/foldl
@@ -293,12 +462,12 @@
               acc
               (if (workout/name-seen? acc n) acc (cons n acc)))))
         ()
-        (rows (quote workout-exercise) lim)))))
+        (rows (quote workout-exercise) lim))))
+  "Distinct normalized exercise names, up to limit.")
 
 (define workout/exercises
   (lambda
     (session-id)
-    "Exercise rows belonging to a session."
     (let
       ((sid (as-str session-id)))
       (list/filter
@@ -307,20 +476,120 @@
           (string-eq
             (workout/field (workout/row-fields row) "session_id")
             sid))
-        (rows (quote workout-exercise) 500)))))
+        (rows (quote workout-exercise) 500))))
+  "Exercise rows belonging to a session.")
 
 (define workout/field
   (lambda
     (fields key)
-    "Field value from a fields dict, \"\" when absent."
     (let
       ((v (dict-get fields (as-str key))))
-      (if (null? v) "" (as-str v)))))
+      (if (null? v) "" (as-str v))))
+  "Field value from a fields dict, \"\" when absent.")
+
+(define workout/gate-assert
+  (lambda
+    (program key passed session_id notes)
+    (create
+      (quote workout-gate)
+      (workout/gate-fields
+        program
+        key
+        passed
+        session_id
+        ""
+        notes)))
+  "Record an asserted gate in the ledger. Returns the new row id.")
+
+(define workout/gate-eval
+  (lambda
+    (program session-id)
+    (cond
+      ((string-eq (as-str program) "toy")
+        (workout/toy-gates session-id (workout/state "toy")))
+      ((string-eq (as-str program) "ksf")
+        (workout/ksf-gates session-id (workout/state "ksf")))
+      ((string-eq (as-str program) "run5k")
+        (workout/run5k-gates session-id (workout/state "run5k")))
+      ((string-eq (as-str program) "sct")
+        (workout/sct-gates session-id (workout/state "sct")))
+      ((string-eq (as-str program) "stretch")
+        (workout/stretch-gates
+          session-id
+          (workout/state "stretch")))
+      (else ())))
+  "Evaluate program gates after a completed session.")
+
+(define workout/gate-fields
+  (lambda
+    (program key passed session_id date notes)
+    (dict-set*
+      "{}"
+      (list
+        "program"
+        (as-str program)
+        "key"
+        (as-str key)
+        "passed"
+        (as-str passed)
+        "session_id"
+        (if (null? session_id) "" (as-str session_id))
+        "date"
+        (if (null? date) (workout/today) (as-str date))
+        "notes"
+        (if (null? notes) "" (as-str notes)))))
+  "Dict of fields for a workout-gate row.")
+
+(define workout/gate-status
+  (lambda
+    (program)
+    (dict-set*
+      "{}"
+      (list
+        "program"
+        (as-str program)
+        "state"
+        (workout/state program)
+        "gates"
+        (workout/gates-summary program))))
+  "Cursor + gate truth for an agent or the UI (flat dict).")
+
+(define workout/gates
+  (lambda
+    (program)
+    (find-rows
+      (quote workout-gate)
+      "program"
+      (as-str program)
+      100))
+  "Gate rows for a program (max 100).")
+
+(define workout/gates-summary
+  (lambda
+    (program)
+    (list/foldl
+      (lambda
+        (acc row)
+        (let
+          ((f (workout/row-fields row)))
+          (let
+            ((entry
+              (string-append
+                (workout/field f "key")
+                "="
+                (workout/field f "passed")
+                (if
+                  (blank? (workout/field f "date"))
+                  ""
+                  (string-append " " (workout/field f "date"))))))
+            (if (blank? acc) entry (string-append entry "; " acc)))))
+      ""
+      (workout/gates program)))
+  "Gate ledger rendered as one string (key=passed @date).")
 
 (define workout/handle-home-post
   (lambda
     ()
-    "Route the home page POST to start or start-ksk."
     (let
       ((action (as-str (request-param "action"))))
       (cond
@@ -348,12 +617,34 @@
               (redirect "/workout")
               (redirect
                 (string-append "/workout/run?id=" (as-str id))))))
-        (else (redirect "/workout"))))))
+        (else (redirect "/workout")))))
+  "Route the home page POST to start or start-ksk.")
+
+(define workout/handle-ksf-run-post
+  (lambda
+    (id action)
+    (let
+      ((sets (workout/as-int (workout/ksf-sets id))))
+      (cond
+        ((string-eq action "ksf-step")
+          (let
+            ((next (+ sets 1)))
+            (seq
+              (workout/ksf-progress-put id next)
+              (redirect
+                (string-append "/workout/run?id=" (as-str id))))))
+        ((string-eq action "ksf-end")
+          (seq
+            (workout/ksf-progress-put id sets)
+            (workout/session-complete id "ended by runner")))
+        (else
+          (redirect
+            (string-append "/workout/run?id=" (as-str id)))))))
+  "KSF runner POST routing.")
 
 (define workout/handle-log-post
   (lambda
     ()
-    "Route the quick-log POST to quick-log or quick-walk."
     (let
       ((action (as-str (request-param "action"))))
       (cond
@@ -398,12 +689,12 @@
                 (request-param "notes"))))
             (redirect
               (string-append "/workout/session?id=" (as-str sid)))))
-        (else (redirect "/workout/log"))))))
+        (else (redirect "/workout/log")))))
+  "Route the quick-log POST to quick-log or quick-walk.")
 
 (define workout/handle-run-post
   (lambda
     ()
-    "Route the run page POST to ksk-step/capture/abandon."
     (let
       ((action (as-str (request-param "action")))
         (id (as-str (request-param "id"))))
@@ -416,18 +707,16 @@
           (seq
             (workout/ksk-capture id)
             (redirect (string-append "/workout/session?id=" id))))
-        ((or (string-eq action "ksf-step") (string-eq action "ksf-end"))
-          (workout/handle-ksf-run-post id action))
         ((string-eq action "abandon")
           (seq
             (workout/session-abandon id)
             (redirect (string-append "/workout/session?id=" id))))
-        (else (redirect "/workout"))))))
+        (else (redirect "/workout")))))
+  "Route the run page POST to ksk-step/capture/abandon.")
 
 (define workout/handle-session-post
   (lambda
     ()
-    "Route the session page POST to the matching action."
     (let
       ((action (as-str (request-param "action")))
         (id (as-str (request-param "id"))))
@@ -469,12 +758,12 @@
             (redirect (string-append "/workout/session?id=" id))))
         ((string-eq action "delete-session")
           (seq (workout/session-delete id) (redirect "/workout")))
-        (else (redirect "/workout"))))))
+        (else (redirect "/workout")))))
+  "Route the session page POST to the matching action.")
 
 (define workout/history
   (lambda
     (from-date to-date limit)
-    "Sessions whose date falls in the range, newest first."
     (let
       ((lim (if (null? limit) 50 (workout/as-int limit))))
       (list/filter
@@ -484,24 +773,24 @@
             (workout/session-date (workout/row-fields row))
             from-date
             to-date))
-        (workout/session-list lim)))))
+        (workout/session-list lim))))
+  "Sessions whose date falls in the range, newest first.")
 
 (define workout/home-main
   (lambda
     ()
-    "HTML main content of the workout home page."
     (html/div
       (html/attr "id" "workout-main")
       (html/join
         (list
           (workout/continue-card)
           (workout/start-bar)
-          (workout/recent-list))))))
+          (workout/recent-list)))))
+  "HTML main content of the workout home page.")
 
 (define workout/home-page
   (lambda
     ()
-    "Home page, handling POST or rendering the HTML."
     (if
       (string-eq (request-method) "POST")
       (workout/handle-home-post)
@@ -512,12 +801,12 @@
             (html/attr "class" "muted")
             (html/text
               "Training journal — free log + King-Sized Killer (snatch)."))
-          (workout/home-main))))))
+          (workout/home-main)))))
+  "Home page, handling POST or rendering the HTML.")
 
 (define workout/insert-session-desc
   (lambda
     (sorted row)
-    "Insert a session row into a date-descending sorted list."
     (if
       (null? sorted)
       (list row)
@@ -530,12 +819,23 @@
           (cons row sorted)
           (cons
             (car sorted)
-            (workout/insert-session-desc (cdr sorted) row)))))))
+            (workout/insert-session-desc (cdr sorted) row))))))
+  "Insert a session row into a date-descending sorted list.")
+
+(define workout/join-csv
+  (lambda
+    (xs)
+    (if
+      (null? xs)
+      ""
+      (if
+        (null? (cdr xs))
+        (car xs)
+        (string-append (car xs) "," (workout/join-csv (cdr xs)))))))
 
 (define workout/join-nums
   (lambda
     (xs)
-    "Join a list of numbers into a space-separated string."
     (list/foldl
       (lambda
         (acc x)
@@ -544,7 +844,451 @@
           (as-str x)
           (string-append acc " " (as-str x))))
       ""
-      xs)))
+      xs))
+  "Join a list of numbers into a space-separated string.")
+
+(define workout/js-escape
+  (lambda
+    (s)
+    (string-replace
+      (string-replace (as-str s) "\\" "\\\\")
+      "\""
+      "\\\"")))
+
+(define workout/ksf-bell-for
+  (lambda
+    (st deload)
+    (let
+      ((b (workout/field st "bell")))
+      (if
+        (blank? b)
+        b
+        (if
+          (string-eq (as-str deload) "true")
+          (as-str
+            (-
+              (workout/as-int b)
+              (if (string-eq "lb" (workout/field st "unit")) 9 4)))
+          b))))
+  "Bell: one size lighter on deloads.")
+
+(define workout/ksf-cleared?
+  (lambda
+    (session-id)
+    (>= (workout/ksf-duration-min session-id) 30))
+  "Clears at >= 30 min.")
+
+(define workout/ksf-configure
+  (lambda
+    (bell unit)
+    (workout/state-put
+      "ksf"
+      (dict-set*
+        "{}"
+        (list
+          "phase"
+          "A"
+          "pattern"
+          "CJ"
+          "bell"
+          (as-str bell)
+          "unit"
+          (workout/normalize-unit unit)
+          "done"
+          "0"
+          "stalls"
+          "0"
+          "since_deload"
+          "0"
+          "deload_left"
+          "0"))
+      "ksf configured after RM test"))
+  "Initial ksf state after the LC RM test (weaker arm 6-12RM).")
+
+(define workout/ksf-doc
+  (lambda
+    (phase pattern day bell unit deload)
+    (dict-set*
+      "{}"
+      (list
+        "program"
+        "ksf"
+        "phase"
+        (as-str phase)
+        "pattern"
+        (as-str pattern)
+        "day"
+        (as-str day)
+        "params"
+        (dict-set*
+          "{}"
+          (list
+            "bell"
+            (as-str bell)
+            "unit"
+            (as-str unit)
+            "cadence_sec"
+            "30"
+            "target_min"
+            "30"
+            "deload"
+            (if deload "true" "false")))
+        "progress"
+        (dict-set* "{}" (list "sets_done" "0" "ended" ""))
+        "blocks"
+        "[]")))
+  "Session doc. Day: LCCJ (A) / C / J (B).")
+
+(define workout/ksf-duration-min
+  (lambda
+    (session-id)
+    (list/foldl
+      (lambda
+        (acc row)
+        (let
+          ((f (workout/row-fields row)))
+          (if
+            (string-eq (workout/field f "exercise") "Duration")
+            (+ acc (workout/as-int (workout/field f "reps")))
+            acc)))
+      0
+      (workout/exercises session-id)))
+  "Duration in minutes from the Duration fact.")
+
+(define workout/ksf-duration-sum
+  (lambda
+    (session-id)
+    (list/foldl
+      (lambda
+        (acc row)
+        (let
+          ((f (workout/row-fields row)))
+          (if
+            (string-eq (workout/field f "exercise") "Duration")
+            (+ acc (workout/as-int (workout/field f "reps")))
+            acc)))
+      0
+      (workout/exercises session-id)))
+  "Duration in minutes from any Duration exercise rows (legacy convention).")
+
+(define workout/ksf-gates
+  (lambda
+    (session-id state)
+    (let*
+      ((st
+          (workout/or-dict state (workout/ksf-state-or-default)))
+        (doc (workout/parse-session-doc session-id))
+        (was-deload
+          (string-eq
+            "true"
+            (workout/pget (workout/doc-params doc) "deload")))
+        (cleared (workout/ksf-cleared? session-id))
+        (phase (workout/field st "phase"))
+        (pattern (workout/field st "pattern"))
+        (idx (workout/ksf-index pattern (workout/ksf-ladder)))
+        (done (+ 1 (workout/as-int (workout/field st "done")))))
+      (let*
+        ((cleared-next
+            (cond
+              (was-deload pattern)
+              ((string-eq "A" phase)
+                (cond
+                  ((not cleared) pattern)
+                  ((< (+ idx 1) (workout/len (workout/ksf-ladder)))
+                    (nth (workout/ksf-ladder) (+ idx 1)))
+                  (else "B:P3")))
+              ((string-eq "B" phase)
+                (if
+                  cleared
+                  (let
+                    ((n (workout/ksf-section-reps pattern)))
+                    (if
+                      (< n 5)
+                      (string-append "P" (as-str (+ n 1)))
+                      pattern))
+                  pattern))
+              (else pattern)))
+          (flip-to-b
+            (and
+              (not cleared)
+              (not (string-eq "B" phase))
+              (>=
+                (+ 1 (workout/as-int (workout/field st "stalls")))
+                6)))
+          (next-phase
+            (if
+              (string-eq "A" phase)
+              (cond
+                (flip-to-b "B")
+                ((string-eq "B:P3" cleared-next) "B")
+                (else "A"))
+              phase))
+          (next-pattern
+            (cond
+              (flip-to-b "P3")
+              ((string-eq "B:P3" cleared-next) "P3")
+              (else cleared-next)))
+          (next-stalls
+            (if
+              cleared
+              0
+              (+ 1 (workout/as-int (workout/field st "stalls")))))
+          (since-d
+            (workout/as-int (workout/field st "since_deload")))
+          (deload-left
+            (workout/as-int (workout/field st "deload_left")))
+          (sched
+            (if
+              was-deload
+              (list since-d deload-left)
+              (if
+                (>= (+ since-d 1) 8)
+                (list 0 2)
+                (list (+ since-d 1) deload-left))))
+          (note
+            (cond
+              (flip-to-b "stalled: retest LC RM, switch to Plan B")
+              ((string-eq "B:P3" cleared-next)
+                "ladder complete: Plan A yields to Plan B")
+              ((and cleared (not (string-eq pattern next-pattern)))
+                "cleared: 30 min, pattern advanced")
+              (cleared "cleared: 30 min")
+              (else "short session: talk test ended the day")))
+          (state2
+            (dict-set*
+              "{}"
+              (list
+                "phase"
+                next-phase
+                "pattern"
+                next-pattern
+                "bell"
+                (workout/field st "bell")
+                "unit"
+                (workout/field st "unit")
+                "done"
+                (as-str done)
+                "stalls"
+                (as-str next-stalls)
+                "since_deload"
+                (as-str (nth sched 0))
+                "deload_left"
+                (as-str (nth sched 1))))))
+        (seq (workout/state-put "ksf" state2 note) state2))))
+  "ksf gates: clear (>=30min) advances Plan A; 6 shorts flip to B.")
+
+(define workout/ksf-index
+  (lambda
+    (needle haystack)
+    (workout/ksf-index-from needle haystack 0))
+  "0-based index, or -1.")
+
+(define workout/ksf-index-from
+  (lambda
+    (needle haystack i)
+    (cond
+      ((null? haystack) -1)
+      ((string-eq (as-str (car haystack)) (as-str needle)) i)
+      (else
+        (workout/ksf-index-from needle (cdr haystack) (+ i 1))))))
+
+(define workout/ksf-ladder
+  (lambda () (list "CJ" "CJC" "CJCJ" "CJCJC" "CJCJCJ"))
+  "Plan A rep patterns per 30s set, in advance order.")
+
+(define workout/ksf-progress-put
+  (lambda
+    (id sets)
+    (let
+      ((doc (workout/parse-session-doc id)))
+      (unless
+        (null? doc)
+        (let*
+          ((old-progress (workout/doc-progress doc))
+            (new-progress
+              (dict-set*
+                old-progress
+                (list
+                  "sets_done"
+                  (as-str sets)
+                  "elapsed_min"
+                  (as-str (div (* (workout/as-int sets) 30) 60)))))
+            (doc2 (dict-set* doc (list "progress" new-progress))))
+          (workout/ksk-save-doc id doc2)))))
+  "Persist sets_done into doc.progress.")
+
+(define workout/ksf-run-main
+  (lambda
+    (id)
+    (let
+      ((f (workout/session id)))
+      (if
+        (null? f)
+        (html/div "" (html/p "Session not found."))
+        (let*
+          ((doc (workout/parse-session-doc id))
+            (day (dict-get doc "day"))
+            (pattern (dict-get doc "pattern"))
+            (params (workout/doc-params doc))
+            (bell (workout/pget params "bell"))
+            (unit (workout/pget params "unit"))
+            (deload (workout/pget params "deload"))
+            (sets
+              (workout/as-int
+                (dict-get (workout/doc-progress doc) "sets_done")))
+            (target 60)
+            (arm (if (= 0 (mod sets 2)) "L" "R")))
+          (html/div
+            (html/attr "class" "ksk-run")
+            (html/join
+              (list
+                (html/h2 "KSF run")
+                (html/p*
+                  ""
+                  (html/text
+                    (string-append
+                      "Plan "
+                      (as-str (dict-get doc "phase"))
+                      " - pattern "
+                      (as-str pattern)
+                      " - "
+                      bell
+                      unit
+                      (if
+                        (string-eq "true" (as-str deload))
+                        " - DELOAD (one bell lighter)"
+                        ""))))
+                (html/p*
+                  ""
+                  (html/text
+                    (string-append
+                      "Weak arm (L) on the minute, strong (R) 30s in. Sets done: "
+                      (as-str sets)
+                      " / "
+                      (as-str target))))
+                (html/div
+                  (html/attrs
+                    (list
+                      (html/attr "id" "ksf-timer")
+                      (html/attr "class" "ksk-timer")
+                      (html/attr "data-sid" (as-str id))))
+                  "")
+                (html/p*
+                  ""
+                  (html/text (string-append "This set: " arm " arm")))
+                (html/form
+                  "POST"
+                  "/workout/run"
+                  (html/attr "style" "display:inline")
+                  (html/join
+                    (list
+                      (html/hidden "action" "ksf-step")
+                      (html/hidden "id" (as-str id))
+                      (html/button
+                        (html/attr "type" "submit")
+                        "Set done (+1)"))))
+                (html/text " ")
+                (html/form
+                  "POST"
+                  "/workout/run"
+                  (html/attr "style" "display:inline")
+                  (html/join
+                    (list
+                      (html/hidden "action" "ksf-end")
+                      (html/hidden "id" (as-str id))
+                      (html/button
+                        (html/attr "type" "submit")
+                        "End - talk test done"))))
+                (workout/timer-script 0.5)
+                (html/p*
+                  ""
+                  (html/a
+                    (string-append "/workout/session?id=" (as-str id))
+                    "Back to session")))))))))
+  "Live KSF runner.")
+
+(define workout/ksf-section-reps
+  (lambda
+    (pattern)
+    (if
+      (blank? pattern)
+      -1
+      (if
+        (string-eq "P" (substring (as-str pattern) 0 1))
+        (parse-int (substring (as-str pattern) 1 2))
+        -1)))
+  "P3/P4/P5 -> 3/4/5; -1 otherwise.")
+
+(define workout/ksf-sets
+  (lambda
+    (id)
+    (dict-get
+      (workout/doc-progress (workout/parse-session-doc id))
+      "sets_done"))
+  "Current sets_done (0 when unset).")
+
+(define workout/ksf-state-or-default
+  (lambda
+    ()
+    (workout/or-dict
+      (workout/state "ksf")
+      (dict-set*
+        "{}"
+        (list
+          "phase"
+          "A"
+          "pattern"
+          "CJ"
+          "bell"
+          ""
+          "unit"
+          "kg"
+          "done"
+          "0"
+          "stalls"
+          "0"
+          "since_deload"
+          "0"
+          "deload_left"
+          "0"))))
+  "ksf state dict, or fresh default.")
+
+(define workout/ksf-suggest
+  (lambda
+    (date)
+    (let*
+      ((st (workout/ksf-state-or-default))
+        (parts (string-split (as-str date) "-"))
+        (wd
+          (if
+            (null? parts)
+            -1
+            (date-weekday
+              (parse-int (nth parts 0))
+              (parse-int (nth parts 1))
+              (parse-int (nth parts 2)))))
+        (on-day (workout/member? wd (workout/ksf-weekdays)))
+        (deload
+          (not (string-eq "0" (workout/field st "deload_left"))))
+        (phase (if on-day (workout/field st "phase") "OFF"))
+        (day
+          (cond
+            ((not on-day) "OFF")
+            ((string-eq "A" phase) "LCCJ")
+            ((= wd 5) "C")
+            (else "J"))))
+      (workout/ksf-doc
+        phase
+        (workout/field st "pattern")
+        day
+        (workout/ksf-bell-for st deload)
+        (workout/field st "unit")
+        deload)))
+  "ksf doc from state. Pure.")
+
+(define workout/ksf-weekdays
+  (lambda () (list 5 0))
+  "2-day variant: Friday and Sunday.")
 
 (define workout/ksk-build-doc
   (lambda
@@ -558,7 +1302,6 @@
       rm-total
       pct
       per-hand)
-    "Build the KSK session document dict from plan params."
     (dict-set*
       "{}"
       (list
@@ -615,24 +1358,24 @@
             "elapsed_sec"
             "0"))
         "blocks"
-        "[]"))))
+        "[]")))
+  "Build the KSK session document dict from plan params.")
 
 (define workout/ksk-capture
   (lambda
     (session-id)
-    "Write KSK facts then complete the session."
     (let
       ((doc (workout/parse-session-doc session-id)))
       (seq
         (unless
           (null? doc)
           (workout/ksk-upsert-facts session-id doc))
-        (workout/session-complete session-id "")))))
+        (workout/session-complete session-id ""))))
+  "Write KSK facts then complete the session.")
 
 (define workout/ksk-current-target
   (lambda
     (doc)
-    "Current per-hand snatch target from a session doc."
     (let*
       ((params (workout/doc-params doc))
         (prog (workout/doc-progress doc))
@@ -651,12 +1394,12 @@
           ((rungs (workout/pattern-rungs pat))
             (n (workout/len rungs))
             (i (if (< ri 0) 0 (if (>= ri n) 0 ri))))
-          (if (null? rungs) 0 (workout/as-int (nth rungs i))))))))
+          (if (null? rungs) 0 (workout/as-int (nth rungs i)))))))
+  "Current per-hand snatch target from a session doc.")
 
 (define workout/ksk-label
   (lambda
     (doc)
-    "Human-readable title for a KSK session doc."
     (let
       ((params (workout/doc-params doc))
         (prog (as-str (dict-get doc "program"))))
@@ -681,23 +1424,23 @@
           (if (blank? unit) "" (string-append " " unit))
           " · "
           cap
-          "m")))))
+          "m"))))
+  "Human-readable title for a KSK session doc.")
 
 (define workout/ksk-program?
   (lambda
     (p)
-    "True when p names a KSK program (ksk1/2/3)."
     (let
       ((s (as-str p)))
       (if
         (string-eq s "ksk1")
         #t
-        (if (string-eq s "ksk2") #t (string-eq s "ksk3"))))))
+        (if (string-eq s "ksk2") #t (string-eq s "ksk3")))))
+  "True when p names a KSK program (ksk1/2/3).")
 
 (define workout/ksk-replace-side
   (lambda
     (sid name load unit reps)
-    "Replace the exercise rows for one side with the given totals."
     (seq
       (list/map
         (lambda
@@ -720,12 +1463,12 @@
           unit
           reps
           ""
-          "")))))
+          ""))))
+  "Replace the exercise rows for one side with the given totals.")
 
 (define workout/ksk-save-doc
   (lambda
     (id doc)
-    "Persist doc back onto the session, preserving other fields."
     (let
       ((cur (workout/session id)))
       (if
@@ -740,7 +1483,9 @@
             (workout/session-state cur)
             (workout/session-notes cur)
             doc
-            (workout/field cur "duration_sec")))))))
+            (workout/field cur "duration_sec")
+            (workout/field cur "author"))))))
+  "Persist doc back onto the session, preserving other fields.")
 
 (define workout/ksk-start
   (lambda
@@ -751,7 +1496,6 @@
       load
       unit
       rm-total)
-    "Create an in-progress KSK session; () when the plan is unknown."
     (let*
       ((p (as-str program))
         (doc
@@ -771,12 +1515,12 @@
       (if
         (null? doc)
         ()
-        (workout/session-create-with-doc p inten doc)))))
+        (workout/session-create-with-doc p inten doc))))
+  "Create an in-progress KSK session; () when the plan is unknown.")
 
 (define workout/ksk-step
   (lambda
     (session-id)
-    "Advance one side of a KSK run and persist the new progress."
     (let
       ((doc (workout/parse-session-doc session-id)))
       (if
@@ -841,18 +1585,18 @@
           (seq
             (workout/ksk-save-doc session-id doc2)
             (workout/ksk-upsert-facts session-id doc2)
-            doc2))))))
+            doc2)))))
+  "Advance one side of a KSK run and persist the new progress.")
 
 (define workout/ksk-time-cap
   (lambda
     (program)
-    "Time cap in minutes for a KSK program (15 for ksk3, else 20)."
-    (if (string-eq (as-str program) "ksk3") 15 20)))
+    (if (string-eq (as-str program) "ksk3") 15 20))
+  "Time cap in minutes for a KSK program (15 for ksk3, else 20).")
 
 (define workout/ksk-upsert-facts
   (lambda
     (session-id doc)
-    "Write the current L/R snatch totals as exercise rows."
     (let
       ((params (workout/doc-params doc))
         (prog (workout/doc-progress doc)))
@@ -864,22 +1608,22 @@
           (sid (as-str session-id)))
         (seq
           (workout/ksk-replace-side sid "Snatch L" load unit rl)
-          (workout/ksk-replace-side sid "Snatch R" load unit rr))))))
+          (workout/ksk-replace-side sid "Snatch R" load unit rr)))))
+  "Write the current L/R snatch totals as exercise rows.")
 
 (define workout/ksk1-next
   (lambda
     (phase week day)
-    "Next (phase week day) tuple, or () when the program completes."
     (cond
       ((< day 3) (list phase week (+ day 1)))
       ((< week 3) (list phase (+ week 1) 1))
       ((< phase 3) (list (+ phase 1) 1 1))
-      (else (list)))))
+      (else (list))))
+  "Next (phase week day) tuple, or () when the program completes.")
 
 (define workout/ksk1-pattern
   (lambda
     (phase day)
-    "Pattern string for a KSK1 phase/day."
     (let
       ((p (workout/as-int phase)) (d (workout/as-int day)))
       (cond
@@ -894,12 +1638,12 @@
             ((= d 2) "3,6")
             (else "3,6,9,12")))
         (else
-          (cond ((= d 1) "S:9") ((= d 2) "S:15") (else "S:12")))))))
+          (cond ((= d 1) "S:9") ((= d 2) "S:15") (else "S:12"))))))
+  "Pattern string for a KSK1 phase/day.")
 
 (define workout/ksk1-plan
   (lambda
     (phase day load unit)
-    "Build a KSK1 session doc from phase/day/load/unit."
     (let
       ((p (workout/as-int phase))
         (d (workout/as-int day))
@@ -914,7 +1658,23 @@
         pat
         ""
         ""
-        ""))))
+        "")))
+  "Build a KSK1 session doc from phase/day/load/unit.")
+
+(define workout/ksk1-replan
+  (lambda
+    (start-date weekdays load unit skip notes)
+    (seq
+      (workout/cal-delete-ksk1-from (workout/today))
+      (workout/ksk1-schedule
+        start-date
+        weekdays
+        load
+        unit
+        skip
+        notes
+        true)))
+  "Replace the KSK1 plan: deletes KSK1 calendar events dated today or later, then regenerates the full schedule from start-date. Past events and logged sessions are untouched.")
 
 (define workout/ksk1-sched-from
   (lambda
@@ -929,7 +1689,6 @@
       notes
       create?
       acc)
-    "Accumulate KSK1 scheduled dates, creating calendar rows when asked."
     (if
       (> phase 3)
       (if create? (count acc) acc)
@@ -976,20 +1735,7 @@
                   (date-add-days date 1)
                   weekdays)))
             (seq
-                (if
-                  create?
-                  (if
-                    (null?
-                      (find-rows
-                        (quote calendar-event)
-                        "day"
-                        (as-str date)
-                        "title"
-                        title
-                        1))
-                    (calendar/create title date "" notes)
-                    ())
-                  ())
+              (if create? (calendar/create title date "" notes) ())
               (if
                 (null? nxt)
                 (if create? (count acc2) acc2)
@@ -1004,7 +1750,8 @@
                   (nth nxt 2)
                   notes
                   create?
-                  acc2)))))))))
+                  acc2))))))))
+  "Accumulate KSK1 scheduled dates, creating calendar rows when asked.")
 
 (define workout/ksk1-schedule
   (lambda
@@ -1015,7 +1762,6 @@
       skip
       notes
       create?)
-    "Plan the full KSK1 schedule of dates and titles."
     (workout/ksk1-sched-from
       (workout/next-training-day start-date weekdays)
       weekdays
@@ -1027,42 +1773,38 @@
       1
       notes
       create?
-      (list))))
+      (list)))
+  "Plan the full KSK1 schedule of dates and titles.")
 
-(define workout/cal-delete-ksk1-from
+(define workout/ksk1-title
   (lambda
-    (from-day)
-    "Delete KSK1 calendar events dated from-day or later."
-    (list/foldl
-      (lambda
-        (acc row)
-        (let
-          ((f (workout/row-fields row))
-            (rid (workout/row-id row)))
-          (if
-            (workout/str-lt? (workout/field f "day") from-day)
-            acc
-            (if
-              (string-eq (nth (string-split (workout/field f "title") " ") 0) "KSK1")
-              (seq
-                (delete (quote calendar-event) rid)
-                acc)
-                acc))))
-      ()
-      (rows (quote calendar-event) 500))))
+    (phase week day load unit)
+    (string-append
+      "KSK1 P"
+      (as-str phase)
+      " W"
+      (as-str week)
+      " D"
+      (as-str day)
+      " · "
+      (workout/ksk1-pattern phase day)
+      " · "
+      (as-str load)
+      (as-str unit)
+      " · "
+      (as-str (workout/ksk-time-cap "ksk1"))
+      "m")))
 
-(define workout/ksk1-replan
+(define workout/ksk1?
   (lambda
-    (start-date weekdays load unit skip notes)
-    "Replace the KSK1 plan: deletes KSK1 calendar events dated today or later, then regenerates the full schedule from start-date. Past events and logged sessions are untouched."
-    (seq
-      (workout/cal-delete-ksk1-from (workout/today))
-      (workout/ksk1-schedule start-date weekdays load unit skip notes true))))
+    (row)
+    (string-eq
+      (workout/field (workout/row-fields row) "program")
+      "ksk1")))
 
 (define workout/ksk2-plan
   (lambda
     (phase day load unit)
-    "Build a KSK2 session doc from phase/day/load/unit."
     (let
       ((p (workout/as-int phase))
         (d (workout/as-int day))
@@ -1077,44 +1819,44 @@
         (string-append "S:" (as-str n))
         ""
         ""
-        ""))))
+        "")))
+  "Build a KSK2 session doc from phase/day/load/unit.")
 
 (define workout/ksk2-set-size
   (lambda
     (phase day)
-    "Reps per set for a KSK2 phase/day."
     (let
       ((p (workout/as-int phase)) (d (workout/as-int day)))
       (cond
         ((= p 1) (cond ((= d 1) 10) ((= d 2) 20) (else 15)))
         ((= p 2) (cond ((= d 1) 12) ((= d 2) 24) (else 18)))
-        (else (cond ((= d 1) 15) ((= d 2) 30) (else 20)))))))
+        (else (cond ((= d 1) 15) ((= d 2) 30) (else 20))))))
+  "Reps per set for a KSK2 phase/day.")
 
 (define workout/ksk3-pct
   (lambda
     (week day)
-    "Percentage of RM for a KSK3 week/day."
     (let
       ((w (workout/as-int week)) (d (workout/as-int day)))
       (cond
         ((= d 1) (if (or (= w 1) (= w 3)) 50 60))
         ((= d 2) (if (or (= w 1) (= w 3)) 65 75))
-        (else (if (or (= w 1) (= w 3)) 70 80))))))
+        (else (if (or (= w 1) (= w 3)) 70 80)))))
+  "Percentage of RM for a KSK3 week/day.")
 
 (define workout/ksk3-per-hand
   (lambda
     (rm-total pct)
-    "Per-hand snatch target given RM total and percentage."
     (workout/max0
       (floor
         (div
           (* (workout/as-int rm-total) (workout/as-int pct))
-          200)))))
+          200))))
+  "Per-hand snatch target given RM total and percentage.")
 
 (define workout/ksk3-plan
   (lambda
     (week day load unit rm-total)
-    "Build a KSK3 session doc from week/day/load/unit/rm."
     (let
       ((w (workout/as-int week))
         (d (workout/as-int day))
@@ -1132,18 +1874,18 @@
           (string-append "S:" (as-str ph))
           rm
           pct
-          ph)))))
+          ph))))
+  "Build a KSK3 session doc from week/day/load/unit/rm.")
 
 (define workout/len
   (lambda
     (xs)
-    "Number of elements in a list."
-    (list/foldl (lambda (acc _) (+ acc 1)) 0 xs)))
+    (list/foldl (lambda (acc _) (+ acc 1)) 0 xs))
+  "Number of elements in a list.")
 
 (define workout/log-form
   (lambda
     ()
-    "HTML card form for the quick-log of a finished workout."
     (html/div
       (html/attr "class" "card")
       (html/join
@@ -1254,14 +1996,12 @@
                       (html/attr "id" "ql-u3")
                       (html/attr "placeholder" "kg"))))
                 (html/button (html/attr "type" "submit") "Save workout"))))
-          (html/p*
-            ""
-            (html/a "/workout" "← All workouts")))))))
+          (html/p* "" (html/a "/workout" "← All workouts"))))))
+  "HTML card form for the quick-log of a finished workout.")
 
 (define workout/log-page
   (lambda
     ()
-    "Quick-log page, handling POST or rendering the form."
     (if
       (string-eq (request-method) "POST")
       (workout/handle-log-post)
@@ -1269,7 +2009,8 @@
         (list
           (html/h1 "Quick log")
           (workout/log-form)
-          (workout/walk-form))))))
+          (workout/walk-form)))))
+  "Quick-log page, handling POST or rendering the form.")
 
 (define workout/log/ksk-write
   (lambda
@@ -1284,7 +2025,6 @@
       notes
       rungs-l-str
       rungs-r-str)
-    "Create a completed KSK session from logged totals and rungs."
     (let*
       ((tl (workout/as-int total-l))
         (tr (workout/as-int total-r))
@@ -1361,7 +2101,8 @@
               "complete"
               n
               doc2
-              ""))))
+              ""
+              (as-str (whoami))))))
       (seq
         (unless
           (< tl 1)
@@ -1383,7 +2124,8 @@
             tr
             ""
             rsr))
-        sid))))
+        sid)))
+  "Create a completed KSK session from logged totals and rungs.")
 
 (define workout/log/ksk1
   (lambda
@@ -1394,7 +2136,6 @@
       unit
       rungs
       notes)
-    "Log a finished KSK1 session from a rungs list."
     (let
       ((doc (workout/ksk1-plan phase day load unit))
         (total (workout/sum rungs))
@@ -1413,7 +2154,8 @@
         total
         n
         rs
-        rs))))
+        rs)))
+  "Log a finished KSK1 session from a rungs list.")
 
 (define workout/log/ksk1-sides
   (lambda
@@ -1425,7 +2167,6 @@
       rungs-l
       rungs-r
       notes)
-    "Log a finished KSK1 session with separate L/R rung lists."
     (let
       ((doc (workout/ksk1-plan phase day load unit))
         (tl (workout/sum rungs-l))
@@ -1446,7 +2187,8 @@
         tr
         n
         rsl
-        rsr))))
+        rsr)))
+  "Log a finished KSK1 session with separate L/R rung lists.")
 
 (define workout/log/ksk2
   (lambda
@@ -1457,7 +2199,6 @@
       unit
       sets
       notes)
-    "Log a finished KSK2 session from a sets list."
     (let
       ((doc (workout/ksk2-plan phase day load unit))
         (total (workout/sum sets))
@@ -1476,7 +2217,8 @@
         total
         n
         rs
-        rs))))
+        rs)))
+  "Log a finished KSK2 session from a sets list.")
 
 (define workout/log/ksk3
   (lambda
@@ -1488,7 +2230,6 @@
       rm-total
       sets
       notes)
-    "Log a finished KSK3 session from a sets list."
     (let
       ((doc (workout/ksk3-plan week day load unit rm-total))
         (total (workout/sum sets))
@@ -1507,15 +2248,16 @@
         total
         n
         rs
-        rs))))
+        rs)))
+  "Log a finished KSK3 session from a sets list.")
 
 (define workout/max0
-  (lambda (n) "At least 1 (bottom floor for positive counts)." (if (< n 1) 1 n)))
+  (lambda (n) (if (< n 1) 1 n))
+  "At least 1 (bottom floor for positive counts).")
 
 (define workout/maybe-log
   (lambda
     (sid name weight unit reps)
-    "Log an exercise row, or () when the name is blank."
     (if
       (blank? (as-str name))
       ()
@@ -1526,32 +2268,32 @@
         unit
         reps
         ""
-        ""))))
+        "")))
+  "Log an exercise row, or () when the name is blank.")
 
 (define workout/member?
   (lambda
     (x xs)
-    "True when x is in list xs (numeric equality)."
     (if
       (null? xs)
       #f
-      (if (= (car xs) x) #t (workout/member? x (cdr xs))))))
+      (if (= (car xs) x) #t (workout/member? x (cdr xs)))))
+  "True when x is in list xs (numeric equality).")
 
 (define workout/name-seen?
   (lambda
     (lst name)
-    "True when an exercise name is already in lst."
     (list/foldl
       (lambda
         (acc x)
         (if acc acc (string-eq (as-str x) (as-str name))))
       #f
-      lst)))
+      lst))
+  "True when an exercise name is already in lst.")
 
 (define workout/next-training-day
   (lambda
     (date weekdays)
-    "Next date (from date) that falls on a training weekday."
     (let*
       ((parts (string-split (as-str date) "-"))
         (y (parse-int (nth parts 0)))
@@ -1563,15 +2305,16 @@
         (as-str date)
         (workout/next-training-day
           (date-add-days (as-str date) 1)
-          weekdays)))))
+          weekdays))))
+  "Next date (from date) that falls on a training weekday.")
 
 (define workout/normalize-exercise
-  (lambda (name) "Trimmed exercise name." (string-trim (as-str name))))
+  (lambda (name) (string-trim (as-str name)))
+  "Trimmed exercise name.")
 
 (define workout/normalize-unit
   (lambda
     (u)
-    "Normalize a weight unit string to kg or lb, else as-is."
     (let
       ((s (as-str u)))
       (cond
@@ -1582,12 +2325,18 @@
         ((string-eq s "Lb") "lb")
         ((string-eq s "lbs") "lb")
         ((string-eq s "LBS") "lb")
-        (else s)))))
+        (else s))))
+  "Normalize a weight unit string to kg or lb, else as-is.")
+
+(define workout/or-dict
+  (lambda
+    (maybe-dict fallback)
+    (if (null? maybe-dict) fallback maybe-dict))
+  "maybe-dict when non-null, else fallback.")
 
 (define workout/parse-session-doc
   (lambda
     (id)
-    "Parsed doc dict for a session, or ()."
     (let
       ((f (workout/session id)))
       (if
@@ -1595,12 +2344,12 @@
         ()
         (let
           ((raw (workout/session-doc f)))
-          (if (blank? raw) () raw))))))
+          (if (blank? raw) () raw)))))
+  "Parsed doc dict for a session, or ().")
 
 (define workout/pattern-kind
   (lambda
     (pat)
-    "Kind of a pattern string: sets or ladder."
     (let
       ((s (as-str pat)))
       (if
@@ -1608,48 +2357,264 @@
           (substring s 0 (if (< (string-length s) 2) 0 2))
           "S:")
         "sets"
-        "ladder"))))
+        "ladder")))
+  "Kind of a pattern string: sets or ladder.")
 
 (define workout/pattern-rungs
   (lambda
     (pat)
-    "Rung list of a ladder pattern, () for a sets pattern."
     (let
       ((s (as-str pat)))
       (if
         (string-eq (workout/pattern-kind s) "sets")
         (list)
-        (string-split s ",")))))
+        (string-split s ","))))
+  "Rung list of a ladder pattern, () for a sets pattern.")
 
 (define workout/pattern-set-size
   (lambda
     (pat)
-    "Set size of a sets pattern, 0 for a ladder pattern."
     (let
       ((s (as-str pat)))
       (if
         (string-eq (workout/pattern-kind s) "sets")
         (workout/as-int (substring s 2 (- (string-length s) 2)))
-        0))))
+        0)))
+  "Set size of a sets pattern, 0 for a ladder pattern.")
 
 (define workout/pget
   (lambda
     (dict key)
-    "dict-get as a string, \"\" when absent."
     (if
       (null? dict)
       ""
       (let
         ((v (dict-get dict (as-str key))))
-        (if (null? v) "" (as-str v))))))
+        (if (null? v) "" (as-str v)))))
+  "dict-get as a string, \"\" when absent.")
+
+(define workout/program-advance
+  (lambda
+    (doc)
+    (cond
+      ((null? doc) ())
+      ((blank? (workout/pget (workout/doc-params doc) "week"))
+        ())
+      (else
+        (let*
+          ((params (workout/doc-params doc))
+            (prog (as-str (dict-get doc "program")))
+            (phase (workout/pget params "phase"))
+            (week (workout/pget params "week"))
+            (day (workout/pget params "day"))
+            (r (workout/program-row)))
+          (if
+            (null? r)
+            ()
+            (let
+              ((f (workout/row-fields r)))
+              (cond
+                ((string-eq (workout/field f "done") "1") ())
+                ((not (string-eq (workout/field f "program") prog)) ())
+                ((not (string-eq (workout/field f "phase") phase)) ())
+                ((not (string-eq (workout/field f "week") week)) ())
+                ((not (string-eq (workout/field f "day") day)) ())
+                (else
+                  (workout/program-apply-next
+                    r
+                    (workout/program-next-state f)))))))))))
+
+(define workout/program-apply-next
+  (lambda
+    (r nxt)
+    (let
+      ((f (workout/row-fields r)) (id (workout/row-id r)))
+      (if
+        (null? nxt)
+        (workout/program-write
+          id
+          (workout/field f "program")
+          ""
+          ""
+          ""
+          (workout/field f "load")
+          (workout/field f "unit")
+          "1")
+        (workout/program-write
+          id
+          (workout/field f "program")
+          (nth nxt 0)
+          (nth nxt 1)
+          (nth nxt 2)
+          (workout/field f "load")
+          (workout/field f "unit")
+          "0")))))
+
+(define workout/program-doc
+  (lambda
+    (f)
+    (workout/ksk-build-doc
+      "ksk1"
+      (workout/field f "phase")
+      (workout/field f "day")
+      (workout/field f "week")
+      (workout/field f "load")
+      (workout/field f "unit")
+      (workout/ksk1-pattern
+        (workout/field f "phase")
+        (workout/field f "day"))
+      ""
+      ""
+      "")))
+
+(define workout/program-fields
+  (lambda
+    (program
+      phase
+      week
+      day
+      load
+      unit
+      done)
+    (dict-set*
+      "{}"
+      (list
+        "program"
+        (as-str program)
+        "phase"
+        (as-str phase)
+        "week"
+        (as-str week)
+        "day"
+        (as-str day)
+        "load"
+        (as-str load)
+        "unit"
+        (as-str unit)
+        "done"
+        (as-str done)
+        "author"
+        (as-str (whoami))))))
+
+(define workout/program-get
+  (lambda
+    ()
+    (let
+      ((r (workout/program-row)))
+      (if (null? r) () (workout/row-fields r)))))
+
+(define workout/program-intensity
+  (lambda
+    (f)
+    (string-append
+      "p"
+      (workout/field f "phase")
+      "d"
+      (workout/field f "day"))))
+
+(define workout/program-next-state
+  (lambda
+    (f)
+    (if
+      (string-eq (workout/field f "program") "ksk1")
+      (workout/ksk1-next
+        (workout/as-int (workout/field f "phase"))
+        (workout/as-int (workout/field f "week"))
+        (workout/as-int (workout/field f "day")))
+      ())))
+
+(define workout/program-row
+  (lambda
+    ()
+    (let
+      ((rs
+        (find-rows
+          (quote workout-program)
+          "author"
+          (as-str (whoami))
+          1)))
+      (if (null? rs) () (car rs)))))
+
+(define workout/program-set
+  (lambda
+    (program phase week day load unit)
+    (let
+      ((r (workout/program-row)))
+      (workout/program-write
+        (if (null? r) "" (workout/row-id r))
+        program
+        phase
+        week
+        day
+        load
+        unit
+        "0"))))
+
+(define workout/program-skip
+  (lambda
+    ()
+    (let
+      ((r (workout/program-row)))
+      (if
+        (null? r)
+        ()
+        (if
+          (string-eq
+            (workout/field (workout/row-fields r) "done")
+            "1")
+          ()
+          (workout/program-apply-next
+            r
+            (workout/program-next-state (workout/row-fields r))))))))
+
+(define workout/program-title
+  (lambda
+    (f)
+    (if
+      (null? f)
+      ""
+      (if
+        (string-eq (workout/field f "program") "ksk1")
+        (workout/ksk1-title
+          (workout/field f "phase")
+          (workout/field f "week")
+          (workout/field f "day")
+          (workout/field f "load")
+          (workout/field f "unit"))
+        (workout/field f "program")))))
+
+(define workout/program-write
+  (lambda
+    (id
+      program
+      phase
+      week
+      day
+      load
+      unit
+      done)
+    (let
+      ((f
+        (workout/program-fields
+          program
+          phase
+          week
+          day
+          load
+          unit
+          done)))
+      (if
+        (blank? (as-str id))
+        (create (quote workout-program) f)
+        (update (quote workout-program) (as-str id) f)))))
 
 (define workout/programs
-  (lambda () "Supported workout program names." (list "free" "ksk1" "ksk2" "ksk3")))
+  (lambda () (list "free" "ksk1" "ksk2" "ksk3"))
+  "Supported workout program names.")
 
 (define workout/recent-list
   (lambda
     ()
-    "HTML list of the most recent sessions plus walk form."
     (let
       ((rows (workout/sessions-sorted)))
       (html/div
@@ -1665,18 +2630,48 @@
               (html/ul
                 ""
                 (html/join (list/map workout/session-li rows))))
-            (workout/walk-form)))))))
+            (workout/walk-form))))))
+  "HTML list of the most recent sessions plus walk form.")
+
+(define workout/replace-fact
+  (lambda
+    (sid name unit reps)
+    (seq
+      (list/map
+        (lambda
+          (row)
+          (let
+            ((f (workout/row-fields row)))
+            (if
+              (string-eq (workout/field f "exercise") (as-str name))
+              (workout/exercise-delete (workout/row-id row))
+              ())))
+        (workout/exercises sid))
+      (unless
+        (or
+          (blank? (as-str reps))
+          (string-eq (as-str reps) "0"))
+        (workout/exercise-log
+          sid
+          name
+          ""
+          unit
+          reps
+          ""
+          ""))))
+  "Upsert one exercise fact (replace by session+exercise).")
 
 (define workout/row-fields
-  (lambda (row) "Fields portion of a data row." (cdr row)))
+  (lambda (row) (cdr row))
+  "Fields portion of a data row.")
 
 (define workout/row-id
-  (lambda (row) "Id string of a data row." (as-str (car row))))
+  (lambda (row) (as-str (car row)))
+  "Id string of a data row.")
 
 (define workout/run-main
   (lambda
     (id)
-    "Main HTML of the KSK run UI for a session."
     (let
       ((f (workout/session id)))
       (if
@@ -1693,19 +2688,16 @@
             (prog-name (workout/session-program f)))
           (if
             (not (workout/ksk-program? prog-name))
-            (if
-              (string-eq (as-str prog-name) "ksf")
-              (workout/ksf-run-main id)
-              (html/div
-                ""
-                (html/join
-                  (list
-                    (html/p "Not a runnable session.")
-                    (html/p*
-                      ""
-                      (html/a
-                        (string-append "/workout/session?id=" id)
-                        "Open session"))))))
+            (html/div
+              ""
+              (html/join
+                (list
+                  (html/p "Not a KSK session.")
+                  (html/p*
+                    ""
+                    (html/a
+                      (string-append "/workout/session?id=" id)
+                      "Open session")))))
             (let
               ((params (workout/doc-params doc))
                 (prog (workout/doc-progress doc))
@@ -1760,10 +2752,7 @@
                     (html/p*
                       (html/attr "class" "muted")
                       (html/text
-                        (string-append
-                          "pattern "
-                          pat
-                          " · per-rung both hands")))
+                        (string-append "pattern " pat " · per-rung both hands")))
                     (if
                       (string-eq st "in_progress")
                       (html/join
@@ -1818,12 +2807,12 @@
                             (string-append "/workout/session?id=" id)
                             "Session detail")
                           (html/text " · ")
-                          (html/a "/workout" "All workouts"))))))))))))))
+                          (html/a "/workout" "All workouts")))))))))))))
+  "Main HTML of the KSK run UI for a session.")
 
 (define workout/run-page
   (lambda
     ()
-    "Run page, handling POST or rendering the run UI."
     (if
       (string-eq (request-method) "POST")
       (workout/handle-run-post)
@@ -1838,12 +2827,12 @@
                   (html/h1 "Run")
                   (html/p "Missing session id.")
                   (html/p* "" (html/a "/workout" "← Back"))))
-              (workout/run-main id))))))))
+              (workout/run-main id)))))))
+  "Run page, handling POST or rendering the run UI.")
 
 (define workout/run-style
   (lambda
     ()
-    "Inline CSS for the KSK run page."
     (html/tag
       "style"
       ""
@@ -1853,20 +2842,752 @@
           ".ksk-run .ksk-target{font-size:2rem;font-weight:700;margin:.5rem 0}"
           ".ksk-run .ksk-side{font-size:1.4rem}"
           ".ksk-run form button{font-size:1.2rem;padding:.75rem 1.25rem;margin:.35rem .35rem .35rem 0}"
-          ".ksk-run .ksk-totals{font-size:1.1rem;margin-top:.75rem}")))))
+          ".ksk-run .ksk-totals{font-size:1.1rem;margin-top:.75rem}"))))
+  "Inline CSS for the KSK run page.")
+
+(define workout/run5k-a-goal
+  (lambda
+    (week)
+    (workout/run5k-ref
+      (list
+        "30/90/6"
+        "30/90/6"
+        "45/75/6"
+        "45/75/6"
+        "60/60/5"
+        "60/60/5"
+        "90/30/4"
+        "90/30/4"
+        "120/30/4"
+        "120/30/4"
+        "180/60/3"
+        "180/60/3"
+        "180/30/4"
+        "180/30/4"
+        "240/45/3"
+        "240/45/3"
+        "300/45/3"
+        "300/45/3")
+      week))
+  "Fri ratio session: jog/walk/sets.")
+
+(define workout/run5k-b-goal
+  (lambda
+    (week)
+    (workout/run5k-ref
+      (list
+        "30/90/8"
+        "30/90/8"
+        "45/75/8"
+        "45/75/8"
+        "60/60/9"
+        "60/60/9"
+        "90/30/7"
+        "90/30/7"
+        "120/60/5"
+        "120/60/5"
+        "120/45/7"
+        "120/45/7"
+        "180/60/6"
+        "180/60/6"
+        "180/45/7"
+        "180/45/7"
+        "240/45/5"
+        "RACE")
+      week))
+  "Sun long session; w18 = RACE.")
+
+(define workout/run5k-capture-facts
+  (lambda
+    (session-id doc)
+    (let
+      ((params (workout/doc-params doc))
+        (goal (workout/pget (workout/doc-params doc) "goal")))
+      (unless
+        (or (blank? goal) (string-eq "RACE" goal))
+        (let*
+          ((g (string-split goal "/"))
+            (jog (workout/as-int (nth g 0)))
+            (walk (workout/as-int (nth g 1)))
+            (sets (workout/as-int (nth g 2)))
+            (mins (div (+ (* jog sets) (* walk sets)) 60)))
+          (workout/replace-fact
+            session-id
+            "Run/Walk"
+            "min"
+            (as-str mins))))))
+  "run5k: prescribed box in minutes.")
+
+(define workout/run5k-configure
+  (lambda
+    ()
+    (workout/state-put
+      "run5k"
+      (dict-set* "{}" (list "week" "1" "in_week" "0"))
+      "run5k configured")))
+
+(define workout/run5k-day
+  (lambda
+    (date)
+    (let
+      ((parts (string-split (as-str date) "-")))
+      (if
+        (null? parts)
+        "OFF"
+        (let
+          ((wd
+            (date-weekday
+              (parse-int (nth parts 0))
+              (parse-int (nth parts 1))
+              (parse-int (nth parts 2)))))
+          (cond ((= wd 5) "A") ((= wd 0) "B") (else "OFF"))))))
+  "A Fri, B Sun, OFF otherwise.")
+
+(define workout/run5k-gates
+  (lambda
+    (session-id state)
+    (let*
+      ((st
+          (workout/or-dict
+            state
+            (dict-set* "{}" (list "week" "1" "in_week" "0"))))
+        (in-week
+          (+ 1 (workout/as-int (workout/field st "in_week"))))
+        (week (workout/as-int (workout/field st "week")))
+        (sore-mark (workout/field st "sore_mark"))
+        (week-turn (= in-week 2))
+        (sore
+          (and week-turn (workout/run5k-sore-unseen? sore-mark)))
+        (week-next
+          (if
+            (and week-turn (not sore))
+            (if (< week 18) (+ week 1) 18)
+            week))
+        (next-mark
+          (if
+            week-turn
+            (workout/run5k-sore-count)
+            (workout/as-int (workout/field st "sore_mark"))))
+        (sore-note
+          (if sore "; sore: repeating the week this cycle" ""))
+        (state2
+          (dict-set*
+            "{}"
+            (list
+              "week"
+              (as-str week-next)
+              "in_week"
+              (as-str (if week-turn 0 in-week))
+              "sore_mark"
+              (as-str next-mark)))))
+      (seq
+        (workout/state-put
+          "run5k"
+          state2
+          (if
+            week-turn
+            (string-append
+              "week "
+              (as-str week)
+              " complete"
+              sore-note)
+            "session logged in current week"))
+        state2)))
+  "Week turns over after 2 sessions; sore repeats it.")
+
+(define workout/run5k-ref
+  (lambda
+    (xs week)
+    (let
+      ((n (- (workout/as-int week) 1)))
+      (let
+        ((lim (workout/len xs)))
+        (cond
+          ((< n 0) (nth xs 0))
+          ((< n lim) (nth xs n))
+          (else (nth xs (- lim 1)))))))
+  "Week n (1-based) -> element n-1; out of range repeats last.")
+
+(define workout/run5k-sore-count
+  (lambda
+    ()
+    (list/foldl
+      (lambda
+        (acc row)
+        (let
+          ((f (workout/row-fields row)))
+          (if
+            (string-eq (workout/field f "key") "sore")
+            (+ acc 1)
+            acc)))
+      0
+      (workout/gates "run5k"))))
+
+(define workout/run5k-sore-unseen?
+  (lambda
+    (seen)
+    (>
+      (workout/run5k-sore-count)
+      (workout/as-int (as-str seen)))))
+
+(define workout/run5k-suggest
+  (lambda
+    (date)
+    (let*
+      ((st
+          (workout/or-dict
+            (workout/state "run5k")
+            (dict-set* "{}" (list "week" "1" "in_week" "0"))))
+        (week (workout/as-int (workout/field st "week")))
+        (day (workout/run5k-day date))
+        (goal
+          (if
+            (string-eq day "B")
+            (workout/run5k-b-goal week)
+            (workout/run5k-a-goal week))))
+      (dict-set*
+        "{}"
+        (list
+          "program"
+          "run5k"
+          "week"
+          (as-str week)
+          "day"
+          day
+          "params"
+          (dict-set*
+            "{}"
+            (list
+              "goal"
+              goal
+              "warmup"
+              "3min brisk walk"
+              "flush"
+              "2min easy walk"
+              "talk_test"
+              "conversational effort only"))
+          "blocks"
+          "[]"))))
+  "run doc from state. Pure.")
+
+(define workout/run5k-weekdays
+  (lambda () (list 5 0)))
+
+(define workout/sct-carry-kind
+  (lambda
+    (n)
+    (workout/pget (workout/sct-carry-session n) "carry")))
+
+(define workout/sct-carry-note
+  (lambda
+    (n)
+    (string-append
+      "carry block: "
+      (workout/sct-carry-kind n)
+      " - accumulate max distance in "
+      (workout/pget (workout/sct-carry-session n) "minutes")
+      " min, RPE "
+      (workout/pget (workout/sct-carry-session n) "rpe"))))
+
+(define workout/sct-carry-session
+  (lambda
+    (n)
+    (let
+      ((min-l
+          (list
+            7
+            7
+            7
+            8
+            8
+            8
+            9
+            9
+            9
+            10
+            10
+            10))
+        (rpe-l
+          (list
+            7
+            7
+            7
+            8
+            8
+            8
+            9
+            9
+            9
+            7
+            7
+            7))
+        (carry-l
+          (list
+            "Suitcase 24kg"
+            "Rack 24kg"
+            "Overhead 24kg"
+            "Bottoms-up 24kg"
+            "Farmers 2x24kg"
+            "Double Rack 2x24kg"
+            "Double Overhead 2x24kg")))
+      (dict-set*
+        "{}"
+        (list
+          "minutes"
+          (as-str (nth min-l (- n 1)))
+          "rpe"
+          (as-str (nth rpe-l (- n 1)))
+          "carry"
+          (nth carry-l (mod (- n 1) 7))))))
+  "Power session: minutes, RPE, rotating carry (24kg / 2x24kg).")
+
+(define workout/sct-configure
+  (lambda
+    ()
+    (workout/state-put
+      "sct"
+      (dict-set*
+        "{}"
+        (list
+          "phase"
+          "stability"
+          "session"
+          "1"
+          "exits"
+          "0"))
+      "sct configured"))
+  "Initial state: stability s1.")
+
+(define workout/sct-content
+  (lambda
+    (phase n day)
+    (cond
+      ((string-eq "OFF" day) (workout/sct-microdose phase))
+      ((string-eq "stability" phase)
+        (workout/sct-suggest-stability n))
+      ((string-eq "strength" phase)
+        (if
+          (string-eq "A" day)
+          (workout/sct-suggest-strength-a n)
+          (workout/sct-suggest-strength-b n)))
+      ((string-eq "power" phase)
+        (if
+          (string-eq "B" day)
+          (workout/sct-carry-note n)
+          "strength maintenance: pick 2-3 drills, stay ownable"))
+      (else ""))))
+
+(define workout/sct-dl-column
+  (lambda
+    (n)
+    (nth
+      (list
+        "3-5x1-3"
+        "3-5x2-4"
+        "3-5x3-5"
+        "3-5x4-6"
+        "3-5x5-7"
+        "2-4x6-8"
+        "2-4x7-9"
+        "2-3x8-10"
+        "1x10")
+      (- n 1))))
+
+(define workout/sct-facts
+  (lambda
+    (session-id doc)
+    (let*
+      ((phase (workout/pget doc "phase"))
+        (n (workout/as-int (workout/pget doc "session")))
+        (day (workout/pget doc "day")))
+      (cond
+        ((string-eq "stability" phase)
+          (workout/sct-stability-facts session-id n))
+        ((string-eq "strength" phase)
+          (workout/sct-strength-facts session-id n day))
+        ((string-eq "power" phase)
+          (if
+            (string-eq "B" day)
+            (workout/replace-fact
+              session-id
+              (workout/sct-carry-kind n)
+              "min"
+              (workout/pget (workout/sct-carry-session n) "minutes"))
+            ()))
+        (else ()))))
+  "sct: one fact per drill, lower-bound totals.")
+
+(define workout/sct-gates
+  (lambda
+    (session-id state)
+    (let*
+      ((st
+          (workout/or-dict state (workout/sct-state-or-default)))
+        (phase (workout/field st "phase"))
+        (n (workout/as-int (workout/field st "session")))
+        (last (workout/sct-phase-last phase))
+        (next-n (if (< n last) (+ n 1) last))
+        (state2
+          (dict-set*
+            "{}"
+            (list
+              "phase"
+              phase
+              "session"
+              (as-str next-n)
+              "exits"
+              (workout/field st "exits")))))
+      (seq
+        (workout/state-put
+          "sct"
+          state2
+          "sct: session column advanced")
+        state2)))
+  "Session column advances, capped at the benchmark.")
+
+(define workout/sct-hang-column
+  (lambda
+    (n)
+    (nth
+      (list
+        "3-5x1-3"
+        "3-6x1-4"
+        "3-5x1-5"
+        "3-6x1-5"
+        "3-7x2-5"
+        "3-5x3-5"
+        "3-6x3-5"
+        "3-5x4-6"
+        "3x4-5")
+      (- n 1))))
+
+(define workout/sct-hold-column
+  (lambda
+    (n)
+    (nth
+      (list
+        "3-5x10s"
+        "3-5x12-15s"
+        "3-5x15-18s"
+        "3-5x18-20s"
+        "3-5x20-22s"
+        "3-5x22-25s"
+        "3-5x24-27s"
+        "3-4x26-28s"
+        "3x30s")
+      (- n 1))))
+
+(define workout/sct-hollow-column
+  (lambda
+    (n)
+    (nth
+      (list
+        "6-10x10s"
+        "6-10x15s"
+        "5-8x20s"
+        "4-7x25s"
+        "3-7x30s"
+        "3-6x35s"
+        "3-5x40s"
+        "2-4x45s"
+        "2-3x50s")
+      (- n 1))))
+
+(define workout/sct-microdose
+  (lambda
+    (phase)
+    (if
+      (string-eq "strength" phase)
+      "MICRO-DOSE: breathing 1max/position | dead bugs 2x8 | neck drills 1min | 1-2 submax floor drills"
+      "MICRO-DOSE: breathing 1max/position | dead bugs 2x8 | neck drills 1min")))
+
+(define workout/sct-phase-last
+  (lambda
+    (phase)
+    (cond
+      ((string-eq phase "stability") 12)
+      ((string-eq phase "strength") 9)
+      (else 12)))
+  "Sessions per phase.")
+
+(define workout/sct-promote
+  (lambda
+    ()
+    (let*
+      ((st (workout/sct-state-or-default))
+        (phase (workout/field st "phase"))
+        (exits (workout/as-int (workout/field st "exits"))))
+      (cond
+        ((string-eq "stability" phase)
+          (seq
+            (workout/gate-assert
+              "sct"
+              "stability-exit"
+              "true"
+              ""
+              "benchmarks passed")
+            (workout/state-put
+              "sct"
+              (dict-set*
+                "{}"
+                (list
+                  "phase"
+                  "strength"
+                  "session"
+                  "1"
+                  "exits"
+                  (as-str (+ exits 1))))
+              "promoted: stability -> strength")))
+        ((string-eq "strength" phase)
+          (seq
+            (workout/gate-assert
+              "sct"
+              "strength-exit"
+              "true"
+              ""
+              "goal column reached")
+            (workout/state-put
+              "sct"
+              (dict-set*
+                "{}"
+                (list
+                  "phase"
+                  "power"
+                  "session"
+                  "1"
+                  "exits"
+                  (as-str (+ exits 1))))
+              "promoted: strength -> power")))
+        (else (workout/state "sct")))))
+  "Explicit promotion after benchmark tests.")
+
+(define workout/sct-raised-column
+  (lambda
+    (n)
+    (nth
+      (list
+        "3-6x3-5"
+        "3-6x4-7"
+        "3-6x5-8"
+        "3-5x6-9"
+        "3-5x7-10"
+        "3-5x8-12"
+        "3-4x12-15"
+        "2-3x15"
+        "3x15")
+      (- n 1))))
+
+(define workout/sct-sit-column
+  (lambda
+    (n)
+    (nth
+      (list
+        "6-10x5s"
+        "6-9x7-10s"
+        "5-8x8-12s"
+        "4-6x10-15s"
+        "3-5x15-20s"
+        "3-5x18-22s"
+        "3-5x20-25s"
+        "1-2x22-28s"
+        "1x30s")
+      (- n 1))))
+
+(define workout/sct-stab-column
+  (lambda
+    (n)
+    (nth
+      (list
+        "2-3x5-10"
+        "3-5x6-12"
+        "3-5x6-12"
+        "3-5x8-15"
+        "3-5x8-15"
+        "3-5x15-20"
+        "3-5x15-20"
+        "3-4x20-25"
+        "3-5x20-25"
+        "1-2x25-30"
+        "2-3x25-30"
+        "2-3x25-30")
+      (- n 1))))
+
+(define workout/sct-stability-facts
+  (lambda
+    (session-id n)
+    (let
+      ((total (workout/col-lower (workout/sct-stab-column n))))
+      (seq
+        (workout/replace-fact
+          session-id
+          "Dead Bug"
+          "reps"
+          (as-str total))
+        (workout/replace-fact
+          session-id
+          "Bird Dog"
+          "reps"
+          (as-str total))))))
+
+(define workout/sct-state-or-default
+  (lambda
+    ()
+    (workout/or-dict
+      (workout/state "sct")
+      (dict-set*
+        "{}"
+        (list
+          "phase"
+          "stability"
+          "session"
+          "1"
+          "exits"
+          "0")))))
+
+(define workout/sct-strength-facts
+  (lambda
+    (session-id n day)
+    (seq
+      (workout/replace-fact
+        session-id
+        "Hollow Hold"
+        "sec"
+        (as-str
+          (workout/col-lower (workout/sct-hollow-column n))))
+      (workout/replace-fact
+        session-id
+        "Leg Raise Short Lever"
+        "reps"
+        (as-str
+          (workout/col-lower (workout/sct-raised-column n))))
+      (if
+        (string-eq "B" day)
+        (seq
+          (workout/replace-fact
+            session-id
+            "Leg Raise Long Lever"
+            "reps"
+            (as-str
+              (workout/col-lower (workout/sct-raised-column n))))
+          (workout/replace-fact
+            session-id
+            "Tuck Sit"
+            "sec"
+            (as-str (workout/col-lower (workout/sct-sit-column n))))
+          (workout/replace-fact
+            session-id
+            "Hanging Knee Raise"
+            "reps"
+            (as-str (workout/col-lower (workout/sct-hang-column n)))))
+        ())
+      (if
+        (and (string-eq "B" day) (>= n 7))
+        (seq
+          (workout/replace-fact
+            session-id
+            "Ground Hold"
+            "sec"
+            (as-str (workout/col-lower (workout/sct-hold-column n))))
+          (workout/replace-fact
+            session-id
+            "SL Deadlift"
+            "reps"
+            (as-str (workout/col-lower (workout/sct-dl-column n)))))
+        ())))
+  "Strength phase: hollow + short lever always; B >=7 adds ground work.")
+
+(define workout/sct-suggest
+  (lambda
+    (date)
+    (let*
+      ((st (workout/sct-state-or-default))
+        (phase (workout/field st "phase"))
+        (n (workout/as-int (workout/field st "session")))
+        (last (workout/sct-phase-last phase))
+        (day (workout/run5k-day date))
+        (content (workout/sct-content phase n day))
+        (bench (if (= n last) "true" "false")))
+      (dict-set*
+        "{}"
+        (list
+          "program"
+          "sct"
+          "phase"
+          phase
+          "session"
+          (as-str n)
+          "day"
+          day
+          "params"
+          (dict-set*
+            "{}"
+            (list
+              "content"
+              content
+              "benchmark_due"
+              bench
+              "promote_with"
+              "(workout/sct-promote)"))))))
+  "sct doc from state. Pure.")
+
+(define workout/sct-suggest-stability
+  (lambda
+    (n)
+    (let
+      ((col (workout/sct-stab-column n)))
+      (string-append
+        "breathing 1max/position (goal 30) | dead bugs "
+        col
+        " | bird dogs "
+        col
+        " | neck nods/rotations 30 | optional rocking 30"))))
+
+(define workout/sct-suggest-strength-a
+  (lambda
+    (n)
+    (string-append
+      "hollow hold "
+      (workout/sct-hollow-column n)
+      " | short-lever leg raises "
+      (workout/sct-raised-column n)
+      " | long-lever leg raises "
+      (workout/sct-raised-column n))))
+
+(define workout/sct-suggest-strength-b
+  (lambda
+    (n)
+    (let
+      ((base
+        (string-append
+          "hollow hold "
+          (workout/sct-hollow-column n)
+          " | leg raises "
+          (workout/sct-raised-column n)
+          " | tuck sit "
+          (workout/sct-sit-column n)
+          " | hanging knee raises "
+          (workout/sct-hang-column n))))
+      (if
+        (>= n 7)
+        (string-append
+          base
+          " | holds "
+          (workout/sct-hold-column n)
+          " | kickstand->SL deadlifts "
+          (workout/sct-dl-column n))
+        base))))
 
 (define workout/session
   (lambda
     (id)
-    "Session fields for id, or ()."
     (let
       ((f (get (quote workout-session) (as-str id))))
-      (if (null? f) () f))))
+      (if (null? f) () f)))
+  "Session fields for id, or ().")
 
 (define workout/session-abandon
   (lambda
     (id)
-    "Mark a session abandoned."
     (let
       ((cur (workout/session id)))
       (if
@@ -1881,12 +3602,13 @@
             "abandoned"
             (workout/session-notes cur)
             (workout/session-doc cur)
-            (workout/field cur "duration_sec")))))))
+            (workout/field cur "duration_sec")
+            (workout/field cur "author"))))))
+  "Mark a session abandoned.")
 
 (define workout/session-actions
   (lambda
     (id state)
-    "HTML card of session actions (complete/abandon/run/delete)."
     (let
       ((f (workout/session id))
         (prog
@@ -1949,14 +3671,12 @@
                   (html/button
                     (html/attr "type" "submit")
                     "Delete session"))))
-            (html/p*
-              ""
-              (html/a "/workout" "← All workouts"))))))))
+            (html/p* "" (html/a "/workout" "← All workouts")))))))
+  "HTML card of session actions (complete/abandon/run/delete).")
 
 (define workout/session-complete
   (lambda
     (id notes)
-    "Mark a session complete, keeping existing notes when blank."
     (let
       ((cur (workout/session id)))
       (if
@@ -1968,24 +3688,22 @@
               (blank? (as-str notes))
               (workout/session-notes cur)
               (as-str notes))))
-          (seq
-            (workout/session-update
-              id
-              (workout/session-fields
-                (workout/session-date cur)
-                (workout/session-program cur)
-                (workout/session-intensity cur)
-                "complete"
-                n
-                (workout/session-doc cur)
-                (workout/field cur "duration_sec")))
-            (workout/capture-facts (workout/session-program cur) id)
-            (workout/gate-eval (workout/session-program cur) id)))))))
+          (workout/session-update
+            id
+            (workout/session-fields
+              (workout/session-date cur)
+              (workout/session-program cur)
+              (workout/session-intensity cur)
+              "complete"
+              n
+              (workout/session-doc cur)
+              (workout/field cur "duration_sec")
+              (workout/field cur "author")))))))
+  "Mark a session complete, keeping existing notes when blank.")
 
 (define workout/session-create
   (lambda
     (program intensity)
-    "Create an in-progress session using today's date."
     (let
       ((prog
           (if (blank? (as-str program)) "free" (as-str program)))
@@ -1999,12 +3717,13 @@
           "in_progress"
           ""
           (workout/empty-doc prog inten)
-          "")))))
+          ""
+          (as-str (whoami))))))
+  "Create an in-progress session using today's date.")
 
 (define workout/session-create-complete
   (lambda
     (program intensity date notes)
-    "Create an already-complete session with the given date and notes."
     (let
       ((prog
           (if (blank? (as-str program)) "free" (as-str program)))
@@ -2024,16 +3743,13 @@
           "complete"
           n
           (workout/empty-doc prog inten)
-          "")))))
+          ""
+          (as-str (whoami))))))
+  "Create an already-complete session with the given date and notes.")
 
 (define workout/session-create-with-doc
   (lambda
     (program intensity doc)
-    "Create an in-progress session carrying the given doc."
-    ;; let* (not parallel let): d's value references siblings prog/inten
-    ;; bound in the same group — parallel `let` evaluates bindings in the
-    ;; outer env, so prog/inten were unbound when doc was blank
-    ;; (threw `unbound: prog`).
     (let*
       ((prog
           (if (blank? (as-str program)) "free" (as-str program)))
@@ -2052,23 +3768,25 @@
           "in_progress"
           ""
           d
-          "")))))
+          ""
+          (as-str (whoami))))))
+  "Create an in-progress session carrying the given doc.")
 
 (define workout/session-date
-  (lambda (f) "Date field of a session." (workout/field f "date")))
+  (lambda (f) (workout/field f "date"))
+  "Date field of a session.")
 
 (define workout/session-date-of
   (lambda
     (session-id)
-    "Date of a session by id, or \"\" when absent."
     (let
       ((f (workout/session session-id)))
-      (if (null? f) "" (workout/session-date f)))))
+      (if (null? f) "" (workout/session-date f))))
+  "Date of a session by id, or \"\" when absent.")
 
 (define workout/session-delete
   (lambda
     (id)
-    "Delete a session and all of its exercise rows."
     (let
       ((sid (as-str id)))
       (seq
@@ -2077,10 +3795,12 @@
             (row)
             (workout/exercise-delete (workout/row-id row)))
           (workout/exercises sid))
-        (delete (quote workout-session) sid)))))
+        (delete (quote workout-session) sid))))
+  "Delete a session and all of its exercise rows.")
 
 (define workout/session-doc
-  (lambda (f) "Doc field of a session." (workout/field f "doc")))
+  (lambda (f) (workout/field f "doc"))
+  "Doc field of a session.")
 
 (define workout/session-fields
   (lambda
@@ -2090,8 +3810,8 @@
       state
       notes
       doc
-      duration_sec)
-    "Dict of fields for a workout-session row."
+      duration_sec
+      author)
     (dict-set*
       "{}"
       (list
@@ -2110,12 +3830,12 @@
         "duration_sec"
         (as-str duration_sec)
         "author"
-        (as-str (whoami))))))
+        (as-str author))))
+  "Dict of fields for a workout-session row.")
 
 (define workout/session-in-progress
   (lambda
     (program)
-    "Id of an in-progress session (optionally matching program), or ()."
     (let
       ((want (if (null? program) "" (as-str program))))
       (list/foldl
@@ -2137,15 +3857,16 @@
                 acc))
             acc))
         ()
-        (workout/session-list 100)))))
+        (workout/session-list 100))))
+  "Id of an in-progress session (optionally matching program), or ().")
 
 (define workout/session-intensity
-  (lambda (f) "Intensity field of a session." (workout/field f "intensity")))
+  (lambda (f) (workout/field f "intensity"))
+  "Intensity field of a session.")
 
 (define workout/session-li
   (lambda
     (row)
-    "HTML list item for a session row."
     (let
       ((id (workout/row-id row)) (f (workout/row-fields row)))
       (let
@@ -2170,20 +3891,20 @@
                   (html/text (workout/walk-li-summary f)))
                 (html/p*
                   (html/attr "class" "muted")
-                  (html/text (string-append (as-str reps) " total reps")))))))))))
+                  (html/text (string-append (as-str reps) " total reps"))))))))))
+  "HTML list item for a session row.")
 
 (define workout/session-list
   (lambda
     (limit)
-    "Session rows, up to limit (default 50)."
     (let
       ((n (if (null? limit) 50 (workout/as-int limit))))
-      (rows (quote workout-session) (if (< n 1) 50 n)))))
+      (rows (quote workout-session) (if (< n 1) 50 n))))
+  "Session rows, up to limit (default 50).")
 
 (define workout/session-main
   (lambda
     (id)
-    "Main HTML of a session page (title, actions, exercises)."
     (let
       ((f (workout/session id)))
       (if
@@ -2231,15 +3952,16 @@
                           (html/text
                             (string-append
                               "Total reps: "
-                              (as-str (workout/session-total-reps id)))))))))))))))))
+                              (as-str (workout/session-total-reps id))))))))))))))))
+  "Main HTML of a session page (title, actions, exercises).")
 
 (define workout/session-notes
-  (lambda (f) "Notes field of a session." (workout/field f "notes")))
+  (lambda (f) (workout/field f "notes"))
+  "Notes field of a session.")
 
 (define workout/session-page
   (lambda
     ()
-    "Session page, handling POST or rendering the session."
     (if
       (string-eq (request-method) "POST")
       (workout/handle-session-post)
@@ -2254,26 +3976,28 @@
                   (html/h1 "Session")
                   (html/p "Missing id.")
                   (html/p* "" (html/a "/workout" "← Back"))))
-              (workout/session-main id))))))))
+              (workout/session-main id)))))))
+  "Session page, handling POST or rendering the session.")
 
 (define workout/session-program
-  (lambda (f) "Program field of a session." (workout/field f "program")))
+  (lambda (f) (workout/field f "program"))
+  "Program field of a session.")
 
 (define workout/session-state
-  (lambda (f) "State field of a session." (workout/field f "state")))
+  (lambda (f) (workout/field f "state"))
+  "State field of a session.")
 
 (define workout/session-summary
   (lambda
     (id)
-    "Summary list (id fields exercises) for a session."
     (let
       ((f (workout/session id)))
-      (if (null? f) () (list id f (workout/exercises id))))))
+      (if (null? f) () (list id f (workout/exercises id)))))
+  "Summary list (id fields exercises) for a session.")
 
 (define workout/session-title
   (lambda
     (f)
-    "Title string for a session: date, program, and intensity."
     (let
       ((date (workout/session-date f))
         (prog (workout/session-program f))
@@ -2281,12 +4005,12 @@
       (if
         (blank? inten)
         (string-append date " · " prog)
-        (string-append date " · " prog " / " inten)))))
+        (string-append date " · " prog " / " inten))))
+  "Title string for a session: date, program, and intensity.")
 
 (define workout/session-total-reps
   (lambda
     (session-id)
-    "Sum of reps across a session's exercises."
     (list/foldl
       (lambda
         (acc row)
@@ -2295,27 +4019,27 @@
           (workout/as-int
             (workout/field (workout/row-fields row) "reps"))))
       0
-      (workout/exercises session-id))))
+      (workout/exercises session-id)))
+  "Sum of reps across a session's exercises.")
 
 (define workout/session-update
   (lambda
     (id fields)
-    "Update a session row with new fields."
-    (update (quote workout-session) (as-str id) fields)))
+    (update (quote workout-session) (as-str id) fields))
+  "Update a session row with new fields.")
 
 (define workout/sessions-sorted
   (lambda
     ()
-    "Sessions sorted newest first."
     (list/foldl
       workout/insert-session-desc
       ()
-      (workout/session-list 100))))
+      (workout/session-list 100)))
+  "Sessions sorted newest first.")
 
 (define workout/start-bar
   (lambda
     ()
-    "HTML card to start a free session or a KSK run."
     (html/div
       (html/attr "class" "card")
       (html/join
@@ -2380,9 +4104,7 @@
                       (html/attr "id" "ksk-week")
                       (html/attr "value" "1")
                       (html/attr "inputmode" "numeric"))))
-                (html/label
-                  (html/attr "for" "ksk-day")
-                  "Day 1–3")
+                (html/label (html/attr "for" "ksk-day") "Day 1–3")
                 (html/text-input
                   "day"
                   (html/attrs
@@ -2424,20 +4146,115 @@
               (list
                 (html/text "Or ")
                 (html/a "/workout/log" "quick log")
-                (html/text " a completed free workout.")))))))))
+                (html/text " a completed free workout."))))))))
+  "HTML card to start a free session or a KSK run.")
+
+(define workout/start-today
+  (lambda
+    ()
+    (let
+      ((f (workout/program-get)))
+      (if
+        (null? f)
+        ()
+        (if
+          (string-eq (workout/field f "done") "1")
+          ()
+          (let
+            ((ip (workout/session-in-progress "")))
+            (if
+              (null? ip)
+              (if
+                (string-eq (workout/field f "program") "ksk1")
+                (workout/session-create-with-doc
+                  "ksk1"
+                  (workout/program-intensity f)
+                  (workout/program-doc f))
+                ())
+              ip)))))))
+
+(define workout/state
+  (lambda
+    (program)
+    (let
+      ((row (workout/state-row program)))
+      (if
+        (null? row)
+        ()
+        (workout/field (workout/row-fields row) "state"))))
+  "Active state dict for a program, or () when fresh.")
 
 (define workout/state-badge
   (lambda
     (state)
-    "Muted badge showing a session state."
     (html/span
       (html/attr "class" "muted")
-      (html/text (as-str state)))))
+      (html/text (as-str state))))
+  "Muted badge showing a session state.")
+
+(define workout/state-fields
+  (lambda
+    (program state active updated notes)
+    (dict-set*
+      "{}"
+      (list
+        "program"
+        (as-str program)
+        "state"
+        (as-str state)
+        "active"
+        (as-str active)
+        "updated"
+        (as-str updated)
+        "notes"
+        (if (null? notes) "" (as-str notes)))))
+  "Dict of fields for a workout-program-state row.")
+
+(define workout/state-put
+  (lambda
+    (program state notes)
+    (let
+      ((old (workout/state-row program)))
+      (seq
+        (unless
+          (null? old)
+          (update
+            (quote workout-program-state)
+            (workout/row-id old)
+            (workout/state-fields
+              (workout/field (workout/row-fields old) "program")
+              (workout/field (workout/row-fields old) "state")
+              ""
+              (workout/field (workout/row-fields old) "updated")
+              "superseded")))
+        (create
+          (quote workout-program-state)
+          (workout/state-fields
+            program
+            state
+            "true"
+            (workout/today)
+            notes)))))
+  "Write a new active state row; supersedes (deactivates) the old one.")
+
+(define workout/state-row
+  (lambda
+    (program)
+    (let
+      ((rs
+        (find-rows
+          (quote workout-program-state)
+          "program"
+          (as-str program)
+          "active"
+          "true"
+          5)))
+      (if (null? rs) () (car rs))))
+  "Active workout-program-state row (id . fields), or ().")
 
 (define workout/str-lt-loop
   (lambda
     (a b i)
-    "Compare strings char-by-char from index i."
     (let
       ((la (string-length a)) (lb (string-length b)))
       (if
@@ -2451,29 +4268,306 @@
             (if
               (string-eq ca cb)
               (workout/str-lt-loop a b (+ i 1))
-              (< (workout/char-rank ca) (workout/char-rank cb)))))))))
+              (< (workout/char-rank ca) (workout/char-rank cb))))))))
+  "Compare strings char-by-char from index i.")
 
 (define workout/str-lt?
   (lambda
     (a b)
-    "True when string a sorts before string b."
     (let
       ((sa (as-str a)) (sb (as-str b)))
-      (if (string-eq sa sb) #f (workout/str-lt-loop sa sb 0)))))
+      (if (string-eq sa sb) #f (workout/str-lt-loop sa sb 0))))
+  "True when string a sorts before string b.")
+
+(define workout/stretch-configure
+  (lambda
+    ()
+    (workout/state-put
+      "stretch"
+      (dict-set*
+        "{}"
+        (list
+          "cycle"
+          "A"
+          "sun_count"
+          "0"
+          "iso_unlocked"
+          "false"
+          "mark"
+          "0"))
+      "stretch configured"))
+  "Initial state: cycle A (front split advancing).")
+
+(define workout/stretch-day
+  (lambda
+    (date)
+    (let
+      ((parts (string-split (as-str date) "-")))
+      (if
+        (null? parts)
+        "OFF"
+        (let
+          ((wd
+            (date-weekday
+              (parse-int (nth parts 0))
+              (parse-int (nth parts 1))
+              (parse-int (nth parts 2)))))
+          (cond ((= wd 0) "SUN") ((= wd 3) "WED") (else "LIGHT"))))))
+  "SUN heavy slot, WED medium, LIGHT otherwise.")
+
+(define workout/stretch-flip
+  (lambda
+    ()
+    (let
+      ((st (workout/state "stretch")))
+      (if
+        (null? st)
+        ()
+        (let
+          ((cycle (workout/field st "cycle")))
+          (let
+            ((next-cycle (if (string-eq "A" cycle) "B" "A")))
+            (seq
+              (workout/gate-assert
+                "stretch"
+                "cycle-achieved"
+                "true"
+                ""
+                (string-append "cycle " cycle " goal achieved"))
+              (workout/state-put
+                "stretch"
+                (dict-set*
+                  "{}"
+                  (list
+                    "cycle"
+                    next-cycle
+                    "sun_count"
+                    (workout/field st "sun_count")
+                    "iso_unlocked"
+                    (workout/field st "iso_unlocked")
+                    "mark"
+                    (workout/field st "mark")))
+                (string-append "leapfrog: " cycle " -> " next-cycle))
+              (workout/state "stretch")))))))
+  "Explicit leapfrog flip when the advancing goal is achieved.")
+
+(define workout/stretch-gates
+  (lambda
+    (session-id state)
+    (let*
+      ((st
+          (workout/or-dict
+            state
+            (dict-set*
+              "{}"
+              (list
+                "cycle"
+                "A"
+                "sun_count"
+                "0"
+                "iso_unlocked"
+                "false"
+                "mark"
+                "0"))))
+        (doc (workout/parse-session-doc session-id))
+        (was-sun
+          (string-eq "SUN" (as-str (dict-get doc "day"))))
+        (counted
+          (if
+            was-sun
+            (+ 1 (workout/as-int (workout/field st "sun_count")))
+            (workout/as-int (workout/field st "sun_count")))))
+      (let*
+        ((ledger (workout/stretch-ledger-count))
+          (unlocked
+            (workout/stretch-or-str
+              (workout/field st "iso_unlocked")
+              (if
+                (> ledger (workout/as-int (workout/field st "mark")))
+                "true"
+                "false")))
+          (mark-next
+            (if
+              was-sun
+              ledger
+              (workout/as-int (workout/field st "mark")))))
+        (seq
+          (workout/state-put
+            "stretch"
+            (dict-set*
+              "{}"
+              (list
+                "cycle"
+                (workout/field st "cycle")
+                "sun_count"
+                (as-str counted)
+                "iso_unlocked"
+                unlocked
+                "mark"
+                (as-str mark-next)))
+            "stretch: sunday slot counted")
+          (workout/state "stretch")))))
+  "Consumes own-the-range asserts from the marker.")
+
+(define workout/stretch-goals
+  (lambda
+    (cycle)
+    (cond
+      ((string-eq "A" cycle)
+        (dict-set*
+          "{}"
+          (list
+            "advancing"
+            "Front Split"
+            "light"
+            "Reverse Hamstring Stretch + Kneeling Lunge - prying"
+            "medium"
+            "Front Split - Pulses+Holds (10 pulses/15s -> 10/20s -> 10/30s)"
+            "heavy"
+            "Front Split - Extended Isometric (3-5 contractions 30-45s, 3-5min rests)"
+            "maintain"
+            "Loaded Straddle: Horizontal Cossack - Pulses+Holds"
+            "light_other"
+            "Frog Series - prying")))
+      (else
+        (dict-set*
+          "{}"
+          (list
+            "advancing"
+            "Loaded Straddle"
+            "light"
+            "Frog Series - prying"
+            "medium"
+            "Loaded Straddle - Pulses+Holds"
+            "heavy"
+            "Loaded Straddle - Extended Isometric"
+            "maintain"
+            "Front Split - Pulses+Holds"
+            "light_other"
+            "Reverse Hamstring Stretch + Kneeling Lunge - prying")))))
+  "Advancing + maintaining slot content per cycle.")
+
+(define workout/stretch-ledger-count
+  (lambda
+    ()
+    (list/foldl
+      (lambda
+        (acc row)
+        (let
+          ((f (workout/row-fields row)))
+          (if
+            (string-eq (workout/field f "key") "own-the-range")
+            (+ acc 1)
+            acc)))
+      0
+      (workout/gates "stretch")))
+  "own-the-range asserts, total.")
+
+(define workout/stretch-or-str
+  (lambda
+    (cur next)
+    (cond
+      ((string-eq "true" (as-str cur)) "true")
+      ((string-eq "true" (as-str next)) "true")
+      (else
+        (if (blank? (as-str cur)) (as-str next) (as-str cur)))))
+  "true wins: never downgrades.")
+
+(define workout/stretch-suggest
+  (lambda
+    (date)
+    (let*
+      ((st
+          (workout/or-dict
+            (workout/state "stretch")
+            (dict-set*
+              "{}"
+              (list
+                "cycle"
+                "A"
+                "sun_count"
+                "0"
+                "iso_unlocked"
+                "false"
+                "mark"
+                "0"))))
+        (cycle (workout/field st "cycle"))
+        (goals (workout/stretch-goals cycle))
+        (day (workout/stretch-day date))
+        (iso
+          (string-eq "true" (workout/field st "iso_unlocked")))
+        (sun-even
+          (=
+            0
+            (mod (workout/as-int (workout/field st "sun_count")) 2)))
+        (slot
+          (cond
+            ((string-eq "SUN" day)
+              (if
+                (and iso sun-even)
+                (workout/field goals "heavy")
+                (workout/field goals "medium")))
+            ((string-eq "WED" day) (workout/field goals "maintain"))
+            (else
+              (string-append
+                "LIGHT - "
+                (workout/field goals "light_other")
+                " + "
+                (workout/field goals "light")
+                " (prying only)")))))
+      (dict-set*
+        "{}"
+        (list
+          "program"
+          "stretch"
+          "cycle"
+          cycle
+          "day"
+          day
+          "params"
+          (dict-set*
+            "{}"
+            (list
+              "slot"
+              slot
+              "cap"
+              (if
+                iso
+                "heavy iso 3x per 2 weeks max"
+                "no deep isometrics until the range is owned")
+              "promote_with"
+              "(workout/stretch-flip) when the advancing goal is achieved"))))))
+  "stretch doc from state. Pure.")
+
+(define workout/suggest
+  (lambda
+    (program date)
+    (cond
+      ((string-eq (as-str program) "toy")
+        (workout/toy-suggest date))
+      ((string-eq (as-str program) "ksf")
+        (workout/ksf-suggest date))
+      ((string-eq (as-str program) "run5k")
+        (workout/run5k-suggest date))
+      ((string-eq (as-str program) "sct")
+        (workout/sct-suggest date))
+      ((string-eq (as-str program) "stretch")
+        (workout/stretch-suggest date))
+      (else ())))
+  "Generate today's session doc for a gated program. Pure.")
 
 (define workout/sum
   (lambda
     (xs)
-    "Sum of a list of numbers."
     (list/foldl
       (lambda (acc x) (+ acc (workout/as-int x)))
       0
-      xs)))
+      xs))
+  "Sum of a list of numbers.")
 
 (define workout/timer-script
   (lambda
     (cap-min)
-    "Inline JS implementing the countdown timer for a KSK run."
     (html/tag
       "script"
       ""
@@ -2497,15 +4591,232 @@
         "if(left>0)setTimeout(tick,250);"
         "}"
         "tick();"
-        "})();"))))
+        "})();")))
+  "Inline JS implementing the countdown timer for a KSK run.")
 
 (define workout/today
-  (lambda () "Today's date string." (date-today)))
+  (lambda () (date-today))
+  "Today's date string.")
+
+(define workout/today-card
+  (lambda
+    ()
+    (let
+      ((r (workout/program-row)))
+      (if
+        (null? r)
+        (html/div
+          (html/attr "class" "card")
+          (html/join
+            (list
+              (html/h2 "Start a program")
+              (html/p*
+                (html/attr "class" "muted")
+                (html/text
+                  "Track where you are: one click to start, auto-advanced when you finish."))
+              (html/form
+                "POST"
+                "/workout"
+                ""
+                (html/join
+                  (list
+                    (html/hidden "action" "program-init")
+                    (html/hidden "program" "ksk1")
+                    (html/label (html/attr "for" "pi-load") "Load")
+                    (html/text-input
+                      "load"
+                      (html/attrs
+                        (list
+                          (html/attr "id" "pi-load")
+                          (html/attr "placeholder" "24")
+                          (html/attr "required" "required"))))
+                    (html/label (html/attr "for" "pi-unit") "Unit")
+                    (html/text-input
+                      "unit"
+                      (html/attrs
+                        (list
+                          (html/attr "id" "pi-unit")
+                          (html/attr "value" "kg"))))
+                    (html/button
+                      (html/attr "type" "submit")
+                      "Begin KSK 1.0")))))))
+        (let
+          ((f (workout/row-fields r)))
+          (if
+            (string-eq (workout/field f "done") "1")
+            (html/div
+              (html/attr "class" "card")
+              (html/join
+                (list
+                  (html/h2 "Program complete")
+                  (html/p*
+                    (html/attr "class" "muted")
+                    (html/text "KSK 1.0 finished — all 3 phases."))
+                  (html/form
+                    "POST"
+                    "/workout"
+                    ""
+                    (html/join
+                      (list
+                        (html/hidden "action" "program-init")
+                        (html/hidden "program" "ksk1")
+                        (html/label (html/attr "for" "pi-load-r") "Load")
+                        (html/text-input
+                          "load"
+                          (html/attrs
+                            (list
+                              (html/attr "id" "pi-load-r")
+                              (html/attr "placeholder" "24")
+                              (html/attr "required" "required"))))
+                        (html/label (html/attr "for" "pi-unit-r") "Unit")
+                        (html/text-input
+                          "unit"
+                          (html/attrs
+                            (list
+                              (html/attr "id" "pi-unit-r")
+                              (html/attr "value" "kg"))))
+                        (html/button
+                          (html/attr "type" "submit")
+                          "Start a new cycle")))))))
+            (html/div
+              (html/attr "class" "card")
+              (html/join
+                (list
+                  (html/h2 "Next session")
+                  (html/p (workout/program-title f))
+                  (if
+                    (null? (workout/session-in-progress ""))
+                    (html/form
+                      "POST"
+                      "/workout"
+                      ""
+                      (html/join
+                        (list
+                          (html/hidden "action" "start-today")
+                          (html/button
+                            (html/attr "type" "submit")
+                            "Start session"))))
+                    (html/p*
+                      (html/attr "class" "muted")
+                      (html/text "Session in progress — resume above.")))
+                  (html/form
+                    "POST"
+                    "/workout"
+                    ""
+                    (html/join
+                      (list
+                        (html/hidden "action" "program-skip")
+                        (html/button
+                          (html/attr "type" "submit")
+                          "Skip this session")))))))))))))
+
+(define workout/today-card-for
+  (lambda
+    (program)
+    (html/div
+      (html/attr "class" "card")
+      (html/join
+        (list
+          (html/h2 (as-str program))
+          (html/p*
+            (html/attr "class" "muted")
+            (html/text (as-str (workout/gate-status program))))
+          (html/pre
+            (html/text
+              (as-str (workout/suggest program (workout/today)))))))))
+  "One program block: name, state summary, suggestion doc.")
+
+(define workout/today-page
+  (lambda
+    ()
+    (html/page
+      (list
+        (html/h1 "Today")
+        (html/p*
+          (html/attr "class" "muted")
+          (html/text (workout/today)))
+        (workout/today-card-for "ksf")
+        (workout/today-card-for "run5k")
+        (workout/today-card-for "sct")
+        (workout/today-card-for "stretch")
+        (html/a "/workout" "All workouts"))))
+  "Agenda view: suggest docs + state for the four gated programs.")
+
+(define workout/toy-count
+  (lambda () (workout/completed-count "toy")))
+
+(define workout/toy-gates
+  (lambda
+    (session-id state)
+    (let
+      ((done (workout/toy-count)))
+      (let
+        ((per (workout/toy-sessions-per-level)))
+        (let
+          ((new-st (workout/toy-state (+ 1 (div done per)) done)))
+          (let
+            ((old-done
+              (if
+                (null? state)
+                "-1"
+                (as-str (dict-get state "sessions_done")))))
+            (if
+              (string-eq old-done (as-str done))
+              state
+              (seq
+                (workout/state-put
+                  "toy"
+                  new-st
+                  "toy gate: sessions advanced")
+                new-st)))))))
+  "Toy gate: fold completed sessions into state.")
+
+(define workout/toy-sessions-per-level
+  (lambda () 3)
+  "Completed sessions required to advance a toy level.")
+
+(define workout/toy-state
+  (lambda
+    (level done)
+    (dict-set*
+      "{}"
+      (list
+        "level"
+        (as-str level)
+        "sessions_done"
+        (as-str done))))
+  "Toy state dict.")
+
+(define workout/toy-suggest
+  (lambda
+    (date)
+    (let
+      ((st (workout/state "toy")))
+      (dict-set*
+        "{}"
+        (list
+          "program"
+          "toy"
+          "date"
+          (as-str date)
+          "params"
+          (if
+            (null? st)
+            (dict-set*
+              "{}"
+              (list
+                "level"
+                "1"
+                "note"
+                "fresh: 3 completions level up"))
+            st)
+          "blocks"
+          "[]"))))
+  "Toy doc: derived, writes nothing.")
 
 (define workout/volume
   (lambda
     (exercise from-date to-date weight unit)
-    "Total reps of an exercise in the range, filtered by weight/unit."
     (let
       ((ex (workout/normalize-exercise exercise))
         (w (as-str weight))
@@ -2545,12 +4856,12 @@
                   acc))
               acc)))
         0
-        (rows (quote workout-exercise) 1000)))))
+        (rows (quote workout-exercise) 1000))))
+  "Total reps of an exercise in the range, filtered by weight/unit.")
 
 (define workout/walk-create
   (lambda
     (date distance unit duration-min location notes)
-    "Create a completed walk session."
     (let
       ((d
           (if
@@ -2571,12 +4882,13 @@
           "complete"
           (if (null? notes) "" (as-str notes))
           (workout/walk-doc distance unit dur location)
-          (as-str (* (workout/as-int dur) 60)))))))
+          (as-str (* (workout/as-int dur) 60))
+          (as-str (whoami))))))
+  "Create a completed walk session.")
 
 (define workout/walk-detail
   (lambda
     (f)
-    "HTML detail card for a walk session."
     (let
       ((doc (workout/session-doc f))
         (dist (workout/pget (workout/session-doc f) "distance"))
@@ -2600,12 +4912,12 @@
                     (blank? pace)
                     ""
                     (html/li "" (html/text (string-append pace " /" unit))))
-                  (if (blank? loc) "" (html/li "" (html/text loc))))))))))))
+                  (if (blank? loc) "" (html/li "" (html/text loc)))))))))))
+  "HTML detail card for a walk session.")
 
 (define workout/walk-doc
   (lambda
     (distance unit duration-min location)
-    "Session doc dict for a walk."
     (dict-set*
       "{}"
       (list
@@ -2618,12 +4930,12 @@
         "duration_min"
         (as-str duration-min)
         "location"
-        (as-str location)))))
+        (as-str location))))
+  "Session doc dict for a walk.")
 
 (define workout/walk-form
   (lambda
     ()
-    "HTML card form to log a walk."
     (html/div
       (html/attr "class" "card")
       (html/join
@@ -2692,12 +5004,12 @@
                       (html/attr "id" "wk-notes")
                       (html/attr "rows" "2")))
                   "")
-                (html/button (html/attr "type" "submit") "Save walk")))))))))
+                (html/button (html/attr "type" "submit") "Save walk"))))))))
+  "HTML card form to log a walk.")
 
 (define workout/walk-li-summary
   (lambda
     (f)
-    "One-line summary of a walk session."
     (let
       ((dist (workout/pget (workout/session-doc f) "distance"))
         (unit (workout/pget (workout/session-doc f) "unit"))
@@ -2722,12 +5034,12 @@
           " min - "
           pace
           " /"
-          unit)))))
+          unit))))
+  "One-line summary of a walk session.")
 
 (define workout/walk-pace-str
   (lambda
     (doc)
-    "Pace string (mm:ss per unit) for a walk doc, \"\" when no distance."
     (let
       ((dist-str (workout/pget doc "distance"))
         (dur-str (workout/pget doc "duration_min")))
@@ -2752,1051 +5064,5 @@
                     (if
                       (< sec-rem 10)
                       (string-append "0" (as-str sec-rem))
-                      (as-str sec-rem))))))))))))
-
-
-;; =======================================================================
-;; PROGRAM STATE + GATES  (spec: docs/plans/workout-gating.md)
-;; =======================================================================
-
-(deftype 'workout-program-state 'program 'state 'active 'updated 'notes)
-
-(deftype 'workout-gate 'program 'key 'passed 'session_id 'date 'notes)
-
-(define workout/state-fields
-  (lambda (program state active updated notes)
-    "Dict of fields for a workout-program-state row."
-    (dict-set* "{}"
-      (list "program" (as-str program)
-            "state" (as-str state)
-            "active" (as-str active)
-            "updated" (as-str updated)
-            "notes" (if (null? notes) "" (as-str notes))))))
-
-(define workout/gate-fields
-  (lambda (program key passed session_id date notes)
-    "Dict of fields for a workout-gate row."
-    (dict-set* "{}"
-      (list "program" (as-str program)
-            "key" (as-str key)
-            "passed" (as-str passed)
-            "session_id" (if (null? session_id) "" (as-str session_id))
-            "date" (if (null? date) (workout/today) (as-str date))
-            "notes" (if (null? notes) "" (as-str notes))))))
-
-(define workout/state-row
-  (lambda (program)
-    "Active workout-program-state row (id . fields), or ()."
-    (let ((rs
-            (find-rows (quote workout-program-state)
-              "program" (as-str program) "active" "true" 5)))
-      (if (null? rs) () (car rs)))))
-
-(define workout/state
-  (lambda (program)
-    "Active state dict for a program, or () when fresh."
-    (let ((row (workout/state-row program)))
-      (if (null? row) ()
-        (workout/field (workout/row-fields row) "state")))))
-
-(define workout/state-put
-  (lambda (program state notes)
-    "Write a new active state row; supersedes (deactivates) the old one."
-    (let ((old (workout/state-row program)))
-      (seq
-        (unless (null? old)
-          (update (quote workout-program-state) (workout/row-id old)
-            (workout/state-fields
-              (workout/field (workout/row-fields old) "program")
-              (workout/field (workout/row-fields old) "state") ""
-              (workout/field (workout/row-fields old) "updated")
-              "superseded")))
-        (create (quote workout-program-state)
-          (workout/state-fields program state "true" (workout/today) notes))))))
-
-(define workout/gate-assert
-  (lambda (program key passed session_id notes)
-    "Record an asserted gate in the ledger. Returns the new row id."
-    (create (quote workout-gate)
-      (workout/gate-fields program key passed session_id "" notes))))
-
-(define workout/gates
-  (lambda (program)
-    "Gate rows for a program (max 100)."
-    (find-rows (quote workout-gate) "program" (as-str program) 100)))
-
-(define workout/gates-summary
-  (lambda (program)
-    "Gate ledger rendered as one string (key=passed @date)."
-    (list/foldl
-      (lambda (acc row)
-        (let ((f (workout/row-fields row)))
-          (let ((entry
-                  (string-append
-                    (workout/field f "key") "="
-                    (workout/field f "passed")
-                    (if (blank? (workout/field f "date")) ""
-                      (string-append " " (workout/field f "date"))))))
-            (if (blank? acc) entry (string-append entry "; " acc)))))
-      ""
-      (workout/gates program))))
-
-(define workout/gate-status
-  (lambda (program)
-    "Cursor + gate truth for an agent or the UI (flat dict)."
-    (dict-set* "{}"
-      (list "program" (as-str program)
-            "state" (workout/state program)
-            "gates" (workout/gates-summary program)))))
-
-(define workout/completed-count
-  (lambda (program)
-    "Number of completed sessions for a program."
-    (list/foldl
-      (lambda (acc row)
-        (if (string-eq (workout/field (workout/row-fields row) "state") "complete")
-            (+ acc 1) acc))
-      0
-      (find-rows (quote workout-session) "program" (as-str program) 500))))
-
-(define workout/car-or-null
-  (lambda (xs) "First element or ()." (if (null? xs) () (car xs))))
-
-(define workout/or-dict
-  (lambda (maybe-dict fallback) "maybe-dict when non-null, else fallback."
-    (if (null? maybe-dict) fallback maybe-dict)))
-
-(define workout/toy-sessions-per-level
-  (lambda () "Completed sessions required to advance a toy level." 3))
-
-(define workout/toy-state
-  (lambda (level done)
-    "Toy state dict."
-    (dict-set* "{}"
-      (list "level" (as-str level) "sessions_done" (as-str done)))))
-
-(define workout/toy-count
-  (lambda () (workout/completed-count "toy")))
-
-(define workout/toy-gates
-  (lambda (session-id state)
-    "Toy gate: fold completed sessions into state."
-    (let ((done (workout/toy-count)))
-      (let ((per (workout/toy-sessions-per-level)))
-        (let ((new-st (workout/toy-state (+ 1 (div done per)) done)))
-          (let ((old-done (if (null? state) "-1" (as-str (dict-get state "sessions_done")))))
-            (if (string-eq old-done (as-str done))
-                state
-                (seq
-                  (workout/state-put "toy" new-st "toy gate: sessions advanced")
-                  new-st))))))))
-
-(define workout/toy-suggest
-  (lambda (date)
-    "Toy doc: derived, writes nothing."
-    (let ((st (workout/state "toy")))
-      (dict-set* "{}"
-        (list "program" "toy"
-              "date" (as-str date)
-              "params"
-              (if (null? st)
-                  (dict-set* "{}" (list "level" "1" "note" "fresh: 3 completions level up"))
-                  st)
-              "blocks" "[]")))))
-
-;; --- ksf: Kettlebells StrongFirst C&J (docs/plans/workout-gating.md) ---
-
-(define workout/ksf-ladder
-  (lambda () "Plan A rep patterns per 30s set, in advance order."
-    (list "CJ" "CJC" "CJCJ" "CJCJC" "CJCJCJ")))
-
-(define workout/ksf-weekdays
-  (lambda () "2-day variant: Friday and Sunday." (list 5 0)))
-
-(define workout/ksf-configure
-  (lambda (bell unit)
-    "Initial ksf state after the LC RM test (weaker arm 6-12RM)."
-    (workout/state-put "ksf"
-      (dict-set* "{}"
-        (list "phase" "A" "pattern" "CJ"
-              "bell" (as-str bell) "unit" (workout/normalize-unit unit)
-              "done" "0" "stalls" "0" "since_deload" "0" "deload_left" "0"))
-      "ksf configured after RM test")))
-
-(define workout/ksf-state-or-default
-  (lambda ()
-    "ksf state dict, or fresh default."
-    (workout/or-dict (workout/state "ksf")
-      (dict-set* "{}"
-        (list "phase" "A" "pattern" "CJ" "bell" "" "unit" "kg"
-              "done" "0" "stalls" "0" "since_deload" "0" "deload_left" "0")))))
-
-(define workout/ksf-doc
-  (lambda (phase pattern day bell unit deload)
-    "Session doc. Day: LCCJ (A) / C / J (B)."
-    (dict-set* "{}"
-      (list "program" "ksf"
-            "phase" (as-str phase)
-            "pattern" (as-str pattern)
-            "day" (as-str day)
-            "params" (dict-set* "{}"
-                        (list "bell" (as-str bell)
-                              "unit" (as-str unit)
-                              "cadence_sec" "30"
-                              "target_min" "30"
-                              "deload" (if deload "true" "false")))
-            "progress" (dict-set* "{}"
-                         (list "sets_done" "0" "ended" ""))
-            "blocks" "[]"))))
-
-(define workout/ksf-bell-for
-  (lambda (st deload)
-    "Bell: one size lighter on deloads."
-    (let ((b (workout/field st "bell")))
-      (if (blank? b) b
-        (if (string-eq (as-str deload) "true")
-            (as-str (- (workout/as-int b) (if (string-eq "lb" (workout/field st "unit")) 9 4)))
-            b)))))
-
-(define workout/ksf-suggest
-  (lambda (date)
-    "ksf doc from state. Pure."
-    (let*
-      ((st (workout/ksf-state-or-default))
-       (parts (string-split (as-str date) "-"))
-       (wd (if (null? parts) -1
-             (date-weekday (parse-int (nth parts 0))
-                           (parse-int (nth parts 1))
-                           (parse-int (nth parts 2)))))
-       (on-day (workout/member? wd (workout/ksf-weekdays)))
-       (deload (not (string-eq "0" (workout/field st "deload_left"))))
-       (phase (if on-day (workout/field st "phase") "OFF"))
-       (day
-         (cond
-           ((not on-day) "OFF")
-           ((string-eq "A" phase) "LCCJ")
-           ((= wd 5) "C")
-           (else "J"))))
-      (workout/ksf-doc phase (workout/field st "pattern") day
-        (workout/ksf-bell-for st deload)
-        (workout/field st "unit") deload))))
-
-(define workout/ksf-duration-sum
-  (lambda (session-id)
-    "Duration in minutes from any Duration exercise rows (legacy convention)."
-    (list/foldl
-      (lambda (acc row)
-        (let ((f (workout/row-fields row)))
-          (if (string-eq (workout/field f "exercise") "Duration")
-              (+ acc (workout/as-int (workout/field f "reps")))
-              acc)))
-      0
-      (workout/exercises session-id))))
-
-(define workout/ksf-duration-min
-  (lambda (session-id)
-    "Duration in minutes for a ksf session (card 3bfba572).
-     Prefer doc.progress.elapsed_min, which the ksf runner writes on every
-     step (kept from legacy/direct doc writes); fall back to the legacy
-     Duration exercise-row sum when progress carries no elapsed_min, and
-     take the max so either signal can clear the 30-minute gate."
-    (let*
-      ((doc (workout/parse-session-doc session-id))
-       (elapsed (workout/pget (workout/doc-progress doc) "elapsed_min"))
-       (from-doc (workout/as-int elapsed))
-       (from-rows (workout/ksf-duration-sum session-id)))
-      (if (blank? elapsed)
-          from-rows
-          (max from-doc from-rows)))))
-
-(define workout/ksf-cleared?
-  (lambda (session-id)
-    "Clears at >= 30 min."
-    (>= (workout/ksf-duration-min session-id) 30)))
-
-(define workout/ksf-index
-  (lambda (needle haystack)
-    "0-based index, or -1."
-    (workout/ksf-index-from needle haystack 0)))
-
-(define workout/ksf-index-from
-  (lambda (needle haystack i)
-    (cond
-      ((null? haystack) -1)
-      ((string-eq (as-str (car haystack)) (as-str needle)) i)
-      (else (workout/ksf-index-from needle (cdr haystack) (+ i 1))))))
-
-(define workout/ksf-section-reps
-  (lambda (pattern)
-    "P3/P4/P5 -> 3/4/5; -1 otherwise."
-    (if (blank? pattern) -1
-      (if (string-eq "P" (substring (as-str pattern) 0 1))
-          (parse-int (substring (as-str pattern) 1 2))
-          -1))))
-
-(define workout/ksf-gates
-  (lambda (session-id state)
-    "ksf gates: clear (>=30min) advances Plan A; 6 shorts flip to B."
-    (let*
-      ((st (workout/or-dict state (workout/ksf-state-or-default)))
-       (doc (workout/parse-session-doc session-id))
-       (was-deload
-         (string-eq "true" (workout/pget (workout/doc-params doc) "deload")))
-       (cleared (workout/ksf-cleared? session-id))
-       (phase (workout/field st "phase"))
-       (pattern (workout/field st "pattern"))
-       (idx (workout/ksf-index pattern (workout/ksf-ladder)))
-       (done (+ 1 (workout/as-int (workout/field st "done")))))
-      (let*
-        ((cleared-next
-           (cond
-             (was-deload pattern)
-             ((string-eq "A" phase)
-              (cond
-                ((not cleared) pattern)
-                ((< (+ idx 1) (workout/len (workout/ksf-ladder)))
-                 (nth (workout/ksf-ladder) (+ idx 1)))
-                (else "B:P3")))
-             ((string-eq "B" phase)
-              (if cleared
-                  (let ((n (workout/ksf-section-reps pattern)))
-                    (if (< n 5)
-                        (string-append "P" (as-str (+ n 1)))
-                        pattern))
-                  pattern))
-             (else pattern)))
-         (flip-to-b
-           (and (not cleared)
-                (not (string-eq "B" phase))
-                (>= (+ 1 (workout/as-int (workout/field st "stalls"))) 6)))
-         (next-phase
-           (if (string-eq "A" phase)
-               (cond (flip-to-b "B")
-                     ((string-eq "B:P3" cleared-next) "B")
-                     (else "A"))
-               phase))
-         (next-pattern
-           (cond
-             (flip-to-b "P3")
-             ((string-eq "B:P3" cleared-next) "P3")
-             (else cleared-next)))
-         (next-stalls
-           (if cleared 0 (+ 1 (workout/as-int (workout/field st "stalls")))))
-         (since-d (workout/as-int (workout/field st "since_deload")))
-         (deload-left (workout/as-int (workout/field st "deload_left")))
-         (sched
-           (if was-deload (list since-d deload-left)
-             (if (>= (+ since-d 1) 8) (list 0 2) (list (+ since-d 1) deload-left))))
-         (note
-           (cond
-             (flip-to-b "stalled: retest LC RM, switch to Plan B")
-             ((string-eq "B:P3" cleared-next)
-              "ladder complete: Plan A yields to Plan B")
-             ((and cleared (not (string-eq pattern next-pattern)))
-              "cleared: 30 min, pattern advanced")
-             (cleared "cleared: 30 min")
-             (else "short session: talk test ended the day")))
-         (state2
-           (dict-set* "{}"
-             (list "phase" next-phase
-                   "pattern" next-pattern
-                   "bell" (workout/field st "bell")
-                   "unit" (workout/field st "unit")
-                   "done" (as-str done)
-                   "stalls" (as-str next-stalls)
-                   "since_deload" (as-str (nth sched 0))
-                   "deload_left" (as-str (nth sched 1))))))
-        (seq
-          (workout/state-put "ksf" state2 note)
-          state2)))))
-
-;; --- sct: Systematic Core Training (docs/plans/workout-gating.md) ---
-
-(define workout/sct-configure
-  (lambda ()
-    "Initial state: stability s1."
-    (workout/state-put "sct"
-      (dict-set* "{}"
-        (list "phase" "stability" "session" "1" "exits" "0"))
-      "sct configured")))
-
-(define workout/sct-phase-last
-  (lambda (phase)
-    "Sessions per phase."
-    (cond
-      ((string-eq phase "stability") 12)
-      ((string-eq phase "strength") 9)
-      (else 12))))
-
-(define workout/sct-stab-column
-  (lambda (n)
-    (nth
-      (list "2-3x5-10" "3-5x6-12" "3-5x6-12" "3-5x8-15" "3-5x8-15"
-            "3-5x15-20" "3-5x15-20" "3-4x20-25" "3-5x20-25"
-            "1-2x25-30" "2-3x25-30" "2-3x25-30")
-      (- n 1))))
-
-(define workout/sct-hollow-column
-  (lambda (n)
-    (nth
-      (list "6-10x10s" "6-10x15s" "5-8x20s" "4-7x25s" "3-7x30s"
-            "3-6x35s" "3-5x40s" "2-4x45s" "2-3x50s")
-      (- n 1))))
-
-(define workout/sct-raised-column
-  (lambda (n)
-    (nth
-      (list "3-6x3-5" "3-6x4-7" "3-6x5-8" "3-5x6-9" "3-5x7-10"
-            "3-5x8-12" "3-4x12-15" "2-3x15" "3x15")
-      (- n 1))))
-
-(define workout/sct-sit-column
-  (lambda (n)
-    (nth
-      (list "6-10x5s" "6-9x7-10s" "5-8x8-12s" "4-6x10-15s"
-            "3-5x15-20s" "3-5x18-22s" "3-5x20-25s" "1-2x22-28s" "1x30s")
-      (- n 1))))
-
-(define workout/sct-hang-column
-  (lambda (n)
-    (nth
-      (list "3-5x1-3" "3-6x1-4" "3-5x1-5" "3-6x1-5" "3-7x2-5"
-            "3-5x3-5" "3-6x3-5" "3-5x4-6" "3x4-5")
-      (- n 1))))
-
-(define workout/sct-hold-column
-  (lambda (n)
-    (nth
-      (list "3-5x10s" "3-5x12-15s" "3-5x15-18s" "3-5x18-20s"
-            "3-5x20-22s" "3-5x22-25s" "3-5x24-27s" "3-4x26-28s" "3x30s")
-      (- n 1))))
-
-(define workout/sct-dl-column
-  (lambda (n)
-    (nth
-      (list "3-5x1-3" "3-5x2-4" "3-5x3-5" "3-5x4-6" "3-5x5-7"
-            "2-4x6-8" "2-4x7-9" "2-3x8-10" "1x10")
-      (- n 1))))
-
-(define workout/sct-carry-session
-  (lambda (n)
-    "Power session: minutes, RPE, rotating carry (24kg / 2x24kg)."
-    (let ((min-l (list 7 7 7 8 8 8 9 9 9 10 10 10))
-          (rpe-l (list 7 7 7 8 8 8 9 9 9 7 7 7))
-          (carry-l (list "Suitcase 24kg" "Rack 24kg" "Overhead 24kg"
-                         "Bottoms-up 24kg" "Farmers 2x24kg"
-                         "Double Rack 2x24kg" "Double Overhead 2x24kg")))
-      (dict-set* "{}"
-        (list "minutes" (as-str (nth min-l (- n 1)))
-              "rpe" (as-str (nth rpe-l (- n 1)))
-              "carry" (nth carry-l (mod (- n 1) 7)))))))
-
-(define workout/sct-carry-kind
-  (lambda (n) (workout/pget (workout/sct-carry-session n) "carry")))
-
-(define workout/sct-state-or-default
-  (lambda ()
-    (workout/or-dict (workout/state "sct")
-      (dict-set* "{}"
-        (list "phase" "stability" "session" "1" "exits" "0")))))
-
-(define workout/sct-suggest-stability
-  (lambda (n)
-    (let ((col (workout/sct-stab-column n)))
-      (string-append
-        "breathing 1max/position (goal 30) | dead bugs " col
-        " | bird dogs " col
-        " | neck nods/rotations 30 | optional rocking 30"))))
-
-(define workout/sct-suggest-strength-a
-  (lambda (n)
-    (string-append
-      "hollow hold " (workout/sct-hollow-column n)
-      " | short-lever leg raises " (workout/sct-raised-column n)
-      " | long-lever leg raises " (workout/sct-raised-column n))))
-
-(define workout/sct-suggest-strength-b
-  (lambda (n)
-    (let ((base
-            (string-append
-              "hollow hold " (workout/sct-hollow-column n)
-              " | leg raises " (workout/sct-raised-column n)
-              " | tuck sit " (workout/sct-sit-column n)
-              " | hanging knee raises " (workout/sct-hang-column n))))
-      (if (>= n 7)
-          (string-append base
-            " | holds " (workout/sct-hold-column n)
-            " | kickstand->SL deadlifts " (workout/sct-dl-column n))
-          base))))
-
-(define workout/sct-microdose
-  (lambda (phase)
-    (if (string-eq "strength" phase)
-        "MICRO-DOSE: breathing 1max/position | dead bugs 2x8 | neck drills 1min | 1-2 submax floor drills"
-        "MICRO-DOSE: breathing 1max/position | dead bugs 2x8 | neck drills 1min")))
-
-(define workout/sct-carry-note
-  (lambda (n)
-    (string-append
-      "carry block: "
-      (workout/sct-carry-kind n)
-      " - accumulate max distance in "
-      (workout/pget (workout/sct-carry-session n) "minutes")
-      " min, RPE "
-      (workout/pget (workout/sct-carry-session n) "rpe"))))
-
-(define workout/sct-content
-  (lambda (phase n day)
-    (cond
-      ((string-eq "OFF" day) (workout/sct-microdose phase))
-      ((string-eq "stability" phase) (workout/sct-suggest-stability n))
-      ((string-eq "strength" phase)
-       (if (string-eq "A" day)
-           (workout/sct-suggest-strength-a n)
-           (workout/sct-suggest-strength-b n)))
-      ((string-eq "power" phase)
-       (if (string-eq "B" day)
-           (workout/sct-carry-note n)
-           "strength maintenance: pick 2-3 drills, stay ownable"))
-      (else ""))))
-
-(define workout/sct-suggest
-  (lambda (date)
-    "sct doc from state. Pure."
-    (let*
-      ((st (workout/sct-state-or-default))
-       (phase (workout/field st "phase"))
-       (n (workout/as-int (workout/field st "session")))
-       (last (workout/sct-phase-last phase))
-       (day (workout/run5k-day date))
-       (content (workout/sct-content phase n day))
-       (bench (if (= n last) "true" "false")))
-      (dict-set* "{}"
-        (list "program" "sct"
-              "phase" phase
-              "session" (as-str n)
-              "day" day
-              "params"
-              (dict-set* "{}"
-                (list "content" content
-                      "benchmark_due" bench
-                      "promote_with" "(workout/sct-promote)")))))))
-
-(define workout/sct-gates
-  (lambda (session-id state)
-    "Session column advances, capped at the benchmark."
-    (let*
-      ((st (workout/or-dict state (workout/sct-state-or-default)))
-       (phase (workout/field st "phase"))
-       (n (workout/as-int (workout/field st "session")))
-       (last (workout/sct-phase-last phase))
-       (next-n (if (< n last) (+ n 1) last))
-       (state2
-         (dict-set* "{}"
-           (list "phase" phase
-                 "session" (as-str next-n)
-                 "exits" (workout/field st "exits")))))
-      (seq
-        (workout/state-put "sct" state2 "sct: session column advanced")
-        state2))))
-
-(define workout/sct-promote
-  (lambda ()
-    "Explicit promotion after benchmark tests."
-    (let*
-      ((st (workout/sct-state-or-default))
-       (phase (workout/field st "phase"))
-       (exits (workout/as-int (workout/field st "exits"))))
-      (cond
-        ((string-eq "stability" phase)
-         (seq
-           (workout/gate-assert "sct" "stability-exit" "true" "" "benchmarks passed")
-           (workout/state-put "sct"
-             (dict-set* "{}"
-               (list "phase" "strength" "session" "1"
-                     "exits" (as-str (+ exits 1))))
-             "promoted: stability -> strength")))
-        ((string-eq "strength" phase)
-         (seq
-           (workout/gate-assert "sct" "strength-exit" "true" "" "goal column reached")
-           (workout/state-put "sct"
-             (dict-set* "{}"
-               (list "phase" "power" "session" "1"
-                     "exits" (as-str (+ exits 1))))
-             "promoted: strength -> power")))
-        (else (workout/state "sct"))))))
-
-;; --- stretch: Quicksilver leapfrog cycles (docs/plans/workout-gating.md) ---
-
-(define workout/stretch-configure
-  (lambda ()
-    "Initial state: cycle A (front split advancing)."
-    (workout/state-put "stretch"
-      (dict-set* "{}"
-        (list "cycle" "A" "sun_count" "0" "iso_unlocked" "false" "mark" "0"))
-      "stretch configured")))
-
-(define workout/stretch-goals
-  (lambda (cycle)
-    "Advancing + maintaining slot content per cycle."
-    (cond
-      ((string-eq "A" cycle)
-       (dict-set* "{}"
-         (list "advancing" "Front Split"
-               "light" "Reverse Hamstring Stretch + Kneeling Lunge - prying"
-               "medium" "Front Split - Pulses+Holds (10 pulses/15s -> 10/20s -> 10/30s)"
-               "heavy" "Front Split - Extended Isometric (3-5 contractions 30-45s, 3-5min rests)"
-               "maintain" "Loaded Straddle: Horizontal Cossack - Pulses+Holds"
-               "light_other" "Frog Series - prying")))
-      (else
-       (dict-set* "{}"
-         (list "advancing" "Loaded Straddle"
-               "light" "Frog Series - prying"
-               "medium" "Loaded Straddle - Pulses+Holds"
-               "heavy" "Loaded Straddle - Extended Isometric"
-               "maintain" "Front Split - Pulses+Holds"
-               "light_other" "Reverse Hamstring Stretch + Kneeling Lunge - prying"))))))
-
-(define workout/stretch-day
-  (lambda (date)
-    "SUN heavy slot, WED medium, LIGHT otherwise."
-    (let ((parts (string-split (as-str date) "-")))
-      (if (null? parts) "OFF"
-        (let ((wd (date-weekday (parse-int (nth parts 0))
-                                (parse-int (nth parts 1))
-                                (parse-int (nth parts 2)))))
-          (cond ((= wd 0) "SUN") ((= wd 3) "WED") (else "LIGHT")))))))
-
-(define workout/stretch-ledger-count
-  (lambda ()
-    "own-the-range asserts, total."
-    (list/foldl
-      (lambda (acc row)
-        (let ((f (workout/row-fields row)))
-          (if (string-eq (workout/field f "key") "own-the-range")
-              (+ acc 1) acc)))
-      0
-      (workout/gates "stretch"))))
-
-(define workout/stretch-or-str
-  (lambda (cur next)
-    "true wins: never downgrades."
-    (cond
-      ((string-eq "true" (as-str cur)) "true")
-      ((string-eq "true" (as-str next)) "true")
-      (else (if (blank? (as-str cur)) (as-str next) (as-str cur))))))
-
-(define workout/stretch-suggest
-  (lambda (date)
-    "stretch doc from state. Pure."
-    (let*
-      ((st (workout/or-dict (workout/state "stretch")
-             (dict-set* "{}"
-               (list "cycle" "A" "sun_count" "0" "iso_unlocked" "false" "mark" "0"))))
-       (cycle (workout/field st "cycle"))
-       (goals (workout/stretch-goals cycle))
-       (day (workout/stretch-day date))
-       (iso (string-eq "true" (workout/field st "iso_unlocked")))
-       (sun-even (= 0 (mod (workout/as-int (workout/field st "sun_count")) 2)))
-       (slot
-         (cond
-           ((string-eq "SUN" day)
-            (if (and iso sun-even)
-                (workout/field goals "heavy")
-              (workout/field goals "medium")))
-           ((string-eq "WED" day)
-            (workout/field goals "maintain"))
-           (else
-             (string-append
-               "LIGHT - "
-               (workout/field goals "light_other")
-               " + "
-               (workout/field goals "light")
-               " (prying only)")))))
-      (dict-set* "{}"
-        (list "program" "stretch"
-              "cycle" cycle
-              "day" day
-              "params"
-              (dict-set* "{}"
-                (list "slot" slot
-                      "cap" (if iso
-                                "heavy iso 3x per 2 weeks max"
-                                "no deep isometrics until the range is owned")
-                      "promote_with" "(workout/stretch-flip) when the advancing goal is achieved")))))))
-
-(define workout/stretch-gates
-  (lambda (session-id state)
-    "Consumes own-the-range asserts from the marker."
-    (let*
-      ((st (workout/or-dict state
-             (dict-set* "{}"
-               (list "cycle" "A" "sun_count" "0" "iso_unlocked" "false" "mark" "0"))))
-       (doc (workout/parse-session-doc session-id))
-       (was-sun (string-eq "SUN" (as-str (dict-get doc "day"))))
-       (counted
-         (if was-sun
-             (+ 1 (workout/as-int (workout/field st "sun_count")))
-           (workout/as-int (workout/field st "sun_count")))))
-      (let*
-        ((ledger (workout/stretch-ledger-count))
-         (unlocked
-           (workout/stretch-or-str (workout/field st "iso_unlocked")
-             (if (> ledger (workout/as-int (workout/field st "mark")))
-                 "true" "false")))
-         (mark-next
-           (if was-sun ledger (workout/as-int (workout/field st "mark")))))
-        (seq
-          (workout/state-put "stretch"
-            (dict-set* "{}"
-              (list "cycle" (workout/field st "cycle")
-                    "sun_count" (as-str counted)
-                    "iso_unlocked" unlocked
-                    "mark" (as-str mark-next)))
-            "stretch: sunday slot counted")
-          (workout/state "stretch"))))))
-
-(define workout/stretch-flip
-  (lambda ()
-    "Explicit leapfrog flip when the advancing goal is achieved."
-    (let ((st (workout/state "stretch")))
-      (if (null? st)
-          ()
-        (let ((cycle (workout/field st "cycle")))
-          (let ((next-cycle (if (string-eq "A" cycle) "B" "A")))
-            (seq
-              (workout/gate-assert "stretch" "cycle-achieved" "true" ""
-                (string-append "cycle " cycle " goal achieved"))
-              (workout/state-put "stretch"
-                (dict-set* "{}"
-                  (list "cycle" next-cycle
-                        "sun_count" (workout/field st "sun_count")
-                        "iso_unlocked" (workout/field st "iso_unlocked")
-                        "mark" (workout/field st "mark")))
-                (string-append "leapfrog: " cycle " -> " next-cycle))
-              (workout/state "stretch"))))))))
-
-;; --- run5k (docs/plans/workout-gating.md) ---
-
-(define workout/run5k-ref
-  (lambda (xs week)
-    "Week n (1-based) -> element n-1; out of range repeats last."
-    (let ((n (- (workout/as-int week) 1)))
-      (let ((lim (workout/len xs)))
-        (cond
-          ((< n 0) (nth xs 0))
-          ((< n lim) (nth xs n))
-          (else (nth xs (- lim 1))))))))
-
-(define workout/run5k-a-goal
-  (lambda (week)
-    "Fri ratio session: jog/walk/sets."
-    (workout/run5k-ref
-      (list "30/90/6"  "30/90/6"  "45/75/6"  "45/75/6"
-            "60/60/5"  "60/60/5"  "90/30/4"  "90/30/4"
-            "120/30/4" "120/30/4" "180/60/3" "180/60/3"
-            "180/30/4" "180/30/4" "240/45/3" "240/45/3"
-            "300/45/3" "300/45/3")
-      week)))
-
-(define workout/run5k-b-goal
-  (lambda (week)
-    "Sun long session; w18 = RACE."
-    (workout/run5k-ref
-      (list "30/90/8"  "30/90/8"  "45/75/8"  "45/75/8"
-            "60/60/9"  "60/60/9"  "90/30/7"  "90/30/7"
-            "120/60/5" "120/60/5" "120/45/7" "120/45/7"
-            "180/60/6" "180/60/6" "180/45/7" "180/45/7"
-            "240/45/5" "RACE")
-      week)))
-
-(define workout/run5k-weekdays
-  (lambda () (list 5 0)))
-
-(define workout/run5k-configure
-  (lambda ()
-    (workout/state-put "run5k"
-      (dict-set* "{}" (list "week" "1" "in_week" "0"))
-      "run5k configured")))
-
-(define workout/run5k-sore-count
-  (lambda ()
-    (list/foldl
-      (lambda (acc row)
-        (let ((f (workout/row-fields row)))
-          (if (string-eq (workout/field f "key") "sore")
-              (+ acc 1) acc)))
-      0
-      (workout/gates "run5k"))))
-
-(define workout/run5k-sore-unseen?
-  (lambda (seen)
-    (> (workout/run5k-sore-count) (workout/as-int (as-str seen)))))
-
-(define workout/run5k-day
-  (lambda (date)
-    "A Fri, B Sun, OFF otherwise."
-    (let ((parts (string-split (as-str date) "-")))
-      (if (null? parts) "OFF"
-        (let ((wd (date-weekday (parse-int (nth parts 0))
-                                (parse-int (nth parts 1))
-                                (parse-int (nth parts 2)))))
-          (cond ((= wd 5) "A") ((= wd 0) "B") (else "OFF")))))))
-
-(define workout/run5k-suggest
-  (lambda (date)
-    "run doc from state. Pure."
-    (let*
-      ((st (workout/or-dict (workout/state "run5k")
-             (dict-set* "{}" (list "week" "1" "in_week" "0"))))
-       (week (workout/as-int (workout/field st "week")))
-       (day (workout/run5k-day date))
-       (goal (if (string-eq day "B")
-                 (workout/run5k-b-goal week)
-                 (workout/run5k-a-goal week))))
-      (dict-set* "{}"
-        (list "program" "run5k"
-              "week" (as-str week)
-              "day" day
-              "params"
-              (dict-set* "{}"
-                (list "goal" goal
-                      "warmup" "3min brisk walk"
-                      "flush" "2min easy walk"
-                      "talk_test" "conversational effort only"))
-              "blocks" "[]")))))
-
-(define workout/run5k-gates
-  (lambda (session-id state)
-    "Week turns over after 2 sessions; sore repeats it."
-    (let*
-      ((st (workout/or-dict state (dict-set* "{}" (list "week" "1" "in_week" "0"))))
-       (in-week (+ 1 (workout/as-int (workout/field st "in_week"))))
-       (week (workout/as-int (workout/field st "week")))
-       (sore-mark (workout/field st "sore_mark"))
-       (week-turn (= in-week 2))
-       (sore (and week-turn (workout/run5k-sore-unseen? sore-mark)))
-       (week-next
-         (if (and week-turn (not sore))
-             (if (< week 18) (+ week 1) 18)
-           week))
-       (next-mark
-         (if week-turn (workout/run5k-sore-count)
-           (workout/as-int (workout/field st "sore_mark"))))
-       (sore-note
-         (if sore "; sore: repeating the week this cycle" ""))
-       (state2
-         (dict-set* "{}"
-           (list "week" (as-str week-next)
-                 "in_week" (as-str (if week-turn 0 in-week))
-                 "sore_mark" (as-str next-mark)))))
-      (seq
-        (workout/state-put "run5k" state2
-          (if week-turn
-              (string-append "week " (as-str week) " complete" sore-note)
-            "session logged in current week"))
-        state2))))
-
-;; =======================================================================
-;; FACT-CAPTURE SHIM + KSF TAP-RUNNER
-;; =======================================================================
-
-(define workout/replace-fact
-  (lambda (sid name unit reps)
-    "Upsert one exercise fact (replace by session+exercise)."
-    (seq
-      (list/map
-        (lambda (row)
-          (let ((f (workout/row-fields row)))
-            (if (string-eq (workout/field f "exercise") (as-str name))
-                (workout/exercise-delete (workout/row-id row))
-                ())))
-        (workout/exercises sid))
-      (unless (or (blank? (as-str reps)) (string-eq (as-str reps) "0"))
-        (workout/exercise-log sid name "" unit reps "" "")))))
-
-(define workout/col-lower
-  (lambda (col)
-    "Lower-bound total of a column like 2-3x5-10 or 3x30s."
-    (let*
-      ((s (as-str col))
-       (pair (string-split s "x"))
-       (set-part (if (null? pair) "0" (nth pair 0)))
-       (rep-part (if (null? pair) "0" (nth pair 1)))
-       (set-tok (string-split set-part "-"))
-       (sets (workout/as-int (nth set-tok 0)))
-       (rep-clean
-         (if (string-eq "s" (substring rep-part
-               (- (string-length rep-part) 1) (string-length rep-part)))
-             (substring rep-part 0 (- (string-length rep-part) 1))
-           rep-part))
-       (rep-tok (string-split rep-clean "-"))
-       (reps (workout/as-int (nth rep-tok 0))))
-      (* sets reps))))
-
-(define workout/run5k-capture-facts
-  (lambda (session-id doc)
-    "run5k: prescribed box in minutes."
-    (let ((params (workout/doc-params doc))
-          (goal (workout/pget (workout/doc-params doc) "goal")))
-      (unless (or (blank? goal) (string-eq "RACE" goal))
-        (let*
-          ((g (string-split goal "/"))
-           (jog (workout/as-int (nth g 0)))
-           (walk (workout/as-int (nth g 1)))
-           (sets (workout/as-int (nth g 2)))
-           (mins (div (+ (* jog sets) (* walk sets)) 60)))
-          (workout/replace-fact session-id "Run/Walk" "min" (as-str mins)))))))
-
-(define workout/sct-stability-facts
-  (lambda (session-id n)
-    (let ((total (workout/col-lower (workout/sct-stab-column n))))
-      (seq
-        (workout/replace-fact session-id "Dead Bug" "reps" (as-str total))
-        (workout/replace-fact session-id "Bird Dog" "reps" (as-str total))))))
-
-(define workout/sct-strength-facts (lambda (session-id n day) "Strength phase: hollow + short lever always; B >=7 adds ground work." (seq (workout/replace-fact session-id "Hollow Hold" "sec" (as-str (workout/col-lower (workout/sct-hollow-column n)))) (workout/replace-fact session-id "Leg Raise Short Lever" "reps" (as-str (workout/col-lower (workout/sct-raised-column n)))) (if (string-eq "B" day) (seq (workout/replace-fact session-id "Leg Raise Long Lever" "reps" (as-str (workout/col-lower (workout/sct-raised-column n)))) (workout/replace-fact session-id "Tuck Sit" "sec" (as-str (workout/col-lower (workout/sct-sit-column n)))) (workout/replace-fact session-id "Hanging Knee Raise" "reps" (as-str (workout/col-lower (workout/sct-hang-column n))))) ()) (if (and (string-eq "B" day) (>= n 7)) (seq (workout/replace-fact session-id "Ground Hold" "sec" (as-str (workout/col-lower (workout/sct-hold-column n)))) (workout/replace-fact session-id "SL Deadlift" "reps" (as-str (workout/col-lower (workout/sct-dl-column n))))) ()))))
-
-(define workout/sct-facts (lambda (session-id doc) "sct: one fact per drill, lower-bound totals." (let* ((phase (workout/pget doc "phase")) (n (workout/as-int (workout/pget doc "session"))) (day (workout/pget doc "day"))) (cond ((string-eq "stability" phase) (workout/sct-stability-facts session-id n)) ((string-eq "strength" phase) (workout/sct-strength-facts session-id n day)) ((string-eq "power" phase) (if (string-eq "B" day) (workout/replace-fact session-id (workout/sct-carry-kind n) "min" (workout/pget (workout/sct-carry-session n) "minutes")) ())) (else ())))))
-
-(define workout/capture-facts
-  (lambda (program session-id)
-    "Project the prescription doc into facts (runs before gates)."
-    (let*
-      ((p (as-str program))
-       (doc (workout/parse-session-doc session-id)))
-      (cond
-        ((null? doc) ())
-        ((string-eq p "run5k") (workout/run5k-capture-facts session-id doc))
-        ((string-eq p "sct") (workout/sct-facts session-id doc))
-        (else ())))))
-
-(define workout/ksf-progress-put
-  (lambda (id sets)
-    "Persist sets_done into doc.progress."
-    (let ((doc (workout/parse-session-doc id)))
-      (unless (null? doc)
-        (let*
-          ((old-progress (workout/doc-progress doc))
-           (new-progress
-             (dict-set* old-progress
-               (list "sets_done" (as-str sets)
-                     "elapsed_min" (as-str (div (* (workout/as-int sets) 30) 60)))))
-           (doc2
-             (dict-set* doc
-               (list "progress" new-progress))))
-          (workout/ksk-save-doc id doc2))))))
-
-(define workout/ksf-sets
-  (lambda (id)
-    "Current sets_done (0 when unset)."
-    (dict-get (workout/doc-progress (workout/parse-session-doc id)) "sets_done")))
-
-(define workout/ksf-run-main
-  (lambda (id)
-    "Live KSF runner."
-    (let ((f (workout/session id)))
-      (if (null? f)
-          (html/div "" (html/p "Session not found."))
-        (let*
-          ((doc (workout/parse-session-doc id))
-           (day (dict-get doc "day"))
-           (pattern (dict-get doc "pattern"))
-           (params (workout/doc-params doc))
-           (bell (workout/pget params "bell"))
-           (unit (workout/pget params "unit"))
-           (deload (workout/pget params "deload"))
-           (sets (workout/as-int (dict-get (workout/doc-progress doc) "sets_done")))
-           (target 60)
-           (arm (if (= 0 (mod sets 2)) "L" "R")))
-          (html/div
-            (html/attr "class" "ksk-run")
-            (html/join (list
-              (html/h2 "KSF run")
-              (html/p* "" (html/text
-                (string-append
-                  "Plan " (as-str (dict-get doc "phase"))
-                  " - pattern " (as-str pattern)
-                  " - " bell unit
-                  (if (string-eq "true" (as-str deload))
-                      " - DELOAD (one bell lighter)" ""))))
-              (html/p* "" (html/text
-                (string-append
-                  "Weak arm (L) on the minute, strong (R) 30s in. Sets done: "
-                  (as-str sets) " / " (as-str target))))
-              (html/div
-                (html/attrs
-                  (list
-                    (html/attr "id" "ksf-timer")
-                    (html/attr "class" "ksk-timer")
-                    (html/attr "data-sid" (as-str id))))
-                "")
-              (html/p* "" (html/text (string-append "This set: " arm " arm")))
-              (html/form
-                "POST" "/workout/run"
-                (html/attr "style" "display:inline")
-                (html/join (list
-                  (html/hidden "action" "ksf-step")
-                  (html/hidden "id" (as-str id))
-                  (html/button (html/attr "type" "submit") "Set done (+1)"))))
-              (html/text " ")
-              (html/form
-                "POST" "/workout/run"
-                (html/attr "style" "display:inline")
-                (html/join (list
-                  (html/hidden "action" "ksf-end")
-                  (html/hidden "id" (as-str id))
-                  (html/button (html/attr "type" "submit") "End - talk test done"))))
-              (workout/timer-script 0.5)
-              (html/p* "" (html/a (string-append "/workout/session?id=" (as-str id)) "Back to session"))))))))))
-
-(define workout/handle-ksf-run-post
-  (lambda (id action)
-    "KSF runner POST routing."
-    (let ((sets (workout/as-int (workout/ksf-sets id))))
-      (cond
-        ((string-eq action "ksf-step")
-         (let ((next (+ sets 1)))
-           (seq
-             (workout/ksf-progress-put id next)
-             (redirect (string-append "/workout/run?id=" (as-str id))))))
-        ((string-eq action "ksf-end")
-         (seq
-           (workout/ksf-progress-put id sets)
-           (workout/session-complete id "ended by runner")))
-        (else (redirect (string-append "/workout/run?id=" (as-str id))))))))
-
-;; --- dispatchers ---
-
-(define workout/suggest
-  (lambda (program date)
-    "Generate today's session doc for a gated program. Pure."
-    (cond
-      ((string-eq (as-str program) "toy") (workout/toy-suggest date))
-      ((string-eq (as-str program) "ksf") (workout/ksf-suggest date))
-      ((string-eq (as-str program) "run5k") (workout/run5k-suggest date))
-      ((string-eq (as-str program) "sct") (workout/sct-suggest date))
-      ((string-eq (as-str program) "stretch") (workout/stretch-suggest date))
-      (else ()))))
-
-(define workout/gate-eval
-  (lambda (program session-id)
-    "Evaluate program gates after a completed session."
-    (cond
-      ((string-eq (as-str program) "toy") (workout/toy-gates session-id (workout/state "toy")))
-      ((string-eq (as-str program) "ksf") (workout/ksf-gates session-id (workout/state "ksf")))
-      ((string-eq (as-str program) "run5k") (workout/run5k-gates session-id (workout/state "run5k")))
-      ((string-eq (as-str program) "sct") (workout/sct-gates session-id (workout/state "sct")))
-      ((string-eq (as-str program) "stretch") (workout/stretch-gates session-id (workout/state "stretch")))
-      (else ()))))
-
-
-(define workout/today
-  (lambda ()
-    "MDT date string (server is UTC; shift back a day before 06:00 UTC)."
-    (let ((h (mod (div (now) 3600) 24)))
-      (if (< h 6) (date-add-days (date-today) -1) (date-today)))))
-
-(define workout/today-card-for (lambda (program) "One program block: name, state summary, suggestion doc." (html/div (html/attr "class" "card") (html/join (list (html/h2 (as-str program)) (html/p* (html/attr "class" "muted") (html/text (as-str (workout/gate-status program)))) (html/pre (html/text (as-str (workout/suggest program (workout/today))))))))))
-
-(define workout/today-page (lambda () "Agenda view: suggest docs + state for the four gated programs." (html/page (list (html/h1 "Today") (html/p* (html/attr "class" "muted") (html/text (workout/today))) (workout/today-card-for "ksf") (workout/today-card-for "run5k") (workout/today-card-for "sct") (workout/today-card-for "stretch") (html/a "/workout" "All workouts")))))
+                      (as-str sec-rem)))))))))))
+  "Pace string (mm:ss per unit) for a walk doc, \"\" when no distance.")
