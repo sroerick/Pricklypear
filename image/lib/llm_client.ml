@@ -70,6 +70,41 @@ let shell_quote (s : string) : string =
   Buffer.add_char buf '\'';
   Buffer.contents buf
 
+(** Egress guard + curl --resolve pin for the server-side LLM calls.
+    The BASE can carry a user-configured provider URL (auth.user-llm-keys
+    /settings/keys), which made the image an open egress proxy that
+    silently bypassed the http-get SSRF blocklist (i-1787971188): any
+    authenticated user could point the provider base at
+    127.0.0.1:* or
+    link-local metadata space and read relayed responses. SAME envelope
+    as prims_net's do_http: fail closed on loopback/private/link-local
+    targets (Prims_net.egress_pin resolves; explicitly-IP-literal targets
+    and resolvable hosts pin the validated IP into curl via --resolve so
+    the fetch cannot re-resolve past the check — the i-1788670187 TOCTOU
+    answer). Opt-out for genuine local providers/dev environments:
+    PP_NET_EGRESS_UNRESTRICTED=1 (shared switch with the Nopales
+    http-get / tcp-connect guards). Returns Ok None for URLs with no
+    parseable host (curl surfaces its own failure) or an unresolvable
+    host (nothing to pin). *)
+let egress_pin_arg (url : string) : (string option, string) result =
+  match Egress.unrestricted () with
+  | true -> Ok None
+  | false ->
+      (match Egress.egress_pin url with
+       | None -> Ok None
+       | Some (_host, "", _blocked) -> Ok None
+       | Some (host, ip, blocked) ->
+           if blocked then
+             Error
+               "blocked: target host resolves to a private/loopback/link-local address (egress restricted)"
+           else
+             let port =
+               match Egress.url_port url with Some p -> p | None -> "80"
+             in
+             Ok
+               (Some
+                  ("--resolve " ^ shell_quote (host ^ ":" ^ port ^ ":" ^ ip))))
+
 (** GET {base}/models — the provider ABI's model catalog for the
     /settings/keys dropdown (borge/agent.borg llm-config: model is a
     per-surface dial sourced from the ABI, not replicated user data).
@@ -84,8 +119,13 @@ let list_models ?(creds : creds option = None) () : string list =
   if key = "" then []
   else
     let url = base ^ "/models" in
+    match egress_pin_arg url with
+    | Error _ -> [] (* egress-blocked base: unreachable; dropdown degrades *)
+    | Ok pin ->
+    let pin_arg = match pin with Some p -> " " ^ p | None -> "" in
     let cmd =
-      Printf.sprintf "curl -sS --max-time 20 %s -H %s 2>&1"
+      Printf.sprintf "curl -sS --max-time 20 %s%s -H %s 2>&1"
+        pin_arg
         (shell_quote url)
         (shell_quote ("Authorization: Bearer " ^ key))
     in
@@ -148,6 +188,10 @@ let call ?(temperature = 0.2) ?(max_tokens = 4096)
     in
     let body_str = Yojson.Safe.to_string body_json in
     let url = active_api_base () ^ "/chat/completions" in
+    match egress_pin_arg url with
+    | Error e -> (Error e)
+    | Ok pin ->
+    let pin_arg = match pin with Some p -> " " ^ p | None -> "" in
     (* Write body to a temp file to avoid shell length limits. *)
     let tmp = Filename.temp_file "pp_llm_" ".json" in
     let oc = open_out tmp in
@@ -155,8 +199,9 @@ let call ?(temperature = 0.2) ?(max_tokens = 4096)
     close_out oc;
     let cmd =
       Printf.sprintf
-        "curl -sS --max-time 180 -X POST %s \
+        "curl -sS --max-time 180 %s -X POST %s \
          -H %s -H %s --data-binary @%s 2>&1"
+        pin_arg
         (shell_quote url)
         (shell_quote "Content-Type: application/json")
         (shell_quote ("Authorization: Bearer " ^ key))
@@ -287,14 +332,19 @@ let agent_chat
     in
     let body_str = Yojson.Safe.to_string body_json in
     let url = active_api_base () ^ "/chat/completions" in
+    match egress_pin_arg url with
+    | Error e -> on_event (Fail e); (Error e)
+    | Ok pin ->
+    let pin_arg = match pin with Some p -> " " ^ p | None -> "" in
     let tmp = Filename.temp_file "pp_llm_stream_" ".json" in
     let oc = open_out tmp in
     output_string oc body_str;
     close_out oc;
     let cmd =
       Printf.sprintf
-        "curl -sS -N --max-time 180 -X POST %s \
+        "curl -sS -N --max-time 180 %s -X POST %s \
          -H %s -H %s --data-binary @%s 2>&1"
+        pin_arg
         (shell_quote url)
         (shell_quote "Content-Type: application/json")
         (shell_quote ("Authorization: Bearer " ^ key))
@@ -470,14 +520,19 @@ let chat_turn
     in
     let body_str = Yojson.Safe.to_string (`Assoc fields) in
     let url = active_api_base () ^ "/chat/completions" in
+    match egress_pin_arg url with
+    | Error e -> (Turn_error e)
+    | Ok pin ->
+    let pin_arg = match pin with Some p -> " " ^ p | None -> "" in
     let tmp = Filename.temp_file "pp_llm_turn_" ".json" in
     let oc = open_out tmp in
     output_string oc body_str;
     close_out oc;
     let cmd =
       Printf.sprintf
-        "curl -sS --max-time 180 -X POST %s \
+        "curl -sS --max-time 180 %s -X POST %s \
          -H %s -H %s --data-binary @%s 2>&1"
+        pin_arg
         (shell_quote url)
         (shell_quote "Content-Type: application/json")
         (shell_quote ("Authorization: Bearer " ^ key))

@@ -66,6 +66,23 @@ let register (t : Session_types.t) (tbl : Primitives.t) : unit =
                         failwith "tcp-connect: host not found"
                       else he.Unix.h_addr_list.(0)
                   in
+                  (* Egress guard (2026-10 security pass; same envelope as
+                     http-get, i-1787971188): raw TCP must not reach
+                     loopback/private/link-local space. On prod,
+                     127.0.0.1:<PP_REPL_PORT> is the UNAUTHENTICATED line
+                     REPL serving the shared BOOT session (admin
+                     identity), so a signed-in tenant eval'ing
+                     (tcp-connect "127.0.0.1" "17878") would otherwise
+                     become admin. No TOCTOU: we connect to the SAME
+                     resolved address checked here (no re-resolve).
+                     Opt-out for local providers/dev:
+                     PP_NET_EGRESS_UNRESTRICTED=1. *)
+                  if not (Egress.unrestricted ()) && Egress.addr_is_private inet then
+                    raise (Pricklypear_lisp.Ast.Interp_error
+                             (Pricklypear_lisp.Ast.Prim_error
+                                ( "tcp-connect"
+                                , "blocked: target host resolves to a private/loopback/link-local address (egress restricted)"
+                                , "denied" )));
                   let sock = Unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
                   Unix.connect sock (Unix.ADDR_INET (inet, port));
                   let id = random_uuid () in
@@ -73,8 +90,14 @@ let register (t : Session_types.t) (tbl : Primitives.t) : unit =
                   (VStr id)
                 end
               with exn ->
-                (VStr (Printf.sprintf "tcp-connect: %s"
-                          (Printexc.to_string exn))))
+                (match exn with
+                 | Pricklypear_lisp.Ast.Interp_error _ as e ->
+                     (* Real denial (quota / egress block) — raise; never
+                       funnel a DENIAL into an in-band result string. *)
+                     raise e
+                 | _ ->
+                     (VStr (Printf.sprintf "tcp-connect: %s"
+                              (Printexc.to_string exn)))))
          | _ -> (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("tcp-connect", "need host port", "bad-args"))))));
 
   (* (stream-write handle bytes) -> n-written VInt | error VStr *)

@@ -217,6 +217,25 @@ let test_merge_system_target_denied () =
             "denied: admin-only merge to system branch" s
       | v -> Alcotest.fail ("expected VStr denial, got: " ^ pp v))
 
+(* 2026-10 security pass (jobs-runner staleness): a session whose
+   manifest.username is an ordinary tenant but whose t.is_admin is
+   TRUE — exactly the shared-boot-session shape the jobs runner leaves
+   behind when it flips the manifest to the submitter — must NOT
+   authorize another tenant's branch unless the DB confirms the
+   USERNAME is admin. Fail-closed (no-DB store ⇒ no verified admin ⇒
+   denied). Before the Prims_db_common.is_verified_admin re-check this
+   test FAILED: the stale flag sailed straight through the owner gate
+   to the lookup (Prim_error "no such branch"). *)
+let test_checkout_stale_admin_flag_denied () =
+  with_eio (fun () ->
+      let t = make_session ~username:"someuser" in
+      t.S.is_admin <- true; (* stale/boot-derived — never DB-verified *)
+      match call t "checkout" [ VStr "victim/personal" ] with
+      | VStr s ->
+          Alcotest.(check string) "stale admin flag denied, owner named"
+            "denied: branch victim/personal is owned by victim" s
+      | v -> Alcotest.fail ("expected denial, got: " ^ pp v))
+
 let () =
   Alcotest.run "pricklypear-prim-gates"
     [
@@ -252,5 +271,8 @@ let () =
           ; ( "merge-system-target-denied"
             , `Quick
             , test_merge_system_target_denied )
+          ; ( "checkout-stale-admin-flag-denied"
+            , `Quick
+            , test_checkout_stale_admin_flag_denied )
         ] )
     ]

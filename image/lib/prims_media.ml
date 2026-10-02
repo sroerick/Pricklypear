@@ -26,7 +26,7 @@ let register (t : t) (tbl : Primitives.t) : unit =
           else
           let m =
             Media.get_meta t.store ~id
-              ~visible_to:(uname, t.is_admin) ()
+              ~visible_to:(uname, Prims_db_common.is_verified_admin ~t ()) ()
           in
           (match m with
            | None -> Pricklypear_lisp.Ast.VNil
@@ -65,7 +65,8 @@ let register (t : t) (tbl : Primitives.t) : unit =
         match args with
         | [ Pricklypear_lisp.Ast.VStr id ] ->
             let res =
-              Media.delete t.store ~id ~actor:uname ~is_admin:t.is_admin
+              Media.delete t.store ~id ~actor:uname
+                ~is_admin:(Prims_db_common.is_verified_admin ~t ())
             in
             (match res with
              | Ok (`Ok id') ->

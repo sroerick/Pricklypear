@@ -4,6 +4,7 @@
  (modules store_db store_common store_defs store_branch store_packages
           store_history store_retention store tree_store branch_algebra def_journal
           primitives request_context control_rim io io_db io_eio
+          egress
           row http_kit
           prims_time prims_crypto
           session_types call_graph agent_tools

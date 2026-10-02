@@ -23,6 +23,11 @@
  (modules http_get_test)
  (libraries pricklypear-image pricklypear-lisp alcotest unix))
 
+(test
+ (name llm_egress_test)
+ (modules llm_egress_test)
+ (libraries pricklypear-image pricklypear-lisp alcotest unix))
+
 
 (test
  (name prims_hyper_test)
