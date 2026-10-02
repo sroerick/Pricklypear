@@ -619,6 +619,18 @@ let describe (t : t) (needle : string) : string =
       (Printf.sprintf
            "%s\n  doc: %s%s\n  next: (function-source %S) (function-ast %S)"
            (binding_annot ~known_fn t needle) doc scope_line needle needle)
+    else if read_scope t needle <> None then
+      (* A known read prim (not stored, not a special form): it has no body
+         to describe, but the branch-resolved-reads SCOPE grammar still
+         requires a line. Emit the exact-binding shape with the prim
+         summary instead of a fuzzy apropos list. *)
+      let summary = Primitives.prim_summary needle in
+      let doc =
+        if summary = "built-in primitive" then "(no docstring)" else summary
+      in
+      (Printf.sprintf "%s\n  doc: %s\n  scope: %s"
+         (binding_annot ~known_fn t needle) doc
+         (match read_scope t needle with Some s -> s | None -> "chain"))
     else if is_pkg then
       let exports = package_export_names t needle in
       let lines =

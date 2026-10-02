@@ -1391,7 +1391,8 @@
   )
   (subsection branch-resolved-reads
    (doc "Every code-read prim gains the optional owner/branch ref that code-history already has — function-source, function-ast, find-code, code-diff — plus a data footprint on branch-changes — so the operator inspects a fork without checking out of their own chain.")
-   (status planned)
+   (status implemented)
+   (implements image/lib/store_defs.ml image/lib/agent_tools.ml image/lib/prims_code.ml image/lib/prims_graph.ml image/test/branch_resolved_reads_test.ml)
    (* agent note (|2026-10-02: burn from the marcus codex recon — the only way to read another branch's pinned BODY today is checkout, and per-identity sessions make checkout re-point the WHOLE shared identity (the operator's browser included). code-history already takes owner/branch; code-diff and function-source do not, so fork bodies were literally unreadable without a global side effect. Also: branch-changes lists fn/route own rows but NOT datum rows, so a fork that only wrote data (a guest's notes/todo footprint) reads as EMPTY.|) *)
    (details
     (doc (|
