@@ -45,6 +45,28 @@ let session_user () : string =
   | Some c -> (Request_context.manifest c).username
   | None -> "anonymous"
 
+(** product-experience §activity-ledger: emit an activity row for a
+    datum write. Target is a PATH (type/id), never a body. The push is a
+    mutex + queue op — zero synchronous DB work on this surface. *)
+let emit_write ~(caller : string) ~(cls : string) ~(type_name : string)
+    ~(id : string) ~(outcome : string) : unit =
+  ignore
+    (Activity_ledger.push ~actor:caller ~cls
+       ~target:(Activity_ledger.path_target (type_name ^ "/" ^ id))
+       ~outcome ())
+
+(** product-experience §activity-ledger: a cross-identity content read
+    rescued by the 033 admin disjunct. Deliberate access is an attributed
+    act; suppressed entirely on a lonely habitat (one human user). Target
+    is the node path, never the body. *)
+let emit_content_read ~(caller : string) ~(target : string) : unit =
+  if caller <> "anonymous" && caller <> "unknown"
+     && not (Activity_ledger.is_lonely_habitat ())
+  then
+    ignore
+      (Activity_ledger.push ~actor:caller ~cls:"admin.content-read"
+         ~target:(Activity_ledger.path_target target) ~outcome:"ok" ())
+
 (** RLS floor for the datum prims (i-1788670872-3).
 
     The CRUD tree/edge/data-lens prims read or write tree_nodes rows —
@@ -256,7 +278,7 @@ let get (store : Store.t) ~(type_name : string) ~(id : string) : value =
     | Some conn ->
         let user = session_user () in
         let sql =
-          "SELECT fields::text FROM " ^ data_rel () ^ " " ^
+          "SELECT fields::text, author FROM " ^ data_rel () ^ " " ^
           "WHERE type_name = $1 AND id = $2::uuid AND " ^
           visible_sql ~user_param:3 in
         let rows =
@@ -270,7 +292,23 @@ let get (store : Store.t) ~(type_name : string) ~(id : string) : value =
          | [] -> VNil
          | row :: _ ->
              (match row with
-              | [ fields_cell ] ->
+              | [ fields_cell; author_cell ] ->
+                  (* 033 disjunct: when an ADMIN reads a row that is not
+                     their own, that is a deliberate content access
+                     (security.borg two-sided audit). The WHERE clause
+                     already guarantees this caller could see it; emit
+                     only when the admin disjunct was actually the
+                     rescuer. No DB work — push is a queue op. *)
+                  (if
+                     (match Request_context.get () with
+                      | Some c -> Request_context.is_admin c
+                      | None -> false)
+                   then
+                     match Pgx.Value.to_string author_cell with
+                     | Some a when a <> user ->
+                         emit_content_read ~caller:user
+                           ~target:(type_name ^ "/" ^ id)
+                     | _ -> ());
                   (match Pgx.Value.to_string fields_cell with
                    | Some s -> (VStr s)
                    | None -> VNil)
@@ -402,9 +440,21 @@ let space_of_datum (conn : Store_db.conn) ~(id : string) : string option =
     intended straggler behavior — thread the real identity to pass. *)
 let guard_space_write (conn : Store_db.conn) ~(prim : string)
     ~(type_name : string) ~(caller : string) ~(id : string option) : unit =
+  let rls_violation ~(detail : string) : 'a =
+    (* product-experience §activity-ledger: a refused cross-boundary
+       write is a first-class event (rls.violation); the descriptive
+       error still raises below. Push is a queue op, no DB work. *)
+    (try
+       ignore
+         (Activity_ledger.push ~actor:caller ~cls:"rls.violation"
+            ~target:(Activity_ledger.path_target type_name)
+            ~outcome:"denied" ())
+     with _ -> ());
+    space_prim_error prim detail
+  in
   (match space_of_type conn ~type_name with
    | Some sp when not (is_space_member conn ~space:sp ~username:caller) ->
-       space_prim_error prim
+       rls_violation ~detail:
          (Printf.sprintf "type %s is admitted to space %s; %s is not a member"
             type_name sp caller)
    | _ -> ());
@@ -413,7 +463,7 @@ let guard_space_write (conn : Store_db.conn) ~(prim : string)
   | Some id ->
       (match space_of_datum conn ~id with
        | Some sp when not (is_space_member conn ~space:sp ~username:caller) ->
-           space_prim_error prim
+           rls_violation ~detail:
              (Printf.sprintf "datum lives in space %s; %s is not a member"
                 sp caller)
        | _ -> ())
@@ -703,7 +753,10 @@ let create_outcome
     (* tree is truth; reverse trigger mirrors to data_rows *)
     let id = Tree_store.insert_datum conn ~type_name ~fields_json ~author in
     (match id with
-     | Ok s -> W_ok s
+     | Ok s ->
+         emit_write ~caller:author ~cls:"data.write" ~type_name ~id:s
+           ~outcome:"ok";
+         W_ok s
      | Error _ ->
          raise (Pricklypear_lisp.Ast.Interp_error
                   (Pricklypear_lisp.Ast.Prim_error
@@ -737,7 +790,12 @@ let update_outcome
     guard_space_write conn ~prim:"update" ~type_name ~caller
       ~id:(Some id);
     let id' = Tree_store.update_datum conn ~type_name ~id ~fields_json in
-    (match id' with Ok s -> W_ok s | Error _ -> W_no_row))
+    (match id' with
+     | Ok s ->
+         emit_write ~caller ~cls:"data.write" ~type_name ~id:s
+           ~outcome:"ok";
+         W_ok s
+     | Error _ -> W_no_row))
 
 let update_impl
     (store : Store.t) ~(type_name : string) ~(id : string)
@@ -876,7 +934,12 @@ let delete_impl (store : Store.t) ~(type_name : string) ~(id : string)
        the RLS floor armed by this tx rejects cross-user deletes). *)
     guard_space_write conn ~prim:"delete" ~type_name ~caller ~id:(Some id);
     let id' = Tree_store.delete_datum conn ~type_name ~id in
-    (match id' with Ok s -> VStr s | Error _ -> VNil))
+    (match id' with
+     | Ok s ->
+         emit_write ~caller ~cls:"data.write" ~type_name ~id:s
+           ~outcome:"ok";
+         VStr s
+     | Error _ -> VNil))
 
 let delete store ~type_name ~id =
   delete_impl store ~type_name ~id ~caller:"unknown"
@@ -1362,8 +1425,18 @@ let get_row
 (** (node-path 'type id) -> VStr path. Space-aware path constructor:
     an admitted type reports its true data.s.<space>.* home (looked up in
     data_space_types — the pure Tree_store.datum_path mirror cannot see
-    dynamic admission), everything else routes exactly as the SQL
-    tree_datum_path does (seed -> shared; else user). *)
+    dynamic admission), a ROW-LEVEL space row (034, body "space") reports
+    its actual data.s.<space>.* home too, and everything else routes exactly
+    as the SQL tree_datum_path does (seed -> shared; else user). *)
+let uuid_label_id (id : string) : bool =
+  (* 32 hex (tree_uuid_label) or 36 dashed uuid. Guards the space_of_datum
+     ::uuid cast against placeholder ids like "new" / "". *)
+  let hexish c =
+    (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+  in
+  let s = String.concat "" (String.split_on_char '-' id) in
+  String.length s = 32 && String.for_all hexish s
+
 let node_path (store : Store.t) ~(type_name : string) ~(id : string) : value =
   let user = session_user () in
   (match Io_db.Db.current_conn store with
@@ -1371,7 +1444,13 @@ let node_path (store : Store.t) ~(type_name : string) ~(id : string) : value =
        (match space_of_type conn ~type_name with
         | Some sp ->
             VStr (Tree_store.datum_path ~space:(Some sp) ~type_name ~id ())
-        | None -> VStr (Tree_store.datum_path ~user ~type_name ~id ()))
+        | None ->
+            (match
+               (if uuid_label_id id then space_of_datum conn ~id else None)
+             with
+             | Some sp ->
+                 VStr (Tree_store.datum_path ~space:(Some sp) ~type_name ~id ())
+             | None -> VStr (Tree_store.datum_path ~user ~type_name ~id ())))
    | None -> VStr (Tree_store.datum_path ~user ~type_name ~id ()))
 
 (** (type-fields 'type) -> VList of VStr field names | VNil if undeclared. *)
@@ -1906,6 +1985,20 @@ let tree_children_html (store : Store.t) ~(prefix : string) ~(garden_root : stri
        let html = render_children_html conn ~prefix ~garden_root () in
        (VStr html))
 
+(* product-experience §activity-ledger: a datum UPSERT is a data.write
+   event, exactly like create/update/delete. This is the register's own
+   write path (notes/issues/add -> todo/item/add-space -> todo/tree/create
+   -> tree/upsert), so without it a guest's filed card is a SILENT
+   VANISH — the 2026-10-02 repro that workstreams.borg §shared-register
+   forbids ("a report is a knock, and knocks must never be silent").
+   Target is the PATH (never a body); push is a queue op, zero DB work. *)
+let emit_tree_write ~(caller : string) ~(target : string) ~(outcome : string)
+    : unit =
+  if caller <> "" && caller <> "unknown" then
+    ignore
+      (Activity_ledger.push ~actor:caller ~cls:"data.write"
+         ~target:(Activity_ledger.path_target target) ~outcome ())
+
 let tree_upsert_outcome (store : Store.t) ~(path : string) ~(kind : string)
     ~(type_name : string) ~(body_json : string) ~(author : string)
     : (string, string) result =
@@ -1915,11 +2008,18 @@ let tree_upsert_outcome (store : Store.t) ~(path : string) ~(kind : string)
        id when the path's id label is a placeholder). one-tree.tree-datum-prims. *)
     let reject = check_type_fields store ~type_name ~fields_json:body_json in
     (match reject with
-     | Some msg -> (Error msg)
+     | Some msg ->
+         emit_tree_write ~caller:author ~target:path ~outcome:"error";
+         (Error msg)
      | None ->
      with_tree_tx store ~none:(fun () -> no_db "tree/upsert") (fun conn ->
-       Tree_store.upsert_datum conn ~path ~type_name ~body_json ~author
-         ~rank:None))
+       let r =
+         Tree_store.upsert_datum conn ~path ~type_name ~body_json ~author
+           ~rank:None
+       in
+       emit_tree_write ~caller:author ~target:path
+         ~outcome:(match r with Ok _ -> "ok" | Error _ -> "error");
+       r))
   else
     with_tree_tx store ~none:(fun () -> no_db "tree/upsert") (fun conn ->
       Tree_store.upsert_hier conn ~path ~kind ~type_name ~body_json ~author

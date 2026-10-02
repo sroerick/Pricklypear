@@ -1331,6 +1331,53 @@
             "kind"
             ""))))))
 
+(define todo/item/add-space
+  (lambda
+    (list-id space title)
+    (let
+      ((lid (as-str list-id)))
+      (if
+        (string-eq lid "")
+        ""
+        (todo/tree/create
+          "todo-item"
+          (dict-set*
+            "{}"
+            (list
+              "list_id"
+              lid
+              "title"
+              (as-str title)
+              "notes"
+              ""
+              "state"
+              "TODO"
+              "due"
+              ""
+              "position"
+              "0"
+              "done"
+              "false"
+              "acceptance"
+              ""
+              "branch"
+              ""
+              "branch_kind"
+              ""
+              "pipeline"
+              ""
+              "kind"
+              ""
+              "space"
+              (as-str space)))))))
+  "Create a todo-item on `list-id` AND stamp the 034 row-level `space`
+     field, so the card lands in that shared data space (e.g. the Board)
+     rather than the filer's garden. Same fields as todo/item/add, plus
+     space. Empty list-id files nothing (the empty string): the register
+     path deliberately has NO ensure-inbox fallback (2026-10-02 spec) so
+     a missing Board is a loud empty, never a silent private-Inbox
+     vanish.")
+
 (define todo/item/all
   (lambda () (todo/tree/rows "todo-item" 200)))
 
@@ -2207,8 +2254,71 @@
 (define todo/list-title
   (lambda (fields) (as-str (dict-get fields "title"))))
 
+(define todo/list/space-of
+  (lambda
+    (row)
+    (let
+      ((s (dict-get (cdr row) "space")))
+      (if (null? s) "" (as-str s))))
+  "The 034 row-level space of a list row (body \"space\" field); \"\" for
+     an ordinary garden list. Callers route a card to the list's space so
+     a shared Board card does not fall back into the filer's garden.")
+
+(define todo/list/all-shared
+  (lambda
+    ()
+    (list/map
+      todo/tree/node->pair
+      (list/filter
+        (lambda
+          (nj)
+          (string-eq (as-str (dict-get nj "type")) "todo-list"))
+        (tree/list (todo/tree/shared-prefix) 3 5000))))
+  "The SHARED data space's lists — datum rows under data.s.*.space.*
+     (034 row-level routing; the Board lives here). Scans the shared root
+     at type depth and keeps todo-list nodes: the space label is dynamic
+     (any space may hold one), so a prefix scan is more faithful than a
+     single synthesized path. Same (id . fields) shape as todo/list/all.")
+
 (define todo/list/all
-  (lambda () (todo/tree/rows "todo-list" 50)))
+  (lambda
+    ()
+    (todo/list/merge (todo/tree/rows "todo-list" 50) (todo/list/all-shared)))
+  "All lists the identity can see: GARDEN lists (data.u.<user>.*) merged
+     with SHARED lists (data.s.*, the Board). Deduped by id, garden rows
+     first. borge/workstreams.borg shared-register: notes/issues/board-list-id
+     runs over this, so the shared Board resolves for EVERY identity.
+     additivity caveat: pre-034 pins of an existing title had no space field
+     and stay in the garden, so both surfaces are merged rather than one
+     replacing the other.")
+
+(define todo/list/merge
+  (lambda
+    (garden shared)
+    (if
+      (null? shared)
+      garden
+      (let
+        ((sid (as-str (car (car shared)))))
+        (todo/list/merge
+          (todo/list/merge-one garden sid (car shared))
+          (cdr shared)))))
+  "Merge shared `shared` into `garden`, deduping by id: an id already in
+     the garden keeps its garden row (no double-listing); a new id is
+     appended.")
+
+(define todo/list/merge-one
+  (lambda
+    (rows id row)
+    (if
+      (null? rows)
+      (list row)
+      (if
+        (string-eq (as-str (car (car rows))) id)
+        rows
+        (cons (car rows) (todo/list/merge-one (cdr rows) id row)))))
+  "Cons/normalize helper for todo/list/merge: returns `rows` unchanged when
+     `id` is already present, else `rows` with `row` appended.")
 
 (define todo/list/create
   (lambda
@@ -3328,6 +3438,14 @@
     (let
       ((p (node-path t "")))
       (substring p 0 (- (string-length p) 1)))))
+
+(define todo/tree/shared-prefix
+  (lambda () "data.s")
+  "The shared data-space subtree root (all spaces). A PURE constant, not
+     node-path-derived: resolving the caller's user label costs a DB round
+     trip per call (and lazy-env sessions can't afford it), while the
+     data.s root is identity-independent. Shared REGISTER rows live under
+     data.s.board.*; a garden Inbox never matches this prefix.")
 
 (define todo/tree/redash
   (lambda

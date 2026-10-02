@@ -57,6 +57,16 @@ let promote_to_personal (t : t) ~(names : string list)
 let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives.t) : unit =
   let caller_username () = Prims_db_common.caller_username ~t () in
   let require_admin op k = Prims_db_common.require_admin ~t op k in
+  (* product-experience §activity-ledger: promote.attempt emit seam.
+     Mutex + queue only, no DB work. The auth_log mirror covers the
+     admin.* classes; promote has no auth_log kind, so it is emitted
+     here directly. *)
+  let ledger_promote ~(ok : bool) ~(what : string) =
+    ignore
+      (Activity_ledger.push ~actor:(caller_username ()) ~cls:"promote.attempt"
+         ~target:(Activity_ledger.path_target what)
+         ~outcome:(if ok then "ok" else "denied") ())
+  in
 
   (* (list-usernames) -> VList of VStr; any authenticated user.
      Usernames are public identifiers on the box (multi-user.chat DMs). *)
@@ -780,8 +790,12 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
       in
       let r = promote_to_personal t ~names in
       (match r with
-       | Error e -> ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("promote", e, "failed")))))
-       | Ok n -> (Pricklypear_lisp.Ast.VStr (string_of_int n))));
+       | Error e ->
+           ledger_promote ~ok:false ~what:(String.concat "," names);
+           ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("promote", e, "failed")))))
+       | Ok n ->
+           ledger_promote ~ok:true ~what:(String.concat "," names);
+           (Pricklypear_lisp.Ast.VStr (string_of_int n))));
 
   (* (promote-to-main source-ref name...) | (promote-to-main source-ref (list name...))
      Admin-only selective upsert onto system/main. branching.promote / land. *)
@@ -810,8 +824,10 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
             (not t.is_admin)
             && t.manifest.username <> "admin"
             && t.manifest.username <> "system"
-          then
+          then begin
+            ledger_promote ~ok:false ~what:source_ref;
             ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("promote-to-main", "requires admin", "denied")))))
+          end
           else begin
             let owner, name =
               match String.split_on_char '/' source_ref with
@@ -826,6 +842,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
                   Store.promote_functions t.store ~source_id
                     ~target_id:Store.system_main_id ~names
                 in
+                ledger_promote ~ok:true ~what:source_ref;
                 (if Store.current_branch_id t.store = Store.system_main_id then
                    rehydrate_fn t);
                 (Pricklypear_lisp.Ast.VStr

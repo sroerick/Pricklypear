@@ -17,17 +17,20 @@ type t = {
   manifest : Manifest.t;
   env : Pricklypear_lisp.Ast.env;
   routes : (string, string * string) Hashtbl.t;
+  is_admin : bool;
   (* store : Store.t;                       -- Phase 3 *)
 }
 
-let make ~manifest ~env ~routes : t =
-  { manifest; env; routes }
+let make ~is_admin ~manifest ~env ~routes : t =
+  { manifest; env; routes; is_admin }
 
 let manifest (t : t) = t.manifest
 
 let env (t : t) = t.env
 
 let routes (t : t) = t.routes
+
+let is_admin (t : t) = t.is_admin
 
 (** Snapshot the live session routes table by COPYING it, so a concurrent
     rehydrate (Hashtbl.clear t.routes) during this request's page work cannot

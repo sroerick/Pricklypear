@@ -10,6 +10,24 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
   let deny_anon name = Prims_db_common.deny_anon name in
   let actor () = Prims_db_common.actor ~t () in
 
+  (* Resolve an optional "owner/branch" read ref to a branch id without
+     checking out (branching.branch-resolved-reads). Mirrors code-history's
+     parsing, but also enforces the read-side owner rule via
+     [Session_control_prims.branch_readable]: system/* is public, personal
+     gardens are tenant-confined. Returns a clean error STRING the caller
+     surfaces (never raises) — reads must not crash on a bad ref. *)
+  let branch_read_scope = function
+    | None -> `Current (Store.current_branch_id t.store)
+    | Some branch_ref ->
+        let owner, name = Session_control_prims.split_branch_ref branch_ref in
+        if not (Session_control_prims.branch_readable t owner) then
+          `Denied (branch_ref, owner)
+        else
+          (match Store.lookup_branch_id_by_name t.store ~owner ~name with
+           | Some id -> `Found (id, branch_ref)
+           | None -> `Missing branch_ref)
+  in
+
   (* (list-branches) -> VList of "owner/name" strings *)
   Primitives.register tbl "list-branches"
     (fun _args ->
@@ -217,40 +235,84 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
       | _ ->
           ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("install-function", "need name-str, body-str", "bad-args"))))));
 
-  (* (function-source name) -> VStr pretty body | VNil *)
+  (* (function-source name [owner/branch]) -> VStr pretty body | VNil
+     Reads the branch's effective body over its own chain WITHOUT checkout
+     (branching.branch-resolved-reads). A denied/missing ref returns a clean
+     error string. *)
   Primitives.register tbl "function-source"
     (fun args ->
+      let fetch name = function
+        | None ->
+            (match Agent_tools.function_source t name with
+             | Some s -> (Pricklypear_lisp.Ast.VStr s)
+             | None -> Pricklypear_lisp.Ast.VNil)
+        | Some branch_ref ->
+            (match branch_read_scope (Some branch_ref) with
+             | `Found (bid, _) ->
+                 (match Agent_tools.function_source_at t ~branch_id:bid name with
+                  | Some s -> (Pricklypear_lisp.Ast.VStr s)
+                  | None -> Pricklypear_lisp.Ast.VNil)
+             | `Denied (r, o) ->
+                 (Pricklypear_lisp.Ast.VStr
+                    (Printf.sprintf "denied: branch %s is owned by %s" r o))
+             | `Missing r ->
+                 (Pricklypear_lisp.Ast.VStr
+                    (Printf.sprintf "function-source: no such branch: %s" r))
+             | `Current _ -> assert false)
+      in
       match args with
-      | [ Pricklypear_lisp.Ast.VStr name ] ->
-          let src = Agent_tools.function_source t name in
-          (match src with
-           | Some s -> (Pricklypear_lisp.Ast.VStr s)
-           | None -> Pricklypear_lisp.Ast.VNil)
+      | [ Pricklypear_lisp.Ast.VStr name ] -> fetch name None
+      | [ Pricklypear_lisp.Ast.VStr name; Pricklypear_lisp.Ast.VStr branch_ref ] ->
+          fetch name (Some branch_ref)
       | _ ->
-          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("function-source", "need name-str", "bad-args")))));
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("function-source", "need name-str [owner/branch]", "bad-args")))));
 
-  (* (find-code needle [limit]) -> VList of name strings.
-     Postgres ILIKE over effective function_defs.body::text (branch chain). *)
+  (* (find-code needle [limit] [owner/branch]) -> VList of name strings.
+     Postgres ILIKE over effective function_defs.body::text (branch chain).
+     The optional branch ref reads a fork's chain without checkout; a
+     non-numeric string arg is taken as the ref (a ref contains '/'). *)
   Primitives.register tbl "find-code"
     (fun args ->
-      let names_of needle limit =
+      let names_of ~branch_id needle limit =
         let ns =
-          Store.search_function_bodies t.store ~needle ~limit
+          match branch_id with
+          | None -> Store.search_function_bodies t.store ~needle ~limit
+          | Some bid ->
+              Store.search_function_bodies_at t.store ~branch_id:bid ~needle ~limit
         in
         Pricklypear_lisp.Ast.VList
           (List.map (fun n -> Pricklypear_lisp.Ast.VStr n) ns)
       in
+      let with_ref needle limit branch_ref =
+        match branch_read_scope branch_ref with
+        | `Current bid -> names_of ~branch_id:(Some bid) needle limit
+        | `Found (bid, _) -> names_of ~branch_id:(Some bid) needle limit
+        | `Denied (r, o) ->
+            (Pricklypear_lisp.Ast.VStr
+               (Printf.sprintf "denied: branch %s is owned by %s" r o))
+        | `Missing r ->
+            (Pricklypear_lisp.Ast.VStr
+               (Printf.sprintf "find-code: no such branch: %s" r))
+      in
       match args with
-      | [ Pricklypear_lisp.Ast.VStr needle ] -> names_of needle 200
+      | [ Pricklypear_lisp.Ast.VStr needle ] -> names_of ~branch_id:None needle 200
       | [ Pricklypear_lisp.Ast.VStr needle; Pricklypear_lisp.Ast.VInt n ] ->
-          names_of needle (Int64.to_int n)
+          names_of ~branch_id:None needle (Int64.to_int n)
       | [ Pricklypear_lisp.Ast.VStr needle; Pricklypear_lisp.Ast.VStr n_s ] ->
           (match int_of_string_opt n_s with
-           | Some n -> names_of needle n
+           | Some n -> names_of ~branch_id:None needle n
+           | None -> with_ref needle 200 (Some n_s))
+      | [ Pricklypear_lisp.Ast.VStr needle; Pricklypear_lisp.Ast.VInt n
+        ; Pricklypear_lisp.Ast.VStr branch_ref ] ->
+          with_ref needle (Int64.to_int n) (Some branch_ref)
+      | [ Pricklypear_lisp.Ast.VStr needle; Pricklypear_lisp.Ast.VStr n_s
+        ; Pricklypear_lisp.Ast.VStr branch_ref ] ->
+          (match int_of_string_opt n_s with
+           | Some n -> with_ref needle n (Some branch_ref)
            | None ->
-               ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("find-code", "limit must be int", "bad-args"))))))
+               (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("find-code", "limit must be int", "bad-args")))))
       | _ ->
-          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("find-code", "need needle-str [, limit]", "bad-args")))));
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("find-code", "need needle-str [limit] [owner/branch]", "bad-args")))));
 
   (* (function-doc name) -> VStr docstring | VNil
      Store metadata first; special-form / prim blurbs as fallback. *)
@@ -273,18 +335,36 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
       | _ ->
           (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("function-doc", "need name-str", "bad-args")))));
 
-  (* (function-ast name) -> quoted body value tree | VNil.
-     Does not eval the body; reifies the stored AST via quote_to_value. *)
+  (* (function-ast name [owner/branch]) -> quoted body value tree | VNil.
+     Does not eval the body; reifies the stored AST via quote_to_value.
+     Optional ref reads a fork without checkout. *)
   Primitives.register tbl "function-ast"
     (fun args ->
+      let fetch name = function
+        | None ->
+            (match Agent_tools.function_ast t name with
+             | Some v -> v
+             | None -> Pricklypear_lisp.Ast.VNil)
+        | Some branch_ref ->
+            (match branch_read_scope (Some branch_ref) with
+             | `Found (bid, _) ->
+                 (match Agent_tools.function_ast_at t ~branch_id:bid name with
+                  | Some v -> v
+                  | None -> Pricklypear_lisp.Ast.VNil)
+             | `Denied (r, o) ->
+                 (Pricklypear_lisp.Ast.VStr
+                    (Printf.sprintf "denied: branch %s is owned by %s" r o))
+             | `Missing r ->
+                 (Pricklypear_lisp.Ast.VStr
+                    (Printf.sprintf "function-ast: no such branch: %s" r))
+             | `Current _ -> assert false)
+      in
       match args with
-      | [ Pricklypear_lisp.Ast.VStr name ] ->
-          let ast = Agent_tools.function_ast t name in
-          (match ast with
-           | Some v -> v
-           | None -> Pricklypear_lisp.Ast.VNil)
+      | [ Pricklypear_lisp.Ast.VStr name ] -> fetch name None
+      | [ Pricklypear_lisp.Ast.VStr name; Pricklypear_lisp.Ast.VStr branch_ref ] ->
+          fetch name (Some branch_ref)
       | _ ->
-          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("function-ast", "need name-str", "bad-args")))));
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("function-ast", "need name-str [owner/branch]", "bad-args")))));
 
   (* ===== Forge prims ===== *)
 
@@ -609,28 +689,43 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
       | _ ->
           ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("code-history", "need name [owner/branch]", "bad-args"))))));
 
-  (* (code-diff "name" n) → VStr text diff of current vs nth-newest history. *)
+  (* (code-diff name n [owner/branch]) -> VStr text diff of branch-head
+     vs nth-newest history. Optional ref reads a fork without checkout. *)
   Primitives.register tbl "code-diff"
     (fun args ->
+      let run name n branch_ref =
+        (match branch_read_scope branch_ref with
+         | `Current bid | `Found (bid, _) ->
+             (match Store.code_diff t.store ~branch_id:bid ~name ~n with
+              | Ok s -> (Pricklypear_lisp.Ast.VStr s)
+              | Error e -> (Pricklypear_lisp.Ast.VStr e))
+         | `Denied (r, o) ->
+             (Pricklypear_lisp.Ast.VStr
+                (Printf.sprintf "denied: branch %s is owned by %s" r o))
+         | `Missing r ->
+             (Pricklypear_lisp.Ast.VStr
+                (Printf.sprintf "code-diff: no such branch: %s" r)))
+      in
       match args with
       | [ Pricklypear_lisp.Ast.VStr name; Pricklypear_lisp.Ast.VInt n64 ] ->
-          let n = Int64.to_int n64 in
-          let bid = Store.current_branch_id t.store in
-          (match Store.code_diff t.store ~branch_id:bid ~name ~n with
-           | Ok s -> (Pricklypear_lisp.Ast.VStr s)
-           | Error e -> (Pricklypear_lisp.Ast.VStr e))
+          run name (Int64.to_int n64) None
       | [ Pricklypear_lisp.Ast.VStr name
         ; Pricklypear_lisp.Ast.VStr n_s ] ->
           (match int_of_string_opt n_s with
            | None ->
-               ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("code-diff", "n must be int", "bad-args")))))
-           | Some n ->
-               let bid = Store.current_branch_id t.store in
-               (match Store.code_diff t.store ~branch_id:bid ~name ~n with
-                | Ok s -> (Pricklypear_lisp.Ast.VStr s)
-                | Error e -> (Pricklypear_lisp.Ast.VStr e)))
+               (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("code-diff", "n must be int", "bad-args"))))
+           | Some n -> run name n None)
+      | [ Pricklypear_lisp.Ast.VStr name; Pricklypear_lisp.Ast.VInt n64
+        ; Pricklypear_lisp.Ast.VStr branch_ref ] ->
+          run name (Int64.to_int n64) (Some branch_ref)
+      | [ Pricklypear_lisp.Ast.VStr name; Pricklypear_lisp.Ast.VStr n_s
+        ; Pricklypear_lisp.Ast.VStr branch_ref ] ->
+          (match int_of_string_opt n_s with
+           | None ->
+               (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("code-diff", "n must be int", "bad-args"))))
+           | Some n -> run name n (Some branch_ref))
       | _ ->
-          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("code-diff", "need name n", "bad-args")))));
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("code-diff", "need name n [owner/branch]", "bad-args")))));
 
   (* (diff source target) -> VList of VStr change summaries.
      Spec: branching.diff.  Args: two branch specs (owner/name strings, same

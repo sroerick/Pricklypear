@@ -196,8 +196,10 @@ let install_ai_function (t : t) ~(name : string) ~(body_src : string)
 
 (** Pretty source body for a binding (env lambda or store).
     Special forms are not stored; return a short language card instead. *)
-let function_source (t : t) (name : string) : string option =
-  let found = Store.lookup_function t.store name in
+let function_source_at (t : t) ~(branch_id : string) (name : string)
+  : string option =
+  let found = Store.lookup_function_at t.store ~branch_id name in
+  let is_current = branch_id = t.store.branch_id in
   (* Opaque-body contract (i-1788671083-c): parse at the eval boundary;
      a malformed body is treated like an absent function, as before. *)
   let found =
@@ -208,7 +210,7 @@ let function_source (t : t) (name : string) : string option =
   | Some (expr, _, _) ->
       (Some (Pricklypear_lisp.Reader.pp_expr expr))
   | None ->
-      (match Pricklypear_lisp.Env.lookup t.eval_state.env name with
+      (match if is_current then Pricklypear_lisp.Env.lookup t.eval_state.env name else None with
        | Some (Pricklypear_lisp.Ast.VLambda (params, body, _)) ->
            let e =
              Pricklypear_lisp.Ast.Lambda (params, body)
@@ -225,13 +227,17 @@ let function_source (t : t) (name : string) : string option =
                 (Some card)
             | None -> None))
 
+let function_source (t : t) (name : string) : string option =
+  function_source_at t ~branch_id:t.store.branch_id name
+
 (** Raw function body as quoted data (no eval, no pretty-print).
     Store body (or env lambda) reified via [Eval.quote_to_value] so the
     result is a first-class Lisp value tree agents can walk/rewrite.
     Missing / special-form / non-lambda → None. *)
-let function_ast (t : t) (name : string)
+let function_ast_at (t : t) ~(branch_id : string) (name : string)
   : Pricklypear_lisp.Ast.value option =
-  let found = Store.lookup_function t.store name in
+  let found = Store.lookup_function_at t.store ~branch_id name in
+  let is_current = branch_id = t.store.branch_id in
   (* Opaque-body contract (i-1788671083-c): parse at the eval boundary;
      a malformed body is treated like an absent function, as before. *)
   let found =
@@ -242,7 +248,7 @@ let function_ast (t : t) (name : string)
   | Some (expr, _, _) ->
       (Some (Pricklypear_lisp.Eval.quote_to_value expr))
   | None ->
-      (match Pricklypear_lisp.Env.lookup t.eval_state.env name with
+      (match if is_current then Pricklypear_lisp.Env.lookup t.eval_state.env name else None with
        | Some (Pricklypear_lisp.Ast.VLambda (params, body, _)) ->
            let e = Pricklypear_lisp.Ast.Lambda (params, body) in
            (Some (Pricklypear_lisp.Eval.quote_to_value e))
@@ -258,6 +264,10 @@ let function_ast (t : t) (name : string)
            in
            (Some v)
        | _ -> None)
+
+let function_ast (t : t) (name : string)
+  : Pricklypear_lisp.Ast.value option =
+  function_ast_at t ~branch_id:t.store.branch_id name
 
 (** Names in package [pkg].
 
@@ -477,8 +487,7 @@ let lambda_params (e : Pricklypear_lisp.Ast.expr) : string list option =
   | _ -> None
 
 let binding_annot ?(known_fn : Pricklypear_lisp.Effect.known_fn_lookup =
-  fun _ -> None) (t : t) (name : string) : string =
-  match Store.lookup_function t.store name with
+  fun _ -> None) (t : t) (name : string) : string =  match Store.lookup_function t.store name with
   | Some (body, _, _) ->
       (match Pricklypear_lisp.Ast.expr_of_body_json body with
        | Some e ->
@@ -500,6 +509,28 @@ let binding_annot ?(known_fn : Pricklypear_lisp.Effect.known_fn_lookup =
           (Pricklypear_lisp.Effect.EffSet.badge
              (Pricklypear_lisp.Effect.default_prim_lookup name))
       else name ^ " [?]"
+
+(** branching.branch-resolved-reads SCOPE grammar. Every read prim DECLARES
+    the visibility of its answer, because three readers silently differing
+    on "does marcus have data?" burned operator time. The closed vocabulary
+    is `chain` (branch-chain-visible), `garden` (own-branch/garden-scoped
+    with a prefix escape), `store` (whole-store under the admin RLS
+    disjunct). Stored Lisp defs default to `chain` (they cross the branch
+    chain); unknown prims get no line. A new reader may not introduce a
+    fourth kind without a line in the spec. *)
+let read_scope (t : t) (name : string) : string option =
+  match name with
+  | "find-code" | "function-source" | "function-ast" | "code-history"
+  | "code-diff" | "describe" | "branch-changes" -> Some "chain"
+  | "find-text" | "tree/find-by" -> Some "garden"
+  | "find-rows-author" -> Some "store"
+  | "ops/activity" -> Some "store"
+  | "ops/presence" -> Some "store"
+  | "ops/knock" -> Some "store"
+  | _ ->
+      (match Store.lookup_function t.store name with
+       | Some _ -> Some "chain"
+       | None -> None)
 
 (** Visible bindings without docstrings (bumpers M5; function-doc () =
     missing). [pkg] None → every visible binding; Some p → package
@@ -583,9 +614,26 @@ let describe (t : t) (needle : string) : string =
                  let b = Primitives.prim_summary needle in
                  if b = "built-in primitive" then "(no docstring)" else b)
       in
+      let scope_line =
+        match read_scope t needle with
+        | Some s -> Printf.sprintf "\n  scope: %s" s
+        | None -> ""
+      in
       (Printf.sprintf
-           "%s\n  doc: %s\n  next: (function-source %S) (function-ast %S)"
-           (binding_annot ~known_fn t needle) doc needle needle)
+           "%s\n  doc: %s%s\n  next: (function-source %S) (function-ast %S)"
+           (binding_annot ~known_fn t needle) doc scope_line needle needle)
+    else if read_scope t needle <> None then
+      (* A known read prim (not stored, not a special form): it has no body
+         to describe, but the branch-resolved-reads SCOPE grammar still
+         requires a line. Emit the exact-binding shape with the prim
+         summary instead of a fuzzy apropos list. *)
+      let summary = Primitives.prim_summary needle in
+      let doc =
+        if summary = "built-in primitive" then "(no docstring)" else summary
+      in
+      (Printf.sprintf "%s\n  doc: %s\n  scope: %s"
+         (binding_annot ~known_fn t needle) doc
+         (match read_scope t needle with Some s -> s | None -> "chain"))
     else if is_pkg then
       let exports = package_export_names t needle in
       let lines =

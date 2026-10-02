@@ -270,8 +270,13 @@
     (list
       (list "todos" "todo")
       (list "notes" "notes")
-      (list "calendar" "calendar")))
-  "Column 0: the app chooser. Entries are (label . target); target is the\npackage key that names the browse below.")
+      (list "calendar" "calendar")
+      ;; product-experience.borg §activity-ledger: the operator console is a
+      ;; filmstrip strip, so it is a first-class app in the chooser. Target
+      ;; is a ROUTE leaf (filmstrip/route?), so clicking it opens /ops in
+      ;; the content strip like any other pane.
+      (list "operator console" "/ops")))
+  "Column 0: the app chooser. Entries are (label . target); target is the\npackage key that names the browse below, or a ROUTE to open directly.")
 
 (define filmstrip/browse
   (lambda
@@ -281,10 +286,15 @@
       (if
         (null? path)
         (cons (list apps) #f)
-        (let
-          ((r
-            (filmstrip/pkg-browse (as-str (car path)) (cdr path))))
-          (cons (cons apps (car r)) (cdr r))))))
+        (if
+          (filmstrip/route? (car path))
+          ;; a route LEAF selected in column 0 (e.g. the operator console)
+          ;; has no deeper Miller column; stop the walk here.
+          (cons (list apps) #f)
+          (let
+            ((r
+              (filmstrip/pkg-browse (as-str (car path)) (cdr path))))
+            (cons (cons apps (car r)) (cdr r)))))))
   "Shell cascade: column 0 is the app chooser; deeper columns come from\nthe selected package's browse. Returns (columns . leaf?).")
 
 (define filmstrip/browse-walk

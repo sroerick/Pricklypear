@@ -94,6 +94,25 @@ let env_or name dft =
 
 let pg_conn (store : Store.t) : Io_db.Db.conn option = Io_db.Db.current_conn store
 
+(** Map an auth_log kind to the ledger's closed class grammar. The
+    ledger MIRRORS the auth_log write (it is the by-actor read view of
+    the same event) — it never forks it. Unknown/_internal kinds fall
+    back to auth.login so the row stays attributable. *)
+let ledger_class_of_auth_kind (kind : string) : string =
+  match kind with
+  | "password" | "bootstrap" -> "auth.login"
+  | "mint" | "issue_token" | "api_key" | "ssh_key" | "mint_delegated" ->
+      "auth.mint"
+  | "logout" | "revoke_all" | "revoke_delegated" | "revoke_token" ->
+      "auth.revoke"
+  | "delegated" -> "auth.delegated"
+  | "admin_create_user" -> "admin.create"
+  | "admin_delete_user" -> "admin.delete"
+  | "admin_revoke_sessions" -> "admin.revoke"
+  | "admin_set_password" -> "admin.revoke"
+  | "admin_set_user_type" -> "admin.hold"
+  | _ -> "auth.login"
+
 let log_auth (store : Store.t) ?user_id ~kind ~success ?source_ip ()
   : unit =
   (* PROBE (i-1788671060-2 keep): the audit trail must never block or
@@ -124,7 +143,37 @@ let log_auth (store : Store.t) ?user_id ~kind ~success ?source_ip ()
     with exn ->
       Printf.eprintf "[auth_store] log_auth: %s\n%!"
             (Printexc.to_string exn);
-          ())
+          ());
+      (* product-experience §activity-ledger: mirror the auth_log row onto
+         the by-actor ledger. Resolve the username (the ledger is
+         identity-attributed, auth_log is user-id keyed) best-effort;
+         source_ip rides auth.* rows only. Push is request-path safe. *)
+      (try
+         let actor =
+           match user_id with
+           | None -> "anonymous"
+           | Some uid -> (
+               try
+                 match
+                   Store_db.exec conn
+                     ~params:[ Pgx.Value.of_string uid ]
+                     "SELECT username FROM users WHERE id = $1::uuid"
+                 with
+                 | [ [ c ] ] -> (
+                     match Pgx.Value.to_string c with
+                     | Some u -> u
+                     | None -> "anonymous")
+                 | _ -> "anonymous"
+               with _ -> "anonymous")
+         in
+         ignore
+           (Activity_ledger.push ~actor
+              ~cls:(ledger_class_of_auth_kind kind)
+              ~target:(Activity_ledger.path_target ("auth:" ^ kind))
+              ~outcome:(if success then "ok" else "denied") ?source_ip ())
+       with exn ->
+         Printf.eprintf "[auth_store] ledger mirror: %s\n%!"
+           (Printexc.to_string exn))
 
 let count_users (store : Store.t) : int =
   match pg_conn store with

@@ -329,9 +329,11 @@ let save_base (store : Store.t) ~(user_id : string) ~(lens : string)
 
 (** Member-space replication prefixes for one identity (borge/local-first
     .borg replication-units, data.s.<space>.* — branching.shared-data-spaces
-    membership from migration 029): encoded data.s.<space> prefixes for every
-    space the user is a member of, per the same authorized-reads argument as
-    a member space's read rights. Empty without a live connection. *)
+    membership from migration 029, open spaces from 030): encoded
+    data.s.<space> prefixes for every space the user is a member of, plus
+    every OPEN space (implicit membership for any authenticated identity,
+    'anonymous' excluded), per the same authorized-reads argument as a
+    member space's read rights. Empty without a live connection. *)
 let member_space_prefixes (store : Store.t) ~(user : string) : string list =
   match Store.conn_of store with
   | None -> []
@@ -339,7 +341,11 @@ let member_space_prefixes (store : Store.t) ~(user : string) : string list =
       let rows =
         Store_db.exec conn
           ~params:[ Pgx.Value.of_string user ]
-          "SELECT space FROM data_space_members WHERE username = $1 ORDER BY space"
+          "SELECT space FROM data_space_members WHERE username = $1 \
+           UNION \
+           SELECT name FROM data_spaces WHERE open \
+             AND $1 <> '' AND $1 <> 'anonymous' \
+           ORDER BY space"
       in
       List.filter_map
         (function
