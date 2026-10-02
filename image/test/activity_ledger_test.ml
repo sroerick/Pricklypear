@@ -155,6 +155,47 @@ let test_ring_bounded () =
   Alcotest.(check int) "ring dropped oldest to capacity" Al.capacity
     (List.length pending)
 
+(* T3.2 emit-seam helpers: the budget→cost JSON shape, the auth_log kind→
+   ledger class map (mirror, never fork), and the lonely-habitat bit. *)
+let test_budget_cost_json () =
+  let s =
+    Al.budget_cost_json ~steps:12 ~prim_calls:3 ~db_hits:4 ~db_ms:7.9
+  in
+  let j = Yojson.Safe.from_string s in
+  Alcotest.(check int) "steps" 12 (Yojson.Safe.Util.member "steps" j |> Yojson.Safe.Util.to_int);
+  Alcotest.(check int) "db_ms truncated" 7
+    (Yojson.Safe.Util.member "db_ms" j |> Yojson.Safe.Util.to_int)
+
+let test_auth_kind_map () =
+  let open Pricklypear_image_lib.Auth_store in
+  Alcotest.(check string) "password -> auth.login" "auth.login"
+    (ledger_class_of_auth_kind "password");
+  Alcotest.(check string) "mint -> auth.mint" "auth.mint"
+    (ledger_class_of_auth_kind "mint");
+  Alcotest.(check string) "issue_token -> auth.mint" "auth.mint"
+    (ledger_class_of_auth_kind "issue_token");
+  Alcotest.(check string) "admin_create_user -> admin.create" "admin.create"
+    (ledger_class_of_auth_kind "admin_create_user");
+  (* every mapped class is inside the closed grammar *)
+  List.iter
+    (fun k ->
+      Alcotest.(check bool)
+        (Printf.sprintf "%s maps to a valid class" k)
+        true (Al.valid_class (ledger_class_of_auth_kind k)))
+    [ "password"; "mint"; "issue_token"; "api_key"; "revoke_all";
+      "delegated"; "admin_create_user"; "admin_delete_user";
+      "admin_revoke_sessions"; "admin_set_password";
+      "admin_set_user_type"; "unknown_kind" ]
+
+let test_lonely_bit () =
+  Al.reset_lonely ();
+  (* a supplied human count is memoized *)
+  Alcotest.(check bool) "one human is lonely" true
+    (Al.is_lonely_habitat ~human_count:(Some 1) ());
+  Al.reset_lonely ();
+  Alcotest.(check bool) "two humans is not lonely" false
+    (Al.is_lonely_habitat ~human_count:(Some 2) ())
+
 let () =
   Alcotest.run "activity_ledger"
     [ ( "activity-ledger",
@@ -163,5 +204,9 @@ let () =
           Alcotest.test_case "flush + day rollups" `Quick test_flush_and_rollup;
           Alcotest.test_case "ring bounded (drop-oldest)" `Quick
             test_ring_bounded;
+          Alcotest.test_case "budget cost json" `Quick test_budget_cost_json;
+          Alcotest.test_case "auth_log kind -> ledger class" `Quick
+            test_auth_kind_map;
+          Alcotest.test_case "lonely-habitat bit" `Quick test_lonely_bit;
         ] )
     ]

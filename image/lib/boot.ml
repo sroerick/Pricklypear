@@ -182,6 +182,7 @@ let jobs_runner_loop ~(session : Session.t) : unit =
       let ctx =
         Request_context.make
           ~manifest:t.manifest ~env:t.eval_state.env ~routes:t.routes
+          ~is_admin:t.is_admin
       in
       (* Bind the current job id on this fiber so the (with-step "name"
          thunk) special form (__step__ prim) scopes its checkpoints to this
@@ -379,6 +380,33 @@ let start_eio ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t) : unit =
           ~store:session.store
       with exn ->
         Printf.eprintf "[boot] activity_ledger flush fiber exited: %s\n%!"
+          (Printexc.to_string exn));
+  (* security.borg §the-watched-machine: the lonely-habitat bit. Count the
+     HUMAN users once at boot (OFF the request path) and memoize it; when
+     there is exactly one human, the admin.content-read ceremony is
+     suppressed. PP_LONELY_HABITAT overrides. Best-effort — a DB miss just
+     leaves it undetermined (the ceremony stays on). *)
+  Eio.Fiber.fork ~sw (fun () ->
+      try
+        let n =
+          match Store.conn_of session.store with
+          | None -> None
+          | Some conn -> (
+              try
+                match
+                  Store_db.exec conn
+                    "SELECT count(*)::text FROM users WHERE user_type='human'"
+                with
+                | [ [ c ] ] -> (
+                    match Pgx.Value.to_string c with
+                    | Some s -> (try Some (int_of_string s) with _ -> None)
+                    | None -> None)
+                | _ -> None
+              with _ -> None)
+        in
+        ignore (Activity_ledger.is_lonely_habitat ~human_count:n ())
+      with exn ->
+        Printf.eprintf "[boot] lonely-habitat probe exited: %s\n%!"
           (Printexc.to_string exn));
   (* image.per-identity-sessions: HTTP requests run on per-identity
      sessions (own env, own pgx connection); the boot session keeps the

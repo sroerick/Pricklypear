@@ -38,7 +38,23 @@ let persist_budget_stats (t : t) ~(budget : Pricklypear_lisp.Eval.budget)
        in
        (* image.function-stat-ring: push, no synchronous DB write. *)
        Function_stats.push ~fn:label ~fields_json:fields
-         ~author:t.manifest.username
+         ~author:t.manifest.username;
+       (* product-experience.activity-ledger: the by-ACTOR view of the
+          same event. push is a mutex + queue op only (migration 035).
+          Target is the function label, a PATH, never a body; cost is the
+          budget object. NOTE: never pass the raw auth_token as
+          session_id — it is a bearer secret; the ledger carries no
+          session id until a non-secret one exists. *)
+       let () =
+         ignore
+           (Activity_ledger.push ~actor:t.manifest.username ~cls:"api.eval"
+              ~target:(Activity_ledger.path_target label) ~outcome:"ok"
+              ~cost_json:
+                (Activity_ledger.budget_cost_json ~steps:b.steps
+                   ~prim_calls:b.prim_calls ~db_hits:b.db_hits ~db_ms:b.db_ms)
+              ~branch_id:(Store.current_branch_id t.store) ())
+       in
+       ()
      with _ -> ())
 
 (* Budgeted variant (jobs.borg runner, 2026-09-05): the job runner passes
@@ -836,7 +852,18 @@ let rec eval_one (t : t) (input : string) : Pricklypear_lisp.Ast.value =
             ~package:pkg t.manifest.username
         else
           Store.persist_function t.store name body_json ~doc
-            ~package:pkg t.manifest.username
+            ~package:pkg t.manifest.username;
+        (* product-experience §activity-ledger: a code write is a
+           tree.write event. Target is the b.fn.<name> PATH.
+           seed_additive boot loading is not interactive activity — skip
+           it (it would flood the ledger with every package define). *)
+        if not t.seed_additive then
+          ignore
+            (Activity_ledger.push ~actor:t.manifest.username
+               ~cls:"tree.write"
+               ~target:(Activity_ledger.path_target ("b.fn." ^ name))
+               ~outcome:"ok"
+               ~branch_id:(Store.current_branch_id t.store) ())
       end
     in
     let persist_define name body_expr doc =
@@ -2337,6 +2364,7 @@ let () =
         Request_context.make
           ~manifest:t.manifest
           ~env:t.eval_state.env
+          ~is_admin:t.is_admin
           ~routes:(Request_context.copy_routes t.routes)
       in
       Request_context.with_current ctx (fun () ->

@@ -60,6 +60,41 @@ let prune_secs = 600.0
 
 let enabled () = Sys.getenv_opt "PP_ACTIVITY_PRUNE" <> Some "0"
 
+(** Lonely-habitat bit (security.borg §the-watched-machine): when there
+    is exactly ONE human user, or PP_LONELY_HABITAT is truthy, deliberate
+    reads of another identity's content are not a ceremony — the operator
+    IS the only human, so `admin.content-read` is suppressed. [None] means
+    "not yet determined"; the first caller to compute it memoizes the
+    answer. PP_LONELY_HABITAT=1 forces true; =0 forces false. *)
+let lonely_habitat : bool option ref = ref None
+
+let env_lonely () : bool option =
+  match Sys.getenv_opt "PP_LONELY_HABITAT" with
+  | Some "1" | Some "true" | Some "yes" | Some "on" -> Some true
+  | Some "0" | Some "false" | Some "no" | Some "off" -> Some false
+  | _ -> None
+
+(** True when this habitat has exactly one human user. A non-blocking
+    in-memory memo: callers on the request path pass the count they have
+    (or [None] to leave it undetermined), so no DB work is ever required
+    at the emit seam. *)
+let is_lonely_habitat ?(human_count : int option = None) () : bool =
+  match !lonely_habitat with
+  | Some b -> b
+  | None -> (
+      match env_lonely () with
+      | Some b -> lonely_habitat := Some b; b
+      | None -> (
+          match human_count with
+          | Some n ->
+              let b = n <= 1 in
+              lonely_habitat := Some b;
+              b
+          | None -> false))
+
+(** Test/reset hook: clear the memo (used by tests). *)
+let reset_lonely () : unit = lonely_habitat := None
+
 let buf : entry Queue.t = Queue.create ()
 let mu : Eio.Mutex.t = Eio.Mutex.create ()
 
@@ -94,6 +129,15 @@ let drain () : entry list =
     path explicitly; these helpers just keep the ledger's promise visible
     at the call site. No-op identity. *)
 let path_target (s : string) : string option = Some s
+
+(** Budget object → the ledger's cost JSON (steps, prim_calls, db_hits,
+    db_ms). Same shape the /timing fiber slot reads; no content. *)
+let budget_cost_json ~(steps : int) ~(prim_calls : int) ~(db_hits : int)
+    ~(db_ms : float) : string =
+  Yojson.Safe.to_string
+    (`Assoc
+       [ ("steps", `Int steps); ("prim_calls", `Int prim_calls);
+         ("db_hits", `Int db_hits); ("db_ms", `Int (int_of_float db_ms)) ])
 
 (* —— day rollups ————————————————————————————————————————————————
    Accumulated from the flushed batch exactly once, grouped by

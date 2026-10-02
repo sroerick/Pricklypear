@@ -121,6 +121,7 @@ let launch (env : route_env) (page_fn : Session.t -> unit) : unit =
                Request_context.make
                  ~manifest:(Session.manifest session)
                  ~env:(Session.env session)
+                 ~is_admin:(Session.is_admin session)
                  ~routes:(Request_context.copy_routes (Session.routes session))
              in
              (* SELECT the identity's session, then attach on IT.
@@ -201,6 +202,17 @@ let launch (env : route_env) (page_fn : Session.t -> unit) : unit =
                            String.length path >= 4
                            && String.sub path 0 4 = "/api"
                          in
+                         (* product-experience §activity-ledger: an
+                            unauthenticated denial on an auth-required
+                            path is a first-class ledger event (auth.deny),
+                            target = path. Mutex + queue only. *)
+                         let () =
+                           ignore
+                             (Activity_ledger.push ~actor:"anonymous"
+                                ~cls:"auth.deny"
+                                ~target:(Activity_ledger.path_target path)
+                                ~outcome:"denied" ~source_ip ())
+                         in
                          if apiish then unauthorized_api reqd
                          else require_login_redirect reqd ~path ~target;
                          None
@@ -262,6 +274,19 @@ let launch (env : route_env) (page_fn : Session.t -> unit) : unit =
                     Ops_stats.record_request ~path ~is_authed
                       ~username:(if is_authed then Some uname else None)
                       ~headers ~sockaddr;
+                    (* product-experience §activity-ledger: the one request
+                       funnel is the route.hit emit seam. Target is the
+                       request PATH, never a body. Mutex + queue only —
+                       zero DB work here (031 ring pattern). source_ip is
+                       carried on auth.* rows only, so ordinary page hits
+                       omit it. *)
+                    let () =
+                      if not (Ops_stats.is_excluded_path path) then
+                        ignore
+                          (Activity_ledger.push ~actor:uname ~cls:"route.hit"
+                             ~target:(Activity_ledger.path_target path)
+                             ~outcome:"ok" ())
+                    in
                     (* Refresh ui/nav cache every request so Lisp chrome is shared
                        by home, system pages, and user routes — not only /.
                        image.boot-request-cost: /api/* never renders chrome, so
