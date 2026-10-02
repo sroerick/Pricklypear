@@ -729,6 +729,22 @@
          (invariant 4) are what make the server survive the next
          traffic spike on throughput, not just on not-crashing.
 
+         PER-IDENTITY FAIR-SHARE (card 1bdeb856): the single global
+         256 cap is a SAFETY valve, not a fair allocator. One
+         authenticated tenant can park ~256 in-budget-but-slow evals
+         — (sleep 60) chains are in-budget — and starve every other
+         tenant, including anonymous public routes queued behind the
+         same gate. security.borg budgets-are-security argues limiter
+         units should be THE RESOURCE, so a small per-identity
+         concurrent-eval bucket (default 4,
+         PP_HTTP_MAX_INFLIGHT_PER_USER; <=0 disables) is checked IN
+         ADDITION to the global cap, ACQUIRED BEFORE it so a tenant
+         cannot occupy every global slot while waiting. The key is
+         derived pre-identity from the presented credential (hash of
+         session cookie / Bearer token; Basic username; else source
+         ip; else "anonymous"), so the raw secret is never stored and
+         the credential IS the identity for gating.
+
          =========================================================
          INVARIANT 6 — EIO PG SEQUENCER MUST NOT PERMANENTLY POISON
          =========================================================

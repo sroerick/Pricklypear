@@ -73,6 +73,66 @@ let inflight_release () : unit =
   Eio.Condition.broadcast inflight_sem.cond;
   Eio.Mutex.unlock inflight_sem.mutex
 
+(* ------------------------------------------------------------------
+   PER-IDENTITY FAIR-SHARE (card 1bdeb856). The global 256 gate alone
+   lets one authenticated tenant park ~256 in-budget-but-slow evals
+   ((sleep 60) chains are in-budget) and starve every other tenant,
+   including anonymous public routes queued behind the same gate.
+   security.borg budgets-are-security: limiter units should be THE
+   RESOURCE, so a small per-username concurrent-eval bucket is checked
+   IN ADDITION to the global cap.
+
+   Applied AFTER identity attach (the global gate is acquired before
+   identity is known), wrapping page_fn only. Anonymous traffic shares
+   one bucket keyed "anonymous". Default 4; PP_HTTP_MAX_INFLIGHT_PER_USER
+   overrides (<=0 disables the per-identity check). *)
+let max_inflight_per_user =
+  match Sys.getenv_opt "PP_HTTP_MAX_INFLIGHT_PER_USER" with
+  | Some s -> (match int_of_string_opt s with Some n -> n | _ -> 4)
+  | None -> 4
+
+type per_user_gate = {
+  mutable counts : (string * int) list;
+  mutex : Eio.Mutex.t;
+  cond : Eio.Condition.t;
+}
+
+let per_user_sem =
+  { counts = []; mutex = Eio.Mutex.create (); cond = Eio.Condition.create () }
+
+let per_user_acquire (user : string) : unit =
+  if max_inflight_per_user > 0 then begin
+    Eio.Mutex.lock per_user_sem.mutex;
+    let rec wait () =
+      let n = try List.assoc user per_user_sem.counts with Not_found -> 0 in
+      if n >= max_inflight_per_user then begin
+        Eio.Condition.await per_user_sem.cond per_user_sem.mutex;
+        wait ()
+      end
+      else
+        let counts =
+          (user, n + 1)
+          :: List.remove_assoc user per_user_sem.counts
+        in
+        per_user_sem.counts <- counts
+    in
+    wait ();
+    Eio.Mutex.unlock per_user_sem.mutex
+  end
+
+let per_user_release (user : string) : unit =
+  if max_inflight_per_user > 0 then begin
+    Eio.Mutex.lock per_user_sem.mutex;
+    let n = try List.assoc user per_user_sem.counts with Not_found -> 0 in
+    let counts =
+      if n <= 1 then List.remove_assoc user per_user_sem.counts
+      else (user, n - 1) :: List.remove_assoc user per_user_sem.counts
+    in
+    per_user_sem.counts <- counts;
+    Eio.Condition.broadcast per_user_sem.cond;
+    Eio.Mutex.unlock per_user_sem.mutex
+  end
+
 let emergency_css : string =
   (* Labeled recovery only — NOT the product design system.
      Product CSS comes from Lisp (ui/css) via Session.ui_css. *)
@@ -540,6 +600,31 @@ let parse_bearer_auth (headers : (string * string) list) : string option =
         let scheme = String.lowercase_ascii (String.sub v 0 6) in
         if scheme <> "bearer" then None
         else Some (String.trim (String.sub v 6 (String.length v - 6)))
+
+(** Cheap pre-identity key for the per-identity fair-share gate
+    (card 1bdeb856): used BEFORE identity attach, so it cannot read the
+    username. The credential the request presents IS the identity for
+    gating purposes, so hash the session cookie / Bearer token (never
+    the raw secret), and fall back to Basic username or the source IP
+    for anonymous logging. Returns "anonymous" when nothing is
+    presented. *)
+let identity_gate_key ~(headers : (string * string) list)
+    ~(source_ip : string) : string =
+  let h s =
+    let open Digestif.SHA256 in
+    to_hex (digest_string s)
+  in
+  match cookie_value headers cookie_name with
+  | Some tok when String.trim tok <> "" -> "c:" ^ h tok
+  | _ ->
+      (match parse_bearer_auth headers with
+       | Some tok when String.trim tok <> "" -> "b:" ^ h tok
+       | _ ->
+           (match parse_basic_auth headers with
+            | Some (u, _) when String.trim u <> "" -> "u:" ^ u
+            | _ ->
+                if String.trim source_ip = "" then "anonymous"
+                else "ip:" ^ source_ip))
 
 (** Emit "; Secure" on the session cookie.
 
