@@ -42,6 +42,28 @@ let session_user () : string =
   | Some c -> (Request_context.manifest c).username
   | None -> "anonymous"
 
+(** product-experience §activity-ledger: emit an activity row for a
+    datum write. Target is a PATH (type/id), never a body. The push is a
+    mutex + queue op — zero synchronous DB work on this surface. *)
+let emit_write ~(caller : string) ~(cls : string) ~(type_name : string)
+    ~(id : string) ~(outcome : string) : unit =
+  ignore
+    (Activity_ledger.push ~actor:caller ~cls
+       ~target:(Activity_ledger.path_target (type_name ^ "/" ^ id))
+       ~outcome ())
+
+(** product-experience §activity-ledger: a cross-identity content read
+    rescued by the 033 admin disjunct. Deliberate access is an attributed
+    act; suppressed entirely on a lonely habitat (one human user). Target
+    is the node path, never the body. *)
+let emit_content_read ~(caller : string) ~(target : string) : unit =
+  if caller <> "anonymous" && caller <> "unknown"
+     && not (Activity_ledger.is_lonely_habitat ())
+  then
+    ignore
+      (Activity_ledger.push ~actor:caller ~cls:"admin.content-read"
+         ~target:(Activity_ledger.path_target target) ~outcome:"ok" ())
+
 (** RLS floor for the datum prims (i-1788670872-3).
 
     The CRUD tree/edge/data-lens prims read or write tree_nodes rows —
@@ -239,7 +261,7 @@ let get (store : Store.t) ~(type_name : string) ~(id : string) : value =
     | Some conn ->
         let user = session_user () in
         let sql =
-          "SELECT fields::text FROM " ^ data_rel () ^ " " ^
+          "SELECT fields::text, author FROM " ^ data_rel () ^ " " ^
           "WHERE type_name = $1 AND id = $2::uuid AND " ^
           visible_sql ~user_param:3 in
         let rows =
@@ -253,7 +275,23 @@ let get (store : Store.t) ~(type_name : string) ~(id : string) : value =
          | [] -> VNil
          | row :: _ ->
              (match row with
-              | [ fields_cell ] ->
+              | [ fields_cell; author_cell ] ->
+                  (* 033 disjunct: when an ADMIN reads a row that is not
+                     their own, that is a deliberate content access
+                     (security.borg two-sided audit). The WHERE clause
+                     already guarantees this caller could see it; emit
+                     only when the admin disjunct was actually the
+                     rescuer. No DB work — push is a queue op. *)
+                  (if
+                     (match Request_context.get () with
+                      | Some c -> Request_context.is_admin c
+                      | None -> false)
+                   then
+                     match Pgx.Value.to_string author_cell with
+                     | Some a when a <> user ->
+                         emit_content_read ~caller:user
+                           ~target:(type_name ^ "/" ^ id)
+                     | _ -> ());
                   (match Pgx.Value.to_string fields_cell with
                    | Some s -> (VStr s)
                    | None -> VNil)
@@ -385,9 +423,21 @@ let space_of_datum (conn : Store_db.conn) ~(id : string) : string option =
     intended straggler behavior — thread the real identity to pass. *)
 let guard_space_write (conn : Store_db.conn) ~(prim : string)
     ~(type_name : string) ~(caller : string) ~(id : string option) : unit =
+  let rls_violation ~(detail : string) : 'a =
+    (* product-experience §activity-ledger: a refused cross-boundary
+       write is a first-class event (rls.violation); the descriptive
+       error still raises below. Push is a queue op, no DB work. *)
+    (try
+       ignore
+         (Activity_ledger.push ~actor:caller ~cls:"rls.violation"
+            ~target:(Activity_ledger.path_target type_name)
+            ~outcome:"denied" ())
+     with _ -> ());
+    space_prim_error prim detail
+  in
   (match space_of_type conn ~type_name with
    | Some sp when not (is_space_member conn ~space:sp ~username:caller) ->
-       space_prim_error prim
+       rls_violation ~detail:
          (Printf.sprintf "type %s is admitted to space %s; %s is not a member"
             type_name sp caller)
    | _ -> ());
@@ -396,7 +446,7 @@ let guard_space_write (conn : Store_db.conn) ~(prim : string)
   | Some id ->
       (match space_of_datum conn ~id with
        | Some sp when not (is_space_member conn ~space:sp ~username:caller) ->
-           space_prim_error prim
+           rls_violation ~detail:
              (Printf.sprintf "datum lives in space %s; %s is not a member"
                 sp caller)
        | _ -> ())
@@ -686,7 +736,10 @@ let create_outcome
     (* tree is truth; reverse trigger mirrors to data_rows *)
     let id = Tree_store.insert_datum conn ~type_name ~fields_json ~author in
     (match id with
-     | Ok s -> W_ok s
+     | Ok s ->
+         emit_write ~caller:author ~cls:"data.write" ~type_name ~id:s
+           ~outcome:"ok";
+         W_ok s
      | Error _ ->
          raise (Pricklypear_lisp.Ast.Interp_error
                   (Pricklypear_lisp.Ast.Prim_error
@@ -720,7 +773,12 @@ let update_outcome
     guard_space_write conn ~prim:"update" ~type_name ~caller
       ~id:(Some id);
     let id' = Tree_store.update_datum conn ~type_name ~id ~fields_json in
-    (match id' with Ok s -> W_ok s | Error _ -> W_no_row))
+    (match id' with
+     | Ok s ->
+         emit_write ~caller ~cls:"data.write" ~type_name ~id:s
+           ~outcome:"ok";
+         W_ok s
+     | Error _ -> W_no_row))
 
 let update_impl
     (store : Store.t) ~(type_name : string) ~(id : string)
@@ -850,7 +908,12 @@ let delete_impl (store : Store.t) ~(type_name : string) ~(id : string)
        the RLS floor armed by this tx rejects cross-user deletes). *)
     guard_space_write conn ~prim:"delete" ~type_name ~caller ~id:(Some id);
     let id' = Tree_store.delete_datum conn ~type_name ~id in
-    (match id' with Ok s -> VStr s | Error _ -> VNil))
+    (match id' with
+     | Ok s ->
+         emit_write ~caller ~cls:"data.write" ~type_name ~id:s
+           ~outcome:"ok";
+         VStr s
+     | Error _ -> VNil))
 
 let delete store ~type_name ~id =
   delete_impl store ~type_name ~id ~caller:"unknown"

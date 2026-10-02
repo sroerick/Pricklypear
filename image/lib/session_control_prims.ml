@@ -698,6 +698,7 @@ let register ~(hooks : hooks) (t : t) (tbl : Primitives.t) : unit =
                   Request_context.make
                     ~manifest:elevated_manifest
                     ~env:(Request_context.env ctx)
+                    ~is_admin:(Request_context.is_admin ctx)
                     ~routes:(Request_context.routes ctx)
                 in
                 Request_context.with_current elevated_ctx

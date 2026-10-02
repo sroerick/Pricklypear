@@ -154,6 +154,7 @@ let as_identity (t : Session.t) ~(username : string) (expr : string) : value =
     Pricklypear_image_lib.Request_context.make
       ~manifest:t.manifest
       ~env:t.eval_state.env
+      ~is_admin:t.is_admin
       ~routes:(Pricklypear_image_lib.Request_context.copy_routes t.routes)
   in
   Pricklypear_image_lib.Request_context.with_current ctx (fun () ->
