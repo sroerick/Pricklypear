@@ -16,7 +16,7 @@
 # stop command on rc_check passing —
 #     stop)  _rc_do rc_check || exit 0
 # so `rcctl stop` is a NO-OP exactly when this watchdog runs (rc_check just
-# failed): it never tears down an unhealthy daemon and never culls an
+# failed): it never tears down an unhealthy service and never culls an
 # ORPHAN — an image still holding :18080 off-pidfile. That blind spot is the
 # 2026-09-03 prod incident: after the promote restart died EADDRINUSE, the
 # watchdog "restarted" without ever stopping anything, and its "started OK"
@@ -34,7 +34,7 @@ PATH="/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin"
 service="${PP_SERVICE:-pricklypear}"
 lockdir="${PP_WATCHDOG_LOCK:-/var/run/pricklypear/watchdog.lock}"
 runtime_dir="${PP_RUNTIME_DIR:-/var/run/pricklypear}"
-daemon_user="_pricklypear"
+service_user="_pricklypear"
 
 # Same resolution order as run-image.ksh: source the env file, THEN resolve
 # knobs, so the watchdog inspects the same pidfile and ports the image uses.
@@ -158,7 +158,7 @@ orphan_desc() {
 # port holders — log them for a human instead), pidfile rm. Keep in sync
 # with rc_stop in /etc/rc.d/pricklypear.
 cull() {
-	pkill -U "${daemon_user}" -f '/bin/image' 2>/dev/null || true
+	pkill -U "${service_user}" -f '/bin/image' 2>/dev/null || true
 	for p in "${http_port}" "${repl_port}"; do
 		if wait_port_free "${p}" 10; then
 			continue

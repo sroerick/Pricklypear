@@ -1374,7 +1374,7 @@
            - land does not push to remotes
            - land does not unoverride the source branch
              (stays an explicit, separate act)
-           - no daemon; land is operator/agent-invoked
+           - no long-running service; land is operator/agent-invoked
     |))
    )
    (verify
@@ -1436,7 +1436,7 @@
            - automatic git commit from image or CLI
            - pg_dump of data_rows as part of pp-sync
            - encrypting snapshots
-           - bidirectional sync daemon
+           - bidirectional sync service
     |))
    )
    (verify

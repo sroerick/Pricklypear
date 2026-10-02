@@ -471,7 +471,7 @@
    unification'); everything habitat-side lands via bridge comments.
    Later, the dispatch loop (poll TODO across workstreams, claim,
    submit, concurrency cap, park-on-failure) moves INSIDE resident glochid
-   as a plugin — the orchestrator becomes a glochid face, not a ksh daemon.
+   as a plugin — the orchestrator becomes a glochid face, not a ksh service.
    HONEST STATUS (agent.borg): agent-loop is partial (OpenAI-compat provider
    only, tool registry v0, long unattended turns unproven) — pi runs today
    because it is mature. SEQUENCING: (1) session header card key + terminal

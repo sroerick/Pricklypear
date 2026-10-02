@@ -117,13 +117,14 @@ let port_of socket =
   | `Tcp (_, p) -> p
   | _ -> failwith "listener not tcp"
 
-(* Fork a one-shot loopback listener as a DAEMON fiber. eio's Switch.run
+(* Fork a one-shot loopback listener as a background fiber. eio's Switch.run
    success path never cancels leftover fibers — it AWAITS them — so a
    plain [Fiber.fork] server keeps the switch open forever whenever the
    handler blocks (the silent/slow-body deadline cases hung exactly
-   there, AFTER the client asserts had passed). [Fork.fork_daemon] is
-   eio's own prescribed pattern for test servers (README "run_server"):
-   the daemon is cancelled once the test body is done. One-shot like
+   there, AFTER the client asserts had passed). [Fiber.fork_daemon] is
+   eio's own prescribed pattern for test servers (README "run_server") —
+   the eio API name is fixed; think "background": the fiber is cancelled
+   once the test body is done. One-shot like
    [Eio.Net.accept_fork] (which also serves a single connection and
    returns): each wire test below makes exactly one request. *)
 let serve ~sw ~handler =

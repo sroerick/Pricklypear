@@ -3,6 +3,12 @@
 #
 # One process. No supervisor, no authd (retired by the single-image pivot).
 # The image binary serves htmx HTTP + a line-protocol REPL directly.
+#
+# Vocabulary note: the `daemon*` variables just below are the OpenBSD
+# rc.subr ABI (see rc.subr(8)) — rc.subr reads `daemon`/`daemon_user`/
+# `daemon_timeout` by name and sets `daemon_class` read-only, so they are
+# not ours to rename. Everything outside that fixed interface says
+# "service".
 
 daemon="/usr/local/libexec/pricklypear/current/bin/run-image.ksh"
 daemon_user="_pricklypear"

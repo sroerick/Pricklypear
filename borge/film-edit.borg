@@ -106,7 +106,7 @@
                                     shot-ref, take, edl-entry,
                                     render-job, line, cue, mix-job
         - Routes via (route …)    — /studio and project/report paths
-        - services/blender_bridge — OCaml daemon: typed commands in,
+        - services/blender_bridge — OCaml service: typed commands in,
           bpy socket calls out; owns the render job queue
         - blender/bridge_addon.py — thin socket-eval addon inside
           Blender; PYTHON IS FIRMWARE, written once, checked in
@@ -549,11 +549,11 @@
     (smoke "render-job records out_hash/out_path on done")))
 
   (subsection blender-bridge
-   (doc "OCaml bridge daemon + bpy socket addon; typed command set; live GUI as view, batch for renders; job queue")
+   (doc "OCaml bridge service + bpy socket addon; typed command set; live GUI as view, batch for renders; job queue")
    (status planned)
    (verify
     (smoke "bridge addon loads in headless blender and answers status")
-    (smoke "strip-add commands from the daemon build a VSE timeline")
+    (smoke "strip-add commands from the service build a VSE timeline")
     (smoke "render command produces a playable output file")
     (smoke "one-at-a-time queue: second render waits for first")))
 
