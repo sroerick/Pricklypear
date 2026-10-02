@@ -275,6 +275,13 @@ curl -sS "$PP_URL/agent.txt" | head
   trusting that a `.pp` change deployed (`body-stale: 0` = honestly live).
   Never `reseed` a drifted package to "land" a fix — that clobbers every
   live-only define (the reseed guard refuses without `--force`).
+- **Snapshot is comment-preserving** (branching.vault-authority,
+  2026-10-02). The vault is literate source; `export-package` emits no
+  interior comments, so `pp-sync snapshot` MERGES: unchanged forms keep
+  their old text verbatim, only changed forms take new text, and a lost
+  comment on a changed form is reported by name. It also refuses to
+  overwrite a hand-authored file (no `exported from live branch` header)
+  or to shrink a file's define count; `--force` overrides both.
 
 ## One-tree storage (default)
 

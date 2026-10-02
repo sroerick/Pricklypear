@@ -1069,7 +1069,7 @@
   (subsection vault-authority
    (doc "The vault is a generated MIRROR of system/main, not an authoring source; drift is visible")
    (status implemented)
-   (implements cli/bin/pp_sync.ml cli/lib/pp_sync_diff.ml scripts/post-receive-prod-hook.ksh)
+   (implements cli/bin/pp_sync.ml cli/lib/pp_sync_diff.ml cli/lib/pp_sync_merge.ml scripts/post-receive-prod-hook.ksh)
    (details
     (doc (|
          DECISION (roerick + pi, 2026-10-02, card 8dff7c9e):
@@ -1149,6 +1149,23 @@
          strictly fewer defines than the file it would replace, naming
          the counts; --force overrides for a deliberate deletion. This
          turns a silent gutting into a loud, reviewable refusal.
+
+         COMMENT-PRESERVING MERGE (i-vault-comments, 2026-10-02): the
+         vault is LITERATE SOURCE — comment blocks explain non-obvious
+         code and exist ONLY in git (the store keeps the AST;
+         export-package emits no interior comments). Measured: filmstrip
+         146 comment lines in git vs 2 in the live export; todo 110 vs
+         ~0. A plain generator write would delete that documentation.
+         So a snapshot MERGES new export into the existing file
+         (cli/lib/pp_sync_merge.ml): every top-level form whose canonical
+         AST is UNCHANGED is emitted VERBATIM (comments, formatting and
+         order kept); only genuinely changed forms take the new text.
+         Forms match by NAME, so reordering is harmless. A changed form
+         keeps its old LEADING prefix (section comment) but its interior
+         comments are replaced by the new body — that is REPORTED by name
+         (changed_with_comments), never silent. Hand-authored files are
+         still refused outright (no 'exported from live branch' header);
+         --force bypasses merge+guards for a deliberate rewrite.
     |))
    )
    (verify

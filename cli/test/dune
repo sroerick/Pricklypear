@@ -7,3 +7,8 @@
  (name pp_sync_diff_test)
  (modules pp_sync_diff_test)
  (libraries pricklypear-cli.lib pricklypear-lisp alcotest))
+
+(test
+ (name pp_sync_merge_test)
+ (modules pp_sync_merge_test)
+ (libraries pricklypear-cli.lib pricklypear-lisp re alcotest))
