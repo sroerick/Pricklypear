@@ -1570,16 +1570,18 @@
         cid)))
   "File an issue: ONE object — a kind-tagged todo-item card on the shared\n     Board (single-object issues, roerick 2026-09-28). The CARD id is the\n     issue id now; resolve/reopen/delete ride the card pipeline directly\n     (card-resolve/card-reopen/card-delete).\n\n     OBITUARY (what/why): this used to DUAL-WRITE — a log/issues ledger\n     heading node AND a Board card linked back via the card's issue_id\n     field — two stored objects for one logical issue, reconciled by every\n     writer (add/resolve/reopen/delete each touched both faces; sync\n     existed to repair drift). The sync tax was real: a ghost-card resync\n     bug, and board visibility needs ONE object per issue. The typed\n     todo-item tree node IS the issue (borge/one-tree.borg typed-nodes);\n     the ledger was the pre-convergence relic. The register on /issues is\n     now a FROZEN ARCHIVE: legacy rows keep resolve/reopen/delete so the\n     archive can be cleaned up, but nothing appends to it. Old issue ids\n     (i-<ts>-<uuid>) referenced in historical comments keep resolving\n     against the archive.
 
-     TODO(Phase 3 activity-ledger): every file ATTEMPT — ok OR denied/error
-     — must row the activity ledger (product-experience.borg
+     ACTIVITY LEDGER (closed): every file ATTEMPT — ok OR denied/error
+     — rows the activity ledger (product-experience.borg
      §activity-ledger; workstreams.borg §shared-register 'a report is a
-     knock, and knocks must never be silent'). The ledger primitive
-     (ops/activity push) does not exist yet, so this write path currently
-     rows nothing; when Phase 3 lands, push an attributed row here
-     (actor = whoami, class = 'register.file', target = Board id,
-     outcome = ok/denied) with ZERO synchronous DB work. This is a
-     DOCUMENTED SEAM, not a silent omission: the ledger test in T3.4 owns
-     closing it.")
+     knock, and knocks must never be silent'). The register writes
+     through todo/item/add-space -> todo/tree/create -> (tree/upsert),
+     so the kernel emits the row on the tree_upsert DATUM path (class
+     'data.write', outcome ok|error, target a b./data. PATH, never a
+     body) with ZERO synchronous DB work. This file carries no ledger
+     call of its own: attribution would be wrong here (the prims already
+     know the per-request actor), and a Lisp-side push would need a new
+     ledger prim just to re-pass what the kernel has. Pinned by
+     image/test/shared_register_test.ml 'file attempt rows the ledger'.")
 
 (define notes/issues/board-list-id
   (lambda
