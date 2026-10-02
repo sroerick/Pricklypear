@@ -41,6 +41,10 @@ let q_int conn ?(params = []) sql : int =
   | [ [ c ] ] -> int_of_string (Option.get (Pgx.Value.to_string c))
   | _ -> Alcotest.fail ("query shape: " ^ sql)
 
+let mk_entry ~actor ~cls ~outcome =
+  { Al.at = Unix.gettimeofday (); actor; session_id = None; branch_id = None;
+    cls; target = None; outcome; cost_json = None; source_ip = None }
+
 let cleanup store ~actor =
   match S.conn_of store with
   | None -> ()
@@ -385,6 +389,125 @@ let test_api_eval_async () =
           in
           Alcotest.(check bool) "cost carries steps" true (cost_steps > 0)))
 
+(* T4.1/T4.2: deterministic knock schema. A pure detector over
+   structure-only events, then a DB-backed filing path that files at
+   most ONE security incident per (kind, actor): N denials in a window
+   produce exactly one row, and a repeat scan BUMPS its count rather
+   than opening a second. The severity class ("security") is distinct
+   from reliability. *)
+let test_knock_detect_thresholds () =
+  let open Pricklypear_image_lib.Knock_policy in
+  let denials n actor =
+    List.init n (fun _ -> mk_entry ~actor ~cls:"admin.delete"
+      ~outcome:"denied")
+  in
+  (* below threshold: no knock *)
+  Alcotest.(check int) "4 denials below min=5" 0
+    (List.length (detect ~min_denials:5 (denials 4 "a")));
+  (* at threshold: exactly one knock, correct kind + count *)
+  let ks = detect ~min_denials:5 (denials 5 "a" @ denials 7 "b") in
+  Alcotest.(check int) "two actors over threshold" 2 (List.length ks);
+  List.iter
+    (fun (k : knock) ->
+      Alcotest.(check string) "kind" "admin.denials" k.kind;
+      Alcotest.(check int)
+        (Printf.sprintf "count for %s" k.actor)
+        (if k.actor = "a" then 5 else 7) k.count)
+    ks;
+  (* rls.violation repeats file *)
+  let rls =
+    List.init 3 (fun _ -> mk_entry ~actor:"c" ~cls:"rls.violation"
+      ~outcome:"denied")
+  in
+  Alcotest.(check int) "rls repeats knock" 1
+    (List.length (List.filter (fun k -> k.kind = "rls.violation") (detect rls)));
+  (* a denied privileged act knocks at count 1 *)
+  let priv =
+    [ mk_entry ~actor:"d" ~cls:"promote.attempt" ~outcome:"denied" ]
+  in
+  Alcotest.(check int) "privilege escalation knocks" 1
+    (List.length (List.filter (fun k -> k.kind = "privilege.escalation")
+                    (detect priv)))
+
+let test_trifecta_from_classes () =
+  let open Pricklypear_image_lib.Knock_policy in
+  (* an actor with private-data reads and an effect channel but NO ingest
+     is not flagged; supplying an ingest leg flips all three. *)
+  let evs =
+    [ mk_entry ~actor:"a" ~cls:"admin.content-read" ~outcome:"ok";
+      mk_entry ~actor:"a" ~cls:"data.write" ~outcome:"ok";
+      mk_entry ~actor:"b" ~cls:"data.write" ~outcome:"ok" ]
+  in
+  let rows = trifecta evs in
+  let find a = List.find (fun r -> r.actor = a) rows in
+  Alcotest.(check bool) "a not flagged without ingest" false (find "a").flag;
+  Alcotest.(check bool) "b has only effect leg" false (find "b").flag;
+  let rows2 = trifecta ~ingest_classes:[ "egress.http" ]
+    (evs @ [ mk_entry ~actor:"a" ~cls:"egress.http" ~outcome:"ok" ]) in
+  Alcotest.(check bool) "a flagged with ingest" true
+    (List.find (fun r -> r.actor = "a") rows2).flag
+
+let test_knock_files_once () =
+  with_store (fun store ->
+      let actor = uniq "knockactor" in
+      let conn = Option.get (S.conn_of store) in
+      let cleanup () =
+        let listed =
+          Pricklypear_image_lib.Crud.find_rows store ~type_name:"ops-incident"
+            ~filters:[ ("actor", actor) ] ~limit:50 ()
+        in
+        (match listed with
+         | Pricklypear_lisp.Ast.VList rows ->
+             List.iter
+               (function
+                 | Pricklypear_lisp.Ast.VPair
+                     (Pricklypear_lisp.Ast.VStr id, _) ->
+                     ignore
+                       (Pricklypear_image_lib.Crud.delete store
+                          ~type_name:"ops-incident" ~id)
+                 | _ -> ())
+               rows
+         | _ -> ());
+        ignore conn
+      in
+      cleanup ();
+      Fun.protect ~finally:cleanup (fun () ->
+          let fp = "security|admin.denials|" ^ actor in
+          let id1 =
+            Pricklypear_image_lib.Ops_incidents.file_security_incident
+              ~store ~fingerprint:fp ~kind:"admin.denials" ~actor
+              ~title:"5 denied admin attempts" ~count0:5
+          in
+          (* a second scan BUMPS the count, never opens a second row *)
+          let id2 =
+            Pricklypear_image_lib.Ops_incidents.file_security_incident
+              ~store ~fingerprint:fp ~kind:"admin.denials" ~actor
+              ~title:"5 denied admin attempts" ~count0:5
+          in
+          Alcotest.(check string) "same row deduped by fingerprint" id1 id2;
+          let n =
+            q_int conn ~params:[ Pgx.Value.of_string actor ]
+              "SELECT count(*)::text FROM data_rows WHERE type_name='ops-incident' \
+               AND fields->>'actor'=$1"
+          in
+          Alcotest.(check int) "exactly ONE security incident" 1 n;
+          let count =
+            q_int conn ~params:[ Pgx.Value.of_string actor ]
+              "SELECT (fields->>'count')::int FROM data_rows \
+               WHERE type_name='ops-incident' AND fields->>'actor'=$1"
+          in
+          Alcotest.(check int) "repeat bumped the count" 10 count;
+          let sev =
+            match
+              Db.exec conn ~params:[ Pgx.Value.of_string actor ]
+                "SELECT fields->>'severity' FROM data_rows \
+                 WHERE type_name='ops-incident' AND fields->>'actor'=$1"
+            with
+            | [ [ c ] ] -> Option.get (Pgx.Value.to_string c)
+            | _ -> Alcotest.fail "shape"
+          in
+          Alcotest.(check string) "security severity class" "security" sev))
+
 let () =
   Alcotest.run "activity_ledger"
     [ ( "activity-ledger",
@@ -405,5 +528,11 @@ let () =
             test_auth_events_rows;
           Alcotest.test_case "api.eval pushes asynchronously" `Quick
             test_api_eval_async;
+          Alcotest.test_case "knock detect thresholds" `Quick
+            test_knock_detect_thresholds;
+          Alcotest.test_case "trifecta from class counts" `Quick
+            test_trifecta_from_classes;
+          Alcotest.test_case "knock files exactly one security incident" `Quick
+            test_knock_files_once;
         ] )
     ]

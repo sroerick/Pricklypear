@@ -116,6 +116,61 @@ let file_todo_and_note (session : Session_types.t) ~(title : string)
       in
       match v with VStr s -> (Some s) | _ -> None)
 
+(* product-experience §activity-ledger KNOCK SCHEMA: the deterministic
+   security-incident filing path. It shares the reliability queue's
+   fingerprint dedup (find_open_incident + count bump) but carries
+   severity="security" so it sorts apart from reliability work. LAW 1:
+   detection never depends on a model noticing; an LLM may later rewrite
+   title/body, never the count. No todo is filed here — the operator
+   console is the action surface; a knock is a row, not a work item,
+   until a human decides. *)
+let file_security_incident ~(store : Store.t) ~(fingerprint : string)
+    ~(kind : string) ~(actor : string) ~(title : string)
+    ~(count0 : int) : string =
+  let now = iso_now () in
+  match find_open_incident store ~fingerprint with
+  | Some (id, fields) ->
+      let count = json_get_int fields "count" 1 + count0 in
+      let fields_json =
+        Yojson.Safe.to_string
+          (`Assoc
+             (fields
+             @ [ ("fingerprint", `String fingerprint)
+               ; ("level", `String "security")
+               ; ("severity", `String "security")
+               ; ("kind", `String kind)
+               ; ("actor", `String actor)
+               ; ("component", `String "security")
+               ; ("count", `Int count)
+               ; ("last_seen", `String now)
+               ; ("status", `String "open") ]))
+      in
+      let _ = Crud.update store ~type_name ~id ~fields_json in
+      id
+  | None ->
+      let sfp = short_fp fingerprint in
+      let fields_json =
+        Yojson.Safe.to_string
+          (`Assoc
+             [ ("fingerprint", `String fingerprint)
+             ; ("level", `String "security")
+             ; ("severity", `String "security")
+             ; ("kind", `String kind)
+             ; ("actor", `String actor)
+             ; ("component", `String "security")
+             ; ("count", `Int count0)
+             ; ("first_seen", `String now)
+             ; ("last_seen", `String now)
+             ; ("status", `String "open")
+             ; ("note_slug", `String ("ops-knock-" ^ sfp))
+             ; ("todo_id", `String "")
+             ; ("sample_msg", `String title)
+             ; ("ai_enriched", `String "false") ])
+      in
+      (match Crud.create store ~type_name ~fields_json ~author:"security" with
+       | VStr id when String.length id = 36 -> id
+       | _ -> sfp)
+
 let record_event (session : Session_types.t) (ev : Ops_log.event)
   : unit =
   match ev.Ops_log.level with
@@ -133,6 +188,7 @@ let record_event (session : Session_types.t) (ev : Ops_log.event)
                (`Assoc
                   [ ("fingerprint", `String ev.fingerprint)
                   ; ("level", `String (Ops_log.level_to_string ev.level))
+                  ; ("severity", `String "reliability")
                   ; ("component", `String ev.component)
                   ; ("count", `Int count)
                   ; ("first_seen", `String (json_get fields "first_seen"))
@@ -172,6 +228,7 @@ let record_event (session : Session_types.t) (ev : Ops_log.event)
                (`Assoc
                   [ ("fingerprint", `String ev.fingerprint)
                   ; ("level", `String (Ops_log.level_to_string ev.level))
+                  ; ("severity", `String "reliability")
                   ; ("component", `String ev.component)
                   ; ("count", `Int 1)
                   ; ("first_seen", `String now)
@@ -248,6 +305,12 @@ let list_open_incidents (store : Store.t) : Yojson.Safe.t =
                        ; ("component", `String (json_get fields "component"))
                        ; ("count", `Int (json_get_int fields "count" 1))
                        ; ("level", `String (json_get fields "level"))
+                       ; ( "severity"
+                         , `String
+                             (let s = json_get fields "severity" in
+                              if s = "" then "reliability" else s) )
+                       ; ("kind", `String (json_get fields "kind"))
+                       ; ("actor", `String (json_get fields "actor"))
                        ; ("sample_msg", `String (json_get fields "sample_msg"))
                        ; ("todo_id", `String (json_get fields "todo_id"))
                        ; ("last_seen", `String (json_get fields "last_seen"))

@@ -268,6 +268,7 @@ let write_db_prims = [
   "with-step"; "__step__";  (* checkpoint write; composes with Txn for exactly-once *)
   "schedule"; "unschedule";  (* borge/jobs.borg schedules WriteDb *)
   "undo";  (* borge/tree-time.borg reads-as-of-gen restore-by-write WriteDb *)
+  "ops/knock";  (* deterministic knock scan files security incidents (admin) *)
   "code-restore";  (* borge/tree-time.borg consumers code-restore WriteDb *)
   (* META-EVAL family (i-1788669715): evaluates code in the live env / a
      fresh budget / a timing harness loop — capability or resource reset
