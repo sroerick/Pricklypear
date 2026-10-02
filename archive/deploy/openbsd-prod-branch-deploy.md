@@ -132,7 +132,7 @@ rcctl restart pricklypear
 rcctl reload nginx
 ```
 
-OpenBSD does not auto-respawn crashed daemons. A root cron watchdog polls
+OpenBSD does not auto-respawn crashed services. A root cron watchdog polls
 `rcctl check` every minute and restarts if needed:
 
 ```cron

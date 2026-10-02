@@ -34,6 +34,7 @@ def main() -> None:
         except Exception:
             pass
 
+    # Background reader; dies with the process.
     t = threading.Thread(target=reader, daemon=True)
     t.start()
 

@@ -6,7 +6,7 @@ Two layers, one closure (borge/storage.borg):
   paths  -> datum rows of type `file`
             {path, blob-id, sha256, size, mtime, content-type}
 The row IS the path index; author + RLS datum confinement IS the filespace.
-Blob retention rules and the v0 non-goals (no chunking, no watch daemon,
+Blob retention rules and the v0 non-goals (no chunking, no watch service,
 no tombstones) live in the borge chapter — don't reimplement policy here.
 
 Env (same as pp_media.py):
