@@ -549,7 +549,8 @@ the ONE /filmstrip/tree endpoint; neither face gets box chrome here)."
 ;; The habitat's FUNCTION GRAMMAR (the image's /bindings face) as a
 ;; glochid app: package -> function -> doc+source, read-only over the
 ;; bind/* habitat-bridge prims (agent/lib/habitat.ml — the one
-;; POST /api/eval client; creds AGENT_HABITAT_(URL|USER|PASS) > PP_*).
+;; POST /api/eval client; creds AGENT_HABITAT_(URL|TOKEN|USER|PASS) > PP_*,
+;; token wins when set).
 ;; FAIL-SOFT at CALL time like the mem/* bridge, so every page/cascade
 ;; touch wraps its call in bind/safe (a guard) and renders a muted
 ;; notice / empty column when the bridge is unconfigured or down — the
