@@ -317,7 +317,12 @@ let cmd_pull_all ~url ~user ~password ~timeout =
       if code <> 0 then code else rc)
     0 pkgs
 
-let cmd_reseed ~url ~user ~password ~timeout package =
+let pkg_path_under root pkg =
+  if pkg = "" || pkg = "(root)" || pkg = "root" then
+    Filename.concat (Filename.concat root "_root") "lib.pp"
+  else Filename.concat (Filename.concat root pkg) "lib.pp"
+
+let cmd_reseed ~url ~user ~password ~timeout ~force package =
   if package = "" then begin
     prerr_endline "reseed: need package name";
     2
@@ -327,6 +332,41 @@ let cmd_reseed ~url ~user ~password ~timeout package =
       prerr_endline ("reseed: " ^ msg);
       2
   | None ->
+    (* Vault-drift guard (card 8dff7c9e): reseed is an explicit clobber of
+       system/main from libs/. A live-only define (bound on main but absent
+       from the vault) would be DESTROYED silently. Diff the live
+       package-bindings against the vault file first, and refuse (listing
+       the names) unless the operator passes --force. The natural recovery
+       is `pp-sync snapshot` to pull the live-only rows into the vault, then
+       reseed. Read-only when it refuses. *)
+    let live_only =
+      let path = pkg_path_under (libs_dir ()) package in
+      let local =
+        if Sys.file_exists path then parse_local_defines (read_file path)
+        else []
+      in
+      let local_set = List.fold_left (fun s x -> x :: s) [] local in
+      match
+        live ~url ~user ~password ~timeout
+          (Printf.sprintf "(package-bindings %S)" package)
+        |> live_value
+      with
+      | Error _ -> []
+      | Ok s ->
+          unwrap_list_of_strings s
+          |> List.filter (fun n -> not (List.mem n local_set))
+          |> List.sort_uniq String.compare
+    in
+    if live_only <> [] && not force then begin
+      Printf.eprintf
+        "reseed: REFUSED — %s has %d live-only define(s) absent from the vault.\n\
+         Reseeding would DELETE them. Run `pp-sync snapshot` first to pull\n\
+         them into libs/, or pass --force to clobber anyway.\n\
+         live-only: %s\n%!"
+        package (List.length live_only)
+        (String.concat ", " live_only);
+      2
+    end else
     match
       live ~url ~user ~password ~timeout
         (Printf.sprintf "(reseed-package %S)" package)
@@ -338,11 +378,6 @@ let cmd_reseed ~url ~user ~password ~timeout package =
     | Ok msg ->
         print_endline msg;
         0
-
-let pkg_path_under root pkg =
-  if pkg = "" || pkg = "(root)" || pkg = "root" then
-    Filename.concat (Filename.concat root "_root") "lib.pp"
-  else Filename.concat (Filename.concat root pkg) "lib.pp"
 
 let cmd_snapshot ~url ~user ~password ~timeout ~branch ~out_dir =
   let prev_branch =
@@ -654,7 +689,7 @@ let env_timeout =
   | None -> 180.
 
 let main command package names verbose url user password password_file timeout
-    branch out_dir from_ref =
+    branch out_dir from_ref force =
   let password =
     Pp_client.resolve_password ~password ~password_file
   in
@@ -670,7 +705,7 @@ let main command package names verbose url user password password_file timeout
     | "pull" -> cmd_pull ~url ~user ~password ~timeout package
     | "push" -> cmd_push ~url ~user ~password ~timeout package
     | "pull-all" -> cmd_pull_all ~url ~user ~password ~timeout
-    | "reseed" -> cmd_reseed ~url ~user ~password ~timeout package
+    | "reseed" -> cmd_reseed ~url ~user ~password ~timeout ~force package
     | "snapshot" ->
         cmd_snapshot ~url ~user ~password ~timeout ~branch ~out_dir
     | "land" ->
@@ -727,10 +762,17 @@ let from_ref =
   let doc = "Source branch for land (default: current session branch)." in
   Arg.(value & opt string "" & info [ "from" ] ~docv:"OWNER/BRANCH" ~doc)
 
+let force =
+  let doc =
+    "reseed: clobber system/main even when the package has live-only \
+     defines absent from the vault (which reseed would delete)."
+  in
+  Arg.(value & flag & info [ "force" ] ~doc)
+
 let term =
   Term.(
     const main $ command $ package $ names $ verbose $ url $ user $ password
-    $ password_file $ timeout $ branch $ out_dir $ from_ref)
+    $ password_file $ timeout $ branch $ out_dir $ from_ref $ force)
 
 let cmd =
   let doc =
