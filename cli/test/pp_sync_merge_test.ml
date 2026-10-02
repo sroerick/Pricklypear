@@ -160,6 +160,13 @@ let test_plan_write_contract () =
          "refusal names hand-authored + zero defines" true
          (contains "hand-authored" m && contains "ZERO" m)
    | Write _ -> Alcotest.fail "hand-authored + empty live must refuse");
+  (* NEW FILE + zero-define export -> refuse (empty shells don't seed vault
+     files; 2026-10-02 err/route/soup incident) *)
+  (match pw ~old_text:"" ~new_text:empty_live ~live_names:[] ~force:false with
+   | Refused m ->
+       Alcotest.(check bool) "zero-define shell refuses on new file" true
+         (contains "ZERO" m)
+   | Write _ -> Alcotest.fail "an empty shell must not create a vault file");
   (* --force overrides with a RAW write of the generator text *)
   (match pw ~old_text:src_hand_old ~new_text:empty_live ~live_names:[] ~force:true with
    | Write w ->

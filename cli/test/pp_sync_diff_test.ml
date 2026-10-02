@@ -76,6 +76,18 @@ let test_unwrap_quoted_names () =
   check_list "lisp plain" [ "a"; "b" ] (unwrap_quoted_names "(a b)");
   check_list "empty string" [] (unwrap_quoted_names "")
 
+let test_export_provenance () =
+  (* the header the image stamps on every export-package text *)
+  let main_export =
+    ";; package std -- exported from live branch system/main\n" in
+  Alcotest.(check (option string)) "parses the branch" (Some "system/main")
+    (export_provenance main_export);
+  Alcotest.(check (option string)) "garden branch identified" (Some "admin/personal")
+    (export_provenance
+       ";; package err -- exported from live branch admin/personal\n");
+  Alcotest.(check (option string)) "no header -> None" None
+    (export_provenance "(define x (lambda () 1))")
+
 let () =
   Alcotest.run "pp_sync_diff"
     [ ( "parse",
@@ -99,4 +111,7 @@ let () =
     ; ( "unwrap",
         [ Alcotest.test_case "quoted-name list shapes (JSON + lisp)" `Quick
             test_unwrap_quoted_names ] )
+    ; ( "provenance",
+        [ Alcotest.test_case "export header branch self-report" `Quick
+            test_export_provenance ] )
     ]

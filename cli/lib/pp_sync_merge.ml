@@ -358,7 +358,18 @@ let plan_write ~(old_text : string) ~(new_text : string) ~live_names
   in
   if String.trim new_text = "" then Refused "empty export"
   else if old_text = "" || String.trim old_text = "" then
-    Write { text = new_text; report = empty_report; raw = true; hand = false }
+    (* first capture of a package: a vault file only exists for packages
+       that DEFINE something. A zero-define export is a shell/junk family
+       (2026-10-02: err/route/soup shells mid-incident) — writing it adds
+       an empty file the seed reads on every boot for no content. *)
+    (match count_defines new_text with
+     | Some 0 ->
+         Refused
+           "the live export carries ZERO defines for this package — an \
+            empty shell (junk family) has no business seeding a vault \
+            file; the vault files only define-bearing packages"
+     | _ -> Write { text = new_text; report = empty_report; raw = true;
+                    hand = false })
   else if force then
     Write { text = new_text; report = empty_report; raw = true;
             hand = not (is_generated old_text) }
