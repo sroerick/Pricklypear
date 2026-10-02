@@ -92,6 +92,125 @@ let register (t : t) (tbl : Primitives.t) : unit =
           (Pricklypear_lisp.Ast.VList
              (List.map (fun s -> Pricklypear_lisp.Ast.VStr s) rows)));
 
+  (* (ops/presence) -> JSON {sessions:[...], rollups:[...]}. product-
+     experience §activity-ledger READ (operator console).
+
+     ADMIN ONLY. Live sessions from the in-process Presence map (identity,
+     branch, admin, last-seen) — those within a 15-minute window — plus
+     per-identity spend/burst from the forever-kept day rollups. Structure
+     only: no content, no token material (token ids/prefixes only, never
+     the secret). Read-only and safe to poll. *)
+  Primitives.register tbl "ops/presence"
+    (fun _args ->
+      let is_admin = Prims_db_common.is_verified_admin ~t () in
+      if not is_admin then
+        (Pricklypear_lisp.Ast.VStr "ops/presence: denied: admin only")
+      else begin
+        let rows = Presence.snapshot ~window:900.0 () in
+        let sessions =
+          List.map
+            (fun (p : Presence.who) ->
+              `Assoc
+                [ ("actor", `String p.username);
+                  ("user_id", `String p.user_id);
+                  ("branch", `String p.branch_name);
+                  ("is_admin", `Bool p.is_admin);
+                  ("last_seen", `Float p.last_seen);
+                  ("age_seconds",
+                   `Int
+                     (int_of_float
+                        (max 0.0 (Unix.gettimeofday () -. p.last_seen))));
+                  ( "tokens",
+                    `List (Presence.tokens_of ~store:t.store ~user_id:p.user_id) );
+                  ( "jobs",
+                    `List
+                      (Presence.projects_of ~store:t.store ~username:p.username
+                         ~is_admin:p.is_admin ()) );
+                  ( "last_auth",
+                    `List
+                      (Presence.last_auth_of ~store:t.store
+                         ~user_id:p.user_id ()) ) ])
+            rows
+        in
+        let rollups =
+          List.filter_map
+            (fun s ->
+              try Some (Yojson.Safe.from_string s) with _ -> None)
+            (Activity_ledger.rollup_rows ~store:t.store ())
+        in
+        Pricklypear_lisp.Ast.VStr
+          (Yojson.Safe.to_string
+             (`Assoc
+                [ ("sessions", `List sessions);
+                  ("rollups", `List rollups) ]))
+      end);
+
+  (* (ops/hold kind target) -> VStr outcome. product-experience
+     §activity-ledger HOLD verbs (security.borg §the-watched-machine):
+     reversible containment one click from the feed. Types:
+       revoke-token  credential-id -> Auth_store.revoke_token
+       revoke-sessions user-id      -> Auth_store.revoke_all_sessions
+       cancel-job    job-id         -> Jobs.cancel
+       disable-package package      -> Store.set_package_enabled false
+
+     ADMIN ONLY (a hold on another identity is an operator act). Every
+     hold writes a ledger row (admin.hold) — the watched machine watches
+     its watchers (two-sided audit). Non-reversible acts remain the
+     operator's own verbs; this prim only offers the reversible four. *)
+  Primitives.register tbl "ops/hold"
+    (fun args ->
+      let is_admin = Prims_db_common.is_verified_admin ~t () in
+      let caller = Prims_db_common.caller_username ~t () in
+      let fail msg =
+        ignore
+          (Activity_ledger.push ~actor:caller ~cls:"admin.hold"
+             ~target:(Activity_ledger.path_target "ops/hold")
+             ~outcome:"denied" ());
+        Pricklypear_lisp.Ast.VStr msg
+      in
+      if not is_admin then fail "ops/hold: denied: admin only"
+      else
+        match args with
+        | [ Pricklypear_lisp.Ast.VStr kind;
+            Pricklypear_lisp.Ast.VStr target ] ->
+            if kind = "" || target = "" then
+              fail "ops/hold: need kind + target"
+            else begin
+              let outcome =
+                match kind with
+                | "revoke-token" -> (
+                    match Auth_store.revoke_token t.store ~credential_id:target with
+                    | Ok () -> "ok"
+                    | Error e -> "error: " ^ e)
+                | "revoke-sessions" ->
+                    let n = Auth_store.revoke_all_sessions t.store ~user_id:target in
+                    Printf.sprintf "ok: %d session(s) revoked" n
+                | "cancel-job" -> (
+                    match
+                      Jobs.cancel ~store:t.store ~id:target ~caller
+                        ~is_admin:true
+                    with
+                    | Pricklypear_lisp.Ast.VStr s -> s
+                    | _ -> "ok")
+                | "disable-package" ->
+                    Store.set_package_enabled t.store ~name:target
+                      ~enabled:false ~author:caller;
+                    "ok: disabled " ^ target
+                | _ ->
+                    "error: unknown hold kind " ^ kind
+                    ^ " (revoke-token|revoke-sessions|cancel-job|disable-package)"
+              in
+              let ok =
+                String.length outcome >= 2 && String.sub outcome 0 2 = "ok"
+              in
+              ignore
+                (Activity_ledger.push ~actor:caller ~cls:"admin.hold"
+                   ~target:(Activity_ledger.path_target (kind ^ ":" ^ target))
+                   ~outcome:(if ok then "ok" else "error") ());
+              Pricklypear_lisp.Ast.VStr outcome
+            end
+        | _ -> fail "ops/hold: need kind + target");
+
   (* (ops/knock) -> JSON {knocks:[...], trifecta:[...]}. product-experience
      §activity-ledger KNOCK SCHEMA + lethal-trifecta row.
 

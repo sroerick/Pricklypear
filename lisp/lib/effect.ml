@@ -198,6 +198,7 @@ let read_db_prims = [
   "list-usernames"; "list-ssh-keys";
   "llm-key-status";
   "log-tail"; "ops/summary"; "ops/incidents"; "ops/activity";
+  "ops/presence";
   "agent-history"; "agent-sessions";
   "job-status"; "jobs"; "schedules";  (* borge/jobs.borg ReadDb *)
   "gen-now";  (* borge/tree-time.borg reads-as-of-gen ReadDb *)
@@ -269,6 +270,7 @@ let write_db_prims = [
   "schedule"; "unschedule";  (* borge/jobs.borg schedules WriteDb *)
   "undo";  (* borge/tree-time.borg reads-as-of-gen restore-by-write WriteDb *)
   "ops/knock";  (* deterministic knock scan files security incidents (admin) *)
+  "ops/hold";   (* reversible operator containment: revoke/cancel/disable (admin) *)
   "code-restore";  (* borge/tree-time.borg consumers code-restore WriteDb *)
   (* META-EVAL family (i-1788669715): evaluates code in the live env / a
      fresh budget / a timing harness loop — capability or resource reset

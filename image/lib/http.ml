@@ -274,6 +274,18 @@ let launch (env : route_env) (page_fn : Session.t -> unit) : unit =
                     Ops_stats.record_request ~path ~is_authed
                       ~username:(if is_authed then Some uname else None)
                       ~headers ~sockaddr;
+                    (* product-experience §activity-ledger READ (operator
+                       console): live-session presence. Mutex + map write,
+                       ZERO DB work; username/branch/admin/last-seen only
+                       (no content). Stale rows age out on snapshot. *)
+                    let () =
+                      if is_authed then
+                        Presence.touch ~username:uname
+                          ~user_id:session.Session.manifest.user_id
+                          ~branch_id:(Store.current_branch_id session.Session.store)
+                          ~branch_name:session.Session.manifest.branch_name
+                          ~is_admin:session.Session.is_admin ()
+                    in
                     (* product-experience §activity-ledger: the one request
                        funnel is the route.hit emit seam. Target is the
                        request PATH, never a body. Mutex + queue only —
