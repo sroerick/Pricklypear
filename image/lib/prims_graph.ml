@@ -229,7 +229,29 @@ let register (t : t) (tbl : Primitives.t) : unit =
                 Pricklypear_lisp.Ast.VStr j)
               routes
           in
-          (Pricklypear_lisp.Ast.VList (fn_items @ route_items)));
+          (* branching.branch-resolved-reads: a data summary so a fork that
+             only wrote datum rows stops reading as EMPTY. One item per type
+             authored on the branch: {name,kind:"data",type,count,authors,
+             newest}. Telemetry is not content, but this is content — it reads
+             the datum footprint, never function_stat. *)
+          let data_items =
+            List.map
+              (fun (ty, n, authors, newest) ->
+                let j =
+                  Yojson.Safe.to_string
+                    (`Assoc
+                       [ ("name", `String ty)
+                       ; ("kind", `String "data")
+                       ; ("type", `String ty)
+                       ; ("count", `Int n)
+                       ; ("authors", `List (List.map (fun a -> `String a) authors))
+                       ; ("newest", `String newest)
+                       ])
+                in
+                Pricklypear_lisp.Ast.VStr j)
+              (Store.list_own_datums_by_type t.store ~branch_id:bid)
+          in
+          (Pricklypear_lisp.Ast.VList (fn_items @ route_items @ data_items)));
   Primitives.register tbl "stub-function"
     (fun args ->
       match args with
