@@ -17,13 +17,17 @@
    as stored; the caller parses via [Ast.expr_of_body_json]. A malformed
    body row now comes back instead of masquerading as a miss — the
    boundary owns the skip decision. *)
-let lookup_function (t : Store_db.t) (name : string)
+(* Branch-id-parameterized variant: resolve [name] over the chain of
+   [branch_id] instead of the store's current branch. Lets a read prim
+   inspect a fork without checkout (branching.branch-resolved-reads).
+   [lookup_function] delegates with [t.branch_id]. *)
+let lookup_function_at (t : Store_db.t) ~(branch_id : string) (name : string)
   : (string * string * string option) option =
   match t.conn with
   | None -> None
   | Some conn ->
       (try
-      (* Recursive CTE: start at the session's branch and walk parents.
+      (* Recursive CTE: start at [branch_id] and walk parents.
              Return the FIRST row matching [name] when ordered by depth
              ascending (closest ancestor wins). *)
           let sql =
@@ -33,7 +37,7 @@ let lookup_function (t : Store_db.t) (name : string)
             "ORDER BY chain.depth ASC LIMIT 1") in
           let rows =
             Store_db.exec conn
-              ~params:[ Pgx.Value.of_string t.branch_id;
+              ~params:[ Pgx.Value.of_string branch_id;
                         Pgx.Value.of_string name ]
               sql in
           (match rows with
@@ -50,6 +54,10 @@ let lookup_function (t : Store_db.t) (name : string)
                      | _ -> None)
                 | _ -> None))
     with exn -> Store_db.reraise ~op:"lookup_function" exn)
+
+let lookup_function (t : Store_db.t) (name : string)
+  : (string * string * string option) option =
+  lookup_function_at t ~branch_id:t.branch_id name
 
 (* List all function names visible to this branch (via the same
    recursive-CTE override walk). Used at session-make time to load
@@ -109,7 +117,10 @@ let list_function_names (t : Store_db.t)
     current branch inheritance chain. Closest definition wins (depth ASC
     dedup). [needle] is matched with SQL ILIKE '%needle%' (no user-supplied
     wildcards expanded beyond that). Returns names only, ordered by name. *)
-let search_function_bodies (t : Store_db.t) ~(needle : string) ~(limit : int)
+(* Branch-id-parameterized variant of [search_function_bodies]: search
+   the effective bodies over [branch_id]'s chain, no checkout. *)
+let search_function_bodies_at (t : Store_db.t) ~(branch_id : string)
+    ~(needle : string) ~(limit : int)
   : string list =
   let needle = String.trim needle in
   let limit = if limit <= 0 then 200 else min limit 2000 in
@@ -131,7 +142,7 @@ let search_function_bodies (t : Store_db.t) ~(needle : string) ~(limit : int)
            let rows =
              Store_db.exec conn
                ~params:
-                 [ Pgx.Value.of_string t.branch_id
+                 [ Pgx.Value.of_string branch_id
                  ; Pgx.Value.of_string needle
                  ; Pgx.Value.of_string (string_of_int limit)
                  ]
@@ -144,6 +155,10 @@ let search_function_bodies (t : Store_db.t) ~(needle : string) ~(limit : int)
                | _ -> None)
              rows
          with exn -> Store_db.reraise ~op:"search_function_bodies" exn)
+
+let search_function_bodies (t : Store_db.t) ~(needle : string) ~(limit : int)
+  : string list =
+  search_function_bodies_at t ~branch_id:t.branch_id ~needle ~limit
 
 (** Full branch-chain defs for env rehydrate: parents first (depth DESC),
     then children. Includes ALL rows (not deduped) so Session.load_defs can
@@ -438,4 +453,61 @@ let list_own_routes (t : Store_db.t) ~(branch_id : string)
                rows)
     with exn -> Store_db.reraise ~op:"list_own_routes" exn)
 
-(** Child own names left-joined to parent: name, child_updated, parent_updated opt. *)
+(** Datum footprint authored on [branch_id]: per type, the number of
+    distinct datum leaves written since the branch was created, the
+    distinct authors (branch owner + that owner's agent users, matched by
+    the [<owner>/…] naming convention), and the newest write time.
+
+    There is no branch column on datum rows (data paths are branch-free
+    per one-tree.data), so "written on this branch" is approximated by
+    ``created_at >= branches.created_at`` — the fork-time watermark — plus
+    an author confined to the branch owner and their agents. Data-lens
+    copies (data.l.<lens>) are excluded: they are explicit forks, not the
+    branch's own live footprint.
+
+    Spec: branching.branch-resolved-reads (branch-changes gains a data
+    summary so a data-only fork stops reading as EMPTY). Returns
+    ``(type_name, count, authors, newest) list`` sorted by type name. *)
+let list_own_datums_by_type (t : Store_db.t) ~(branch_id : string)
+  : (string * int * string list * string) list =
+  match t.conn with
+  | None -> []
+  | Some conn ->
+      (try
+         let sql =
+           "WITH b AS (SELECT created_at, owner FROM branches WHERE id = $1), " ^
+           "agg AS ( " ^
+           "  SELECT v.type_name, " ^
+           "         COUNT(DISTINCT v.path)::int AS n, " ^
+           "         string_agg(DISTINCT v.author, ',' ORDER BY v.author) AS authors, " ^
+           "         max(v.created_at)::text AS newest " ^
+           "  FROM tree_versions v, b " ^
+           "  WHERE v.kind = 'datum' " ^
+           "    AND NOT (v.path <@ 'data.l'::ltree) " ^
+           "    AND v.created_at >= b.created_at " ^
+           "    AND (v.author = b.owner OR v.author LIKE b.owner || '/%') " ^
+           "  GROUP BY v.type_name " ^
+           ") " ^
+           "SELECT type_name, n::text, authors, newest FROM agg " ^
+           "WHERE type_name IS NOT NULL ORDER BY type_name" in
+         let rows =
+           Store_db.exec conn ~params:[ Pgx.Value.of_string branch_id ] sql
+         in
+         List.filter_map
+           (fun row ->
+             match row with
+             | [ ty_c; n_c; authors_c; newest_c ] ->
+                 (match Pgx.Value.to_string ty_c,
+                         Pgx.Value.to_int n_c,
+                         Pgx.Value.to_string newest_c with
+                  | Some ty, Some n, Some newest ->
+                      let authors =
+                        match Pgx.Value.to_string authors_c with
+                        | Some s when s <> "" -> String.split_on_char ',' s
+                        | _ -> []
+                      in
+                      Some (ty, n, authors, newest)
+                  | _ -> None)
+             | _ -> None)
+           rows
+       with exn -> Store_db.reraise ~op:"list_own_datums_by_type" exn)
