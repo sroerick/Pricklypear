@@ -944,6 +944,11 @@ let routes : route list =
         let uptime = Session.uptime_seconds env.session in
         let boot_epoch = Session.boot_epoch env.session in
         let check = Store.health_check (Session.store env.session) in
+        (* fd gauge (2026-10-02 fd-exhaustion incident): surface open fds
+           vs the soft limit so a slow climb is visible before accept
+           fails. Cheap fstat sweep, bounded by the limit. *)
+        let open_fds = Fd_gauge.count () in
+        let fd_limit = Lazy.force Fd_gauge.limit in
         let h, status =
           match check with
           | Ok () ->
@@ -951,6 +956,8 @@ let routes : route list =
                   branch;
                   uptime_seconds = uptime;
                   boot_epoch;
+                  open_fds;
+                  fd_limit;
                   error = None },
                 `OK )
           | Error msg ->
@@ -958,6 +965,8 @@ let routes : route list =
                   branch;
                   uptime_seconds = uptime;
                   boot_epoch;
+                  open_fds;
+                  fd_limit;
                   error = Some msg },
                 `Service_unavailable )
         in
