@@ -10,7 +10,6 @@ let register (t : t) (tbl : Primitives.t) : unit =
   let deny_anon name = Prims_db_common.deny_anon name in
   let register_crud name fn = Prims_db_common.register_crud ~tbl name fn in
   let caller_username () = Prims_db_common.caller_username ~t () in
-  let require_admin op k = Prims_db_common.require_admin ~t op k in
   (* spec_delegation: delegated sessions carry data grants only; schema
      authority (type_defs) is code-adjacent and stays with the owner's
      own admin session. *)
@@ -903,17 +902,31 @@ let register (t : t) (tbl : Primitives.t) : unit =
       | _ ->
           ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("tree/garden-root", "[] or user", "bad-args"))))));
 
-  (* (deftype 'name 'field1 'field2 ...) -> VStr "defined type <name>".
-     All args are quoted symbols (now VSymbol; coerced above). Persists
-     the declaration into type_defs on the session's branch. *)
-  (* (deftype 'name 'field1 ...) — admin only (BORGE-1785213343).
-     Schema authority lives with main/admin; garden authors must not
-     overwrite type_defs. Anonymous still raises (deny_anon). *)
-  register_crud "deftype"
-    (fun args ->
-      let uname = caller_username () in
-      if uname = "anonymous" then deny_anon "deftype"
-      else if Session_types.restricted t then deny_delegated "deftype"
-      else
-        require_admin "deftype" (fun () ->
-            Crud.deftype t.store ~args ~author:uname));
+    (* (deftype 'name 'field1 'field2 ...) -> VStr "defined type <name>".
+       All args are quoted symbols (now VSymbol; coerced above). Persists
+       the declaration into type_defs on the session's branch.
+
+       Garden-branch ownership gate: deftype is a code/schema write and RLS
+       exempts non-datum kinds (migration 013), so it is gated like the rest
+       of the code write surface, not by require_admin. The write lands on the
+       session's CURRENT branch, so the gate is branch_owner_authorized on
+       that branch's owner (admin for system/*, own tenant otherwise).
+       Replaces the require_admin added for BORGE-1785213343: schema
+       authority lives on the branch you own, not only with site admins.
+       Anonymous still raises (deny_anon); delegated stays denied
+       (spec_delegation: schema is code-adjacent). *)
+    register_crud "deftype"
+      (fun args ->
+        let uname = caller_username () in
+        if uname = "anonymous" then deny_anon "deftype"
+        else if Session_types.restricted t then deny_delegated "deftype"
+        else
+          let cur_owner, _ =
+            Session_control_prims.split_branch_ref t.manifest.branch_name
+          in
+          if not (Session_control_prims.branch_owner_authorized t cur_owner)
+          then
+            (Pricklypear_lisp.Ast.VStr
+               (Printf.sprintf "deftype: denied: branch %s is owned by %s"
+                  t.manifest.branch_name cur_owner))
+          else Crud.deftype t.store ~args ~author:uname);

@@ -30,10 +30,10 @@ let with_eio f =
   in
   Pricklypear_image_lib.Io_eio.with_ctx ctx f
 
-let make_session ~username =
+let make_session_branch ~branch_name ~username =
   let manifest =
     M.make ~user_id:("u-" ^ username) ~username ~branch_id:main_id
-      ~branch_name:"main"
+      ~branch_name
       ~boot_mode:M.Boot_on_connect ~image_version:"test" ()
   in
   let store =
@@ -42,6 +42,8 @@ let make_session ~username =
       ~branch_id:main_id ()
   in
   S.make ~manifest ~store ()
+
+let make_session ~username = make_session_branch ~branch_name:"main" ~username
 
 (* Call a registered prim by name through the session's rim + env:
    loader_test's driving shape, but on the SESSION's prim table and env
@@ -257,6 +259,55 @@ let test_set_password_non_admin_denied () =
             "set-password: denied: admin only" s
       | v -> Alcotest.fail ("expected admin denial, got: " ^ pp v))
 
+(* deftype: anonymous -> User_error denial (deny_anon raise), before any
+   store call. The garden-branch ownership gate replaces the require_admin
+   shape (BORGE-1785213343). *)
+let test_deftype_anon_denied () =
+  with_eio (fun () ->
+    let t = make_session ~username:"anonymous" in
+    match call t "deftype" [ VStr "widget"; VStr "name" ] with
+    | v -> Alcotest.fail ("expected anon denial, got: " ^ pp v)
+    | exception Interp_error (User_error (m, _)) ->
+        Alcotest.(check string) "deftype anon gate"
+          "deftype: denied for anonymous" m
+    | exception e ->
+        Alcotest.fail ("unexpected exn: " ^ Printexc.to_string e))
+
+(* deftype: non-admin whose CURRENT branch is system/* -> VStr denial naming
+   the owner, before any store call (a garden author may not declare types
+   into the shared defaults tree). *)
+let test_deftype_system_branch_denied () =
+  with_eio (fun () ->
+      let t = make_session_branch ~username:"tester" ~branch_name:"system/main" in
+    match call t "deftype" [ VStr "widget"; VStr "name" ] with
+    | VStr s ->
+        Alcotest.(check string) "deftype system-branch denial"
+          "deftype: denied: branch system/main is owned by system" s
+    | v -> Alcotest.fail ("expected VStr denial, got: " ^ pp v))
+
+(* deftype: non-admin on their OWN garden branch passes the gate and reaches
+   Crud.deftype (no-DB persist is a no-op, so the answer is "defined type
+   ...", proving it was not denied). *)
+let test_deftype_own_garden_passes () =
+  with_eio (fun () ->
+      let t = make_session_branch ~username:"tester" ~branch_name:"tester/personal" in
+    match call t "deftype" [ VStr "widget"; VStr "name" ] with
+    | VStr s ->
+        Alcotest.(check string) "deftype own-garden passes"
+          "defined type widget" s
+    | v -> Alcotest.fail ("expected defined-type, got: " ^ pp v))
+
+(* deftype: admin keeps system/* access (branch_owner_authorized admin rule;
+   the textual "admin" fallback carries on a no-DB store). *)
+let test_deftype_admin_system_passes () =
+  with_eio (fun () ->
+      let t = make_session_branch ~username:"admin" ~branch_name:"system/main" in
+    match call t "deftype" [ VStr "widget"; VStr "name" ] with
+    | VStr s ->
+        Alcotest.(check string) "deftype admin system passes"
+          "defined type widget" s
+    | v -> Alcotest.fail ("expected defined-type, got: " ^ pp v))
+
 (* set-password: missing/empty password while admin -> bad-args raise
    (never a silent no-op that would look like a successful reset). The
    gate runs first, so this only fires for an admin caller. *)
@@ -305,5 +356,17 @@ let () =
           ; ( "set-password-non-admin-denied"
             , `Quick
             , test_set_password_non_admin_denied )
+          ; ( "deftype-anon-denied"
+            , `Quick
+            , test_deftype_anon_denied )
+          ; ( "deftype-system-branch-denied"
+            , `Quick
+            , test_deftype_system_branch_denied )
+          ; ( "deftype-own-garden-passes"
+            , `Quick
+            , test_deftype_own_garden_passes )
+          ; ( "deftype-admin-system-passes"
+            , `Quick
+            , test_deftype_admin_system_passes )
         ] )
     ]
