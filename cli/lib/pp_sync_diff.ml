@@ -82,6 +82,24 @@ let pp_body (body : string) : string =
   | Some e -> one_line (Pricklypear_lisp.Reader.pp_expr e)
   | None -> one_line body
 
+(* The branch an export-package TEXT says it was exported from: the
+   image writes it into the header — ";; package X -- exported from
+   live branch B". This is the export's SELF-REPORTED provenance, the
+   cheap guard against MID-RUN BRANCH FLIPS: eval sessions are
+   PER-IDENTITY and SHARED, so a concurrent admin client checking out
+   another branch between our eval calls would otherwise silently
+   redirect the mirror (2026-10-02 live incident: a parallel agent
+   session's evals raced a real snapshot and produced empty shells
+   stamped "admin/personal" mid-run). [None] when the header is
+   missing/malformed — callers treat that as not-verified. *)
+let export_provenance (text : string) : string option =
+  let re = Re.Perl.compile_pat {|exported from live branch (\S+)|} in
+  match Re.exec_opt re text with
+  | None -> None
+  | Some g ->
+      (try Some (Re.Group.get g 1)
+       with _ -> None)
+
 (* Unwrap a printed list of names (e.g. a package-bindings reply) into
    its elements. Three shapes arrive over the wire:
    - a JSON array of strings: ["todo/x","todo/y"] (prims print their

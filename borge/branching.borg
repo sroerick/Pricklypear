@@ -1218,12 +1218,23 @@
          shape, deleted from libs/ twice (6ed8656 kernel-form seeding
          abort, 628416f a pull-all resurrected it once). Discovery
          skips banned families silently; explicit verbs refuse loudly.
-         The ban is POLICY, not cleanliness: deleting a define row
-         from system/main has no primitive yet (unbind refuses on the
-         inheritance root). When a guarded main-delete primitive
-         exists, delete the live duplicate rows and lift the ban —
-         until then main-hygiene decisions (theme zz-* strays, the
-         list/std duplicates) have no execution path on the live side.
+         The ban is POLICY, not cleanliness: deleting a define row from
+         system/main has no primitive yet (unbind refuses on the
+         inheritance root); lift the ban only when a guarded
+         main-delete primitive deletes the live duplicate rows.
+
+         MID-RUN BRANCH-FLIP GUARD (2026-10-02 live incident): eval
+         sessions are PER-IDENTITY and shared — a concurrent admin
+         client can flip the session checkout between pp-sync's eval
+         calls, silently redirecting the mirror (a real snapshot raced
+         a parallel agent session and emitted empty shells stamped
+         admin/personal mid-run). Every export text self-reports its
+         provenance (the 'exported from live branch B' header);
+         vault_write REFUSES any export whose reported branch differs
+         from the expected target — loud skip, re-run when the other
+         session is quiet (or give sync its own identity, the clean
+         isolation). Zero-define exports (junk family shells) cannot
+         create new vault files.
     |))
    )
    (verify

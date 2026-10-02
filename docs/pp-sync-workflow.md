@@ -74,7 +74,16 @@ them. Guard semantics (in order): hand-authored file + zero live
 defines → refuse (skins/dead source); ANY name the file would drop that
 live main binds nowhere → refuse by name (main is append-only);
 otherwise merge — unlimited accounted shrink is a legitimate mirror
-edit. Banned families (live rows that must never re-materialize a
+edit.
+
+**Concurrency caveat (learned live 2026-10-02):** eval sessions are
+per-identity and shared — another admin client's evals can flip the
+session branch mid-run between pp-sync's calls. Every export self-reports
+its branch (`exported from live branch B` header) and pp-sync refuses
+any mismatch loudly. If you hit mid-run flip refusals: another session
+is active; re-run when it's quiet, or run sync as a dedicated pp-sync
+user (identity = isolation). A snapshot run is the one pp-sync
+operation that touches many packages — prefer quiet-time. Banned families (live rows that must never re-materialize a
 vault file, e.g. `list` = std's old shape) are skipped by discovery
 and refused explicitly.
 

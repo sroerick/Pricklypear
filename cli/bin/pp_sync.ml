@@ -386,11 +386,32 @@ let sweep_live_names ~url ~user ~password ~timeout base =
    live-name set for one retry when a refusal is about unaccounted
    drops. Returns process exit code: 0 wrote (or would), 2 refusal —
    guards are load-bearing, never "best effort". *)
-let vault_write ~(sweep : unit -> string list) ~verb ~path ~new_text ~live_names
-    ~force ~dry : int =
+let vault_write ~(sweep : unit -> string list) ~verb ~path ~new_text
+    ~live_names ~expect_branch ~force ~dry : int =
   let old_text =
     if Sys.file_exists path then read_file path else ""
   in
+  (* MID-RUN BRANCH-FLIP GUARD (2026-10-02): every export text carries the
+     branch the IMAGE actually exported from. The session is shared per
+     identity — another client's evals flipping the checkout between our
+     calls would redirect the mirror to a garden branch silently. A
+     mismatch is refused LOUDLY; re-run when the other session is quiet
+     (or give sync its own identity). [expect_branch = ""] skips the
+     check (only for callers without a defined target). *)
+  (match
+     ( Pp_sync_diff.export_provenance new_text,
+       String.trim expect_branch )
+   with
+   | Some b, e when e <> "" && b <> e ->
+       Printf.eprintf
+         "  REFUSED %s %s: the export says it came from %S but %S was \
+          expected — the shared session's branch flipped mid-run (a \
+          concurrent eval client checked it out). Nothing was written; \
+          re-run when the other session is quiet or use a dedicated \
+          pp-sync user.\n%!"
+         verb path b e;
+       2
+   | _ ->
   let rec attempt ~live_names =
     Pp_sync_merge.plan_write ~old_text ~new_text ~live_names ~force
   in
@@ -446,7 +467,7 @@ let vault_write ~(sweep : unit -> string list) ~verb ~path ~new_text ~live_names
    | Pp_sync_merge.Refused _ ->
        let wider = sweep () in
        attempt ~live_names:(live_names @ wider) |> report
-   | outcome -> report outcome)
+   | outcome -> report outcome))
 
 let cmd_pull ~url ~user ~password ~timeout ~force ~dry package =
   (* vault-hygiene (i-1788671623-1, i-1788671331-d): refusals are checked
@@ -533,7 +554,8 @@ let cmd_pull ~url ~user ~password ~timeout ~force ~dry package =
         let code =
           vault_write
             ~sweep:(fun () -> sweep_live_names ~url ~user ~password ~timeout [])
-            ~verb:"pull" ~path ~new_text:text ~live_names:base ~force ~dry
+            ~verb:"pull" ~path ~new_text:text ~live_names:base
+            ~expect_branch:"system/main" ~force ~dry
         in
         restore ();
         code
@@ -806,7 +828,7 @@ let cmd_snapshot ~url ~user ~password ~timeout ~branch ~out_dir ~force ~dry =
           let path = pkg_path_under out_root pkg in
           let code =
             vault_write ~sweep:(fun () -> []) ~verb:"snapshot" ~path
-              ~new_text:text ~live_names ~force ~dry
+              ~new_text:text ~live_names ~expect_branch:target ~force ~dry
           in
           if code <> 0 && !write_rc = 0 then write_rc := code
         end)
@@ -982,7 +1004,7 @@ let cmd_land ~url ~user ~password ~timeout ~from_ref ~package ~names =
                             vault_write
                               ~sweep:(fun () -> sweep_live_names ~url ~user ~password ~timeout [])
                               ~verb:"land" ~path ~new_text:text ~live_names
-                              ~force:false ~dry:false
+                              ~expect_branch:"system/main" ~force:false ~dry:false
                           in
                           if code <> 0 then begin
                             Printf.eprintf
