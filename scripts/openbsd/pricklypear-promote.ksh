@@ -29,6 +29,12 @@ config_group="${CONFIG_GROUP:-_pricklypear}"
 runtime_user="${RUNTIME_USER:-_pricklypear}"
 service="pricklypear"
 health_url="${HEALTH_URL:-http://127.0.0.1:18080/health}"
+# Release retention: keep this many newest releases (plus the live
+# current/previous) and prune the rest. /usr/local is a small slice
+# (~3.2G) and a release is ~46M, so an unpruned history fills it in
+# weeks; the 2026-10-02 prod incident had 67 releases (~2.6G) and 64M
+# free. Override KEEP_RELEASES for a longer rollback window.
+keep_releases="${KEEP_RELEASES:-5}"
 target_dir="${releases_dir}/${release_id}"
 tmpdir="$(mktemp -d /tmp/pp-promote.XXXXXXXXXX)"
 stage_dir="${tmpdir}/release"
@@ -155,6 +161,40 @@ apply_migrations() {
 
 apply_migrations || die "database migrations failed; old release still serving"
 
+# ---------------------------------------------------------------------------
+# Login class: the image is a multi-user server (one pgx connection per
+# attached identity plus HTTP/REPL sockets). OpenBSD's generic `daemon`
+# class caps openfiles-cur at 128, which the 2026-10-02 prod wedge hit
+# after ~4.5 days ("Too many open files" on accept -> hung accept loops,
+# eval 499s, watchdog restart). rc.subr selects a per-service class when
+# /etc/login.conf.d/<service> defines it (the postgresql precedent), so
+# install that class. Idempotent; never clobber an operator-edited file.
+# ---------------------------------------------------------------------------
+install_login_class() {
+  lc="/etc/login.conf.d/${service}"
+  [ -d /etc/login.conf.d ] || return 0
+  if [ -f "${lc}" ]; then
+    log "login class ${lc} present; leaving as-is"
+    return 0
+  fi
+  cat > "${lc}" <<'EOF'
+# Pricklypear image login class.
+#
+# Multi-user server: one pgx connection per attached identity plus
+# HTTP/REPL sockets, so the generic `daemon` class soft cap
+# (openfiles-cur=128) is too low. rc.subr selects this class
+# automatically when /etc/login.conf.d/<service> defines it.
+pricklypear:\
+	:openfiles-cur=1024:\
+	:openfiles-max=1024:\
+	:tc=daemon:
+EOF
+  chown root:wheel "${lc}" 2>/dev/null || true
+  chmod 0644 "${lc}"
+  log "installed login class ${lc}"
+}
+install_login_class
+
 if [ -L "${current_link}" ]; then
   previous_target="$(readlink "${current_link}")"
   [ -n "${previous_target}" ] && ln -sfn "${previous_target}" "${previous_link}"
@@ -248,4 +288,31 @@ fi
 
 log "promoted ${release_id}"
 log "current -> ${current_link} -> ${target_dir}"
+
+# ---------------------------------------------------------------------------
+# Release retention: prune all but the newest ${keep_releases}, always
+# protecting the live current and previous targets. Runs AFTER the
+# symlink swap + green health gate, so the release being rolled back to
+# is never a prune candidate. Failure here is loud but non-fatal: a full
+# disk should not turn a successful promote into a rollback.
+# ---------------------------------------------------------------------------
+prune_releases() {
+  case "${keep_releases}" in ''|*[!0-9]*) log "keep_releases not numeric; skipping prune"; return 0 ;; esac
+  n=0
+  pruned=0
+  for d in $(ls -1dt "${releases_dir}"/*/ 2>/dev/null); do
+    d="${d%/}"
+    n=$((n + 1))
+    [ "${n}" -le "${keep_releases}" ] && continue
+    [ "${d}" = "${target_dir}" ] && continue
+    [ "${d}" = "${previous_target}" ] && continue
+    rm -rf "${d}"
+    pruned=$((pruned + 1))
+  done
+  [ "${pruned}" -gt 0 ] && log "pruned ${pruned} old release(s); kept ${keep_releases} + current/previous"
+  return 0
+}
+prune_releases || true
+log "df /usr/local: $(df -h /usr/local | tail -1)"
+
 cat "${target_dir}/MANIFEST" 2>/dev/null || true
