@@ -1553,9 +1553,13 @@
             (as-str kind)
             ": "
             (notes/issues/title-or-kind kind title)))
+        (bid (notes/issues/board-list-id))
         (cid
           (as-str
-            (todo/item/add (notes/issues/board-list-id) full-title))))
+            (todo/item/add-space
+              (as-str (car bid))
+              (as-str (cdr bid))
+              full-title))))
       (seq
         (todo/tree/save
           "todo-item"
@@ -1564,7 +1568,20 @@
             (todo/item/get cid)
             (list "kind" (as-str kind) "notes" (as-str body))))
         cid)))
-  "File an issue: ONE object — a kind-tagged todo-item card on the shared\n     Board (single-object issues, roerick 2026-09-28). The CARD id is the\n     issue id now; resolve/reopen/delete ride the card pipeline directly\n     (card-resolve/card-reopen/card-delete).\n\n     OBITUARY (what/why): this used to DUAL-WRITE — a log/issues ledger\n     heading node AND a Board card linked back via the card's issue_id\n     field — two stored objects for one logical issue, reconciled by every\n     writer (add/resolve/reopen/delete each touched both faces; sync\n     existed to repair drift). The sync tax was real: a ghost-card resync\n     bug, and board visibility needs ONE object per issue. The typed\n     todo-item tree node IS the issue (borge/one-tree.borg typed-nodes);\n     the ledger was the pre-convergence relic. The register on /issues is\n     now a FROZEN ARCHIVE: legacy rows keep resolve/reopen/delete so the\n     archive can be cleaned up, but nothing appends to it. Old issue ids\n     (i-<ts>-<uuid>) referenced in historical comments keep resolving\n     against the archive.")
+  "File an issue: ONE object — a kind-tagged todo-item card on the shared\n     Board (single-object issues, roerick 2026-09-28). The CARD id is the\n     issue id now; resolve/reopen/delete ride the card pipeline directly\n     (card-resolve/card-reopen/card-delete).\n\n     OBITUARY (what/why): this used to DUAL-WRITE — a log/issues ledger\n     heading node AND a Board card linked back via the card's issue_id\n     field — two stored objects for one logical issue, reconciled by every\n     writer (add/resolve/reopen/delete each touched both faces; sync\n     existed to repair drift). The sync tax was real: a ghost-card resync\n     bug, and board visibility needs ONE object per issue. The typed\n     todo-item tree node IS the issue (borge/one-tree.borg typed-nodes);\n     the ledger was the pre-convergence relic. The register on /issues is\n     now a FROZEN ARCHIVE: legacy rows keep resolve/reopen/delete so the\n     archive can be cleaned up, but nothing appends to it. Old issue ids\n     (i-<ts>-<uuid>) referenced in historical comments keep resolving\n     against the archive.
+
+     ACTIVITY LEDGER (closed): every file ATTEMPT — ok OR denied/error
+     — rows the activity ledger (product-experience.borg
+     §activity-ledger; workstreams.borg §shared-register 'a report is a
+     knock, and knocks must never be silent'). The register writes
+     through todo/item/add-space -> todo/tree/create -> (tree/upsert),
+     so the kernel emits the row on the tree_upsert DATUM path (class
+     'data.write', outcome ok|error, target a b./data. PATH, never a
+     body) with ZERO synchronous DB work. This file carries no ledger
+     call of its own: attribution would be wrong here (the prims already
+     know the per-request actor), and a Lisp-side push would need a new
+     ledger prim just to re-pass what the kernel has. Pinned by
+     image/test/shared_register_test.ml 'file attempt rows the ledger'.")
 
 (define notes/issues/board-list-id
   (lambda
@@ -1576,11 +1593,23 @@
             (l)
             (string-eq (as-str (dict-get (cdr l) "title")) "Board"))
           (todo/list/all))))
-      (if
-        (null? hit)
-        (todo/list/ensure-inbox)
-        (as-str (car (car hit))))))
-  "The shared work board list id: the todo-list titled \"Board\", falling\n     back to the Inbox list when the Board is absent.")
+      (let
+        ((list-id (if (null? hit) "" (as-str (car (car hit))))))
+        (cons
+          list-id
+          (if
+            (string-eq list-id "")
+            ""
+            (todo/list/space-of (car hit)))))))
+  "The shared work board list: a (list-id . space) PAIR. The list id is
+     the todo-list titled \"Board\" (merged garden + shared via
+     todo/list/all), or \"\" when the Board is absent — the 2026-10-02
+     spec RETIRES the ensure-inbox fallback for the register path (a
+     guest's report must never quietly land in their private Inbox as a
+     silent vanish). The space is the row's 034 row-level space (\"board\")
+     so a newly filed card lands in the shared space, not the filer's
+     garden. Callers that only need the id take (car ...); writers take
+     (cdr ...) for the space.")
 
 (define notes/issues/body
   (lambda
@@ -1614,8 +1643,9 @@
         (let
           ((cid
             (as-str
-              (todo/item/add
-                (notes/issues/board-list-id)
+              (todo/item/add-space
+                (as-str (car (notes/issues/board-list-id)))
+                (as-str (cdr (notes/issues/board-list-id)))
                 (as-str title)))))
           (seq
             (todo/tree/save

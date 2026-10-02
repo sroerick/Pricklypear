@@ -599,6 +599,177 @@
     |))
    )
   )
+  (subsection activity-ledger
+   (doc "Identity-attributed action ledger, SMF-shaped: who, what class, what target, what outcome, what cost — structure events only, never content. An operator can answer \"who did what, when, at what spend\" from the product instead of the DB. The privacy/auditing doctrine is owned by security.borg §the-watched-machine; this section owns the mechanism.")
+   (status implemented)
+   (implements migrations/035_activity_ledger.sql image/lib/activity_ledger.ml image/lib/prims_ops.ml image/lib/session.ml image/lib/http.ml image/lib/auth_store.ml image/lib/crud.ml image/lib/prims_auth.ml image/lib/boot.ml image/lib/request_context.ml image/lib/knock_policy.ml image/lib/ops_incidents.ml image/test/activity_ledger_test.ml)
+   (* agent note (|2026-10-02: spec'd from the marcus guest-user test + mainframe-SMF discussion (roerick + agent). Heritage: function_statring (031) already proves the storage shape (dedicated table, ring, async flush, set-based prune — TELEMETRY IS NOT CONTENT), auth_log (002) proves audit rows, tree_versions proves attribution, per-eval budgets prove the cost fields; the missing pieces are the by-ACTOR read faces, the deterministic knock policy, and the operator console.|) *)
+   (verify
+    (build "dune build image")
+    (smoke "(ops/activity [actor] [since] [class]) returns rows with actor/class/target/outcome/cost; the class is a validated grammar (safe_sort_sql precedent), an unknown class rejects")
+    (smoke "an unauthenticated /api/eval denial, a login, and a token mint each land as ledger rows with outcome=denied|ok|ok; source_ip present on auth.* rows only")
+    (smoke "labeled evals push api.eval rows carrying steps/prim_calls/db_hits — asynchronous, ZERO synchronous DB work on the request path (031 pattern)")
+    (smoke "033-disjunct rescue of a data.u.<other-user> row emits admin.content-read with author, target, session; the lonely-habitat bit (one human user) suppresses the class entirely")
+    (smoke "N denials on admin surfaces in a window files exactly ONE ops-incident (fingerprint dedup), a security severity class distinct from reliability; LLM enrich may rewrite title/body, never counts")
+    (smoke "(ops/activity) unfiltered for admin; a non-admin caller is force-filtered to its own actor rows")
+    (smoke "IKEA test: day rollups per (actor, class) with steps/db_ms sums survive a 365-day run; trifecta row computed from class counts only")
+   )
+   (details
+    (doc (|
+         PURPOSE
+         A habitat running agents needs an operator who can see.
+         The 2026-10-02 marcus test proved the gap: the data
+         existed (auth_log rows, function_stat.author,
+         tree_versions) but no product surface could answer
+         "when did he log in, what is he running, what is it
+         costing, what did he touch" — the answer required
+         psql. The ledger is the SMF analog: one structured,
+         typed, identity-attributed event stream that stays
+         OFF the request path and OFF the object tree.
+
+         THE SPLIT (extends the product law — a THIRD plane)
+         - /analytics = product metrics: aggregate, identity-
+           stripped, hashed viewer keys — exactly as shipped;
+           its NON-GOALS keep binding it.
+         - ledger     = tenant/operator activity: attributed,
+           admin-gated, structure-only, bounded retention.
+         - notes/todos = the workshop, unchanged; knock fixtures
+           and incident work items live here.
+         The two data planes never merge.
+
+         RECORD (migration 034; strictly additive; the 031
+         pattern — TELEMETRY IS NOT CONTENT — is the reason)
+         Dedicated table, ring-buffered push (bounded, drop-
+         oldest in-process), ~30s background flush fiber, set-
+         based retention prune (newest ~50k raw rows), and day
+         rollup rows per (actor, class) with steps/db_ms sums
+         kept forever (chargeback substrate; budgets-as-security
+         gets its per-identity numbers). Columns:
+           (id, at, actor, session_id, branch_id,
+            class,   -- a VALIDATED enum grammar, never free
+                      -- text (safe_sort_sql precedent):
+                      -- auth.login|mint|revoke|deny|delegated
+                      -- api.eval · route.hit · tree.write ·
+                      -- data.write · rls.violation ·
+                      -- admin.content-read|hold|knock|revoke|
+                      -- create|delete · promote.attempt ·
+                      -- token.mint · agent.spawn ·
+                      -- egress.http · quota.exceeded
+            target,  -- a PATH (b.fn.* / data.* / /route),
+                      -- never a body, never a payload
+            outcome, -- ok | denied | error | timed-out
+            cost)    -- steps, prim_calls, db_hits, db_ms —
+                      -- the budget object already carried by
+                      -- every eval (budget-ledger heritage)
+         source_ip is carried on auth.* classes only (auth_log
+         parity); it is not recorded on ordinary page/eval hits.
+         No RLS on the ledger — the reader prims gate it
+         (admin sees all, non-admin sees self).
+
+         EMIT — existing seams, no new hot paths
+         - http.ml record_request (the one request funnel)
+           → route.hit rows
+         - Session.eval_string_rim_budgeted, where
+           Function_stats.push already sits (its exact budget
+           object, its author) → api.eval rows; function_stat
+           stays the by-fn perf view, the ledger is the by-ACTOR
+           view of the same event
+         - Auth_store.log_auth (already written) is the
+           auth.* source of truth — the ledger mirrors, never
+           forks the write
+         - tree/datum upserts → tree.write / data.write / and
+           rls.violation rows (the 013/033 floors brand these)
+         - admin action handlers (issue-token, revoke-sessions,
+           create-user, delete-user, cancel-job, package-disable,
+           set-user-type, set-allow-agent-promote) → admin.*
+         - THE 033 HOOK: when the admin disjunct rescues a row
+           owner-scoping would have hidden, emit
+           admin.content-read — deliberate access is an
+           attributed act (RACF's type-80 on admin opens, in
+           reverse)
+         - a lonely-habitat bit (PP_LONELY_HABITAT or exactly
+           one human user) skips the content-read ceremony
+
+         READ — the operator console (filmstrip, not a new page-style)
+         - (ops/activity [actor] [since] [class]): admin-
+         unfiltered; non-admin callers force-filtered to self —
+         a watched machine shows its watch to the watched; a
+         user's own activity face is honest UX. Read-only, safe
+         for agent monitors.
+         - The console ships as a filmstrip strip: live
+           sessions from Session_registry, a live ledger tail,
+           the EXISTING views (agent-sessions transcripts,
+           /timing numbers, ops/incidents) drilled from rows,
+           per-identity spend/burst from day rollups, and the
+           HOLD verbs (revoke token / cancel job / disable
+           package) one click from the feed. Mainframe
+           operator's batch-hold, on a Lisp shell.
+         - Trifecta row: per identity, computed from CLASS
+           COUNTS ONLY — does this actor simultaneously hold
+         private-data reads, untrusted-content ingest, and an
+         effect channel (lethal-trifecta, made computable).
+         Flag when all three legs are live.
+
+         OPERATOR FAST-PATH (2026-10-02 marcus recon — the
+         acceptance bar for the read faces; each of these
+         burned ten-plus minutes of prim-probing today)
+         - WHO IS ON, and when did each identity last
+           authenticate, from where — the auth_log read face;
+           today login provenance is psql-only.
+         - WHAT IS X RUNNING RIGHT NOW — attributed, labeled
+           eval stream; the 2,674 /api hits of 2026-10-02
+           could not be attributed to identities AT ALL.
+         - WHAT DID X WRITE TODAY, ANYWHERE — one query, all
+           branches; today mirrors and readers disagree on
+           scope, so the honest answer needed five different
+           prims (see branching.borg branch-resolved-reads
+           SCOPE GRAMMAR)
+         - WHAT DID X TRY THAT WAS DENIED OR FAILED — the
+           silent-write surface; marcus's agent's vanished
+           /issues attempt is the repro, and today the two
+         cases "never tried" and "tried and evaporated" are
+         indistinguishable. outcome + rls.violation rows
+         make the distinction visible — and the console
+         carries the branch-resolved body reads so suspected
+         defs open in one click, no checkout.
+
+         KNOCK SCHEMA (deterministic — LAW 1)
+         Thresholds + classes, never content, never vibes: N
+         denials on admin surfaces in a window · rls.violation
+         repeats · non-admin token.mint / promote.attempt ·
+         first-login-from-new-IP · cost outliers vs the
+         identity's own 7-day median · trifecta all-flags-up.
+         Files through the EXISTING ops_incidents fingerprint
+         queue (dup bumps count, no second todo) under a
+         security severity class so it sorts apart from
+         reliability. A human sends the knock (chat DM for a
+         human, a hold for a process); the act writes
+         admin.knock / admin.hold like every other deliberate
+         operator act. Nothing fires itself. LLM may enrich a
+         filed incident's title/body; never counts, never
+         detection.
+
+         NON-GOALS
+         - No content in, adjacent to, or derivable from the
+           ledger: no eval source, no route/note/chat bodies,
+           no payloads — target paths only. TELEMETRY IS NOT
+           CONTENT, and this table is exactly why that rule
+           exists (the 031 admission: a 25-minute retention
+           delete took prod down TWICE).
+         - No content-keyed automation (security.borg LAW 3).
+         - No synchronous per-hit writes (031 pattern, ring).
+         - No session replay, no ML anomaly scoring, no
+           keystroke fishing.
+         - Off-box SIEM export deferred (matches the analytics
+           non-goals); syslog/stderr mirroring of warn+
+           ledger events is the interim export path.
+         - No hosted crypto-floor tier (security.borg
+           §the-watched-machine): sovereignty via §exit is the
+           privacy mechanic, not operator blindness.
+    |))
+   )
+  )
+
   (subsection reliability-work-queue
    (doc "Structured errors → fingerprint → note + todo; LLM enriches work items")
    (status implemented)
