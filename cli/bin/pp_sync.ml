@@ -545,50 +545,31 @@ let cmd_snapshot ~url ~user ~password ~timeout ~branch ~out_dir ~force =
               if String.trim text = "" then rc
               else begin
                 let path = pkg_path_under out_root pkg in
-                (* SNAPSHOT GUARD (i-vault-exporter, 2026-10-02): a
-                   snapshot MIRRORS live main into the vault. But live
-                   main does not contain every package: on-demand skins
-                   (the theme-as400 family) are never seeded, and
-                   hand-authored files
-                   (libs/memory) may define names that export-package
-                   cannot attribute. Writing the (near-empty) export over
-                   the existing file would GUT it — libs/std went 69
-                   defines -> 0 before the provenance fix, and the theme
-                   skins + memory remain exposed. So refuse (and say so)
-                   when the new text has strictly FEWER defines than the
-                   file it would replace. --force overrides for a
-                   deliberate deletion. Empty/absent target is fine. *)
+                (* SNAPSHOT WRITE (card 8dff7c9e): three protections, in
+                   order.
+                   1. A hand-authored vault file (no 'exported from live
+                      branch' header) is CURATED SOURCE — never replace
+                      it with generator output.
+                   2. A live export with fewer defines than the file would
+                      GUT it (on-demand skins libs/theme-* are never
+                      seeded; export-package cannot see them).
+                   3. Otherwise MERGE: forms whose AST is unchanged keep
+                      the OLD text verbatim (comments + formatting), only
+                      genuinely changed forms take the new text. The old
+                      generator write discarded every interior comment
+                      (filmstrip 146 -> 2). --force overrides 1 and 2. *)
                 let count_defines s =
                   let re = Re.Perl.compile_pat {|\(define[ \t\(]|} in
                   List.length (Re.all re s)
                 in
-                (* A GENERATED vault file is export-package output: its
-                   header carries 'exported from live branch'. A file
-                   without that is HAND-AUTHORED (libs/std, the theme
-                   skins, libs/memory, libs/workstreams, …) — those must
-                   never be silently replaced by generator output: the
-                   snapshot would strip their curated headers and any
-                   defines export-package cannot attribute. *)
-                let is_generated s =
-                  let head =
-                    let ls = String.split_on_char '\n' s in
-                    let rec take n l =
-                      if n = 0 then []
-                      else match l with [] -> [] | x :: tl -> x :: take (n - 1) tl
-                    in
-                    String.concat "\n" (take 4 ls)
-                  in
-                  let re = Re.Perl.compile_pat {|exported from live branch|} in
-                  Re.execp re head
-                in
+                let generated re = Pp_sync_merge.is_generated re in
                 let new_defs = count_defines text in
-                let old_defs =
-                  if Sys.file_exists path then
-                    count_defines (read_file path)
-                  else 0
+                let old_text =
+                  if Sys.file_exists path then read_file path else ""
                 in
+                let old_defs = count_defines old_text in
                 let hand_authored =
-                  Sys.file_exists path && not (is_generated (read_file path))
+                  old_text <> "" && not (generated old_text)
                 in
                 if (not force) && hand_authored then begin
                   Printf.eprintf
@@ -608,9 +589,26 @@ let cmd_snapshot ~url ~user ~password ~timeout ~branch ~out_dir ~force =
                     path new_defs old_defs;
                   if rc = 0 then 2 else rc
                 end else begin
-                  write_file path text;
-                  Printf.printf "  wrote %s (%d bytes, %d defines)\n%!" path
-                    (String.length text) new_defs;
+                  let out_text, rep =
+                    if old_text = "" || force then (text, Pp_sync_merge.empty_report)
+                    else Pp_sync_merge.merge ~old_text ~new_text:text
+                  in
+                  write_file path out_text;
+                  Printf.printf
+                    "  wrote %s (%d bytes, %d defines; %d forms kept verbatim)" path
+                    (String.length out_text) new_defs rep.reused;
+                  if rep.changed <> [] then
+                    Printf.printf ", %d changed" (List.length rep.changed);
+                  if rep.changed_with_comments <> [] then
+                    Printf.printf
+                      ", %d changed form(s) lost old comments: %s"
+                      (List.length rep.changed_with_comments)
+                      (String.concat ", " rep.changed_with_comments);
+                  Printf.printf "\n%!";
+                  if rep.removed <> [] then
+                    Printf.printf "    note: %d name(s) no longer on live main \
+                                   (kept? no — dropped): %s\n%!"
+                      (List.length rep.removed) (String.concat ", " rep.removed);
                   rc
                 end
               end)
