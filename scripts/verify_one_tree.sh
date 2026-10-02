@@ -41,6 +41,20 @@ dune build @all || fail "dune build @all"
 dune runtest image/test/tree_store_test.exe || fail "tree_store_test"
 ok "dune build + tree_store_test"
 
+# 2a. label codec: SQL tree_enc_label must be ltree-safe and round-trip for
+# long inputs, whose PG base64 (MIME) output wraps at 76 chars (>=57 bytes).
+# Regression for the 2026-10 marcus create crash.
+psql -h "$PP_SOCKET_DIR" -p "$PP_DB_PORT" -U "$PP_DB_USER" -d "$PP_DB_NAME" -v ON_ERROR_STOP=1 -t -A <<'SQL' >/tmp/pp-tree-label.out
+SELECT (position(chr(10) in tree_enc_label(repeat('a',57)))=0)::text,
+       (tree_enc_label(repeat('a',57))::ltree IS NOT NULL)::text,
+       (tree_dec_label(tree_enc_label(repeat('a',57))) = repeat('a',57))::text,
+       (tree_enc_label(repeat('a',200))::ltree IS NOT NULL)::text,
+       (tree_dec_label(tree_enc_label(repeat('a',200))) = repeat('a',200))::text;
+SQL
+grep -qxE 't\|t\|t\|t\|t' /tmp/pp-tree-label.out \
+  || fail "tree_enc_label not ltree-safe/round-trip for >=57-byte names: $(cat /tmp/pp-tree-label.out)"
+ok "tree_enc_label ltree-safe + round-trip for >=57-byte names"
+
 # 2. PG tree_verify lockstep
 psql -h "$PP_SOCKET_DIR" -p "$PP_DB_PORT" -U "$PP_DB_USER" -d "$PP_DB_NAME" -v ON_ERROR_STOP=1 -t -A <<'SQL' >/tmp/pp-tree-verify.out
 SELECT kind || '=' || in_sync::text FROM tree_verify() ORDER BY kind;
