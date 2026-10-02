@@ -1310,9 +1310,16 @@
                   0)
                 (roam/reindex (as-str slug) outline)
                 slug))))
-        (string-append
-          "refused: outline is malformed (every node must be a 5-element list [id title body todo kids], recursively); note not changed: "
-          (as-str slug)))
+        ;; i-1790546235 item 3: RAISE, don't return a "refused: …"
+        ;; string. A returned string is silently ignorable in (seq …),
+        ;; so a multi-write handler could proceed past a refused
+        ;; outline. Callers either pre-validate with outline/valid? or
+        ;; let the error propagate; nothing reads the old return value.
+        (error
+          "bad-outline"
+          (string-append
+            "notes/doc/upsert-in: refused: outline is malformed (every node must be a 5-element list [id title body todo kids], recursively); note not changed: "
+            (as-str slug))))
       (let
         ((row (notes/doc/row slug))
           (fields

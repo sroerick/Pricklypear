@@ -223,7 +223,7 @@
     (smoke "folder path nesting depth > 1 via tree list")
     (smoke "outline headings persist as heading children under note path")
     (smoke "SAVE ORDER: with headings a,b,c present and an accepted save of a,b — a and b survive with new content and c is swept; save order is write-then-sweep, so a failure mid-write leaves the OLD headings in place, never an empty note")
-    (smoke "malformed outline is REFUSED before any write: an outline whose CHILD is not a 5-element [id title body todo kids] node at any depth leaves the note's existing headings untouched (outline/valid? is recursive; notes/doc/upsert-in returns a 'refused' string)")
+    (smoke "malformed outline is REFUSED before any write: an outline whose CHILD is not a 5-element [id title body todo kids] node at any depth leaves the note's existing headings untouched (outline/valid? is recursive; notes/doc/upsert-in RAISES a bad-outline User_error — never a silently-ignorable 'refused' string)")
     (smoke "rename/move note keeps uuid; links still resolve")
     (build "dune build image"))
 
@@ -301,12 +301,15 @@
              empty, so the sweep removes every heading.
 
            VALIDATE BEFORE DESTROYING: notes/doc/upsert-in refuses a
-           malformed outline BEFORE any write and returns
-           'refused: outline is malformed …; note not changed' — a
-           caller that persists a shape it cannot write gets a
-           refusal, never a half-applied save. outline/valid? checks
-           the node AND its kids RECURSIVELY (a well-formed root with
-           a malformed child passed the old shallow (count n) = 5
+           malformed outline BEFORE any write and RAISES a bad-outline
+           User_error ('notes/doc/upsert-in: refused: outline is
+           malformed …; note not changed') — a caller that persists a
+           shape it cannot write gets a hard failure, never a
+           half-applied save and never a silently-ignorable return
+           string (i-1790546235 item 3: a returned 'refused: …' string
+           can be walked right past in a (seq …) body). outline/valid?
+           checks the node AND its kids RECURSIVELY (a well-formed root
+           with a malformed child passed the old shallow (count n) = 5
            test and only blew up inside write-heading, after the
            damage). Both layers are required: the guard stops bad
            input, the order contains whatever the guard misses.
