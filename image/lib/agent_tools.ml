@@ -275,21 +275,35 @@ let package_binding_names (t : t) (pkg : string) : string list =
     let p = String.trim pkg in
     if p = "(root)" || p = "root" then "" else p
   in
-  let matches name =
-    if pkg = "" then not (String.contains name '/')
-    else if name = pkg then true
-    else
-      let prefix = pkg ^ "/" in
-      let plen = String.length prefix in
-      String.length name >= plen && String.sub name 0 plen = prefix
-  in
-  let names =
+  (* MEMBERSHIP (i-vault-exporter, 2026-10-02): provenance FIRST.
+     function_defs.package is the (package …) form's stamp, set at
+     load time — it records which package a define was DECLARED in,
+     regardless of the name's shape. Name-prefix matching is only a
+     fallback: it is simply wrong for packages whose defines don't use
+     the package name as a prefix (std defines list/…, html/…, css/…;
+     each theme-* defines theme/…). Prefix-matching those produced an
+     EMPTY export, which pp-sync snapshot then wrote over the vault —
+     gutting libs/std (69 defines -> 0) and every theme-*. *)
+  if pkg = "" then
+    (* root: names with no [/] that carry no provenance either. *)
     List.filter_map
-      (fun (name, _, _) -> if matches name then Some name else None)
+      (fun (name, _, _) ->
+        if not (String.contains name '/') then Some name else None)
       defs
     |> List.sort_uniq String.compare
-  in
-  names
+  else
+    let by_prov = Store.package_names_by_provenance t.store pkg in
+    if by_prov <> [] then by_prov
+    else
+      (* Fallback for unstamped/legacy rows: prefix + exact match. *)
+      let prefix = pkg ^ "/" in
+      let plen = String.length prefix in
+      let matches name =
+        name = pkg
+        || (String.length name >= plen && String.sub name 0 plen = prefix)
+      in
+      List.filter_map (fun (name, _, _) -> if matches name then Some name else None) defs
+      |> List.sort_uniq String.compare
 
 (** Public export names for [pkg].
     Resolution: declared package_registry exports (if non-empty) →

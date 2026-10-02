@@ -372,7 +372,12 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
       | _ ->
           (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("package-exports", "need package-str", "bad-args")))));
 
-  (* (package-bindings pkg) -> VList of name strings (prefix pkg/ any depth) *)
+  (* (package-bindings pkg) -> VList of name strings.
+     MEMBERSHIP = function_defs.package provenance (the (package …)
+     form's stamp) when present, else fallback prefix pkg/ + exact.
+     Provenance is required because a package's defines may not share
+     its name as a prefix (std defines list/…, html/…, css/…; each
+     theme-asNNN defines theme/…), and prefix matching returned []. *)
   Primitives.register tbl "package-bindings"
     (fun args ->
       match args with

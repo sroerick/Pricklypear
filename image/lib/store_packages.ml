@@ -211,3 +211,22 @@ let function_package_map (t : Store_db.t) : (string, string) Hashtbl.t =
           tbl
     with exn -> Store_db.reraise ~op:"function_package_map" exn)
 
+(** Binding names whose PROVENANCE is [package] (the (package …) form's
+    stamp on function_defs.package), closest definition wins.
+
+    This is the correct membership source for export/snapshot: a package
+    may define names that do NOT share its name as a prefix (std defines
+    list/…, html/…, css/…; each theme-* defines theme/…). Name-prefix
+    matching silently misses all of them. Returns [] when the package has
+    no stamped bindings (caller decides whether to fall back to prefix). *)
+let package_names_by_provenance (t : Store_db.t) (package : string)
+  : string list =
+  let package = String.trim package in
+  if package = "" then []
+  else
+    let map = function_package_map t in
+    Hashtbl.fold
+      (fun name pkg acc -> if pkg = package then name :: acc else acc)
+      map []
+    |> List.sort_uniq String.compare
+

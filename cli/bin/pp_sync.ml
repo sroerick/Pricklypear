@@ -485,7 +485,7 @@ let cmd_reseed ~url ~user ~password ~timeout ~force package =
         print_endline msg;
         0
 
-let cmd_snapshot ~url ~user ~password ~timeout ~branch ~out_dir =
+let cmd_snapshot ~url ~user ~password ~timeout ~branch ~out_dir ~force =
   let prev_branch =
     match live ~url ~user ~password ~timeout "(current-branch)" |> live_value with
     | Ok s -> String.trim s
@@ -545,10 +545,74 @@ let cmd_snapshot ~url ~user ~password ~timeout ~branch ~out_dir =
               if String.trim text = "" then rc
               else begin
                 let path = pkg_path_under out_root pkg in
-                write_file path text;
-                Printf.printf "  wrote %s (%d bytes)\n%!" path
-                  (String.length text);
-                rc
+                (* SNAPSHOT GUARD (i-vault-exporter, 2026-10-02): a
+                   snapshot MIRRORS live main into the vault. But live
+                   main does not contain every package: on-demand skins
+                   (the theme-as400 family) are never seeded, and
+                   hand-authored files
+                   (libs/memory) may define names that export-package
+                   cannot attribute. Writing the (near-empty) export over
+                   the existing file would GUT it — libs/std went 69
+                   defines -> 0 before the provenance fix, and the theme
+                   skins + memory remain exposed. So refuse (and say so)
+                   when the new text has strictly FEWER defines than the
+                   file it would replace. --force overrides for a
+                   deliberate deletion. Empty/absent target is fine. *)
+                let count_defines s =
+                  let re = Re.Perl.compile_pat {|\(define[ \t\(]|} in
+                  List.length (Re.all re s)
+                in
+                (* A GENERATED vault file is export-package output: its
+                   header carries 'exported from live branch'. A file
+                   without that is HAND-AUTHORED (libs/std, the theme
+                   skins, libs/memory, libs/workstreams, …) — those must
+                   never be silently replaced by generator output: the
+                   snapshot would strip their curated headers and any
+                   defines export-package cannot attribute. *)
+                let is_generated s =
+                  let head =
+                    let ls = String.split_on_char '\n' s in
+                    let rec take n l =
+                      if n = 0 then []
+                      else match l with [] -> [] | x :: tl -> x :: take (n - 1) tl
+                    in
+                    String.concat "\n" (take 4 ls)
+                  in
+                  let re = Re.Perl.compile_pat {|exported from live branch|} in
+                  Re.execp re head
+                in
+                let new_defs = count_defines text in
+                let old_defs =
+                  if Sys.file_exists path then
+                    count_defines (read_file path)
+                  else 0
+                in
+                let hand_authored =
+                  Sys.file_exists path && not (is_generated (read_file path))
+                in
+                if (not force) && hand_authored then begin
+                  Printf.eprintf
+                    "  REFUSED %s: hand-authored vault file (no 'exported from \
+                     live branch' header) — a snapshot would replace curated \
+                     source with generator output. Edit it by hand, or use \
+                     --force to overwrite deliberately.\n%!"
+                    path;
+                  if rc = 0 then 2 else rc
+                end
+                else if (not force) && new_defs < old_defs then begin
+                  Printf.eprintf
+                    "  REFUSED %s: live export has %d define(s), vault file \
+                     has %d — a snapshot would GUT it. Live main is probably \
+                     missing this package (on-demand skin / hand-authored \
+                     file). Use --force to overwrite deliberately.\n%!"
+                    path new_defs old_defs;
+                  if rc = 0 then 2 else rc
+                end else begin
+                  write_file path text;
+                  Printf.printf "  wrote %s (%d bytes, %d defines)\n%!" path
+                    (String.length text) new_defs;
+                  rc
+                end
               end)
         0 pkgs
     in
@@ -800,7 +864,7 @@ let main command package names verbose names_only url user password password_fil
     | "pull-all" -> cmd_pull_all ~url ~user ~password ~timeout
     | "reseed" -> cmd_reseed ~url ~user ~password ~timeout ~force package
     | "snapshot" ->
-        cmd_snapshot ~url ~user ~password ~timeout ~branch ~out_dir
+        cmd_snapshot ~url ~user ~password ~timeout ~branch ~out_dir ~force
     | "land" ->
         cmd_land ~url ~user ~password ~timeout ~from_ref ~package ~names
     | _ ->
@@ -868,7 +932,9 @@ let from_ref =
 let force =
   let doc =
     "reseed: clobber system/main even when the package has live-only \
-     defines absent from the vault (which reseed would delete)."
+     defines absent from the vault (which reseed would delete). snapshot: \
+     allow writing a vault file smaller than the one it replaces (only for \
+     a deliberate deletion)."
   in
   Arg.(value & flag & info [ "force" ] ~doc)
 
