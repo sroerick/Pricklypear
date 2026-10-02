@@ -379,6 +379,25 @@
          The OCaml outer shell is where correctness is proven
          (formal-verification).
 
+         DECLARED-TYPE WRITE GATE: a datum write must name a type
+         DECLARED on the writer's branch (a visible type_defs row via
+         the ancestor walk). create/update/update-field, tree/upsert
+         with kind=datum, and a tree/move that changes the datum's
+         type_name all run check_type_fields; an UNDECLARED type_name
+         is a clean rejection naming the type and the declaration
+         surface ((deftype 'name …)), never a silent free-form pass.
+         A declared type with ZERO fields is the deliberate schemaless
+         case: its writes stay free-form (the schema is "no fields").
+         Declared-but-empty and undeclared are therefore distinct
+         outcomes of the lookup (Some [] vs None), and only the former
+         writes. RATIONALE: the miss used to pass, so a typo ('todos
+         for 'todo) silently minted a type and its rows — absent from
+         /types, unstyled by any product UI, and outside every
+         declared-field check. Orphan rows (data_rows whose type_def
+         was dropped or never written) remain READABLE, since reads
+         are not the write boundary; new writes to them are rejected
+         until the type is declared.
+
          NO INHERITANCE, NO SUBTYPING — composition via :ref,
          exactly as object-model.type-system already rules and
          storage.no-inheritance already argues. One-tree does
@@ -396,7 +415,9 @@
    (verify
     (build "dune build @all")
     (smoke "create a flash-card node missing a required field → clean rejection naming the field")
-    (smoke ":ref deref resolves via path; backlink query lists nodes referencing a given node")))
+    (smoke ":ref deref resolves via path; backlink query lists nodes referencing a given node")
+    (smoke "create of an UNDECLARED type → clean rejection naming the type and the declaration surface; no datum node and no data_rows row written")
+    (smoke "create/update of a declared type with zero fields → free-form JSON accepted (schemaless case)")))
   (subsection tree-datum-prims
    (doc "Tree prims are a complete data API: tree/upsert, tree/move, tree/delete operate on datum nodes, not only hierarchical kinds")
    (status implemented)
@@ -432,7 +453,10 @@
              create/update CRUD prims (check_type_fields over
              body_json against the declared type_name): a
              missing required field is a clean rejection naming
-             the field. Undeclared types accept free-form JSON.
+             the field. An UNDECLARED type_name is a clean
+             rejection (see typed-nodes declared-type gate);
+             free-form JSON requires a declared type with zero
+             fields.
            - Writes the tree_node with kind=datum, type_name
              set, the standard envelope payload, and a body
              hash; ON CONFLICT (path) DO UPDATE the body (and

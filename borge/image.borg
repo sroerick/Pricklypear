@@ -1382,6 +1382,14 @@
            in edit form as additional inputs OR preserve via hidden
            merge so update does not drop them. REQUIRED: updates
            must not silently strip unknown keys.
+           - Type-declaration gate (one-tree typed-nodes): the write
+             surfaces (POST /data/<type>, detail POST, and the "new"
+             form) accept only a DECLARED type_name. A type with no
+             visible type_def is rejected with a clear error naming
+             (deftype); a declared type with zero fields is the
+             free-form/raw-JSON case. Orphan rows (data_rows with no
+             type_def) stay listable/readable on the index and detail
+             views, but cannot be written until declared.
 
          =========================================================
          RELATIONSHIP TO EXISTING PAGES
