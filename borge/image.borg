@@ -466,7 +466,7 @@
 
   (subsection http-robustness
    (doc "HTTP server robustness under load, peer disconnect, and DB liveness")
-   (implements image/lib/http.ml image/lib/http_core.ml image/lib/http_agent.ml image/lib/http_data.ml image/lib/http_branches.ml image/lib/session.ml image/lib/session_types.ml image/lib/io_eio.ml image/lib/store_db.ml image/lib/request_context.ml scripts/rc.d/pricklypear scripts/openbsd/pricklypear-watchdog.ksh scripts/openbsd/pricklypear-promote.ksh)
+   (implements image/lib/http.ml image/lib/http_core.ml image/lib/http_agent.ml image/lib/http_data.ml image/lib/http_branches.ml image/lib/session.ml image/lib/session_types.ml image/lib/io_eio.ml image/lib/store_db.ml image/lib/request_context.ml image/lib/fd_gauge.ml scripts/rc.d/pricklypear scripts/openbsd/pricklypear-watchdog.ksh scripts/openbsd/pricklypear-promote.ksh)
    (status implemented)
    (* agent note (|2026-08-02: closed-writer swallow, request_mutex narrowed to gate, page-work queue, Store.health_check on /health, http_robust tests present.|) *)
    (verify
@@ -809,6 +809,36 @@
          This closes the class of failures where the accept loop
          is healthy but the DB mutex/conn is dead — the failure
          mode that locked out all logins while looking green.
+
+         =========================================================
+         INVARIANT 8 — FD USAGE IS OBSERVABLE BEFORE IT FAILS
+         =========================================================
+         Incident 2026-10-02 (pricklypear.rocks): the image wedged
+         ~16min with accept() dying on Eio.Io ("Too many open
+         files") while /health still answered 200 — the count was
+         invisible until it was fatal, so nothing warned first.
+         The process soft limit was the generic daemon class's
+         openfiles-cur=128, BELOW the accept-side cap (invariant 5,
+         default 256): a burst could exhaust fds before the cap was
+         ever reached.
+
+         Rule:
+           - /health reports open_fds + fd_limit (additive; an old
+             image omits them, parsers default to 0).
+           - A boot fiber logs one gauge line per minute and raises
+             an Ops_log warning at 75% of the soft limit.
+           - The service login class must sit ABOVE the accept-side
+             cap: /etc/login.conf.d/pricklypear sets
+             openfiles-cur/max=1024 (rc.subr selects a per-service
+             class; postgresql precedent). The promote script
+             installs it idempotently.
+           - Counting: OpenBSD /dev/fd is a static 64-entry table,
+             not a per-process view — the gauge fstat-sweeps fd
+             numbers up to the soft limit.
+           - Promote's health probe is BOUNDED (curl -m 5) exactly
+             like rc_check: an unbounded probe could block the gate
+             past its whole 120s budget on a wedged-but-listening
+             image (2026-09-08 lesson).
 
    |))
    )
