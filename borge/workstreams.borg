@@ -79,7 +79,14 @@
    - column/transition control stays operator/worker-side — guests file and follow, they do not triage (LAW 2 symmetry: the queue's one-way doors stay with the operator);
    - every file ATTEMPT (ok or denied/failed) rows the activity ledger (product-experience.borg activity-ledger) — the 2026-10-02 case where an agent's report may have been attempted and silently vanished is the repro: a report is a knock, and knocks must never be silent;
    - migration moves the existing Board into the shared space, list + card ids preserved.")
-  (status planned)
+  (implements "migrations/034_shared_board.sql"
+              "image/lib/tree_store.ml"
+              "image/lib/crud.ml"
+              "image/lib/sync.ml"
+              "libs/todo/lib.pp (todo/item/add-space, todo/list/all merge, todo/list/all-shared)"
+              "libs/notes/lib.pp (notes/issues/board-list-id pair, notes/issues/add shared write)"
+              "image/test/shared_register_test.ml")
+  (status implemented)
   (* agent note (|2026-10-02 marcus codex test: with the register garden-scoped, a guest filing an issue writes their own garden Inbox — operator queue never sees it; gregor's 09-02 card documented the same semantic ("writes always persisted to the caller's garden"). Empirics from the test: marcus was asked to have his agent file; zero marcus-authored datums exist store-wide; the attempt is untraceable with today's observability. Filed as 2026-10-02 DESIGN card; spec'd here instead of patching lib.pp in place.|) *)
   (verify
    (test "a non-operator authenticated identity sees the Board in (todo/list/all) and (notes/issues/add …) lands ONE card ON that list — no garden fallback, single object per issue"
