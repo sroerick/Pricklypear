@@ -333,3 +333,8 @@
  (name activity_ledger_test)
  (modules activity_ledger_test)
  (libraries pricklypear-image pricklypear-lisp alcotest eio_main yojson pgx unix))
+
+(test
+ (name operator_console_test)
+ (modules operator_console_test)
+ (libraries pricklypear-image pricklypear-lisp alcotest eio_main yojson pgx unix))

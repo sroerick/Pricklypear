@@ -117,7 +117,7 @@ let last_auth_of ~(store : Store.t) ~(user_id : string)
   | Some conn ->
       let sql =
         "SELECT kind, success, source_ip::text, happened_at::text \
-         FROM auth_log WHERE user_id = $1::uuid \
+         FROM auth_log WHERE user_id = $1 \
          ORDER BY happened_at DESC LIMIT $2"
       in
       (try
