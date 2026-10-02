@@ -99,21 +99,27 @@ let auth_types_tests = [
 let protocol_tests = [
   ("protocol: health_response round-trip ok", `Quick, fun () ->
     let h = { Protocol.ok = true; branch = "alice/main";
-              uptime_seconds = 42; boot_epoch = 1756900000; error = None } in
+              uptime_seconds = 42; boot_epoch = 1756900000;
+              open_fds = 37; fd_limit = 1024; error = None } in
     let j = Protocol.health_response_to_json h in
     (match Protocol.health_response_of_json j with
      | Ok h' ->
         Alcotest.(check bool) "ok" true h'.ok;
         Alcotest.(check string) "branch" "alice/main" h'.branch;
         Alcotest.(check int) "uptime" 42 h'.uptime_seconds;
-        Alcotest.(check int) "boot_epoch" 1756900000 h'.boot_epoch
+        Alcotest.(check int) "boot_epoch" 1756900000 h'.boot_epoch;
+        Alcotest.(check int) "open_fds" 37 h'.open_fds;
+        Alcotest.(check int) "fd_limit" 1024 h'.fd_limit
      | Error e -> Alcotest.failf "parse failed: %s" e));
   ("protocol: health_response of_json tolerates missing boot_epoch (old image)",
    `Quick, fun () ->
     let j : Yojson.Safe.t = `Assoc [ ("ok", `Bool true); ("branch", `String "system/main");
                                      ("uptime_seconds", `Int 7); ("error", `Null) ] in
     (match Protocol.health_response_of_json j with
-     | Ok h' -> Alcotest.(check int) "boot_epoch defaults to 0" 0 h'.boot_epoch
+     | Ok h' ->
+        Alcotest.(check int) "boot_epoch defaults to 0" 0 h'.boot_epoch;
+        Alcotest.(check int) "open_fds defaults to 0" 0 h'.open_fds;
+        Alcotest.(check int) "fd_limit defaults to 0" 0 h'.fd_limit
      | Error e -> Alcotest.failf "parse failed: %s" e));
   ("protocol: health_status conversions", `Quick, fun () ->
     Alcotest.(check string) "healthy" "healthy"

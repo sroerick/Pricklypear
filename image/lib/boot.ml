@@ -368,6 +368,14 @@ let start_eio ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t) : unit =
       with exn ->
         Printf.eprintf "[boot] function_stats flush fiber exited: %s\n%!"
           (Printexc.to_string exn));
+  (* fd gauge (2026-10-02 fd-exhaustion incident): one open-fd sample per
+     minute, mirroring /health. The gauge is what makes the next slow fd
+     climb visible before accept fails. *)
+  Eio.Fiber.fork ~sw (fun () ->
+      try Fd_gauge.watch_loop ~clock:(Eio.Stdenv.clock env)
+      with exn ->
+        Printf.eprintf "[boot] fd-gauge fiber exited: %s\n%!"
+          (Printexc.to_string exn));
   (* image.per-identity-sessions: HTTP requests run on per-identity
      sessions (own env, own pgx connection); the boot session keeps the
      REPL endpoint + auth lookups. *)

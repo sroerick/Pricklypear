@@ -18,6 +18,7 @@
           session
           session_registry
           function_stats
+          fd_gauge
            crud media packages loader profile repl_endpoint
           ops_log ops_stats ops_incidents
           timing

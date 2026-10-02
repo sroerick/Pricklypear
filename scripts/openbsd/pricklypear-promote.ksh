@@ -256,11 +256,24 @@ fi
 # false-accept would need the old image to have booted during this promote's
 # same second — impossible on the common path since it was already serving
 # when promote began. promote_start is captured pre-restart (see above).
+# Health probe: BOUNDED (2026-09-08 lesson) — the bare `ftp -o -` probe
+# hung forever when the image accepted connections but could not answer
+# (store conn-mutex held by a runaway query), so the promote gate could
+# block past its whole 120s budget on a single probe. curl (runtime
+# package) with -m 5 fails fast; rc.d's rc_check and the watchdog use
+# the same bound. Fall back to ftp only if curl is absent.
+health_probe() {
+  if command -v curl >/dev/null 2>&1; then
+    curl -sS -m 5 "${health_url}" 2>/dev/null || true
+  else
+    ftp -o - "${health_url}" 2>/dev/null || true
+  fi
+}
 ok=0
 attempts=0
 orphan_seen=0
 while [ "${attempts}" -lt 480 ]; do
-  body="$(ftp -o - "${health_url}" 2>/dev/null || true)"
+  body="$(health_probe)"
   if print -r -- "${body}" | grep -q '"ok"[[:space:]]*:[[:space:]]*true'; then
     boot_epoch="$(print -r -- "${body}" | sed -n 's/.*"boot_epoch"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')"
     if [ -n "${boot_epoch}" ] && [ "${boot_epoch}" -ge "${promote_start}" ]; then
