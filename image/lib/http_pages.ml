@@ -148,7 +148,7 @@ let about_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
       HTML.div [HTML.class_ "card"] [
         HTML.h2 [] [txt "What is this?"];
         HTML.p [] [txt
-          "Pricklypear is a multi-user live computing environment. You log into your running image, write Lisp functions that are stored as durable data in Postgres, branch code like git while sharing data, bind functions to URLs, and optionally let AI propose functions onto your branch."];
+            "Pricklypear is a multi-user live computing environment. You log into your running image, write Lisp functions that are stored as durable data in Postgres, branch code like git while your data stays single-head and keyed by identity, bind functions to URLs, and optionally let AI propose functions onto your branch."];
         HTML.p [] [txt
           "It is Smalltalk-like (live, inspectable, editable) without being Smalltalk (no single-user OOP image dump). The image is the CPU; Postgres is the disk."];
       ];
@@ -158,8 +158,8 @@ let about_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
           HTML.li [] [txt "Image — your running personal process (REPL + HTTP). Disposable; rebuildable from the store."];
           HTML.li [] [txt "Store — Postgres holds functions, types, routes, data rows, auth, branches."];
           HTML.li [] [txt "Function / binding — a named live value, usually a lambda. Top-level (define ...) persists it."];
-          HTML.li [] [txt "Branch — versioned code world (system/main, alice/experiment). Code branches; data is shared."];
-          HTML.li [] [txt "Type + row — (deftype ...) then (create/get/update/rows ...); rows are per-user plus shared seed."];
+          HTML.li [] [txt "Branch — versioned CODE world (system/main, alice/experiment): it versions functions, types and routes. Branches do not version data."];
+          HTML.li [] [txt "Type + row — (deftype ...) then (create/get/update/rows ...). Your rows are isolated to you (data.u.<user>.*), the seed corpus is shared (data.shared.*), and (data-scope) reports what your identity can see."];
           HTML.li [] [txt "Route / page — (route \"/path\" \"handler\") makes a URL call a function."];
           HTML.li [] [txt "AI propose — model writes a function on the current branch as agent:<model>; you keep or discard."];
         ];

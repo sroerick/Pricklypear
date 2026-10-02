@@ -246,9 +246,10 @@
          per-branch monotonic counter bumped by AFTER triggers on
          function_defs / type_defs / view_bindings writes (covers
          promote/merge and the one-tree reverse mirror, since they all write
-         the scaffolding tables) and by data_rows writes to the root branch
-         (data is shared/branch-free, so a data write appears in every
-         branch's ancestry). It is surfaced as
+         the scaffolding tables) and by datum writes to the root branch
+         (data is branch-free: live rows are single-head and keyed by
+         user/space/lens, so a write appears in every branch's ancestry).
+         It is surfaced as
          current_branch_generation(branch_id) (walks the ancestry chain so an
          ancestor write appears to every descendant via the inheritance CTE),
          Store.current_generation, and the tree-time (gen-now) prim. Tree-time

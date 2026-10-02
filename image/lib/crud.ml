@@ -10,8 +10,11 @@
       - Datum nodes live in tree_nodes; reads project through the
         tree_data_rows view. The scaffolding data_rows table is the
         reverse-mirror kept warm for residual readers / fork-copy.
-      - Data is NOT branch-versioned (no branch_id); fork/merge copies
-        code, not data.
+      - Data is not versioned by branch and carries no branch_id: rows are
+        user-isolated (data.u.<user> tree), the seed corpus is shared
+        (data.shared tree), collaboration is data.s.<space>, and an explicit
+        data lens is data.l.<lens>.<user> tree. Code fork/merge copies code,
+        never data. (data-scope) reports the caller's effective scope.
       - Visibility is USER-SCOPED: a session sees rows it authored plus
         the shared seed corpus (bible-*, strongs-entry). Prim SQL
         enforces this; RLS on tree_nodes is the floor (migration 013).

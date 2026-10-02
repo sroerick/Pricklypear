@@ -16,7 +16,7 @@
          deftype 'music-track 'title 'artist 'album 'media_id 'notes
          deftype 'music-playlist 'title 'track_ids
 
-         - Track bytes live in media_blobs (shared across branches,
+         - Track bytes live in media_blobs (a branch-free store,
            author-owned); the row is a Nopales-side catalog entry.
          - track_ids is a comma-separated list of track row ids in
            playlist order. Deliberately NOT an outline tree: order

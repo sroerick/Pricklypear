@@ -1176,8 +1176,9 @@
            NOT be seeded from libs/*.
 
          WHY NOT "data branch" literally (v1):
-           branching.data and one-tree placement A keep /data shared
-           (no branch_id). Full per-lens versioned data is placement B
+         branching.data and one-tree placement A keep live /data single-head
+         (data.u.<user>/data.shared; no branch_id). Versioned data lenses are
+         placement B
            and deferred. Garden isolation v1 is:
              1. path prefix data.note.u.<username>.…
              2. author = session user on write

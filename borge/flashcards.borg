@@ -73,7 +73,8 @@
 
         NO separate flashcard-review log table in v1 (history deferred).
         NO cloze / image occlusion / media blobs in v1.
-        NO per-user row ACL — data_rows are shared (existing rule).
+         NO extra per-type ACL — the RLS floor already isolates rows by
+         user (data.u.<user>.* + data.shared.* seed).
         Multi-user isolation of card content is a later multi-user.permissions
         concern, not this chapter's first cut.
 
@@ -234,7 +235,7 @@
         - Shared multiplayer decks / permissions
         - Sync protocol beyond data_rows + pp_sync package export
         - OCaml system pages for study (package owns UX)
-        - Branch-scoped cards (data is shared by design)
+         - Branch-scoped cards (isolation is by user/space/lens, not branch)
 
 
    |))

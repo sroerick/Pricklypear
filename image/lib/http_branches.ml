@@ -121,7 +121,7 @@ let list_branches_page (session : Session.t) (reqd : Httpun.Reqd.t)
        [ HTML.p [HTML.class_ "muted"]
            [ txt "On: "
            ; HTML.strong [] [txt "%s" current]
-           ; txt " — code branches; data_rows are shared."
+           ; txt " — code branches (functions/types/routes); data is not versioned by branch."
            ]
        ; (match branches with
           | [] -> HTML.p [] [txt "(no branches in store)"]

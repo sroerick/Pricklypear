@@ -143,7 +143,8 @@
           so aggregation stays a simple group-by on exercise name.
         NO separate "program definitions" table — programs are code
           (and templates inside plan functions / doc skeletons).
-        NO per-user row ACL — data_rows are shared (existing habitat rule).
+         NO extra per-type ACL — the RLS floor scopes rows to their author
+           (data.u.<user>.*), with the data.shared.* seed readable by all.
           Multi-user content isolation is multi-user.permissions later.
         Orphan exercise rows (missing session) show under a virtual
         "(orphan)" bucket in UI; agents can repair.
