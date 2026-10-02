@@ -1,4 +1,4 @@
-;; package notes -- exported from live branch admin/personal
+;; package notes -- exported from live branch system/main
 ;; Sync: scripts/pp_sync.py pull|push
 
 (define notes/all-todos
@@ -110,6 +110,104 @@
               (string-append "/notes?slug=" slug)))
           (outline/kids (notes/get-outline n))))))
   "Top-level outline headings of one doc, each a leaf to the doc view.")
+
+(define notes/cache-fresh?
+  (lambda
+    (fields ttl)
+    (if
+      (null? fields)
+      #f
+      (let
+        ((ts (dict-get fields "ts")))
+        (if
+          (null? ts)
+          #f
+          (let
+            ((age (- (now) (parse-int (as-str ts)))))
+            (if (> age ttl) #f #t))))))
+  "whether the cache is within ttl seconds")
+
+(define notes/cache-get
+  (lambda
+    (fields)
+    (let
+      ((v (dict-get fields "html")))
+      (if (null? v) "" (as-str v))))
+  "cached html from a row fields")
+
+(define notes/cache-put
+  (lambda
+    (key html)
+    (let
+      ((row (notes/cache-row key))
+        (fields
+          (dict-set*
+            "{}"
+            (list
+              "key"
+              key
+              "ts"
+              (as-str (now))
+              "req"
+              (as-str (now))
+              "html"
+              html))))
+      (seq
+        (if
+          (null? row)
+          (create (quote notes-cache) fields)
+          (update (quote notes-cache) (car row) fields))
+        "stored")))
+  "upsert one cache row (create or update by key)")
+
+(define notes/cache-request
+  (lambda
+    (key job)
+    (let
+      ((row (notes/cache-row key)))
+      (let
+        ((fields (if (null? row) (list) (cdr row))))
+        (let
+          ((req
+            (if
+              (null? fields)
+              0
+              (let
+                ((r (dict-get fields "req")))
+                (if (null? r) 0 (parse-int (as-str r)))))))
+          (if
+            (> (- (now) req) 10)
+            (seq
+              (if
+                (null? row)
+                (create
+                  (quote notes-cache)
+                  (dict-set*
+                    "{}"
+                    (list
+                      "key"
+                      key
+                      "req"
+                      (as-str (now))
+                      "ts"
+                      "0"
+                      "html"
+                      "")))
+                (update
+                  (quote notes-cache)
+                  (car row)
+                  (dict-set* (cdr row) (list "req" (as-str (now))))))
+              (submit-job job "null"))
+            "already-requested")))))
+  "ask the UNBUDGETED jobs runner to refresh; bounded to one request/10s so renders never compute inline")
+
+(define notes/cache-row
+  (lambda
+    (key)
+    (let
+      ((rs (find-rows (quote notes-cache) "key" key 1)))
+      (if (null? rs) (list) (car rs))))
+  "cache row for key (or ())")
 
 (define notes/capture
   (lambda
@@ -753,6 +851,41 @@
           (redirect (string-append "/notes?slug=" (as-str slug)))))))
   "Save an outline (from raw JSON) into a note, then redirect to it.")
 
+(define notes/doc/append-node
+  (lambda
+    (slug node-slug title body)
+    (let*
+      ((node
+          (list
+            (as-str node-slug)
+            (as-str title)
+            (as-str body)
+            ""
+            (list)))
+        (row (notes/doc/get slug)))
+      (if
+        (null? row)
+        (notes/doc/upsert
+          slug
+          (as-str title)
+          (list "root" (as-str title) "" "" (list node))
+          ""
+          ""
+          (substring (now-iso) 0 10))
+        (let*
+          ((root (nth row 3))
+            (new-root
+              (outline/set-kids
+                root
+                (append (outline/kids root) (list node)))))
+          (notes/doc/upsert
+            (as-str (nth row 1))
+            (as-str (nth row 2))
+            new-root
+            (as-str (nth row 4))
+            (as-str (nth row 5))
+            (as-str (nth row 6))))))))
+
 (define notes/doc/daily
   (lambda
     (day)
@@ -878,6 +1011,24 @@
               ((folder (dict-get f "folder")))
               (if (null? folder) "" folder)))))))
   "Decode a note row by slug into (id slug title outline tags kind day folder).")
+
+(define notes/doc/get-dict
+  (lambda
+    (slug)
+    (let*
+      ((row (notes/doc/get slug)))
+      (if
+        (null? row)
+        ()
+        (let*
+          ((d0 (dict-set "{}" "id" (as-str (nth row 0))))
+            (d1 (dict-set d0 "slug" (as-str (nth row 1))))
+            (d2 (dict-set d1 "title" (as-str (nth row 2))))
+            (d3 (dict-set d2 "outline" (json-emit (nth row 3))))
+            (d4 (dict-set d3 "tags" (as-str (nth row 4))))
+            (d5 (dict-set d4 "kind" (as-str (nth row 5))))
+            (d6 (dict-set d5 "day" (as-str (nth row 6)))))
+          (dict-set d6 "folder" (as-str (nth row 7))))))))
 
 (define notes/doc/hidden?
   (lambda
@@ -1094,63 +1245,48 @@
         (outline/valid? outline)
         (let
           ((prev (notes/doc/row slug)))
-        (let
-          ((uuid (if (null? prev) (random-uuid) (car prev)))
-            (oldp (if (null? prev) "" (notes/doc/row-path prev))))
           (let
-            ((path
-                (if
-                  (string-eq oldp "")
-                  (notes/tree/note-path folder slug)
-                  oldp))
-              (body
-                (dict-set*
-                  "{}"
-                  (list
-                    "uuid"
-                    uuid
-                    "slug"
-                    (as-str slug)
-                    "title"
-                    (as-str title)
-                    "tags"
-                    (as-str tags)
-                    "kind"
-                    (as-str kind)
-                    "day"
-                    (as-str day)))))
-            ;; i-1790546235 item 1: the note-row upsert and the outline
-            ;; save are TWO writes; each was internally atomic but the
-            ;; PAIR was not, so a failure between them left a new note
-            ;; row with the OLD outline. ONE with-transaction here makes
-            ;; the whole upsert all-or-nothing (nested wraps JOIN).
-            (with-transaction
-              (lambda
-                ()
-                (seq
-                  (notes/tree/ensure-folder (notes/tree/root) (whoami))
-                  (tree/upsert path "note" "note" body)
-                  (notes/tree/save-outline path outline)
+            ((uuid (if (null? prev) (random-uuid) (car prev)))
+              (oldp (if (null? prev) "" (notes/doc/row-path prev))))
+            (let
+              ((path
                   (if
-                    (and
-                      (not (null? prev))
-                      (not (string-eq oldp ""))
-                      (not
-                        (string-eq (as-str folder) (notes/doc/row-folder prev))))
-                    (notes/doc/set-folder slug folder)
-                    0)
-                  (roam/reindex (as-str slug) outline)
-                  slug))))))
-        ;; i-1790546235 item 3: RAISE, do not return a "refused: …"
-        ;; string. A returned string is silently ignorable in (seq …),
-        ;; so a multi-write handler could proceed past a refused
-        ;; outline. Callers either checked outline/valid? before the
-        ;; call or let the error propagate; see spec/notes.
-        (error
-          "bad-outline"
-          (string-append
-            "notes/doc/upsert-in: refused: outline is malformed (every node must be a 5-element list [id title body todo kids], recursively); note not changed: "
-            (as-str slug))))
+                    (string-eq oldp "")
+                    (notes/tree/note-path folder slug)
+                    oldp))
+                (body
+                  (dict-set*
+                    "{}"
+                    (list
+                      "uuid"
+                      uuid
+                      "slug"
+                      (as-str slug)
+                      "title"
+                      (as-str title)
+                      "tags"
+                      (as-str tags)
+                      "kind"
+                      (as-str kind)
+                      "day"
+                      (as-str day)))))
+              (seq
+                (notes/tree/ensure-folder (notes/tree/root) (whoami))
+                (tree/upsert path "note" "note" body)
+                (notes/tree/save-outline path outline)
+                (if
+                  (and
+                    (not (null? prev))
+                    (not (string-eq oldp ""))
+                    (not
+                      (string-eq (as-str folder) (notes/doc/row-folder prev))))
+                  (notes/doc/set-folder slug folder)
+                  0)
+                (roam/reindex (as-str slug) outline)
+                slug))))
+        (string-append
+          "refused: outline is malformed (every node must be a 5-element list [id title body todo kids], recursively); note not changed: "
+          (as-str slug)))
       (let
         ((row (notes/doc/row slug))
           (fields
@@ -1170,41 +1306,6 @@
           (roam/reindex (as-str slug) outline)
           slug))))
   "Insert or update a note into a given folder.")
-
-;; (notes/doc/get-dict slug) — dict view of doc/get: {id,slug,title,outline,
-;; tags,kind,day,folder}, outline as a JSON array string (json-emit). Stops
-;; callers car/cdr-laddering the positional tuple (Board card b0863753).
-(define notes/doc/get-dict
-  (lambda (slug)
-    (let* ((row (notes/doc/get slug)))
-      (if (null? row)
-          ()
-          (let* ((d0 (dict-set "{}" "id" (as-str (nth row 0))))
-                 (d1 (dict-set d0 "slug" (as-str (nth row 1))))
-                 (d2 (dict-set d1 "title" (as-str (nth row 2))))
-                 (d3 (dict-set d2 "outline" (json-emit (nth row 3))))
-                 (d4 (dict-set d3 "tags" (as-str (nth row 4))))
-                 (d5 (dict-set d4 "kind" (as-str (nth row 5))))
-                 (d6 (dict-set d5 "day" (as-str (nth row 6)))))
-            (dict-set d6 "folder" (as-str (nth row 7))))))))
-
-;; (notes/doc/append-node slug node-slug title body) — ONE call read-modify-
-;; upsert: append a top-level heading to the note's outline (or create the
-;; note when missing). Covers log/sessions-style registers (Board b0863753).
-;; The outline arg is the ROOT node [id title body todo kids]; append goes
-;; into its kids. Day rides now-iso on create.
-(define notes/doc/append-node
-  (lambda (slug node-slug title body)
-    (let* ((node (list (as-str node-slug) (as-str title) (as-str body) "" (list)))
-           (row (notes/doc/get slug)))
-      (if (null? row)
-          (notes/doc/upsert slug (as-str title)
-                            (list "root" (as-str title) "" "" (list node))
-                            "" "" (substring (now-iso) 0 10))
-          (let* ((root (nth row 3))
-                 (new-root (outline/set-kids root (append (outline/kids root) (list node)))))
-            (notes/doc/upsert (as-str (nth row 1)) (as-str (nth row 2)) new-root
-                              (as-str (nth row 4)) (as-str (nth row 5)) (as-str (nth row 6))))))))
 
 (define notes/edit-form
   (lambda
@@ -1360,29 +1461,29 @@
       (notes/list)))
   "All visible (non-hidden) notes for the index.")
 
-(define notes/issues/register-html
+(define notes/issues-cache-refresh
   (lambda
     ()
     (let
       ((tree (notes/issues-fast-tree)))
-      (if
-        (null? tree)
-        ""
-        (html/join
-          (list
-            (html/h2 "Archive (legacy ledger — no longer written)")
-            (html/ul
-              (html/attr "class" "card")
-              (notes/issues/nodes-html (outline/kids tree))))))))
-  "The frozen legacy ledger register, rendered LIVE from the issues
-     outline (one tree/find-by + one snapshot fold). ARCHIVE since
-     single-object issues (roerick 2026-09-28): notes/issues/add no
-     longer appends here — new issues are kind-tagged Board cards.
-     NOT rendered on /issues any more: the fold alone blew the route
-     budget (2026-09-28, even behind ?archive=1) — the ledger stays
-     readable at /notes?slug=log/issues, and register-html remains for
-     API/cleanup callers (its per-row resolve/reopen/delete reconcile
-     the row AND its linked card — pre-convergence twins).")
+      (let
+        ((register-html
+            (if
+              (null? tree)
+              ""
+              (html/join
+                (list
+                  (html/h2 "Register")
+                  (html/ul
+                    (html/attr "class" "card")
+                    (notes/issues/nodes-html (outline/kids tree)))))))
+          (cards-html (notes/issues/cards-section)))
+        (seq
+          (notes/cache-put
+            "issues-list"
+            (string-append register-html cards-html))
+          "refreshed"))))
+  "JOB (unbudgeted): rebuild the register HTML (frozen legacy ledger) PLUS the\n  Issue-cards section (todo-items with a kind, through the shared pipeline)\n  from the fast snapshot outline + the todo-item pool, and store it")
 
 (define notes/issues-fast-tree
   (lambda
@@ -1406,8 +1507,7 @@
                 ""
                 ""
                 (notes/tree/heading-kids path))))))))
-  "register outline via ONE subtree snapshot (the same fold the live
-     doc/get read path now runs — see notes/tree/heading-kids obituary)")
+  "register outline via ONE subtree snapshot (the same fold the live\n     doc/get read path now runs — see notes/tree/heading-kids obituary)")
 
 (define notes/issues/add
   (lambda
@@ -1420,38 +1520,16 @@
             (notes/issues/title-or-kind kind title)))
         (cid
           (as-str
-            (todo/item/add
-              (notes/issues/board-list-id)
-              full-title))))
+            (todo/item/add (notes/issues/board-list-id) full-title))))
       (seq
         (todo/tree/save
           "todo-item"
           cid
           (dict-set*
             (todo/item/get cid)
-            (list
-              "kind"
-              (as-str kind)
-              "notes"
-              (as-str body))))
+            (list "kind" (as-str kind) "notes" (as-str body))))
         cid)))
-  "File an issue: ONE object — a kind-tagged todo-item card on the shared
-     Board (single-object issues, roerick 2026-09-28). The CARD id is the
-     issue id now; resolve/reopen/delete ride the card pipeline directly
-     (card-resolve/card-reopen/card-delete).
-
-     OBITUARY (what/why): this used to DUAL-WRITE — a log/issues ledger
-     heading node AND a Board card linked back via the card's issue_id
-     field — two stored objects for one logical issue, reconciled by every
-     writer (add/resolve/reopen/delete each touched both faces; sync
-     existed to repair drift). The sync tax was real: a ghost-card resync
-     bug, and board visibility needs ONE object per issue. The typed
-     todo-item tree node IS the issue (borge/one-tree.borg typed-nodes);
-     the ledger was the pre-convergence relic. The register on /issues is
-     now a FROZEN ARCHIVE: legacy rows keep resolve/reopen/delete so the
-     archive can be cleaned up, but nothing appends to it. Old issue ids
-     (i-<ts>-<uuid>) referenced in historical comments keep resolving
-     against the archive.")
+  "File an issue: ONE object — a kind-tagged todo-item card on the shared\n     Board (single-object issues, roerick 2026-09-28). The CARD id is the\n     issue id now; resolve/reopen/delete ride the card pipeline directly\n     (card-resolve/card-reopen/card-delete).\n\n     OBITUARY (what/why): this used to DUAL-WRITE — a log/issues ledger\n     heading node AND a Board card linked back via the card's issue_id\n     field — two stored objects for one logical issue, reconciled by every\n     writer (add/resolve/reopen/delete each touched both faces; sync\n     existed to repair drift). The sync tax was real: a ghost-card resync\n     bug, and board visibility needs ONE object per issue. The typed\n     todo-item tree node IS the issue (borge/one-tree.borg typed-nodes);\n     the ledger was the pre-convergence relic. The register on /issues is\n     now a FROZEN ARCHIVE: legacy rows keep resolve/reopen/delete so the\n     archive can be cleaned up, but nothing appends to it. Old issue ids\n     (i-<ts>-<uuid>) referenced in historical comments keep resolving\n     against the archive.")
 
 (define notes/issues/board-list-id
   (lambda
@@ -1561,7 +1639,8 @@
         (kind (as-str (dict-get fields "kind")))
         (state (todo/item/state fields))
         (own-pipe
-          (not (string-eq (as-str (dict-get fields "pipeline")) "")))
+          (not
+            (string-eq (as-str (dict-get fields "pipeline")) "")))
         (lid (as-str (dict-get fields "list_id")))
         (hit
           (list/filter
@@ -1598,10 +1677,7 @@
                 (list
                   (html/text "state ")
                   (html/code state)
-                  (if
-                    own-pipe
-                    (html/text " · own pipeline")
-                    ""))))
+                  (if own-pipe (html/text " · own pipeline") ""))))
             (html/div
               (html/attr "class" "issue-actions")
               (html/join
@@ -1714,37 +1790,12 @@
       (todo/item/all)))
   "Todo-item rows tagged with an issue kind (kind != \"\") — the /issues\n     convergence: cards carry a kind (BUG/DESIGN/SMELL/CLEANUP) convention and\n     /issues reads them AS ISSUE ROWS through the shared pipeline\n     (borge/workstreams.borg pipeline-model). Archived cards are excluded\n     (archived is closed). The legacy note-ledger stays a frozen archive; this\n     is the live issue face (no corpus migration in this task).")
 
-(define notes/issues/cols-map
-  (lambda
-    (rows)
-    (if
-      (null? rows)
-      (list)
-      (let*
-        ((lid (as-str (dict-get (cdr (car rows)) "list_id")))
-          (rest (notes/issues/cols-map (cdr rows)))
-          (have
-            (list/filter
-              (lambda (e) (string-eq (car e) lid))
-              rest)))
-        (if
-          (null? have)
-          (cons
-            (cons lid (todo/state/columns-for-list lid))
-            rest)
-          rest))))
-  "Assoc list (list-id . columns) for a card row set — ONE
-     todo/state/columns-for-list call per DISTINCT list (borge
-     workstreams pipeline-model resolution b: list columns). Replaces the
-     per-row columns-for-item DB call that made /issues render ~76 round
-     trips for 38 rows (46s, route-budget 500 — 2026-09-28). Cards with
-     their OWN pipeline field still resolve per-item (rare; the row says
-     so for free).")
-
 (define notes/issues/cards-html
   (lambda
     (rows)
-    (notes/issues/cards-html* rows (notes/issues/cols-map rows)))
+    (notes/issues/cards-html*
+      rows
+      (notes/issues/cols-map rows)))
   "Concatenated card-as-issue HTML for rows (columns memoized per list).")
 
 (define notes/issues/cards-html*
@@ -1777,6 +1828,23 @@
               (notes/issues/cards-html rows)))))))
   "THE live issue face (single-object issues): todo-items tagged with a\n     kind, through the shared pipeline. Primary section of /issues; the\n     legacy ledger register renders BELOW as the archive.")
 
+(define notes/issues/cols-map
+  (lambda
+    (rows)
+    (if
+      (null? rows)
+      (list)
+      (let*
+        ((lid (as-str (dict-get (cdr (car rows)) "list_id")))
+          (rest (notes/issues/cols-map (cdr rows)))
+          (have
+            (list/filter (lambda (e) (string-eq (car e) lid)) rest)))
+        (if
+          (null? have)
+          (cons (cons lid (todo/state/columns-for-list lid)) rest)
+          rest))))
+  "Assoc list (list-id . columns) for a card row set — ONE\n     todo/state/columns-for-list call per DISTINCT list (borge\n     workstreams pipeline-model resolution b: list columns). Replaces the\n     per-row columns-for-item DB call that made /issues render ~76 round\n     trips for 38 rows (46s, route-budget 500 — 2026-09-28). Cards with\n     their OWN pipeline field still resolve per-item (rare; the row says\n     so for free).")
+
 (define notes/issues/delete
   (lambda
     (id)
@@ -1807,14 +1875,7 @@
           "issue"
           "")
         (car found))))
-  "ensure the register exists via ONE find-by (was: full doc/get walk, 100-300s under DB degradation).
-     Arity fix 2026-09-27: this call passed EIGHT args to the six-arg
-     notes/doc/upsert (a duplicated slug and a stray \"\") and would have
-     raised 'arity mismatch' the first time the register had to be created
-     from scratch — latent, because the register already exists on every
-     live habitat. tags/kind/day now match notes/issues/upsert, the
-     register's other writer ('log' / 'issue' / ''), so a fresh register
-     is shaped identically to a repaired one.")
+  "ensure the register exists via ONE find-by (was: full doc/get walk, 100-300s under DB degradation).\n     Arity fix 2026-09-27: this call passed EIGHT args to the six-arg\n     notes/doc/upsert (a duplicated slug and a stray \"\") and would have\n     raised 'arity mismatch' the first time the register had to be created\n     from scratch — latent, because the register already exists on every\n     live habitat. tags/kind/day now match notes/issues/upsert, the\n     register's other writer ('log' / 'issue' / ''), so a fresh register\n     is shaped identically to a repaired one.")
 
 (define notes/issues/form
   (lambda
@@ -1893,8 +1954,7 @@
             (notes/issues/card-delete (request-param "id"))
             (redirect "/issues")))
         (else (redirect "/issues")))))
-  "mutations redirect; the next GET renders the register + cards LIVE
-     from the store (borge/notes.outline-read-path)")
+  "mutations redirect; the next GET renders the register + cards LIVE\n     from the store (borge/notes.outline-read-path)")
 
 (define notes/issues/kind-of
   (lambda
@@ -1928,14 +1988,8 @@
   "The last element of xs (as a string); \"\" when xs is empty.")
 
 (define notes/issues/list-html
-  (lambda
-    ()
-    (notes/issues/cards-section))
-  "THE live issue list: kind-tagged cards through the shared pipeline
-     (single-object issues). The legacy ledger archive is NOT here —
-     notes/issues/body gates it behind /issues?archive=1 because the
-     register fold blew the route budget (2026-09-28: /issues 500'd on
-     budget exceeded with the register inline). API/compat surface.")
+  (lambda () (notes/issues/cards-section))
+  "THE live issue list: kind-tagged cards through the shared pipeline\n     (single-object issues). The legacy ledger archive is NOT here —\n     notes/issues/body gates it behind /issues?archive=1 because the\n     register fold blew the route budget (2026-09-28: /issues 500'd on\n     budget exceeded with the register inline). API/compat surface.")
 
 (define notes/issues/node-html
   (lambda
@@ -2016,6 +2070,23 @@
       (string-eq (request-method) "POST")
       (notes/issues/handle-post)
       (html/page (list (notes/issues/body))))))
+
+(define notes/issues/register-html
+  (lambda
+    ()
+    (let
+      ((tree (notes/issues-fast-tree)))
+      (if
+        (null? tree)
+        ""
+        (html/join
+          (list
+            (html/h2
+              "Archive (legacy ledger — no longer written)")
+            (html/ul
+              (html/attr "class" "card")
+              (notes/issues/nodes-html (outline/kids tree))))))))
+  "The frozen legacy ledger register, rendered LIVE from the issues\n     outline (one tree/find-by + one snapshot fold). ARCHIVE since\n     single-object issues (roerick 2026-09-28): notes/issues/add no\n     longer appends here — new issues are kind-tagged Board cards.\n     NOT rendered on /issues any more: the fold alone blew the route\n     budget (2026-09-28, even behind ?archive=1) — the ledger stays\n     readable at /notes?slug=log/issues, and register-html remains for\n     API/cleanup callers (its per-row resolve/reopen/delete reconcile\n     the row AND its linked card — pre-convergence twins).")
 
 (define notes/issues/reopen
   (lambda
@@ -4304,17 +4375,20 @@
             flat
             (list (cons -1 (outline/node* "root" "" "" "" (list)))))))
         (outline/kids (cdr (car stack))))))
-  "Rebuild the outline under one note path from ONE (tree/list path)
-     subtree snapshot, folded flat in memory by notes/tree/of-flat
-     (subtrees are lexicographically contiguous in path-ASC order).
-     OBITUARY (borge/notes.outline-read-path, 2026-12): this binding was
-     the recursive per-node walk — one tree/list query PER HEADING NODE,
-     155 queries for the 156-node log/issues register, minutes on a
-     degraded DB (the 2026-09-14 promote-gate floor). The snapshot fold
-     (the old heading-kids-snap, job-only because the VStr-JSON boundary
-     tax burned ~380k ticks) is now the LIVE read path: with
-     json-values-alist the fold fits the route budget. The old recursive
-     body is deleted, not kept as a fallback.")
+  "Rebuild the outline under one note path from ONE (tree/list path)\n     subtree snapshot, folded flat in memory by notes/tree/of-flat\n     (subtrees are lexicographically contiguous in path-ASC order).\n     OBITUARY (borge/notes.outline-read-path, 2026-12): this binding was\n     the recursive per-node walk — one tree/list query PER HEADING NODE,\n     155 queries for the 156-node log/issues register, minutes on a\n     degraded DB (the 2026-09-14 promote-gate floor). The snapshot fold\n     (the old heading-kids-snap, job-only because the VStr-JSON boundary\n     tax burned ~380k ticks) is now the LIVE read path: with\n     json-values-alist the fold fits the route budget. The old recursive\n     body is deleted, not kept as a fallback.")
+
+(define notes/tree/heading-kids-snap
+  (lambda
+    (parent-path)
+    (let
+      ((flat (tree/list parent-path)))
+      (let
+        ((stack
+          (notes/tree/of-flat
+            flat
+            (list (cons -1 (outline/node* "root" "" "" "" (list)))))))
+        (outline/kids (cdr (car stack))))))
+  "FAST outline builder from ONE (tree/list path) subtree snapshot. Job-only: 380k ticks for the 156-node issues register (json-parse dominates) would 500 route renders; the old recursive walk is 155 queries (minutes when DB is degraded, 1.5s healthy). Used by notes/issues-cache-refresh (unbudgeted job).")
 
 (define notes/tree/join-slash
   (lambda
@@ -4591,35 +4665,11 @@
             (outline/kids outline))
           (notes/tree/clear-stale-headings
             note-path
-            (notes/tree/outline-paths note-path (outline/kids outline)))
+            (notes/tree/outline-paths
+              note-path
+              (outline/kids outline)))
           note-path))))
-  "Persist a note's outline under its tree path.
-
-   WRITE-THEN-SWEEP + ATOMIC (2026-09-27, after a data-loss incident).
-   This used to clear-headings FIRST — a recursive delete of every heading —
-   and then write the new ones, so any failure in the write half (or in
-   write-root-body above it) left the note with its old content DELETED and
-   nothing put back. Two things made that fire: tree/upsert rejected a
-   structured body (dict-set* over a parsed node returns an alist,
-   json-values-alist), and the clear ran before the rejection was known.
-   Live cost: the shared log/sessions note lost all headings on a doc upsert.
-
-   Both required guarantees of notes.storage SAVE ORDERING CONTRACT:
-     1. ORDER — new headings are upserted first (idempotent, keyed by path
-        and id), then headings NOT in the new outline are swept. A failure
-        mid-write leaves the previous outline in place PLUS whatever was
-        written — degraded, never empty.
-     2. ATOMICITY — the whole sequence runs in ONE with-transaction, so a
-        raise anywhere rolls the save back entirely and the old outline is
-        intact. /api/eval does NOT wrap a request in a transaction
-        (verified live 2026-09-27), so this wrap is what makes the save
-        all-or-nothing. Nested with-transaction JOINS
-        (store_db.with_dynamic_transaction rides an active tx instead of
-        raising), so callers that already wrapped (notes/refile, dabar)
-        stay correct.
-
-   An empty outline still clears the note: the sweep's keep-list is empty,
-   so every heading under the note goes.")
+  "Persist a note's outline under its tree path.\n\n   WRITE-THEN-SWEEP + ATOMIC (2026-09-27, after a data-loss incident).\n   This used to clear-headings FIRST — a recursive delete of every heading —\n   and then write the new ones, so any failure in the write half (or in\n   write-root-body above it) left the note with its old content DELETED and\n   nothing put back. Two things made that fire: tree/upsert rejected a\n   structured body (dict-set* over a parsed node returns an alist,\n   json-values-alist), and the clear ran before the rejection was known.\n   Live cost: the shared log/sessions note lost all headings on a doc upsert.\n\n   Both required guarantees of notes.storage SAVE ORDERING CONTRACT:\n     1. ORDER — new headings are upserted first (idempotent, keyed by path\n        and id), then headings NOT in the new outline are swept. A failure\n        mid-write leaves the previous outline in place PLUS whatever was\n        written — degraded, never empty.\n     2. ATOMICITY — the whole sequence runs in ONE with-transaction, so a\n        raise anywhere rolls the save back entirely and the old outline is\n        intact. /api/eval does NOT wrap a request in a transaction\n        (verified live 2026-09-27), so this wrap is what makes the save\n        all-or-nothing. Nested with-transaction JOINS\n        (store_db.with_dynamic_transaction rides an active tx instead of\n        raising), so callers that already wrapped (notes/refile, dabar)\n        stay correct.\n\n   An empty outline still clears the note: the sweep's keep-list is empty,\n   so every heading under the note goes.")
 
 (define notes/tree/sort-by-name
   (lambda

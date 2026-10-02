@@ -4,7 +4,6 @@
 (define ref/fn-li
   (lambda
     (fn)
-    "One reference list item: function name plus its docstring when present."
     (let
       ((doc (function-doc (as-str fn))))
       (if
@@ -17,12 +16,11 @@
               (html/code (as-str fn))
               (html/span
                 (html/attr "class" "muted")
-                (string-append " — " (as-str doc))))))))))
+                (string-append " &mdash; " (as-str doc))))))))))
 
 (define ref/packages
   (lambda
     ()
-    "Distinct package prefixes over all visible bindings."
     (list/foldl
       (lambda
         (acc name)
@@ -39,76 +37,59 @@
 (define ref/page
   (lambda
     ()
-    "Function Reference page: search box, package groups, or matching rows."
     (let
       ((q (request-param "q")) (all (list-bindings)))
       (let
         ((needle (if (null? q) "" (as-str q))))
         (let
           ((fns (if (string-eq needle "") all (apropos needle))))
-          (if
-            (string-eq needle "")
-            (html/page
-              (list
-                (html/h1 "Function Reference")
-                (html/p*
-                  (html/attr "class" "muted")
-                  (string-append
-                    (as-str (count fns))
-                    " of "
-                    (as-str (count all))
-                    " functions. Search with ?q= or (apropos \"term\"). "))
-                (html/form
-                  "GET"
-                  "/ref"
-                  ""
-                  (html/join
-                    (list
-                      (html/text-input
-                        "q"
-                        (html/attrs
-                          (list
-                            (html/attr "placeholder" "apropos…"))))
-                      (html/button (html/attr "type" "submit") "Search"))))
-                (html/div
-                  (html/attr "class" "ref-packages")
-                  (html/join
-                    (list/map
-                      ref/render-pkg
-                      (list/filter
-                        (lambda (p) (not (string-eq (as-str p) "")))
-                        (ref/packages)))))))
-            (html/page
-              (list
-                (html/h1 "Function Reference")
-                (html/p*
-                  (html/attr "class" "muted")
-                  (string-append
-                    (as-str (count fns))
-                    " of "
-                    (as-str (count all))
-                    " functions matching \""
-                    needle
-                    "\". "))
-                (html/form
-                  "GET"
-                  "/ref"
-                  ""
-                  (html/join
-                    (list
-                      (html/text-input
-                        "q"
-                        (html/attrs
-                          (list
-                            (html/attr "value" needle)
-                            (html/attr "placeholder" "apropos…"))))
-                      (html/button (html/attr "type" "submit") "Search"))))
-                (html/ul "" (html/join (list/map ref/fn-li fns)))))))))))
+          (html/page
+            (list
+              (html/h1 "Function Reference")
+              (html/p*
+                (html/attr "class" "muted")
+                (string-append
+                  (as-str (count fns))
+                  " of "
+                  (as-str (count all))
+                  " functions. Search with ?q= or (apropos \"term\"). "
+                  "Docstrings via (function-doc name)."))
+              (html/form
+                "GET"
+                "/ref"
+                ""
+                (html/join
+                  (list
+                    (html/text-input
+                      "q"
+                      (html/attrs
+                        (list
+                          (html/attr "value" needle)
+                          (html/attr "placeholder" "apropos&hellip;"))))
+                    (html/button (html/attr "type" "submit") "Search"))))
+              (html/ul "" (html/join (list/map ref/fn-li fns))))))))))
+
+(define ref/pkg-source
+  (lambda
+    ()
+    (let
+      ((name (as-str (request-param "name"))))
+      (cond
+        ((string-eq name "")
+          (render-html
+            "Usage: GET /pkg/source?name=<package>. One call returns the full lib.pp text of a package on this branch. Enumerate: /ref or (list-packages)."))
+        ((member name (list-packages))
+          (render-html (export-package name)))
+        (else
+          (render-html
+            (string-append
+              "no package named "
+              name
+              " . Try (list-packages) or /ref.")))))))
 
 (define ref/render-pkg
   (lambda
     (pkg)
-    "Card listing the functions whose prefix equals pkg."
     (let
       ((fns
         (list/filter
@@ -123,4 +104,3 @@
               (html/attr "class" "muted")
               (string-append (as-str (count fns)) " functions"))
             (html/ul "" (html/join (list/map ref/fn-li fns)))))))))
-
