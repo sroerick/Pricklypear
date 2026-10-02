@@ -311,6 +311,20 @@
            damage). Both layers are required: the guard stops bad
            input, the order contains whatever the guard misses.
 
+           OUTLINE ARG IS TREE-OR-ENCODED (2026-10-02): the façade
+           notes/doc/upsert accepts the outline EITHER as a decoded
+           ADT or as its encoded JSON string (notes/doc/coerce-
+           outline parses+validates a string, else passes it through
+           so upsert-in still refuses). This exists because the
+           natural read-modify-write idiom — read the note, take the
+           outline, hand (outline/encode …) straight back to
+           notes/doc/upsert — used to be REFUSED: valid? ran on the
+           string, got (), and the caller saw 'malformed' for a
+           perfectly good tree. A live agent hit this while editing
+           the agents note and left a scratch rehearsal doc behind
+           (the agents-naming-scratch incident). The encode→upsert
+           round-trip is now an identity for the caller.
+
            ATOMICITY (honest gap, 2026-09-27): the save sequence is
            NOT atomic — /api/eval does NOT roll back a raising eval
            (verified live: a write followed by an unbound symbol

@@ -1215,6 +1215,31 @@
   (lambda (n) (car (cdr (cdr n))))
   "Extract the title field from a decoded note row.")
 
+(define notes/doc/coerce-outline
+  (lambda
+    (outline)
+    (if
+      (string? outline)
+      (let
+        ((parsed
+           (guard
+             (lambda (e) ())
+             (json-parse (as-str outline)))))
+        (if
+          (if (null? parsed) #f (outline/valid? parsed))
+          parsed
+          outline))
+      outline))
+  "Accept an outline as EITHER a decoded tree OR its encoded JSON string.
+     The natural read-modify-write idiom — (outline/encode (notes/doc/outline
+     ...)) fed straight back into notes/doc/upsert — used to fail: upsert
+     validated the STRING with outline/valid?, got (), and returned
+     'refused: outline is malformed' even though the tree was fine (the
+     2026-10-02 agents-naming-scratch incident). Coercing here makes the
+     round-trip an identity from the caller's point of view. A string that
+     does not parse to a valid node is returned unchanged, so upsert-in
+     still refuses it — silent data loss is never an option.")
+
 (define notes/doc/upsert
   (lambda
     (slug title outline tags kind day)
@@ -1223,12 +1248,13 @@
       (notes/doc/upsert-in
         slug
         title
-        outline
+        (notes/doc/coerce-outline outline)
         tags
         kind
         day
         (if (null? row) "" (notes/doc/row-folder row)))))
-  "Insert or update a note, preserving its folder.")
+  "Insert or update a note, preserving its folder. Accepts the outline as a
+     decoded tree or an encoded JSON string (see notes/doc/coerce-outline).")
 
 (define notes/doc/upsert-in
   (lambda
