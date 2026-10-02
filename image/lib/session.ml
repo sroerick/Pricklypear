@@ -1334,7 +1334,7 @@ and reseed_package (t : t) (pkg : string) : (string, string) result =
   if restricted t then
     (Error "reseed-package: denied for delegated sessions and tenants")
   else if pkg = "" then (Error "empty package name")
-  else if (not t.is_admin)
+  else if (not (Prims_db_common.is_verified_admin ~t ()))
           && t.manifest.username <> "admin"
           && t.manifest.username <> "system" then
     (Error "requires admin")
@@ -2104,8 +2104,12 @@ let promote_to_main (t : t) ~(source_ref : string) ~(names : string list)
     match src with
     | None -> (Error "no such source branch")
     | Some source_id ->
-        (* Policy: only admin username may write system/main via promote UI. *)
-        if (not t.is_admin)
+        (* Policy: only admin username may write system/main via promote UI.
+           2026-10 security pass: the flag alone is not trustworthy on
+           shared-session paths (jobs runner / loopback REPL eval on the
+           boot session whose t.is_admin stays boot-derived while the
+           manifest flips to the submitter) — recheck users.is_admin. *)
+        if (not (Prims_db_common.is_verified_admin ~t ()))
            && t.manifest.username <> "admin"
            && t.manifest.username <> "system" then
           (Error "promote to system/main requires admin")

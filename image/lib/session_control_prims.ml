@@ -32,10 +32,20 @@ let split_branch_ref (s : string) : string * string =
     "admin") may target a branch owner O iff O = U or the session is
     admin. Agent users are named "<parent>/agent" and work in the
     parent-owned <parent>/agent workshop branch, so their tenant is the
-    parent username. *)
+    parent username.
+
+    ADMIN RECHECK (2026-10 security pass): the admin arm reads
+    Prims_db_common.is_verified_admin — the raw flag plus a live
+    users.is_admin re-check — because the jobs runner / loopback REPL
+    evaluate on the SHARED BOOT SESSION whose t.is_admin is permanently
+    boot-derived (true on prod) while manifest.username flips to the
+    submitter. With the raw flag, any submitted job could checkout ANY
+    tenant's garden. The U="admin" textual fallback is KEPT: it is the
+    documented rule and the bootstrap valve (users row exists from
+    bootstrap_admin_if_empty on real boots; no-DB tests exercise it). *)
 let branch_owner_authorized (t : t) (owner : string) : bool =
   let u = t.manifest.username in
-  if t.is_admin || u = "admin" then true
+  if Prims_db_common.is_verified_admin ~t () || u = "admin" then true
   else
     let tenant =
       let suffix = "/agent" in
@@ -131,7 +141,8 @@ let register ~(hooks : hooks) (t : t) (tbl : Primitives.t) : unit =
              path), but another tenant's garden is denied — it would
              copy their code into readable merge results. *)
           if (tgt_owner = "system")
-             && not (t.is_admin || t.manifest.username = "admin")
+             && not (Prims_db_common.is_verified_admin ~t ()
+                     || t.manifest.username = "admin")
           then
             (Pricklypear_lisp.Ast.VStr
                           "denied: admin-only merge to system branch")

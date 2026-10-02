@@ -717,7 +717,18 @@ let timing_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
      measure so their samples land in the SAME ring as live traffic and
      the sweep completes progressively across page loads (≤15 × ≤0.25s
      CPU each — bounded). Admin-only page; probes really run handlers;
-     the page body carries the side-effects note. *)
+     the page body carries the side-effects note.
+
+     2026-10 security pass: the "Admin-only" above was a comment, not
+     a gate (/db enforces, this didn't). Route names + aggregate render
+     costs across the whole image are cross-tenant information —
+     enforce the admin check like db_panel_page does. *)
+  if not (Session.is_admin session) then begin
+    html_response reqd ~session ~status:`Forbidden
+      (chrome ~session ~title:"Forbidden" [
+         HTML.p [] [ txt "timing panel is admin-only" ]])
+  end
+  else begin
   let probe_batch = 15 in
   let aggs0 = Timing.aggregates () in
   let sampled0 = Hashtbl.create 64 in
@@ -874,6 +885,7 @@ let timing_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
   in
   html_response reqd ~session body;
   ()
+  end
 
 (* ---- db panel (image.db-panel) -------------------------------------
    Global Postgres statistics for the operator. Admin-only. All SQL is

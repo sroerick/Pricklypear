@@ -71,3 +71,30 @@ let require_admin ~(t : t) (op : string) (k : unit -> Pricklypear_lisp.Ast.value
     | Some u when u.Auth_store.is_admin -> k ()
     | _ ->
         (Pricklypear_lisp.Ast.VStr (op ^ ": denied: admin only"))
+
+(** DB-verified admin consult for SECURITY GATES (the flag is not enough).
+    require_admin answers "may this prim run"; this answers "is the
+    identity REALLY an admin right now" for authority gates that catch
+    stale or boot-derived [t.is_admin]:: the jobs runner and the
+    loopback REPL eval on the SHARED BOOT session, whose t.is_admin is
+    true on prod (Session.make derives it from username="admin" when
+    PP_USERNAME is the default) and NEVER changes when the runner flips
+    manifest.username to the submitter. Gates that trusted the flag
+    alone (branch_owner_authorized, promote, reseed, media visibility)
+    let any submitted job eval as admin — checkout of any tenant's
+    garden, promote into system/main, cross-tenant media reads.
+
+    Shape mirrors require_admin's rationale ("a concurrent attach
+    cannot flip t.is_admin"): read the per-request snapshot username,
+    re-check users.is_admin in PG, fail closed when the row is missing
+    or the DB is unreachable. Cheap on the common path — a non-admin
+    session (t.is_admin=false) answers false with NO db round trip. *)
+let is_verified_admin ~(t : t) () : bool =
+  if not t.is_admin then false
+  else
+    let uname = caller_username ~t () in
+    if uname = "anonymous" then false
+    else
+      match Auth_store.get_user_by_username t.store uname with
+      | Some u -> u.Auth_store.is_admin
+      | None -> false

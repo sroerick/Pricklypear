@@ -592,7 +592,16 @@ let changes_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
     | _ -> (Session.username session, ref_)
   in
   let store = Session.store session in
-  let bid_opt = Store.lookup_branch_id_by_name store ~owner ~name in
+  (* 2026-10 security pass: read side of the branch-owner rule
+     (i-1787970640, Session_control_prims.branch_readable) — another
+     tenant's personal garden is not listable here. The denial renders
+     the SAME unknown-branch page as a missing ref, so it never leaks
+     whether the ref exists. *)
+  let bid_opt =
+    if Session.branch_readable session owner then
+      Store.lookup_branch_id_by_name store ~owner ~name
+    else None
+  in
   match bid_opt with
   | None ->
       html_response reqd ~session ~status:`Not_found
@@ -918,7 +927,12 @@ let diff_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
       | [ o; n ] when o <> "" && n <> "" -> (o, n)
       | _ -> ("", ref_)
     in
-    Store.lookup_branch_id_by_name (Session.store session) ~owner ~name
+    (* 2026-10 security pass: same read-side branch-owner rule as
+       changes_page — the body renderer prints stored fn/source text, so
+       the from/to pair must both be readable to the session identity
+       BEFORE the lookup. system/* stays shared (shared defaults tree). *)
+    if not (Session.branch_readable session owner) then None
+    else Store.lookup_branch_id_by_name (Session.store session) ~owner ~name
   in
   let from_ref =
     Option.value (query_param target "from") ~default:"" |> String.trim
