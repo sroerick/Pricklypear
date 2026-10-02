@@ -219,6 +219,76 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
         | _ ->
             ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("create-user", "need username password [is-admin]", "bad-args")))))));
 
+  (* (delete-user user-id-or-username) -> VStr result | error VStr.
+     Admin only. The symmetric counterpart to create-user that the
+     admin-surface gap card (0d20dc58) called out: removal existed only
+     as raw DB surgery. Credentials / sessions cascade; agents parented
+     to the deleted user are reparented to NULL (see Auth_store.delete_user).
+     Refuses to delete the calling admin's own account (lockout guard) and
+     the last remaining admin. Accepts a uuid id or a username for
+     ergonomic cleanup of probe users. *)
+  Primitives.register_server_only tbl "delete-user"
+    (fun args ->
+      require_admin "delete-user" (fun () ->
+        let run ~uid ~label =
+          (* Lockout guards: never let the acting admin delete themselves,
+             and never delete the last admin. Both make the habitat
+             unreachable through the admin UI. *)
+          let me = Auth_store.get_user_by_username t.store (caller_username ()) in
+          (match me with
+           | Some m when m.Auth_store.id = uid ->
+               ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("delete-user", "refusing to delete your own account", "denied")))))
+           | _ -> ());
+          let target = Auth_store.get_user_by_id t.store uid in
+          (match target with
+           | None ->
+               ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("delete-user", "no such user: " ^ label, "failed")))))
+           | Some tu when tu.Auth_store.is_admin ->
+               let admins =
+                 List.filter
+                   (fun (u : Auth_store.user) -> u.Auth_store.is_admin)
+                   (Auth_store.list_users t.store)
+               in
+               if List.length admins <= 1 then
+                 ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("delete-user", "refusing to delete the last admin", "denied")))))
+           | Some _ -> ());
+          let r = Auth_store.delete_user t.store ~user_id:uid in
+          (match r with
+           | Error e ->
+               ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("delete-user", e, "failed")))))
+           | Ok n ->
+               let () =
+                 Auth_store.log_auth t.store ~user_id:uid
+                   ~kind:"admin_delete_user" ~success:true ()
+               in
+               (Pricklypear_lisp.Ast.VStr (string_of_int n)))
+        in
+        match args with
+        | [ Pricklypear_lisp.Ast.VStr id_or_name ] ->
+            let s = String.trim id_or_name in
+            if s = "" then
+              ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("delete-user", "user-id-or-username required", "bad-args")))))
+            else
+              let looks_like_uuid =
+                String.length s = 36 && String.contains s '-'
+              in
+              let resolved =
+                let by_id =
+                  if looks_like_uuid then Auth_store.get_user_by_id t.store s
+                  else None
+                in
+                match by_id with
+                | Some u -> u
+                | None ->
+                    (match Auth_store.get_user_by_username t.store s with
+                     | Some u -> u
+                     | None ->
+                         ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("delete-user", "no such user: " ^ s, "failed"))))))
+              in
+              run ~uid:resolved.Auth_store.id ~label:s
+        | _ ->
+            ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("delete-user", "need user-id-or-username", "bad-args")))))));
+
   (* (create-agent parent-username) -> VStr agent-user-id. Admin only. *)
   Primitives.register tbl "create-agent"
     (fun args ->

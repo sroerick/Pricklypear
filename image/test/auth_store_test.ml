@@ -36,6 +36,7 @@ let cleanup_all (store : S.t) : unit =
       ()
 
 let with_store f =
+  Mirage_crypto_rng_unix.use_default ();
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let ctx : Pricklypear_image_lib.Io_eio.Ctx.t =
@@ -200,6 +201,79 @@ let test_unknown_user_rejected () =
   | Error _ -> ()
   | Ok () -> Alcotest.fail "unknown user accepted"
 
+(* ---- delete_user (admin-surface gap card 0d20dc58) ---- *)
+
+let test_delete_user_removes_row () =
+  with_store @@ fun store ->
+  let name = uniq "del" in
+  let u =
+    match A.create_user store ~username:name ~is_admin:false with
+    | Ok u -> u
+    | Error e -> Alcotest.failf "create user: %s" e
+  in
+  (match A.delete_user store ~user_id:u.id with
+   | Error e -> Alcotest.failf "delete user: %s" e
+   | Ok n -> Alcotest.(check int) "one row deleted" 1 n);
+  (match A.get_user_by_username store name with
+   | None -> ()
+   | Some _ -> Alcotest.fail "user still present after delete")
+
+let test_delete_user_cascades_credentials () =
+  with_store @@ fun store ->
+  let name = uniq "delcred" in
+  let u =
+    match A.create_user store ~username:name ~is_admin:false with
+    | Ok u -> u
+    | Error e -> Alcotest.failf "create user: %s" e
+  in
+  (match A.set_password store ~user_id:u.id ~password:"pw-123456" with
+   | Ok () -> ()
+   | Error e -> Alcotest.failf "set password: %s" e);
+  (match A.delete_user store ~user_id:u.id with
+   | Error e -> Alcotest.failf "delete user: %s" e
+   | Ok _ -> ());
+  (* The password credential row cascaded with the user. *)
+  Alcotest.(check (option string)) "no password hash after delete" None
+    (Option.map snd (A.password_hash_for_user store ~username:name))
+
+let test_delete_user_reparents_agent () =
+  with_store @@ fun store ->
+  let parent_name = uniq "delparent" in
+  let agent_name = uniq "delagent" in
+  let p =
+    match A.create_user store ~username:parent_name ~is_admin:false with
+    | Ok u -> u
+    | Error e -> Alcotest.failf "create parent: %s" e
+  in
+  let a =
+    match A.create_user store ~username:agent_name ~is_admin:false with
+    | Ok u -> u
+    | Error e -> Alcotest.failf "create agent: %s" e
+  in
+  (match A.set_user_type store ~user_id:a.id ~user_type:"agent"
+           ~parent_user_id:(Some p.id) with
+   | Ok () -> ()
+   | Error e -> Alcotest.failf "flip to agent: %s" e);
+  (* Deleting the parent must not fail on the FK; the agent is reparented. *)
+  (match A.delete_user store ~user_id:p.id with
+   | Error e -> Alcotest.failf "delete parent: %s" e
+   | Ok _ -> ());
+  let after =
+    match A.get_user_by_username store agent_name with
+    | Some u -> u
+    | None -> Alcotest.fail "agent vanished with parent"
+  in
+  Alcotest.(check (option string)) "agent reparented to NULL" None
+    after.A.parent_user_id;
+  cleanup_user store ~username:agent_name
+
+let test_delete_unknown_user_zero () =
+  with_store @@ fun store ->
+  match A.delete_user store
+          ~user_id:"00000000-0000-0000-0000-00000000dead" with
+  | Error e -> Alcotest.failf "delete unknown: %s" e
+  | Ok n -> Alcotest.(check int) "no rows deleted" 0 n
+
 let () =
   let open Alcotest in
   run "auth_store_set_user_type"
@@ -215,4 +289,13 @@ let () =
         ; test_case "agent cannot parent another agent" `Quick
             test_agent_cannot_parent_agent
         ; test_case "unknown user rejected" `Quick
-            test_unknown_user_rejected ] ) ]
+            test_unknown_user_rejected ] )
+    ; ( "delete_user"
+      , [ test_case "removes the user row" `Quick
+            test_delete_user_removes_row
+        ; test_case "cascades credentials" `Quick
+            test_delete_user_cascades_credentials
+        ; test_case "reparents child agents" `Quick
+            test_delete_user_reparents_agent
+        ; test_case "unknown id deletes zero rows" `Quick
+            test_delete_unknown_user_zero ] ) ]

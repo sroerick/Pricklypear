@@ -295,7 +295,7 @@ let write_db_prims = [
   (* delegated on-behalf-of token writes (auth.delegation-tokens) *)
   "mint-delegated-token"; "revoke-delegated-token";
   "set-user-type"; "set-allow-agent-promote";
-  "create-user"; "create-agent";
+  "create-user"; "delete-user"; "create-agent";
   (* package/config writes *)
   "package-enable"; "package-disable"; "reseed-package";
   (* sync push writes both sides (server-side merge authority) *)

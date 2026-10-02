@@ -244,6 +244,50 @@ let create_user (store : Store.t) ~(username : string) ~(is_admin : bool)
           Printf.eprintf "[auth_store] create_user: %s\n%!" msg;
           (Error msg))
 
+(** Delete a user and every auth artifact that hangs off it.
+
+    credentials / auth_sessions / delegated rows cascade (FK ON DELETE
+    CASCADE), but parent_user_id does NOT — it is a plain FK with no
+    cascade, so deleting a human would fail while an agent still points
+    at it. Clear those children first (reparent to NULL), then delete
+    the user row. All in one transaction so a partial delete is
+    impossible.
+
+    DELETE-USER GAP (card 0d20dc58): account removal was DB-only — the
+    admin surface had create-user but no symmetric delete. This is the
+    store half of the fix. Returns the number of user rows removed (0
+    when the id did not match). *)
+let delete_user (store : Store.t) ~(user_id : string)
+  : (int, string) result =
+  match pg_conn store with
+  | None -> (Error "no database")
+  | Some _ ->
+      (try
+         Store_db.with_transaction store (fun conn ->
+             match conn with
+             | None -> raise (Failure "no database")
+             | Some conn ->
+                 (* An agent pointing at a deleted parent would violate the
+                    FK; reparent to NULL first (agents without a parent
+                    degrade, they do not block the delete). *)
+                 let _ =
+                   Store_db.exec conn
+                     ~params:[ Pgx.Value.of_string user_id ]
+                     "UPDATE users SET parent_user_id = NULL \
+                      WHERE parent_user_id = $1::uuid"
+                 in
+                 let rows =
+                   Store_db.exec conn
+                     ~params:[ Pgx.Value.of_string user_id ]
+                     "DELETE FROM users WHERE id = $1::uuid RETURNING id"
+                 in
+                 List.length rows)
+         |> fun n -> Ok n
+    with exn ->
+      let msg = Printexc.to_string exn in
+      Printf.eprintf "[auth_store] delete_user: %s\n%!" msg;
+      (Error msg))
+
 (** Create an agent user attached to a parent human.
     username = "<parent>/agent", user_type='agent', parent_user_id=parent.
     is_admin=false (agents never admin). Idempotent: returns existing if any. *)

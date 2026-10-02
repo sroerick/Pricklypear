@@ -1232,6 +1232,21 @@ let admin_users_page (session : Session.t) (reqd : Httpun.Reqd.t)
                 [ HTML.method_ `POST; HTML.action "/admin/users" ]
                 [ HTML.input
                     [ HTML.type_ "hidden"; HTML.name "action";
+                      HTML.value "delete_user" ]
+                ; HTML.input
+                    [ HTML.type_ "hidden"; HTML.name "user_id";
+                      HTML.value "%s" u.id ]
+                ; HTML.button
+                    [ HTML.type_ "submit";
+                      HTML.onclick
+                        "return confirm('Delete this user? Credentials and \
+                         sessions are removed permanently.');" ]
+                    [txt "Delete"]
+                ];
+              HTML.form
+                [ HTML.method_ `POST; HTML.action "/admin/users" ]
+                [ HTML.input
+                    [ HTML.type_ "hidden"; HTML.name "action";
                       HTML.value "issue_token" ]
                 ; HTML.input
                     [ HTML.type_ "hidden"; HTML.name "user_id";
@@ -1416,6 +1431,57 @@ let post_admin_users (session : Session.t) (reqd : Httpun.Reqd.t)
       Option.value (form_field body name) ~default:"" |> String.trim
     in
     match action with
+    | "delete_user" ->
+        let user_id = field "user_id" in
+        if user_id = "" then
+          admin_err ~session ~reqd ~title:"Delete user" "user_id required"
+        else
+          (* Same lockout guards as the delete-user prim: never delete
+             yourself (loses the admin session), never delete the last
+             admin (unreachable habitat). *)
+          let me =
+            Auth_store.get_user_by_username store (Session.username session)
+          in
+          let target = Auth_store.get_user_by_id store user_id in
+          let deny msg =
+            admin_err ~session ~reqd ~title:"Delete user" msg
+          in
+          (match me with
+           | Some m when m.Auth_store.id = user_id ->
+               deny "refusing to delete your own account"
+           | _ ->
+               (match target with
+                | None -> deny "no such user"
+                | Some tu when tu.Auth_store.is_admin ->
+                    let admins =
+                      List.filter
+                        (fun (u : Auth_store.user) -> u.Auth_store.is_admin)
+                        (Auth_store.list_users store)
+                    in
+                    if List.length admins <= 1 then
+                      deny "refusing to delete the last admin"
+                    else
+                      let r = Auth_store.delete_user store ~user_id in
+                      (match r with
+                       | Error e -> deny e
+                       | Ok _n ->
+                           let () =
+                             Auth_store.log_auth store ~user_id
+                               ~kind:"admin_delete_user" ~success:true ()
+                           in
+                           redirect_response reqd "/admin/users";
+                           ())
+                | Some _ ->
+                    let r = Auth_store.delete_user store ~user_id in
+                    (match r with
+                     | Error e -> deny e
+                     | Ok _n ->
+                         let () =
+                           Auth_store.log_auth store ~user_id
+                             ~kind:"admin_delete_user" ~success:true ()
+                         in
+                         redirect_response reqd "/admin/users";
+                         ())))
     | "revoke_sessions" ->
         let user_id = field "user_id" in
         if user_id = "" then
