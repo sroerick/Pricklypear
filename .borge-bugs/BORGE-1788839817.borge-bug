@@ -1,0 +1,25 @@
+(borge-bug (id "BORGE-1788839817")
+  (title "Spec deltas from the 2026-09-08 perf-fix session: function_stat retention + latest-reader, tree/note-index-full outline variant, load-library effective-body skip map, begin/seq spine define persistence. Four kernel changes (log/issues perf batch, deploy pending) touch spec'd surfaces; next plan pass should fold them into the book. 1) borge/image.borg function-stat-ring: the ring bounded the WRITE path only; the table grew to 55,775 rows and degraded every datum read. function_stats.ml now prunes on the flush fiber (throttled ~10min, first pass at boot): keeps the newest 1000 function_stat datum rows (mirror triggers cascade). Spec should also record the reader flip: Crud.find_row ~latest:true — the /binding last-run widget now reads the NEWEST row (was ORDER BY created_at ASC = oldest). 2) borge/notes.borg tree/note-index: new kernel prim tree/note-index-full (prefix [, limit]) — index rows carry the REAL outline reconstructed from the note's heading nodes (one extra ordered query over kind='heading', bottom-up parent-path linking; emitted outline JSON is outline/encode-format so outline/decode/outline/todos consume it unchanged). Fixes the silently-dead from-notes scrape (notes/outline/all-todos + notes/all-todos now fold tree/note-index-full via notes/tree/full-notes). Plain tree/note-index rows stay light (outline '[]') for the /notes UI request path. 3) borge/branching.borg pin-hygiene / load-library: the load-library skip map now fingerprints CHAIN-VISIBLE effective bodies (list_function_names_for_load, closest non-hidden row wins — the same rows load_defs binds), not own-only. An inherited-only name with an identical lib body now skips eval + persist (was ~0.8s/def of pure waste on prod: re-eval + parent-chain CTE per def). Pin semantics unchanged: an own pin with a different body is the effective row, still misses the map, keeps the unpin reachable. 4) define persistence: top-level (begin ...)/(seq ...) spines now persist their defines/defmacros (was: env-only, lost with the session — begin-wrapped defines never persisted). Both eval_one (/api/eval, /repl, boot seed) and eval_form (load-library/load-string) walk the spine after eval, honoring the seed/load-skip windows in the eval_form path. No spec change needed (noted here only): branch_status b_res/p_res now resolve from LIVE tree_nodes rows instead of scanning all tree_versions history (a_res keeps the gen-bounded versions walk; ancestor-only key rows that the OCaml filter dropped are no longer computed); /data index page uses one grouped COUNT (Crud.counts_by_type); branch_status is memoized per (branch, chain def_gen-SUM stamp — sum not max: main's counter dwarfs a garden branch's) outside transactions.
+
+     UPDATE (same day, post-deploy incident): the original retention design
+     (chunked datum-row deletes) proved unviable on prod — per-row tree
+     maintenance costs ~1s/row there (mirrors + RLS + versions); even a
+     2000-row chunk ran 11 minutes holding the store conn mutex. The first
+     deploy's unchunked 54k-row DELETE took prod down for ~1h (health
+     starved; the rc.d probe had no timeout so the watchdog hung too —
+     probe now curl -m 5). FINAL DESIGN (migration 031, deploy fe78dbe):
+     function_stat telemetry lives in a DEDICATED TABLE (plain rows, no
+     mirrors/RLS/versions); flush = plain INSERT, retention = set-based
+     DELETE keeping newest 1000 (milliseconds); the reader is
+     Crud.function_stat_last (newest run — also fixes the old widget
+     reading the FIRST-ever run). Telemetry is not content: spec should
+     say function_stat rows are NOT tree datums and never re-enter the
+     tree. Prod backlog was drained via replica-mode set-based deletes
+     (74,765 rows tree + data_rows each) + VACUUM ANALYZE; recovery
+     runbook recorded in the agents note + log/sessions.")
+  (status closed)
+  (created 2026-09-08)
+  (filed-by roerick)
+  (doc "")
+  (resolution (when 1790990399) (how closed) (by roerick))
+)
