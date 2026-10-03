@@ -471,6 +471,10 @@
   (doc "Book chapter — the little music player package: tracks + playlists as data_rows, audio bytes in media_blobs, multipart upload via media-put-raw, player over the kernel Range/206 serve path; full text inlined from borge/music.borg")
   (inline borge/music.borg)
  )
+ (section songs
+  (doc "Book chapter — chord charts and the layered music representation: chart DSL -> song AST (spelled pitches, explicit tick time) -> theory faces (roman numerals, key-fit, transposition), instrument voicing strips (uke first), and the note-event IR that later MIDI/engine/DAW sinks render from — Kadosh is the canonical worked example and M1 acceptance test; full text inlined from borge/songs.borg")
+  (inline borge/songs.borg)
+ )
  (section upsets
   (doc "Book chapter — prediction-market informed-flow analytics on the habitat: Nopales schedule-driven ingest (zero new kernel prims in v1), typed tree-row domain store, pure OCaml analytics + point-in-time simulator in spikes/upsets, parity contract between the engines, habitat control faces + paper ledger, execution signing prims gated behind paper-proof. Full text inlined from borge/upsets.borg")
   (inline borge/upsets.borg)

@@ -1,0 +1,133 @@
+(project pricklypear-songs
+ (doc "Songs: CHORD CHARTS as the front end of a layered music representation — the chapter that makes the later insane features (ultimate-guitar tab, theory analysis, melody lines, MIDI, a DAW, live coding, a browser audio engine) all RENDERINGS instead of rewrites. The thesis: every downstream feature is a pure function of one internal representation, so the only decisions that matter early are the representation invariants — spelled pitches and explicit time. Chart text (what the human types) is high-level source; it parses to a song AST; analysis/transposition/diagrams/MIDI/events are derived at read time and NEVER stored (same discipline as the book: .borg source -> AST -> print/export/verify faces). Companion to borge/music.borg (the audio player owning tracks/playlists/media_blobs) — songs owns NOTATION. The boundary is clean: music plays recorded audio, songs renders what you play.")
+ (status planned)
+ (* agent note (|2026-10-02 chapter created from discussion (roerick + pi), plan phase, no make yet. Worked example and first seed song: Kadosh (Paul Wilbur, Jerusalem Arise; words+E melody Elisheva Shomron), chart transcribed from ultimate-guitar ver-1 tab 1645590 (44 votes, key Am) — the song the design MUST make playable on a ukulele to count as real. Name dropped: 'chard' (a chord chART on a cactus OS) — kept out of the spec; package is the plain word 'songs' (libs/songs, /songs, row type chordsong) so chart-vs-song rows stay unambiguous.|) *)
+ (convention nopales-package)
+
+ (section representation
+  (doc "The one-way pipeline every feature hangs off: L0 pitch algebra (spelled pitch, key, chord-as-degree-map — pure math) < L1 chart DSL+parser (typed text -> song AST) < L2 analysis (roman numerals, key-fit, transposition — pure reads) < L3 renderings (HTML chart face, transposed view, instrument diagrams) < L4 sinks (MIDI file, browser audio engine, live transport). TWO INVARIANTS carry all the weight: (1) SPELL PITCHES — the canonical chord form is a spelled root pitch-class plus a degree->semitones map, never a bare integer and never a display string; MIDI numbers are derived; enharmonic spelling follows the KEY'S accidental preference. (2) TIME IS EXPLICIT — every chord event carries exact start/duration in integer ticks (12 per beat: divisible by 2/3/4/6, covers 4/4, 6/8, triplets); 'chords floating over lyrics' is a RENDERING, not a model. Derived forms (roman, transposed, events, MIDI) are memoized reads keyed on content (same pattern as the book parse memo), never rows.")
+  (status planned)
+  (verify
+   (test "a chordsong row round-trips through (songs/parse (songs/chart ast)) with identical ASTs")
+   (test "no row of any type persists a roman numeral, a transposition, an event list, or MIDI bytes — derived forms exist only at read time")))
+
+ (section algebra
+  (doc "L0, pure Nopales, no DB, REPL-testable via pp-local lens. Values are lists (Nopales has no records): a spelled pitch is ((letter alter octave)) with alter in semitones (letter symbol, ints); a pitch-CLASS drops the octave ((e 0) = E-natural). A chord is ((root class) (bass class or ()) (degrees list)) where degrees is an ORDERED list of (degree . semitones-above-root) pairs — e.g. minor 7 flat 5 = ((3 . 3) (5 . 6) (7 . 10)). A key is ((tonic class) (mode major|minor)) and carries the scale's spelled degrees (natural-minor scale for analysis spelling; harmonic-minor V is the classic borrowed case the analyzer must name). The QUALITY TABLE is the finite morpheme set: (blank)=maj, m, 7, maj7, m7, 6, 9, dim, m7b5, aug, sus2, sus4, add9, dim7 — every suffix maps to ONE degree map; suffixes outside the table are parse errors with the accepted list named (the borge/review lesson: fail fast naming the legal values). Key functions: (songs/parse-chord \"Esus/A\") -> chord value (bass present); (songs/chord-tones chord) -> spelled pitch classes; (songs/pitch-midi pitch) -> int; (songs/key-scale key) -> spelled scale; (songs/transpose-chord chord key-a key-b) -> respelled chord (transposition follows the TARGET key's accidental set — the respelling table is the piece naive apps get wrong: Bb not A# in F); (songs/roman chord key) -> numeral string; (songs/fit chord key) -> diatonic|borrowed|chromatic|pivot.")
+  (status planned)
+  (verify
+   (test "(songs/roman Dm. (key Am)) -> i; (songs/fit A-major-triad Am) matches the C# chromatic test (the pivot case Kadosh actually uses)")
+   (test "transpose +3 then -3 on every chord of the Kadosh chart returns the original spelling in the original key")
+   (test "every quality-table entry parses and prints back to itself through the chart glyph printer")))
+
+ (section chart-dsl
+  (doc "L1 — the chart format, typed in a textarea, line-oriented, forgiving. TIME RULE (iReal lineage): inside a bar group | ... | each space-separated chord glyph consumes ONE WHOLE BAR; a slash splits the bar into equal halves | Am / Esus |; dots or N.C. hold/continue. METER: key/meter/tempo are header directives (key Am, meter 4/4, tempo 70) that set state forward; a section header may override for its span ([Chorus key A]). SECTIONS: [Label] starts a section with inherited context; every bar after it belongs to it until the next header — sections inherit keys DOWNWARD, so modulations are local (the Kadosh chorus shifting Am -> A is the canonical test). LYRICS: any other nonblank line is an annotation carried verbatim in its section, carrying NO time in v1 (lyric-to-beat alignment is a later voice problem, not a chart problem). Comments start with ';'.")
+  (details
+   (doc (|
+WORKED EXAMPLE — the canonical seed chart (Kadosh, UG ver-1 1645590, key Am):
+
+key Am
+meter 4/4
+tempo 70
+
+[Verse: Kadosh — Hebrew]
+| Am  Dm  Am  Esus/A |
+Kadosh, kadosh, kadosh.
+| Am  Dm  Am  Esus/A |
+Kadosh, kadosh, kadosh.
+| Am  G  Em  Am  |
+Adonai Elohim tz'va'ot,
+| Am  G  Em  Am  Esus/A |
+Adonai Elohim tz'va'ot.
+
+[Verse: Santo — Spanish]
+| Am  Dm  Am  Esus/A |
+Santo, santo, santo.
+| Am  Dm  Am  Esus/A |
+Santo, santo, santo.
+| Am  G  Em  Am  Esus/A |
+Señor, nuestro Dios de poder —
+| Am  G  Em  Am  A |
+Señor, nuestro Dios de poder.
+
+[Chorus key A]
+| A  G  D  A |
+Quien fue y quien es y quien ha de venir.
+| A  G  D  A |
+Quien fue y quien es y quien ha de venir.
+| A  G  D  A |
+Asher hayah, v'hoveh v'yavo —
+| A  G  D  A |
+Asher hayah, v'hoveh v'yavo.
+
+PARSE PRODUCT: a song AST — (((meta (key Am) (meter (4 4)) (tempo 70)))
+ (sections (((name ...) (key ...) (bars ((events ...) ...)) (text ...)) ...))).
+Each event: ((chord value) (start-tick int) (dur-ticks int)) on the 12-ticks-per-beat grid.
+ERRORS: a song parses or returns a list of (line kind message) — never partial ASTs;
+unknown quality, malformed meter, lone pipes, and a [section key X] with a bad key all
+report with line numbers (drift-as-rendering: the editor face shows them inline, like
+book/verify). The PRINTER (songs/chart ast) emits canonical text — the round-trip identity
+is the format's honesty check.|))
+  )
+  (status planned)
+  (verify
+   (test "parse of the Kadosh chart yields toggles: verse sections key Am, chorus section key A, 24 bars total, 4 events per line")
+   (test "(songs/chart (songs/parse body)) == canonical body for the seed chart (whitespace-bar-level normalization documented)")
+   (smoke "an injected typo (Esus/ alone) reports line-anchored errors naming accepted qualities; the row body is never silently coerced")))
+
+ (section model
+  (doc "Storage follows the notes-doc pattern exactly. (deftype 'chordsong 'slug 'title 'body 'tags 'day). ONE row per song; body is the chart DSL text and the ONLY authority for key/meter/tempo/sections (no denormalized key field — an out-of-sync label is a drift class we refuse to create; the index face just parses cheaply). Editing is the read-modify-upsert convention from notes: GET the row, POST the new body. Songs are branch-shared data like every data_rows type: your charts on your garden branch, promote to system/main to publish the songbook.")
+  (status planned)
+  (verify
+   (smoke "(deftype 'chordsong 'slug 'title 'body 'tags 'day) + upsert of the Kadosh chart on admin/dev, then /songs?slug=kadosh renders it")
+   (test "update changing only the body never rewrites title/slug; deleting the row deletes nothing else")))
+
+ (section faces
+  (doc "GET-query-driven, zero extra state — every view of a song is a pure function of (row, query): /songs (index: title, parsed key, bars, sections); /songs?slug=kadosh (the chart rendered as a per-section CSS-grid of bar cells with chord glyphs, lyric lines under their bars, key/meter/tempo header); &key=G (TRANSPOSED VIEW — no row mutation, the transpose buttons walk the circle of fifths); &roman=1 (roman numeral under each chord cell + fit coloring: diatonic plain, borrowed amber, chromatic/pivot marked — the analysis ANSWERS the question 'is this chart legal' the way book/verify answers drift); &inst=uke (diagram strip: one small fret grid above the chart for each DISTINCT chord object in the song — the ultimate-guitar feel). Editor: /songs?slug=x&edit=1 textarea POST upserts the body; parse errors list inline under the editor with line numbers. All faces are htmx fragments first (filmstrip pane citizens).")
+  (status planned)
+  (verify
+   (smoke "/songs?slug=kadosh renders all three sections with 6 distinct chord cells; &inst=uke shows 7 diagram grids (Esus/A included)")
+   (test "&key=C is byte-identical across two GETs an hour apart (a pure read, no writes anywhere)")
+   (test "&roman=1 on the Kadosh chart prints i iv VII v (verse) and I bVII IV (chorus, key A) — and flags the Spanish verse's final A as the pivot")))
+
+ (section voicings
+  (doc "Chord OBJECTS are instrument-free; VOICINGS are instrument-specific render data. (deftype 'chordsvoicing 'instrument 'chord 'frets 'label 'day) seeds the standard shapes, uke first: frets is 4 comma-joined per-string values (G,C,E,A on uke). The diagram face looks up voicing by (instrument, chord-print) — NOT by display string — so C#m7b5 and Dbm7b5 are the same lookup through the object. THE KADOSH LESSON is the spec case: Esus/A's slash bass is an instrument-relative instruction, unrepresentable on a reentrant uke (no low E, and the C string is the lowest pitch anyway) — the FACE substitutes the voicing Esus4 4400 during rendering; the chart keeps saying Esus/A. Voicing rows seed from libs/songs at package promote: no hand-authorship (vault-authority rule). Left hand of the future: the voice-leading optimizer is explicitly NOT spec'd here (only the storage seam it will read).")
+  (details
+   (doc (|
+SEED UKULELE VOICINGS (standard gCEA, GCEA string order):
+Am 2,0,0,0   Dm 2,2,1,0   Em 0,4,3,2   G 0,2,3,2
+A 2,1,0,0     D 2,2,2,0     Esus4 4,4,0,0   (Esus/A renders as Esus4)
+|))
+  )
+  (status planned)
+  (verify
+   (smoke "&inst=uke resolves every distinct chord of Kadosh to a voicing; an unknown chord degrades to a name chip, never a blank cell")
+   (test "removing the Esus4 row makes the face substitute nothing silently — a diagram miss is visible (dots render, wrong fingers don't)")))
+
+ (section analysis
+  (doc "L2 — the theory face, pure. Given the song AST: per-section key resolution (inherit, override); roman numerals via the L0 algebra; key-fit classification with a four-word vocabulary: diatonic (all chord tones in the section key's scale), borrowed (in the mode's modal-interchange family — natural-minor VII and harmonic-minor V are the common worship pair), chromatic (tones outside both), pivot (a chord containing the NEXT section's key's tonic color — Kadosh's final Spanish-verse A-major-over-Am is the flag case: its C# launches the chorus key). This vocabulary is deliberately small and NAMEABLE — every label must be arguable from first principles (a chord is not 'wrong', it is classified), which is the formalism. Transposition composes with analysis: roman view of a transposed chart is IDENTICAL to the original (key-relative math proves spelling correctness end-to-end).")
+  (status planned)
+  (verify
+   (test "&roman=1&key=G on Kadosh shows the same numerals as &roman=1 — the invariance IS the test")
+   (test "fit never returns an untagged error: Esus/A in Am is borrowed+Vsus (harmonic V suspension), G in A-major is bVII borrowed, Dm in Am is diatonic iv")))
+
+ (section events-and-sinks
+  (doc "L4 — the interchange representation the engines grow from. (songs/events ast) compiles the chart to a NOTE-EVENT list: ((voice) (pitch spelled) (start-tick) (dur-ticks) optional velocity) — the chart voice emits block chords per bar ('changes' pad), sections carry tempo. THIS IR IS THE DAW SEED: a section is an arrangement span, a voice is a track, tempo lives per-section. Everything downstream consumes events, never the chart: MIDI export (protected event IR -> SMF type-0 bytes via (media-put-raw 'audio/midi ...) -> a /media/<id> download — kernel asks: binary-safe VStr byte concat + the audio/midi whitelist entry; the VLQ packer is pure Nopales); the browser audio engine (planned: an AudioWorklet asset page fed /songs?fmt=events JSON — htmx stays the UI face, the asset owns sound only); live coding (planned: the REPL already IS the live language — (songs/transpose-chord ...) at the REPL proves it today; a transport later takes event IR pushes); MELODY LINES (planned: m: lines in a section add a mono voice to the same bar grammar — time is already explicit so chord+melody alignment is free); TAB (planned: a second INPUT face — (string,fret,time) events compiling to the same IR, rendering in the ultimate-guitar style). Each sink is a milestone that CANNOT force a representation change — that is the whole point of the layering.")
+  (status planned)
+  (verify
+   (test "(songs/events ast) for Kadosh: chorus events are spelled with G-naturals (mixolydian borrow survives to the sink), verse Esus/A events carry the A-bass pitch")
+   (smoke "POST /songs action=export-midi slug=kadosh -> a media row; the downloaded file plays as a chord pad with section tempos")
+   (test "deriving events twice from one body is memoized (content-keyed read, no rows written)")))
+
+ (section non-goals
+  (doc "v1 ships NO: lyric-to-beat time alignment (annotations carry no time — a later voice problem); NO audio synthesis or transport in the habitat process (sinks are file downloads and later a browser asset — the image never becomes a DAW); NO PDF/print styling beyond browser print; NO voice-leading optimizer (only the voicing storage seam); NO per-user sharing model beyond branches; NO capo emulation (transpose covers it); NO import from ultimate-guitar or ChordPro (though the DSL is deliberately adjacent to both — an importer is a face on the parser, cheap later).")
+  (status planned)
+  (verify
+   (test "after any songs make, borge drift: no kernel audio-playback substance added — sinks stay file/asset exports")))
+
+ (section sequencing
+  (doc "M1 algebra + parser + chart face + model (Kadosh seeded on admin/dev, promote to main, vault snapshot; the seed song is the acceptance test — a human must be able to play Kadosh off /songs?slug=kadosh&inst=uke). M2 transpose + roman/fit faces (the Kadosh chorus I-bVII-IV vector is the gate). M3 uke voicing strip (diagram face + voicing rows). M4 events IR + MIDI export (kernel byte prims + audio/midi whitelist — the one milestone allowing an image change, additive only). M5+ sketched axes in events-and-sinks (melody m: lines, live transport, browser engine, tab input) each land as their own chapter make with the IR frozen. Workstream cards per milestone (borge/workstreams.borg); branches follow the garden ritual: define on admin/dev, promote, snapshot.")
+  ; status planned — nothing implemented yet; chapter is the plan-phase record of the 2026-10-02 design conversation.
+  (status planned)
+  (verify
+   (test "borge report after M1: songs sections flip planned->implemented one subsection at a time; report planned-count decreases monotonically")))
+)
