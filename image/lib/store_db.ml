@@ -153,6 +153,35 @@ let set_local_pp_user (pg : Io_eio.Pg.t) : unit =
     would only repeat them. *)
 let serialization_retries = 2
 
+(** BORGE-1790987435 connection-reuse guard: never let a NEW store
+    transaction open on a pgx connection whose server-side transaction is
+    still open from a previous one.
+
+    A transaction is opened via pgx's begin_work (which sets the pgx
+    conn's mutable [in_transaction] flag) and closed via commit/rollback
+    (which clears it). The only way the conn can be released with
+    [in_transaction] still set is a path that skipped pgx's
+    commit/rollback — the cancellation/disconnect hazard this issue
+    documents. The Eio.Cancel.protect boundary (with_eio_conn_lock,
+    below) already defers cancellation so the tx body runs to completion
+    and pgx's catch-arm rolls back on any body exception; this guard is
+    defense in depth against any remaining path (a swallowed rollback
+    failure, a future refactor that removes the protect, a direct
+    begin_work). Before opening a NEW transaction on a reused
+    connection, if pgx still reports in_transaction, issue ROLLBACK to
+    restore the conn to idle and release whatever locks the stale tx
+    held. pgx's rollback raises Invalid_argument ("rollback: cannot run
+    outside of transaction") when no tx is open — the clean case,
+    swallowed CLIENT-SIDE (no wire round-trip: the flag check precedes
+    the query). Any other error (wire/connection) propagates. Invariant:
+    a transaction is never released to reuse while the server-side tx is
+    open (borge/single-image.borg runtime, HARD INVARIANT 7). *)
+let rollback_stale (pg : Io_eio.Pg.t) : unit =
+  try
+    Io_eio.Pg.rollback pg
+  with
+  | Invalid_argument _ -> ()
+
 let is_serialization_failure (exn : exn) : bool =
   match exn with
   | Pgx.PostgreSQL_Error (_, fields) ->
@@ -219,6 +248,13 @@ let with_transaction ?(isolation = Pgx.Isolation.Serializable) (t : t)
        | None ->
            let attempt () =
              with_eio_conn_lock mu (fun () ->
+                 (* Reuse guard (BORGE-1790987435): a stale server-side
+                    tx on this conn (see rollback_stale) must be rolled
+                    back before begin_work, or the next BEGIN raises
+                    "cannot transact while in another transaction" and
+                    inherits the leaked tx. Inside the store mutex; the
+                    guard itself is a single pgx op. *)
+                 rollback_stale pg;
                  Io_eio.Pg.with_transaction ~isolation pg (fun tx ->
                      t.current_tx <- Some (tx, mu);
                      set_local_pp_user tx;
@@ -263,6 +299,10 @@ let with_dynamic_transaction ?(isolation = Pgx.Isolation.Serializable)
                   inner join commits (or rolls back) with the outer. *)
                f ()
            | None ->
+               (* Reuse guard (BORGE-1790987435): same as
+                  with_transaction — never begin on a conn that still
+                  holds a stale server-side tx. *)
+               rollback_stale pg;
                Io_eio.Pg.with_transaction ~isolation pg (fun tx_conn ->
                    t.current_tx <- Some (tx_conn, mu);
                    set_local_pp_user tx_conn;
