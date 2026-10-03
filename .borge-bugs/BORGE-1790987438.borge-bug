@@ -1,0 +1,52 @@
+(borge-bug (id "BORGE-1790987438")
+  (title "single-row tree_generations makes every branch-free data.* write contend on one row; one stalled transaction freezes all datum writes tree-wide")
+  (status open)
+  (created 2026-10-02)
+  (filed-by roerick)
+  (doc (|FOUND 2026-10-02 during the prod lock pileup (BORGE-1790987430).
+This design choice turned a single stalled writer into a tree-wide write
+freeze.
+
+migrations/018_tree_versions.sql defines the TREE-WIDE head counter:
+
+    CREATE TABLE tree_generations ( generation bigint NOT NULL DEFAULT 0 );
+    INSERT INTO tree_generations (generation) SELECT 0 WHERE NOT EXISTS (...);
+
+There is exactly ONE row, with no branch key. For every branch-free data.*
+path, the tree_version_append trigger (migrations/019, 020, 021, 025) runs:
+
+    UPDATE tree_generations SET generation = generation + 1
+    RETURNING generation INTO ngen;
+
+For branch-owned code paths the counter is per-branch
+(branch_generations, keyed by branch_id), so those writes contend per branch.
+But every data.* datum write — notes, todos, chat, any package data row —
+takes a row lock on the single tree_generations row for the duration of its
+transaction.
+
+CONSEQUENCE: any transaction that writes a datum and then stalls before
+COMMIT holds the tree_generations row lock, and EVERY other datum writer
+tree-wide blocks on it. In the 2026-10-02 incident the leaked reader (pid 572,
+idle in transaction) plus a chain of UPDATE tree_nodes writers serialized all
+data writes. This is the amplifier that made one abandoned transaction take
+down the whole habitat.
+
+SPEC: borge/one-tree.borg / borge/tree-time.borg (tree_generations head
+counter) — the single-writer global counter was chosen for simplicity.
+
+FIX DIRECTION (choose after measuring write volume):
+  - Key the counter by a shard: e.g. tree_generations(scope text PRIMARY KEY)
+    with a shard derived from the datum path/id (or per-type_name), so
+    unrelated writes no longer contend. Generation numbers become per-shard;
+    readers that assume a single monotonic gen would need to chain/min.
+  - OR use a sequence / gapless-per-scope scheme that does not take a
+    transaction-scoped row lock on a hot single row.
+  - OR (weaker) keep one row but ensure datum writes never hold it across
+    user-code / blocking work — reduces, does not eliminate, contention.
+NOTE: the counter is exactly-once-sensitive (tree/versions gen windows,
+undo), so a sharded redesign must preserve per-path ordering.
+VERIFY: concurrent datum writes from many fibers on disjoint paths do not
+serialize on one row (pg_locks shows no common single-row waiter), and
+version/gen semantics + undo still hold.
+|))
+)

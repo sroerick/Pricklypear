@@ -1,0 +1,44 @@
+(borge-bug (id "BORGE-1790987437")
+  (title "/health is lock-blind: a tree-write lock pileup answers ok:true via SELECT 1, so the health-only watchdog never recovers a wedged-but-listening image")
+  (status open)
+  (created 2026-10-02)
+  (filed-by roerick)
+  (doc (|FOUND 2026-10-02 during the prod lock pileup (BORGE-1790987430).
+The image was functionally dead for ~30 minutes while /health answered
+ok:true and the watchdog did nothing.
+
+/health (image/lib/http.ml) calls Store.health_check, which runs `SELECT 1`
+on the boot session's connection. That succeeds under any amount of
+tree-write lock contention, because SELECT 1 takes no locks. So /health was
+green while every tree-touching route was blocked behind a leaked transaction.
+
+The watchdog (scripts/openbsd/pricklypear-watchdog.ksh) is deliberately
+health-only ("a healthy listener IS a healthy service", 2026-08-21 design).
+That gate is correct for a dead process or an fd-exhausted accept loop, but
+it cannot see a lock pileup, a wedged connection, or a poisoned Eio mutex
+that happens to leave SELECT 1 working. The rc.d health probe is likewise
+blind (curl -m 5).
+
+SPEC TENSION: borge/image.borg http-robustness invariant 7 says /health must
+probe the same store path auth/prims use. SELECT 1 is the same CONNECTION but
+not the same CONTENTION DOMAIN. Invariant 5 says /health must never queue
+behind page work — so the liveness signal must itself be cheap and
+non-blocking.
+
+FIX DIRECTION:
+  - Add a lock/contention check to /health that is cheap and bounded: e.g. a
+    pg_stat_activity query (with its own short statement_timeout) reporting
+    long-running / idle-in-transaction / blocked counts, or a
+    pg_blocking_pids() count. A non-zero blocking chain above a threshold =>
+    ok:false (503), so the watchdog and promote gate act.
+  - Alternatively/in addition: a liveness probe that performs a trivial write
+    or lock-taking read on a dedicated probe row (bounded by lock_timeout), so
+    a wedged writer path flips health.
+  - Keep the probe bounded (statement_timeout / lock_timeout) so /health can
+    never itself hang (invariant 5).
+  - Reconcile with invariant 7 wording: "same store path" should mean the
+    write/lock path, not only SELECT 1.
+VERIFY: induce a held lock on tree_nodes in dev; /health flips to 503 within
+the bound; the watchdog recovers the image.
+|))
+)
