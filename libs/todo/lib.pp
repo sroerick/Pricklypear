@@ -1378,8 +1378,31 @@
      a missing Board is a loud empty, never a silent private-Inbox
      vanish.")
 
+(define todo/item/all-shared
+  (lambda
+    ()
+    (list/map
+      todo/tree/node->pair
+      (list/filter
+        (lambda
+          (nj)
+          (string-eq (as-str (dict-get nj "type")) "todo-item"))
+        (tree/list (todo/tree/shared-prefix) 3 5000))))
+  "The SHARED data space's todo-items — datum rows under data.s.*. And a
+     Board on any space may hold them, so scan the data.s root at type
+     depth. Same (id . fields) shape as todo/item/all.")
+
 (define todo/item/all
-  (lambda () (todo/tree/rows "todo-item" 200)))
+  (lambda
+    ()
+    (todo/list/merge (todo/tree/rows "todo-item" 200) (todo/item/all-shared)))
+  "All todo-items the identity can see: GARDEN items (data.u.<user>.*)
+     merged with SHARED items (data.s.*, the Board). Deduped by id, garden
+     rows first. borge/workstreams.borg shared-register: the /issues
+     register, /todos and /kanban read this pool, so a card filed to the
+     shared Board is visible to EVERY identity. The list pool
+     (todo/list/all) got the same merge; without it here the Board's cards
+     were invisible after migration 034 moved them into data.s.board.*.")
 
 (define todo/item/archive
   (lambda (id) (todo/item/set-state id "ARCHIVED")))
