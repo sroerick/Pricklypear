@@ -1,0 +1,8 @@
+(borge-bug (id "BORGE-1786931598")
+  (title "tree-time (5.1/5.2): versioned-leaves hash normalization divergence — store (sha256 raw body-string) vs one-tree mirror (sha256 canonical jsonb ::text) produce different hash VALUES for the same content on tree-first writes (datum/fn/type/route). Consequence: the newest tree_versions row's hash can differ from the live tree_nodes.hash after the forward-mirror bounce recomputes the derived hash, even though the content BODY is byte-identical. This made the tree_version_shadow test flaky (head-hash-vs-live assertions pass only when the deferred mirror bounce hasn't re-hashed the live node before the read). Resolved for the TEST by asserting CONTENT (body) equality instead of hash (migration 020's own comment already treats hash as a recomputed consistency artifact, not content). The durable design question remains: should the OCaml store adopt the canonical-jsonb hash convention (so versioned_head.hash == live node hash holds deterministically) or should tree_nodes.hash stop being re-derived by the mirror on content-unchanged echoes? Recommend a single hash authority over the canonical body (digest((payload->'body')::text)) so version rows and live nodes always agree; defer to a tree-time plan/make pass rather than racing in. Filed for spec awareness.")
+  (status closed)
+  (created 2026-08-16)
+  (filed-by roerick)
+  (doc "")
+  (resolution (when 1790990782) (how closed) (by roerick))
+)
