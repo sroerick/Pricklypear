@@ -41,6 +41,14 @@ type health_response = {
       signal that preceded the wedge. *)
   open_fds : int;
   fd_limit : int;
+  (** Lock/contention probe (health deep leg, 2026-10-02 prod lock pileup
+      — BORGE-1790987437): DB-wide count of backends currently blocked on
+      a lock held by another backend (pg_blocking_pids non-empty) and
+      backends idle in transaction older than 30s. Additive: old images
+      omit them, parsers default to 0. Non-zero is the /health
+      lock-pileup signal that SELECT 1 cannot see. *)
+  blocked_backends : int;
+  idle_in_tx : int;
   error : string option;    (* present if not ok *)
 }
 
@@ -52,6 +60,8 @@ let health_response_to_json (h : health_response) : Yojson.Safe.t =
     ("boot_epoch", `Int h.boot_epoch);
     ("open_fds", `Int h.open_fds);
     ("fd_limit", `Int h.fd_limit);
+    ("blocked_backends", `Int h.blocked_backends);
+    ("idle_in_tx", `Int h.idle_in_tx);
     ("error", match h.error with Some e -> `String e | None -> `Null);
   ]
 
@@ -74,7 +84,15 @@ let health_response_of_json (j : Yojson.Safe.t) : (health_response, string) resu
     let fd_limit = match List.assoc_opt "fd_limit" assoc with
       | Some (`Int n) -> n
       | _ -> 0 in
+    (* Additive (contention probe, 2026-10-02): old images omit these; 0 = none. *)
+    let blocked_backends = match List.assoc_opt "blocked_backends" assoc with
+      | Some (`Int n) -> n
+      | _ -> 0 in
+    let idle_in_tx = match List.assoc_opt "idle_in_tx" assoc with
+      | Some (`Int n) -> n
+      | _ -> 0 in
     let error = match List.assoc "error" assoc with
                 | `String s -> Some s | `Null -> None | _ -> failwith "error" in
-    Ok { ok; branch; uptime_seconds = uptime; boot_epoch; open_fds; fd_limit; error }
+    Ok { ok; branch; uptime_seconds = uptime; boot_epoch; open_fds; fd_limit;
+         blocked_backends; idle_in_tx; error }
   with Failure msg -> Error msg

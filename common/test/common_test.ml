@@ -100,7 +100,8 @@ let protocol_tests = [
   ("protocol: health_response round-trip ok", `Quick, fun () ->
     let h = { Protocol.ok = true; branch = "alice/main";
               uptime_seconds = 42; boot_epoch = 1756900000;
-              open_fds = 37; fd_limit = 1024; error = None } in
+              open_fds = 37; fd_limit = 1024;
+              blocked_backends = 0; idle_in_tx = 0; error = None } in
     let j = Protocol.health_response_to_json h in
     (match Protocol.health_response_of_json j with
      | Ok h' ->
@@ -109,7 +110,24 @@ let protocol_tests = [
         Alcotest.(check int) "uptime" 42 h'.uptime_seconds;
         Alcotest.(check int) "boot_epoch" 1756900000 h'.boot_epoch;
         Alcotest.(check int) "open_fds" 37 h'.open_fds;
-        Alcotest.(check int) "fd_limit" 1024 h'.fd_limit
+        Alcotest.(check int) "fd_limit" 1024 h'.fd_limit;
+        Alcotest.(check int) "blocked_backends" 0 h'.blocked_backends;
+        Alcotest.(check int) "idle_in_tx" 0 h'.idle_in_tx
+     | Error e -> Alcotest.failf "parse failed: %s" e));
+  ("protocol: health_response contention fields round-trip", `Quick, fun () ->
+    let h = { Protocol.ok = false; branch = "system/main";
+              uptime_seconds = 42; boot_epoch = 1756900000;
+              open_fds = 37; fd_limit = 1024;
+              blocked_backends = 3; idle_in_tx = 1;
+              error = Some "lock pileup: 3 backend(s) blocked" } in
+    let j = Protocol.health_response_to_json h in
+    (match Protocol.health_response_of_json j with
+     | Ok h' ->
+        Alcotest.(check bool) "ok" false h'.ok;
+        Alcotest.(check int) "blocked_backends" 3 h'.blocked_backends;
+        Alcotest.(check int) "idle_in_tx" 1 h'.idle_in_tx;
+        Alcotest.(check (option string)) "error"
+          (Some "lock pileup: 3 backend(s) blocked") h'.error
      | Error e -> Alcotest.failf "parse failed: %s" e));
   ("protocol: health_response of_json tolerates missing boot_epoch (old image)",
    `Quick, fun () ->
@@ -119,7 +137,9 @@ let protocol_tests = [
      | Ok h' ->
         Alcotest.(check int) "boot_epoch defaults to 0" 0 h'.boot_epoch;
         Alcotest.(check int) "open_fds defaults to 0" 0 h'.open_fds;
-        Alcotest.(check int) "fd_limit defaults to 0" 0 h'.fd_limit
+        Alcotest.(check int) "fd_limit defaults to 0" 0 h'.fd_limit;
+        Alcotest.(check int) "blocked_backends defaults to 0" 0 h'.blocked_backends;
+        Alcotest.(check int) "idle_in_tx defaults to 0" 0 h'.idle_in_tx
      | Error e -> Alcotest.failf "parse failed: %s" e));
   ("protocol: health_status conversions", `Quick, fun () ->
     Alcotest.(check string) "healthy" "healthy"

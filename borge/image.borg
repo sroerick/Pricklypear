@@ -780,7 +780,7 @@
          Never poison. Never leave the mutex locked.
 
          =========================================================
-         INVARIANT 7 — /health PROBES DB LIVENESS
+         INVARIANT 7 — /health PROBES DB LIVENESS AND CONTENTION
          =========================================================
          /health remains hard-public and outside the inflight page
          cap (invariant 5 note). But "ok" MUST mean the image can
@@ -788,13 +788,27 @@
          prims — not merely "process is alive and JSON encodes".
 
          Rule:
-           - GET /health runs SELECT 1 (or Store.health_check) on
-             Session.store via the same dual-conn exec path.
+           - GET /health runs SELECT 1 (Store.health_check) on
+             Session.store via the same dual-conn exec path, PLUS a
+             cheap, lock-free contention probe (Store.health_check_deep)
+             reading pg_stat_activity DB-wide: backends blocked on a
+             lock (pg_blocking_pids non-empty) and backends idle in
+             transaction older than 30s (BORGE-1790987437). "Same store
+             path" means the write/lock contention domain, not only a
+             no-lock SELECT 1 — a leaked tx held tree-write locks for
+             ~30min (2026-10-02) while SELECT 1 stayed green.
            - On success: HTTP 200, {"ok": true, ... error: null}.
            - On failure (no conn, query error, Poisoned residual,
              timeout): HTTP 503, {"ok": false, error: "..."}.
-           - Cheap: one round-trip; must not take request_mutex or
-             the inflight page semaphore.
+           - Contention: blocked_backends > 0 OR idle_in_tx > 0 flips
+             /health to 503 ("lock pileup …" / "leaked transaction …")
+             so the watchdog and promote gate act on a wedge instead of
+             waiting it out. Both counts are reported additively in the
+             health JSON (old consumers ignore them).
+           - Cheap: two quick round-trips; must not take request_mutex
+             or the inflight page semaphore. The probe takes no locks
+             and is bounded by the catalog; it cannot queue behind page
+             work (invariant 5).
            - rc.d rc_check and the promote health loop MUST match
              ok:true (not merely the substring "ok" — "ok": false
              must fail the check).

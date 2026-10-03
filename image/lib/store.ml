@@ -32,6 +32,8 @@
 
 type t = Store_db.t
 
+type contention_probe = Store_db.contention_probe
+
 (* ---- explicit conn/tx substrate accessors (replacing the old
        wholesale substrate include) ---- *)
 
@@ -43,6 +45,7 @@ let current_conn = Store_db.current_conn
 let in_transaction = Store_db.in_transaction
 let connect = Store_db.connect
 let health_check = Store_db.health_check
+let health_check_deep = Store_db.health_check_deep
 let exec = Store_db.exec
 let with_transaction = Store_db.with_transaction
 let with_transaction_low = Store_db.with_transaction_low

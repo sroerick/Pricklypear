@@ -304,5 +304,59 @@ let health_check (t : t) : (unit, string) result =
         | [] -> Error "SELECT 1 returned no rows"
       with exn -> Error (Printexc.to_string exn))
 
+(** Lock/contention probe for /health (image.http-robustness invariant 7,
+    deep leg — BORGE-1790987437). SELECT 1 (health_check) takes no locks,
+    so it stays green under any amount of tree-write lock pileup — the
+    2026-10-02 prod wedge answered ok:true while every tree-touching route
+    was blocked behind a leaked transaction for ~30 minutes. This probe
+    reads pg_stat_activity DB-wide (excluding this probe's own backend):
+
+    - [blocked_backends]: backends currently waiting on a lock held by
+      another backend (pg_blocking_pids(pid) non-empty) — the direct
+      pileup signal. Steady-state count is 0; > 0 means a blocking chain.
+    - [idle_in_tx]: backends idle in transaction older than 30s — a leaked
+      tx (the root hazard). P1 (migrations/037) reaps it after 3min via
+      idle_in_transaction_session_timeout, but a pileup must not wait that
+      long to be visible. Reported additively; /health flips on it because
+      a held-open tx is a time bomb for the next writer.
+
+    The read takes no locks and is bounded by the catalog (O(backends));
+    the image role can see state/xact_start/pg_blocking_pids for all
+    backends on its own database. Cheap enough to run on every /health
+    probe (invariant 5: never queue behind page work). *)
+type contention_probe = {
+  blocked_backends : int;
+  idle_in_tx : int;
+}
+
+let contention_probe_sql =
+  {|
+SELECT
+  (SELECT count(*) FROM pg_stat_activity
+    WHERE datname = current_database() AND pid <> pg_backend_pid()
+      AND array_length(pg_blocking_pids(pid), 1) > 0),
+  (SELECT count(*) FROM pg_stat_activity
+    WHERE datname = current_database() AND pid <> pg_backend_pid()
+      AND state LIKE 'idle in transaction%'
+      AND xact_start < now() - interval '30 seconds')
+|}
+
+let health_check_deep (t : t) : (contention_probe, string) result =
+  match current_conn t with
+  | None -> Error "no database connection"
+  | Some conn -> (
+      try
+        match exec conn contention_probe_sql with
+        | row :: _ ->
+            let int_at i =
+              match List.nth_opt row i with
+              | Some v -> (
+                  match Pgx.Value.to_int v with Some n -> n | None -> 0)
+              | None -> 0
+            in
+            Ok { blocked_backends = int_at 0; idle_in_tx = int_at 1 }
+        | [] -> Error "contention probe returned no rows"
+      with exn -> Error (Printexc.to_string exn))
+
 (** @deprecated compatibility alias — was Pg_lwt. *)
 module Pg = Io_eio.Pg

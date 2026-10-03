@@ -976,40 +976,66 @@ let routes : route list =
         (* image.http-robustness invariant 7: /health must probe the same
            store path auth/prims use. Memory-only ok:true hid Eio mutex
            poison and locked out all logins while watchdog saw green.
-           Invariant 5: /health must never queue behind page work. *)
+           Invariant 5: /health must never queue behind page work.
+           Deep leg (BORGE-1790987437): SELECT 1 takes no locks, so a
+           tree-write lock pileup stayed green (2026-10-02). health_check_deep
+           adds a cheap, lock-free pg_stat_activity contention probe; a
+           blocked backend or a leaked idle-in-tx flips /health to 503. *)
         let branch = Session.branch_name env.session in
         let uptime = Session.uptime_seconds env.session in
         let boot_epoch = Session.boot_epoch env.session in
-        let check = Store.health_check (Session.store env.session) in
+        let store = Session.store env.session in
+        let check = Store.health_check store in
+        let probe = Store.health_check_deep store in
         (* fd gauge (2026-10-02 fd-exhaustion incident): surface open fds
            vs the soft limit so a slow climb is visible before accept
            fails. Cheap fstat sweep, bounded by the limit. *)
         let open_fds = Fd_gauge.count () in
         let fd_limit = Lazy.force Fd_gauge.limit in
-        let h, status =
-          match check with
-          | Ok () ->
-              ( { Pricklypear_common.Protocol.ok = true;
-                  branch;
-                  uptime_seconds = uptime;
-                  boot_epoch;
-                  open_fds;
-                  fd_limit;
-                  error = None },
-                `OK )
-          | Error msg ->
-              ( { Pricklypear_common.Protocol.ok = false;
-                  branch;
-                  uptime_seconds = uptime;
-                  boot_epoch;
-                  open_fds;
-                  fd_limit;
-                  error = Some msg },
-                `Service_unavailable )
+        let ok_resp ~ok ~error ~blocked_backends ~idle_in_tx status =
+          let h =
+            { Pricklypear_common.Protocol.ok;
+              branch;
+              uptime_seconds = uptime;
+              boot_epoch;
+              open_fds;
+              fd_limit;
+              blocked_backends;
+              idle_in_tx;
+              error }
+          in
+          let j = Pricklypear_common.Protocol.health_response_to_json h in
+          text_response env.reqd ~status ~content_type:"application/json"
+            (Yojson.Safe.pretty_to_string j)
         in
-        let j = Pricklypear_common.Protocol.health_response_to_json h in
-        text_response env.reqd ~status ~content_type:"application/json"
-          (Yojson.Safe.pretty_to_string j));
+        match (check, probe) with
+        | Error msg, _ ->
+            ok_resp ~ok:false ~error:(Some msg) ~blocked_backends:0 ~idle_in_tx:0
+              `Service_unavailable
+        | Ok (), Error msg ->
+            (* SELECT 1 works but we cannot see the contention domain: the
+               store path is degraded. Flipping keeps invariant 7 honest. *)
+            ok_resp ~ok:false ~error:(Some ("contention probe failed: " ^ msg))
+              ~blocked_backends:0 ~idle_in_tx:0 `Service_unavailable
+        | Ok (), Ok { blocked_backends; idle_in_tx } ->
+            let pileup =
+              if blocked_backends > 0 then
+                Some
+                  (Printf.sprintf "lock pileup: %d backend(s) blocked"
+                     blocked_backends)
+              else if idle_in_tx > 0 then
+                Some
+                  (Printf.sprintf "leaked transaction: %d backend(s) idle in transaction"
+                     idle_in_tx)
+              else None
+            in
+            (match pileup with
+             | Some err ->
+                 ok_resp ~ok:false ~error:(Some err) ~blocked_backends ~idle_in_tx
+                   `Service_unavailable
+             | None ->
+                 ok_resp ~ok:true ~error:None ~blocked_backends ~idle_in_tx
+                   `OK));
     (* ---- public agent bootstrap — no auth, no secrets; DIRECT (no
        launch): discovery must answer under load. /agent stays private. ---- *)
     rt "agent-json" [ `GET ] (Exact "/.well-known/agent.json")
