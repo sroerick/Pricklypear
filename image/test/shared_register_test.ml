@@ -272,6 +272,14 @@ let test_guest_files_one_shared_card_no_garden_fallback () =
                (Printf.sprintf
                   "(count (list/filter (lambda (r) (string-eq (as-str (car \
                    r)) %S)) (notes/issues/cards)))" cid));
+          (* The merged pool must be a PROPER list: todo/list/merge used cons,
+             which car/cdr/map/filter accept but strict (count) rejects. The
+             shared side being non-empty is what exposes it, so guard (count)
+             directly. *)
+          ignore
+            (eval_int t
+               "(count (list/filter (lambda (r) #t) (todo/item/all)))");
+          ignore (eval_int t "(count (todo/item/all))");
           let conn = Option.get (S.conn_of store) in
           (* ONE card, on data.s.board.*, authored by the guest *)
           let n_board =
