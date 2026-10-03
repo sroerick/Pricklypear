@@ -1846,9 +1846,10 @@ let lens_subtree_in_chain (conn : Store_db.conn) ~(suffix : string)
     (rank COLLATE "C" NULLS LAST, path ASC).
 
     NOTE: a version's gen comes from the writer's counter class
-    (branch_generations for b.* paths, the tree-wide tree_generations
-    for data.* paths) — a ?gen= read is meaningful within one path
-    class, never across both. *)
+    (branch_generations for b.* paths, the tree_generations_seq
+    sequence for data.* paths — migration 038, BORGE-1790987438) —
+    a ?gen= read is meaningful within one path class, never across
+    both. *)
 let list_children_as_of (conn : Store_db.conn) ~(prefix : string)
     ~(gen : int64) ?(limit : int = 1000) () : node list =
   if not (valid_path prefix) then []

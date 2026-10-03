@@ -150,6 +150,11 @@
  (libraries pricklypear-image pricklypear-lisp alcotest eio_main yojson pgx unix))
 
 (test
+ (name tree_gen_sequence_test)
+ (modules tree_gen_sequence_test)
+ (libraries pricklypear-image pricklypear-lisp alcotest eio_main pgx unix))
+
+(test
  (name tree_retention_test)
  (modules tree_retention_test)
  (libraries pricklypear-image pricklypear-lisp alcotest eio_main yojson pgx unix))
