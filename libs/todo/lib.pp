@@ -2339,9 +2339,12 @@
       (if
         (string-eq (as-str (car (car rows))) id)
         rows
-        (cons (car rows) (todo/list/merge-one (cdr rows) id row)))))
+        (append rows (list row)))))
   "Cons/normalize helper for todo/list/merge: returns `rows` unchanged when
-     `id` is already present, else `rows` with `row` appended.")
+     `id` is already present, else `rows` with `row` appended as a PROPER list.
+     Uses append (not cons) so the result is a VList: a cons-chain is accepted
+     by car/cdr/map/filter but rejected by the strict (count), which bit
+     todo/item/all once the shared side became non-empty (2026-10-03).")
 
 (define todo/list/create
   (lambda
