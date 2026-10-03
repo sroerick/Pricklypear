@@ -1,9 +1,9 @@
 (borge-bug (id "BORGE-1790987437")
   (title "/health is lock-blind: a tree-write lock pileup answers ok:true via SELECT 1, so the health-only watchdog never recovers a wedged-but-listening image")
-  (status open)
+  (status closed)
   (created 2026-10-02)
   (filed-by roerick)
-  (doc (|FOUND 2026-10-02 during the prod lock pileup (BORGE-1790987430).
+  (doc "FOUND 2026-10-02 during the prod lock pileup (BORGE-1790987430).
 The image was functionally dead for ~30 minutes while /health answered
 ok:true and the watchdog did nothing.
 
@@ -40,5 +40,6 @@ FIX DIRECTION:
     write/lock path, not only SELECT 1.
 VERIFY: induce a held lock on tree_nodes in dev; /health flips to 503 within
 the bound; the watchdog recovers the image.
-|))
+")
+  (resolution (when 1790988922) (how closed) (by roerick))
 )
