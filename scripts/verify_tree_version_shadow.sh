@@ -9,17 +9,20 @@
 #
 # This script is the PHASE 2 EQUIVALENCE GATE (tree-time.projections): the
 # condition that must hold before the read path may switch to tree_versions.
-# It therefore distinguishes AUTHENTIC divergence from the known deferred
-# hash-normalization artifact:
+# It gates AUTHENTIC divergence:
 #
-#   * CONTENT equivalence (HARD gate): for every shadowed LIVE tree_nodes
-#     row whose newest version row is NOT a tombstone, the live payload and
-#     the newest version body must be CONTENT-identical. Comparison removes
-#     the derived `hash` SUBFIELD from both envelopes, because the live
-#     tree_nodes.hash is recomputed by the mirror over a differently-
-#     normalized body (BORGE-1786931598, deferred single-hash-authority);
-#     a hash-subfield-only delta is NOT a content divergence. This is the
-#     "versioned head read == today's read" invariant.
+#   * HEAD EQUIVALENCE (HARD gate, deterministic): for every shadowed LIVE
+#     tree_nodes row whose newest version row is NOT a tombstone, the
+#     newest version body must equal the live payload IN FULL — content AND
+#     the derived hash. Since migration 027 (one-tree.hash-domain) there is
+#     ONE hash authority — sha256 over PG's canonical jsonb text of the
+#     body, digest((payload->'body')::text), computed DB-side in every
+#     writer (Tree_store upserts and the 009 mirror triggers alike) — so a
+#     versioned head hash MUST equal the live node hash deterministically.
+#     The old mirror-recomputes-over-a-differently-normalized-body artifact
+#     (BORGE-1786931598, resolved) is gone; a hash-subfield-only delta is
+#     now a real divergence and FAILS here. This is the "versioned head
+#     read == today's read" invariant.
 #
 #   * TOMBSTONE HEAD (HARD gate, the real block): no shadowed LIVE
 #     tree_nodes row may have a TOMBSTONE as its newest version row. A
@@ -27,10 +30,6 @@
 #     tombstone head means a delete-then-recreate cycle wrote a tombstone
 #     but the re-create did not append a new (non-tombstone) version row —
 #     the corpus is not head-equivalent and the read switch must NOT run.
-#
-#   * HASH-ARTIFACT (REPORT ONLY): rows whose newest version differs from
-#     live ONLY in the derived hash subfield are content-identical; they are
-#     counted and reported, not failed (deferred BORGE-1786931598).
 #
 #   * HEAD COUNTERS (HARD gate): tree_generations_seq (the data.* head
 #     sequence, 038) / branch_generations never move backwards relative to
@@ -67,10 +66,12 @@ trg=$($PSQL -c "SELECT count(*) FROM pg_trigger WHERE tgname='tree_version_appen
 [ "$trg" = "1" ] || fail "tree_version_append_trg not attached (count=$trg)"
 ok "migration 18 applied; tree_version_append_trg attached to tree_nodes"
 
-# 2. CONTENT-EQUIVALENCE gate: non-tombstone-newest shadowed live rows must be
-#    content-identical to their newest version body (envelope `hash` subfield
-#    excluded — deferred BORGE-1786931598). Removing the hash subfield means a
-#    live mirror-recomputed hash alone never trips this gate.
+# 2. HEAD-EQUIVALENCE gate (deterministic): non-tombstone-newest shadowed
+#    live rows must be FULL-envelope-identical to their newest version body,
+#    including the derived `hash` subfield. One hash authority since 027
+#    (canonical jsonb digest, computed DB-side in every writer), so live
+#    hash == versioned head hash holds deterministically; a hash-only delta
+#    is now a hard failure, not a deferred artifact (BORGE-1786931598).
 content_diff=$($PSQL -c "
 SELECT count(*) FROM tree_nodes tn
 WHERE EXISTS (SELECT 1 FROM tree_versions v0 WHERE v0.path = tn.path)
@@ -79,10 +80,10 @@ WHERE EXISTS (SELECT 1 FROM tree_versions v0 WHERE v0.path = tn.path)
     SELECT 1 FROM tree_versions v
     WHERE v.path = tn.path
       AND v.gen = (SELECT max(x.gen) FROM tree_versions x WHERE x.path = tn.path)
-      AND (v.body - 'hash') = (tn.payload - 'hash')
+      AND v.body = tn.payload
   )" 2>&1)
-[ "$content_diff" = "0" ] || fail "$content_diff shadowed live tree_nodes row(s) differ in CONTENT from newest version (read-switch blocked)"
-ok "every non-tombstone shadowed live tree_nodes row's newest version is content-identical to head"
+[ "$content_diff" = "0" ] || fail "$content_diff shadowed live tree_nodes row(s) differ from newest version — content OR derived hash (read-switch blocked; single hash authority BORGE-1786931598 resolved)"
+ok "every non-tombstone shadowed live tree_nodes row's newest version equals head (content + hash, deterministic)"
 
 # 3. TOMBSTONE-HEAD gate: a tombstone as the newest version of a LIVE row means
 #    the delete/recreate history is not head-equivalent — hard block for the
@@ -102,23 +103,7 @@ GROUP BY tn.kind ORDER BY 2 DESC" 2>&1
 fi
 ok "no TOMBSTONE at head for any shadowed live tree_nodes row"
 
-# 4. HASH-ARTIFACT report (deferred BORGE-1786931598): content-identical rows
-#    whose whole payload (incl. derived hash subfield) differs from the
-#    version body. Informational; not a hard gate.
-hash_art=$($PSQL -c "
-SELECT count(*) FROM tree_nodes tn
-WHERE EXISTS (SELECT 1 FROM tree_versions v0 WHERE v0.path = tn.path)
-  AND $newest_tombstone <> 'true'
-  AND EXISTS (SELECT 1 FROM tree_versions v2 WHERE v2.path = tn.path
-              AND v2.gen = (SELECT max(x2.gen) FROM tree_versions x2 WHERE x2.path = tn.path)
-              AND (v2.body - 'hash') = (tn.payload - 'hash'))
-  AND NOT EXISTS (SELECT 1 FROM tree_versions v3 WHERE v3.path = tn.path
-              AND v3.gen = (SELECT max(x3.gen) FROM tree_versions x3 WHERE x3.path = tn.path)
-              AND v3.body = tn.payload)" 2>&1)
-[ -n "$hash_art" ] && [ "$hash_art" != "0" ] && \
-  warn "$hash_art content-identical row(s) differ only in the derived hash subfield (deferred BORGE-1786931598)"
-
-# 5. head counters never move backwards relative to version rows.
+# 4. head counters never move backwards relative to version rows.
 #    data: tree_generations_seq last_value >= max(gen) over data.* version rows
 #      (the data.* head is the SEQUENCE since migration 038 — BORGE-1790987438;
 #      the old tree_generations singleton row is frozen and no longer written,
@@ -140,7 +125,7 @@ SELECT CASE WHEN count(*) = 0 THEN 'ok' ELSE 'BAD' END FROM (
 [ "$cg" = "ok" ] || fail "branch_generations head behind a branch's code version rows ($cg)"
 ok "tree_generations_seq and branch_generations heads stay ahead of version rows"
 
-# 6. aggregate info for the operator / monitor.
+# 5. aggregate info for the operator / monitor.
 r=$($PSQL -c "SELECT count(*) FROM tree_versions")
 t=$($PSQL -c "SELECT count(DISTINCT path) FROM tree_versions")
 n=$($PSQL -c "SELECT count(*) FROM tree_nodes")
