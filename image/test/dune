@@ -285,6 +285,11 @@
  (libraries pricklypear-image pricklypear-lisp alcotest eio_main))
 
 (test
+ (name pin_hygiene_livelock_test)
+ (modules pin_hygiene_livelock_test)
+ (libraries pricklypear-image pricklypear-lisp alcotest eio_main))
+
+(test
  (name agent_profile_test)
  (modules agent_profile_test)
  (libraries pricklypear-image pricklypear-lisp pricklypear-common alcotest eio_main))
@@ -348,3 +353,4 @@
  (name operator_console_test)
  (modules operator_console_test)
  (libraries pricklypear-image pricklypear-lisp alcotest eio_main yojson pgx unix))
+
