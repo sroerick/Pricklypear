@@ -1108,6 +1108,25 @@
            notes/list-light is re-pointed at notes/doc/index-list so
            agent and UI see the same rows.
 
+         FULL VARIANT (tree/note-index-full, 2026-09-08 perf batch):
+           The plain (tree/note-index [prefix [, limit]]) rows carry
+           outline "[]" — the /notes UI folds those rows on the
+           request path and outlines are the fat field. The full
+           variant (same signature, OCaml kernel prim
+           image/tree_store.ml) reconstructs the REAL outline from
+           the note's heading nodes (kind='heading' under
+           <note>.h.<id>; ONE ordered query over the whole subtree,
+           bottom-up parent-path linking — the OCaml twin of
+           notes/tree/heading-kids-snap), so index rows carry
+           outline JSON in exactly outline/encode's format and
+           outline/decode + outline/todos consume it unchanged. The
+           From-notes todo scrape folds the full variant
+           (notes/outline/all-todos + notes/all-todos →
+           notes/tree/full-notes): the plain index's empty outlines
+           silently killed it — every note decoded to an empty tree,
+           zero todos. Scrapes/aggregation use the full variant; the
+           /notes UI request path stays on the light rows.
+
          SLICES:
            I1  Route /notes to notes/page (git-managed, flat index).
                Delete the live-only notes/light/* bindings; nothing

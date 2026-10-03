@@ -232,11 +232,12 @@
     (smoke "control-prim registrations live only in session_control_prims; family modules register nothing else"))
   )
   (subsection function-stat-ring
-   (doc "function_stat writes go through an in-process ring flushed by a background fiber; no per-eval DB write")
+   (doc "function_stat telemetry lives OUTSIDE the object tree: request path pushes to an in-process ring, a background fiber flushes into a DEDICATED table (migration 031) and prunes to the newest 1000; the only reader is the per-fn last-run widget (Crud.function_stat_last)")
    (status implemented)
    (implements
     image/lib/function_stats.ml
     migrations/031_function_stat.sql
+    image/lib/crud.ml
     image/lib/session.ml
     image/lib/boot.ml)
    (verify
@@ -244,14 +245,40 @@
     (smoke "burst of labeled evals produces zero synchronous data_rows writes; flush fiber lands them <= 30s later"))
    (details
     (doc (|
-         Every labeled /api/eval called Crud.create for a
-         function_stat row — a synchronous SERIALIZABLE insert +
-         fsync on the request path, and 54k unbounded rows on prod
-         after a few weeks. Same medicine as
-         http-robustness's ops-incidents rule: request path pushes
-         to an in-process ring (capacity 512, drop-oldest), a
-         background fiber flushes at most once every 30s. Loss on
-         crash is acceptable: these are perf stats, not ledger.
+         ORIGINAL DESIGN (shipped, then replaced): every labeled
+         /api/eval called Crud.create synchronously for a
+         function_stat row — a SERIALIZABLE insert + fsync on the
+         request path — and retention paid the full TREE write per
+         row (mirrors, RLS, tree_versions). At ~76k rows a retention
+         DELETE was a 25-minute transaction that took prod down
+         TWICE (incident 2026-09-08: the unchunked 54k-row first
+         pass, then the per-row cost even in 2000-row chunks; the
+         rc.d watchdog probe gained curl -m 5 so it can no longer
+         hang).
+
+         TELEMETRY IS NOT CONTENT (HARD RULE): function_stat rows are
+         perf samples, never ledger. They must not pay the tree's
+         write path at all, and must never re-enter the tree.
+
+         FINAL DESIGN (migration 031, deploy fe78dbe): the ring
+         survives on the WRITE side — request path pushes to an
+         in-process ring (capacity 512, drop-oldest), the same
+         http-robustness ops-incidents medicine. The background
+         flush fiber now INSERTs plain rows into the DEDICATED
+         function_stat table (id, fn, fields jsonb, author,
+         created_at; (fn, created_at DESC) index) — no mirrors, no
+         RLS, no versions; retention is a set-based DELETE keeping
+         the newest keep_rows=1000 (plain rows: milliseconds, no
+         triggers), on a ~10min beat with a first pass at boot
+         (PP_FUNCSTAT_PRUNE=0 is the kill switch). Crash loss is
+         acceptable — perf stats, not ledger. The ONLY reader is the
+         per-fn "last run" widget, Crud.function_stat_last (newest
+         run by created_at DESC — the pre-031 ASC read returned the
+         FIRST-ever run and mislabeled it 'last run'). Legacy datum
+         rows (type_name='function_stat') were drained on prod
+         (replica-mode set-based deletes) and are inert — not
+         migrated, because samples are not ledger; operators may
+         drop residuals at will.
     |))
    )
   )
@@ -1350,6 +1377,9 @@
              - Types = visible type_defs on current branch (Store.list_types)
              - Also surface type_names that have data_rows but no
                type_def (orphan data) so nothing is invisible
+             - Row counts are ONE grouped scan (Crud.counts_by_type), not a
+               per-type sequential COUNT (~40 of them each with the ltree
+               walk) — the 2026-09-08 /data 49s fix
               - Banner: effective data scope (your rows / shared seed /
                 member spaces; /data-scope details it)
              - Link back/forward with /types (types = schema index;
