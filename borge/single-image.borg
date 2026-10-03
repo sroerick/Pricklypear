@@ -226,6 +226,24 @@
            (dev.sh / promote apply_migrations) opt out via
            PGOPTIONS so a backfill migration is never killed by
            the net it installs.
+        7. TRANSACTION REUSE (BORGE-1790987435): a transaction
+           is never released to reuse while the server-side tx
+           is open. A tx opened by with_transaction /
+           with_dynamic_transaction runs its body inside
+           Eio.Cancel.protect (with_eio_conn_lock), so an Eio
+           cancellation (client disconnect / request teardown)
+           is DEFERRED: the body runs to completion and pgx's
+           catch-arm rolls back before the cancellation can
+           land — a cancelled request can never skip ROLLBACK
+           and hand the connection back with BEGIN still open.
+           Defense in depth: before opening a NEW transaction
+           on a reused connection, Store_db.rollback_stale
+           issues ROLLBACK if pgx still reports in_transaction
+           (a stale server-side tx is rolled back, releasing
+           its locks, rather than inherited by the next
+           request). Pair with invariant 6 (the 3-min
+           idle-in-transaction reap) as the server-side
+           backstop.
 
       RUNTIME SAFETY NET (BORGE-1790987430, SHIPPED):
 
@@ -258,6 +276,40 @@
           -c idle_in_transaction_session_timeout=0" so a future
           backfill migration is never constrained by the net it
           is installing.
+
+      TRANSACTION REUSE (BORGE-1790987435, SHIPPED):
+
+        - The 2026-10-02 leaked tx was suspected to come from
+          Store_db.with_transaction: a pgx BEGIN/COMMIT/ROLLBACK
+          whose body an Eio cancellation interrupted, skipping
+          pgx's rollback and releasing the conn with the server
+          tx still open. PROVEN NOT LEAKED (not assumed):
+          image/test/store_tx_cancel_test.ml
+          test_cancel_mid_tx_leaves_store_clean cancels a fiber
+          mid-with_transaction-body and asserts the store is
+          clean afterward (current_tx cleared, backend state
+          'idle' observed from a second connection, fresh
+          with_transaction opens/runs/commits). The mechanism:
+          with_eio_conn_lock wraps the WHOLE pgx with_transaction
+          in Eio.Cancel.protect, which defers parent cancellation
+          (protected child context) so the body runs to
+          completion and pgx's catch-arm rolls back first.
+        - Defense in depth (Store_db.rollback_stale): before
+          opening a NEW transaction on a reused connection, if
+          pgx still reports in_transaction, issue ROLLBACK to
+          restore the conn to idle and release any locks the
+          stale tx held. pgx's rollback raises Invalid_argument
+          when no tx is open — the clean case, swallowed
+          client-side (no wire round-trip). Proven by
+          test_reuse_guard_rolls_back_stale_tx: it forces the
+          leak shape (direct pgx begin_work leaving the flag set)
+          and asserts the next with_transaction ROLLS IT BACK and
+          commits; the same test FAILS with "begin_work: cannot
+          transact while in another transaction" if the guard is
+          removed.
+        - Invariant 6's idle-in-transaction reap is the
+          server-side backstop for any residual path that leaves
+          a tx open without pgx noticing.
     |)))
   )
 

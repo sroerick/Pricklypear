@@ -270,6 +270,11 @@
  (libraries pricklypear-image pricklypear-lisp alcotest eio_main))
 
 (test
+ (name store_tx_cancel_test)
+ (modules store_tx_cancel_test)
+ (libraries pricklypear-image pricklypear-lisp alcotest eio_main))
+
+(test
  (name session_split_test)
  (modules session_split_test)
  (libraries pricklypear-image pricklypear-lisp alcotest eio_main))
