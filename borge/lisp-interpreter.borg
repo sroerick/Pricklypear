@@ -552,6 +552,18 @@
          = redefine (update the row). No versioning at the
          binding level beyond what branches provide.
 
+         BEGIN/SEQ SPINE PERSISTENCE (2026-09-08 perf batch): a
+         top-level (begin …) / (seq …) persists the
+         defines/defmacros INSIDE the spine. Pre-fix the persist
+         hook only watched the WHOLE top-level form, so begin-
+         wrapped defines bound in env but never landed in the store
+         and died with the session. Both eval_one (/api/eval, /repl,
+         boot seed) and eval_form (load-library / load-string) walk
+         the spine after eval, recursing nested begin/seq; the
+         eval_form path honors the seed/load-skip windows per spine
+         form. (Raw AST App args exclude the head — eval_step
+         prepends it at dispatch.)
+
          Optional docstring (define-docstring): trailing string
          after the value, or leading string in a multi-body
          define/lambda, is accepted by eval (not bound as the

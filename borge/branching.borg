@@ -352,6 +352,25 @@
          at GENERATIONS — the tree-time substrate that
          already exists.
 
+         READ PATH (2026-09-08 perf batch): b_res/p_res resolve
+         from LIVE tree_nodes rows, not a full scan of every gen of
+         every def on the chain (delete_fn physically removes the
+         row; only the version trail keeps a tombstone, so live rows
+         are tombstone-free by construction — the old tombstone-
+         filtered DISTINCT ON over version heads is gone). a_res
+         keeps the gen-bounded versions walk (historical base state,
+         exact old semantics). CTEs are MATERIALIZED (live_all was
+         recomputed per reference); ancestor-only key rows the OCaml
+         filter dropped are no longer computed. branch_status is
+         memoized per (branch, chain def_gen-SUM stamp) OUTSIDE
+         transactions — sum not max: main's counter dwarfs a garden
+         branch's, so a bump on the branch itself must move the
+         aggregate; count catches tree_branches row
+         appear/disappear, base_gen catches merge advances. Inside a
+         transaction: never cached (deferred-mirror windows must read
+         their own tx). Dev: /branches 8.4s cold → 0.17s warm, with
+         live invalidation on define.
+
          MODEL (two coordinates, additive):
            - base_gen: NEW COLUMN on branches (bigint).
              At fork, base_gen = parent head gen
@@ -919,6 +938,30 @@
          door. Data rows are untouched (branch-free by the one-tree
          /data decision; data versioning is the opt-in data.l lens,
          a separate axis).
+
+         4. LOAD-LIBRARY SKIP MAP (perf, 2026-09-08 — NOT pin
+            semantics): load-library / load-string / reseed re-
+            evaluate and re-persist every define in the release file;
+            a big package (notes ~1000 defs) burned minutes re-
+            evaluating unchanged bodies plus a parent-chain CTE per
+            def for persist_function's no-diff-no-pin check. Before
+            eval, load-library fingerprints the CHAIN-VISIBLE
+            effective rows (list_function_names_for_load, ancestors-
+            first replace-fold → closest non-hidden row wins — the
+            same rows load_defs binds; fingerprint = pp body + doc)
+            into the session skip map; eval_form skips a
+            define/defmacro on an exact hit (returns VNil). What
+            changed vs the original own-rows-only map: an UNPINNED
+            INHERITED name with an identical lib body now skips too —
+            the env already binds the inherited body and persist
+            would be a no-op delete of a nonexistent row, so both
+            were pure waste. Pin semantics unchanged: an own pin with
+            a DIFFERENT body is the effective row and still misses
+            the map (the unpin stays reachable); disabled-package and
+            kernel-prim names stay out of the map (full eval path
+            preserved). The skip is purely a perf window — it never
+            creates or deletes rows, only avoids touching the store
+            when the result would be a no-op.
     |))
    )
   )
