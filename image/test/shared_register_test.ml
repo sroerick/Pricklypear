@@ -254,6 +254,24 @@ let test_guest_files_one_shared_card_no_garden_fallback () =
               "(notes/issues/add \"SMELL\" \"guest report\" \"from a guest\")"
           in
           card_ids := [ cid ];
+          (* REGRESSION GUARD (2026-10-03): the filed shared card must be
+             VISIBLE through the item read pool, not only present in the
+             store. Migration 034 moved the Board into data.s.board.* but
+             todo/item/all scanned garden-only, so /issues, /todos and
+             /kanban lost every shared card. Assert the pool this card
+             feeds renders it. *)
+          Alcotest.(check int)
+            "shared card visible through (todo/item/all)" 1
+            (eval_int t
+               (Printf.sprintf
+                  "(count (list/filter (lambda (r) (string-eq (as-str (car \
+                   r)) %S)) (todo/item/all)))" cid));
+          Alcotest.(check int)
+            "shared card visible through (notes/issues/cards)" 1
+            (eval_int t
+               (Printf.sprintf
+                  "(count (list/filter (lambda (r) (string-eq (as-str (car \
+                   r)) %S)) (notes/issues/cards)))" cid));
           let conn = Option.get (S.conn_of store) in
           (* ONE card, on data.s.board.*, authored by the guest *)
           let n_board =
