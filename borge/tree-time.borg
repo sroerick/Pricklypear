@@ -73,7 +73,7 @@
                 scripts/verify_tree_version_shadow.sh
                 scripts/reconcile_tree_version_head.sh)
     (verify
-     (smoke "ksh scripts/verify_tree_version_shadow.sh (Phase 1 shadow gate: trigger present; every shadowed live tree_nodes row's newest version is CONTENT-identical to head (envelope hash subfield excluded — deferred BORGE-1786931598); no TOMBSTONE at head for a live row; head counters never behind live version rows). Canonic tooling: ksh scripts/reconcile_tree_version_head.sh repairs the one non-head-equivalent class (tombstone-head-but-live rows are re-versioned from the live authority) and the counter heads, then re-runs the gate to confirm PASS")
+     (smoke "ksh scripts/verify_tree_version_shadow.sh (Phase 1 shadow gate: trigger present; every shadowed live tree_nodes row's newest version is IDENTICAL to head — content AND the derived hash (single hash authority since migration 027: canonical jsonb digest((payload->'body')::text) computed DB-side in every writer, so live hash == versioned head hash holds deterministically; BORGE-1786931598 resolved); no TOMBSTONE at head for a live row; head counters never behind live version rows). Canonic tooling: ksh scripts/reconcile_tree_version_head.sh repairs the one non-head-equivalent class (tombstone-head-but-live rows are re-versioned from the live authority) and the counter heads, then re-runs the gate to confirm PASS")
      (smoke "image/test/tree_version_shadow_test: datum create shadows one row; datum update appends + as-of read returns old body; datum delete appends TOMBSTONE; fn code-path bumps branch_generations"))
     (details
      (doc (|
