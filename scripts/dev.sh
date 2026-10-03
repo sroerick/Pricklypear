@@ -61,6 +61,12 @@ pg_pidfile="$PP_DEV_DIR/pg.pid"
 image_pidfile="$PP_DEV_DIR/image.pid"
 
 apply_migrations() {
+  # Migration/seed sessions explicitly opt OUT of the db-safety-net timeouts
+  # (037_db_safety_net.sql, BORGE-1790987430): the net is role-level defaults
+  # on the image role, and a future backfill migration must never be killed by
+  # the very statement/lock/idle timeouts it is installing. PGOPTIONS applies
+  # at connection start, before the role defaults would take effect.
+  export PGOPTIONS="-c statement_timeout=0 -c lock_timeout=0 -c idle_in_transaction_session_timeout=0"
   # Idempotent SQL files — safe when PG already running (new 006 etc.).
   if ! psql -h "$PP_SOCKET_DIR" -p "$PP_DB_PORT" -U "$PP_DB_USER" \
        -d postgres -lqt 2>/dev/null | cut -d'|' -f1 | grep -qw "$PP_DB_NAME"; then

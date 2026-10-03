@@ -113,7 +113,8 @@
      image/lib/tree_store.ml
      image/lib/session.ml
      image/lib/http.ml
-     image/lib/boot.ml)
+     image/lib/boot.ml
+     migrations/037_db_safety_net.sql)
    (verify
      (build "dune build && dune runtest")
      (test "image/test/io_eio_test.ml")
@@ -212,6 +213,51 @@
            stay green on the default backend.
         5. Capability inference (layer A) unchanged; guest
            Nopales never gains Effect.perform.
+        6. RUNTIME SAFETY NET (BORGE-1790987430): role-level
+           session defaults on the image role —
+           idle_in_transaction_session_timeout = 3 min,
+           statement_timeout = 5 min, lock_timeout = 30 s
+           (migrations/037_db_safety_net.sql). Invariant: a
+           transaction is never left idle-in-transaction on a
+           reused connection — Postgres reaps one after 3 min
+           and releases its locks; a blocked writer errors at
+           30 s instead of queueing forever; a runaway
+           statement is bounded at 5 min. Deployment sessions
+           (dev.sh / promote apply_migrations) opt out via
+           PGOPTIONS so a backfill migration is never killed by
+           the net it installs.
+
+      RUNTIME SAFETY NET (BORGE-1790987430, SHIPPED):
+
+        - migrations/037_db_safety_net.sql sets role-level
+          session defaults on the image role, expressed as
+          CURRENT_USER (the role that applies the migration —
+          the image role in both dev and prod):
+          idle_in_transaction_session_timeout 3 min,
+          statement_timeout 5 min, lock_timeout 30 s.
+        - Why: 2026-10-02 prod — a backend went idle in
+          transaction for 30+ min holding a transactionid lock,
+          blocking the tree-write chain (pg_blocking_pids) while
+          /health stayed green (see image.http-robustness). With
+          the net, Postgres reaps the idle-in-tx session at
+          3 min, releasing its locks; a blocked writer errors at
+          lock_timeout 30 s instead of hanging; a runaway
+          statement is bounded at 5 min.
+        - Sizes: 3 min idle-in-tx is 10x tighter than the
+          observed 30-min leak and 2.25x above the worst legit
+          single-op floor (notes/doc/get ~80s on big docs);
+          5 min statement is 3.75x above that floor and would
+          have killed the 22-26 min runaway writers; 30 s lock
+          wait is far above normal single-row upsert holds.
+        - idle_session_timeout is deliberately NOT set: the
+          per-identity pool idles BETWEEN transactions and must
+          not be reaped.
+        - Deployment sessions (scripts/dev.sh apply_migrations
+          and the promote hook) set PGOPTIONS
+          "-c statement_timeout=0 -c lock_timeout=0
+          -c idle_in_transaction_session_timeout=0" so a future
+          backfill migration is never constrained by the net it
+          is installing.
     |)))
   )
 

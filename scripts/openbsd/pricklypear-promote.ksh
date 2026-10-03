@@ -137,8 +137,14 @@ apply_migrations() {
   : "${PP_DB_NAME:?PP_DB_NAME unset in ${config_file}}"
   : "${PP_DB_USER:?PP_DB_USER unset in ${config_file}}"
   : "${PP_DB_PASS:?PP_DB_PASS unset in ${config_file}}"
-  ppsql() { PGPASSWORD="${PP_DB_PASS}" psql -h "${PP_DB_HOST}" -p "${PP_DB_PORT}" \
+  ppsql() { PGPASSWORD="${PP_DB_PASS}" \
+              PGOPTIONS="-c statement_timeout=0 -c lock_timeout=0 -c idle_in_transaction_session_timeout=0" \
+              psql -h "${PP_DB_HOST}" -p "${PP_DB_PORT}" \
               -U "${PP_DB_USER}" -d "${PP_DB_NAME}" "$@"; }
+  # PGOPTIONS above opts migration sessions out of the db-safety-net timeouts
+  # (037_db_safety_net.sql, BORGE-1790987430): role-level defaults set by that
+  # migration apply at login, and a future backfill migration must never be
+  # killed by the very statement/lock/idle timeouts it is installing.
   # schema_migrations may not exist yet on a fresh DB -> empty means "run all".
   applied="$(ppsql -At -c \
     "SELECT coalesce(string_agg(version::text,','),'') FROM schema_migrations" \
