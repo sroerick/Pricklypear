@@ -1,0 +1,47 @@
+(borge-bug (id "BORGE-1790987430")
+  (title "prod DB has no idle_in_transaction_session_timeout / statement_timeout / lock_timeout — a leaked transaction blocks the whole tree indefinitely (2026-10-02 prod stall)")
+  (status open)
+  (created 2026-10-02)
+  (filed-by roerick)
+  (doc (|FOUND 2026-10-02, prod (pricklypear.rocks), investigating recurring
+/api/eval timeouts. Same failure twice that day: ~20:46Z and ~23:38Z.
+
+ROOT CAUSE: the production database has NO server-side safety net against a
+transaction that is opened and then abandoned. PostgreSQL 18.4, all four
+guards disabled (defaults, source=default):
+
+    idle_in_transaction_session_timeout = 0   (disabled)
+    statement_timeout                    = 0   (disabled)
+    lock_timeout                         = 0   (disabled)
+    idle_session_timeout                 = 0   (disabled)
+
+At 23:38:41Z a backend (pid 572) ran BEGIN + one SELECT on tree_nodes and then
+went `idle in transaction` for 30+ minutes holding transactionid 3255420. With
+idle_in_transaction_session_timeout = 0, Postgres NEVER reclaims it. It blocked:
+
+    pid 572  idle in transaction, xid 3255420   (the leaked reader)
+      \\-> pid 93064  UPDATE tree_nodes  (active, 26 min, Lock/transactionid)
+          \\-> pid 91066  UPDATE tree_nodes  (active, 22 min, Lock/tuple)
+
+Confirmed with pg_blocking_pids(). Because the image serializes DB work through
+one pgx connection per identity (image.per-identity-sessions), every subsequent
+eval and page route queued behind the stuck writers -> 499s and 504s. /health
+stayed green the whole time (see BORGE-1790987437).
+
+The only recovery was `pg_terminate_backend(572)` / an image restart. A
+10-minute idle_in_transaction_session_timeout would have self-cleared it; a
+statement_timeout would have bounded the runaway writes; a lock_timeout would
+have surfaced the wait as an error instead of an indefinite hang.
+
+FIX: set role-level (ALTER ROLE pricklypear SET ...) or postgresql.conf:
+  - idle_in_transaction_session_timeout = e.g. 60000-300000 ms
+  - statement_timeout = a generous but finite bound (the image has
+    long-running maintenance queries; measure first)
+  - lock_timeout = finite, so a blocked writer errors instead of hanging
+Record in borge/single-image.borg or borge/image.borg runtime section.
+
+VERIFY: \d+ role shows the settings; a synthetic idle-in-tx session is
+terminated by Postgres after the timeout; pg_stat_activity has no long
+idle-in-transaction lenders under load.
+|))
+)

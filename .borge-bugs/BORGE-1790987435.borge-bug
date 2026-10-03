@@ -1,0 +1,55 @@
+(borge-bug (id "BORGE-1790987435")
+  (title "transaction left open (BEGIN + statement, no COMMIT/ROLLBACK) on the request cancellation/disconnect path in Store_db.with_transaction")
+  (status open)
+  (created 2026-10-02)
+  (filed-by roerick)
+  (doc (|FOUND 2026-10-02 while diagnosing the prod lock pileup
+(see BORGE-1790987430). The leaked transaction that took the tree down came
+from THIS code path.
+
+image/lib/store_db.ml with_transaction / with_dynamic_transaction open a real
+pgx transaction (BEGIN ... COMMIT/ROLLBACK) and rely on Fun.protect to run the
+commit/rollback:
+
+    Io_eio.Pg.with_transaction ~isolation pg (fun tx ->
+        t.current_tx <- Some (tx, mu);
+        set_local_pp_user tx;
+        Fun.protect
+          ~finally:(fun () -> t.current_tx <- None)
+          (fun () -> f (Some (tx, mu))))
+
+Two problems compound:
+
+1) `t.current_tx <- None` in the finally only clears the OCaml-side field. The
+   pgx transaction object owns the wire BEGIN. pgx's with_transaction itself
+   has a catch-arm that rolls back on an exception, BUT under Eio a fiber can
+   be CANCELLED (client disconnect / nginx 499 / request switch teardown). The
+   pgx catch is `catch (fun () -> f conn >>= ... commit) (fun e -> rollback)`,
+   built on its Io monad; Eio cancellation is not an ordinary OCaml exception
+   raised at that point, so the rollback can be skipped and the connection is
+   released from the mutex with the server-side transaction still open. The
+   next request reuses the same pgx connection and inherits an open tx.
+
+2) There is no owner on a per-connection basis: the pgx `conn.in_transaction`
+   flag lives in the connection, but Store_db's `current_tx` is store-global
+   and is the only thing readers consult. Once cleared by the lost path, the
+   connection is handed out as if idle while the server still holds the tx.
+
+This is the documented hazard of riding/opening transactions across an
+Eio-cancellation boundary: `with_eio_conn_lock` uses Cancel.protect around the
+SQL section, but the BEGIN/f body/COMMIT sequence spans fiber-suspending work
+(gc, DB round trips) where cancellation can land.
+
+FIX DIRECTION:
+  - Wrap the transaction lifetime so Eio cancellation is converted to a
+    rollback: match on Eio.Cancel.Cancelled, issue ROLLBACK, re-raise; or use
+    Eio.Switch.on_release / a protect that always closes the pgx tx.
+  - Strengthen the safety net: on connection reuse, if pgx reports
+    in_transaction (or a cheap `SHOW transaction_isolation` / `SELECT 1` probe
+    is in an aborted/blocked state), roll back before handing the conn out.
+  - Pair with the DB-level idle_in_transaction_session_timeout
+    (BORGE-1790987430) as defense in depth.
+Add a test that cancels a fiber mid-transaction and asserts the subsequent use
+of the same store issues no open tx (and that pg_stat_activity shows none).
+|))
+)
