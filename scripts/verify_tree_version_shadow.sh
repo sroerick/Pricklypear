@@ -32,8 +32,9 @@
 #     live ONLY in the derived hash subfield are content-identical; they are
 #     counted and reported, not failed (deferred BORGE-1786931598).
 #
-#   * HEAD COUNTERS (HARD gate): tree_generations / branch_generations
-#     never move backwards relative to the version rows they own.
+#   * HEAD COUNTERS (HARD gate): tree_generations_seq (the data.* head
+#     sequence, 038) / branch_generations never move backwards relative to
+#     the version rows they own.
 #
 # Exit 0 iff the HARD gates pass. Prerequisites: PG up via
 # scripts/dev.sh start (dev PG, not prod).
@@ -118,10 +119,13 @@ WHERE EXISTS (SELECT 1 FROM tree_versions v0 WHERE v0.path = tn.path)
   warn "$hash_art content-identical row(s) differ only in the derived hash subfield (deferred BORGE-1786931598)"
 
 # 5. head counters never move backwards relative to version rows.
-#    data: tree_generations.generation >= max(gen) over data.* version rows.
+#    data: tree_generations_seq last_value >= max(gen) over data.* version rows
+#      (the data.* head is the SEQUENCE since migration 038 — BORGE-1790987438;
+#      the old tree_generations singleton row is frozen and no longer written,
+#      so the sequence is the authority here).
 #    code: branch_generations.generation >= max(gen) over that branch's b.* rows.
 dg=$($PSQL -c "
-SELECT CASE WHEN (SELECT generation FROM tree_generations LIMIT 1) >=
+SELECT CASE WHEN (SELECT last_value FROM tree_generations_seq) >=
                  COALESCE((SELECT max(gen) FROM tree_versions WHERE branch_id IS NULL), 0)
             THEN 'ok' ELSE 'BAD' END" 2>&1)
 [ "$dg" = "ok" ] || fail "tree_generations head behind data version rows ($dg)"
@@ -134,7 +138,7 @@ SELECT CASE WHEN count(*) = 0 THEN 'ok' ELSE 'BAD' END FROM (
        AND EXISTS (SELECT 1 FROM tree_nodes tn WHERE tn.path = v.path)), 0)
 ) t" 2>&1)
 [ "$cg" = "ok" ] || fail "branch_generations head behind a branch's code version rows ($cg)"
-ok "tree_generations and branch_generations heads stay ahead of version rows"
+ok "tree_generations_seq and branch_generations heads stay ahead of version rows"
 
 # 6. aggregate info for the operator / monitor.
 r=$($PSQL -c "SELECT count(*) FROM tree_versions")

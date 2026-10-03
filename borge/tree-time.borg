@@ -180,14 +180,24 @@
               branch_generations.generation+1 and the counter
               bumps. The 017 triggers already fire on the
               scaffolding writes bound to these paths.
-            - data.* paths: branch-free, so a TREE-WIDE
-              tree_generations (bigint) row is the head; every
-              data write takes gen+1 (the 017 root-row bump
-              discipline generalized to one row). Deliberately NOT
-              per-path — under (branch_id, path, gen) the per-path
-              order is implicit; the global counter keeps undo /
-              diff ordering tree-wide and matches the
-              local-first.sync merge clock.
+            - data.* paths: branch-free, so the head is a single
+              GLOBAL gen axis from the tree_generations_seq
+              SEQUENCE (migration 038; the original singleton
+              tree_generations bigint row from 018 is frozen and
+              no longer written). Each data write allocates
+              nextval — strictly increasing, NON-TRANSACTIONAL, and
+              crucially it takes NO row lock, so concurrent datum
+              writes on disjoint paths never contend on one shared
+              row (BORGE-1790987438, the 2026-10-02 lock-pileup
+              amplifier). Deliberately a single global axis, NOT
+              per-path: under (branch_id, path, gen) the per-path
+              order is implicit; the global axis keeps undo / diff
+              ordering tree-wide and matches the local-first.sync
+              merge clock. Sequence GAPS (values consumed by a
+              rolled-back writer) are harmless — every reader is
+              window-based (retention), ORDER BY gen DESC LIMIT 1
+              (head), or gen <= at_gen (as-of); undo restores-by-
+              write and never computes gen+1 numerically.
 
           TOMBSTONE: delete writes (branch_id, path, gen+1, body =
           {v:1,kind,path,type,body:null,author,doc:null,hash:<hash of
@@ -382,16 +392,17 @@
               branch_generations counter IS the head. Undo on code
               paths is branch-local: read (branch, path, gen-1),
               write to (branch, path, gen+1) on that branch.
-            - data.* paths: branch-free, so the head pointer is
-              a tree-wide data generation (the 017 migration's
-              root-row bump discipline generalizes to one
-              tree_generations row). Undo on data paths is
-              per-path: it moves no global pointer, only appends a
-              restored value for that one path. NOTHING about
-              multi-user safety changes: Andrea's undo of her
-              note is an append to (data.u.andrea.note.<id>, gen+1);
-              Beth's head is untouched because the head is a
-              counter, not per-path state.
+            - data.* paths: branch-free, so the head pointer is a
+              tree-wide data generation axis from the
+              tree_generations_seq sequence (migration 038; the
+              singleton tree_generations row is frozen). Undo on
+              data paths is per-path: it moves no global pointer,
+              only appends a restored value for that one path.
+              NOTHING about multi-user safety changes: Andrea's
+              undo of her note is an append to
+              (data.u.andrea.note.<id>, gen+1); Beth's head is
+              untouched because the head is a counter, not
+              per-path state.
 
           EVAL-SCOPE UNDO IS NOT A PRIM. "Undo my session's last N
           writes" is the habitat-events stream (event journal of
@@ -564,8 +575,11 @@
           (insert/update/delete->TOMBSTONE) appends a version row in
           ADDITION to today's writes, allocating its head gen
           atomically per path class (branch_generations for code
-          b.* paths, the tree_generations singleton for data.*
-          paths); 020 refines the append so a no-op mirror echo
+          b.* paths; migration 038's tree_generations_seq sequence
+          for data.* paths — the original tree_generations
+          singleton row was a transaction-scoped row lock every
+          datum write held, the BORGE-1790987438 contention
+          amplifier); 020 refines the append so a no-op mirror echo
           (unchanged content) returns BEFORE allocating a gen — one
           logical write is never double-counted. Nothing reads the
           new table for a live read yet. Verify:
