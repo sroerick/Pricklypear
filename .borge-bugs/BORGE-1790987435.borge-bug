@@ -1,9 +1,9 @@
 (borge-bug (id "BORGE-1790987435")
   (title "transaction left open (BEGIN + statement, no COMMIT/ROLLBACK) on the request cancellation/disconnect path in Store_db.with_transaction")
-  (status open)
+  (status closed)
   (created 2026-10-02)
   (filed-by roerick)
-  (doc (|FOUND 2026-10-02 while diagnosing the prod lock pileup
+  (doc "FOUND 2026-10-02 while diagnosing the prod lock pileup
 (see BORGE-1790987430). The leaked transaction that took the tree down came
 from THIS code path.
 
@@ -51,5 +51,6 @@ FIX DIRECTION:
     (BORGE-1790987430) as defense in depth.
 Add a test that cancels a fiber mid-transaction and asserts the subsequent use
 of the same store issues no open tx (and that pg_stat_activity shows none).
-|))
+")
+  (resolution (when 1790989528) (how closed) (by roerick))
 )
