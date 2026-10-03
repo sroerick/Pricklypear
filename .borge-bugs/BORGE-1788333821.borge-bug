@@ -1,0 +1,8 @@
+(borge-bug (id "BORGE-1788333821")
+  (title "branching.pin-hygiene (7f0041b) livelocks prod after promote: seed/attach on a personal branch enters unpin->redefine->unpin churn (backend loop of DELETE FROM tree_nodes WHERE path=$1 every ~250ms, PG backend 35% CPU, log spams 'load def string-split skipped'; all DB-touching HTTP requests block while /health stays ok:true so the watchdog never fires. Hypothesis: identical-redefine unpin deletes the pin, additive boot seed sees the name missing on the branch and re-inserts an identical body, hygiene unpins again -> insert/delete ping-pong. Observed after 2026-09-02 06:42Z promote from this HEAD; rolled back to 277a634 and service recovered. Repro path: promote 7f0041b, attach to a personal branch whose libs are identical to main.")
+  (status closed)
+  (created 2026-09-02)
+  (filed-by roerick)
+  (doc "")
+  (resolution (when 1790991425) (how closed) (by roerick))
+)
