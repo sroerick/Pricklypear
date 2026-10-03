@@ -1,9 +1,9 @@
 (borge-bug (id "BORGE-1790987438")
   (title "single-row tree_generations makes every branch-free data.* write contend on one row; one stalled transaction freezes all datum writes tree-wide")
-  (status open)
+  (status closed)
   (created 2026-10-02)
   (filed-by roerick)
-  (doc (|FOUND 2026-10-02 during the prod lock pileup (BORGE-1790987430).
+  (doc "FOUND 2026-10-02 during the prod lock pileup (BORGE-1790987430).
 This design choice turned a single stalled writer into a tree-wide write
 freeze.
 
@@ -48,5 +48,6 @@ undo), so a sharded redesign must preserve per-path ordering.
 VERIFY: concurrent datum writes from many fibers on disjoint paths do not
 serialize on one row (pg_locks shows no common single-row waiter), and
 version/gen semantics + undo still hold.
-|))
+")
+  (resolution (when 1790990238) (how closed) (by roerick))
 )
