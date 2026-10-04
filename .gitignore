@@ -84,3 +84,7 @@ package-lock.json
 
 # built release artifact (built to PP_PUBLIC_DIR at promote; never tracked)
 docs/pricklypear-book.pdf
+
+# Zig engine build artifacts (engine/)
+engine/zig-out/
+engine/.zig-cache/
