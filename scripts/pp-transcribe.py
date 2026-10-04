@@ -196,7 +196,7 @@ def best_chord(chroma_vec, key_ctx=None):
     return NOTES[top[2]] + QUALITY_GLYPH[top[3]]
 
 
-def analyze(path: str):
+def analyze(path: str, want_melody: bool = False):
     import librosa
     import numpy as np
 
@@ -259,6 +259,17 @@ def analyze(path: str):
     # Section segmentation by chroma novelty (self-similarity proxy).
     sections = segment_sections(spans, duration, len(beat_times))
 
+    if want_melody:
+        per_beat = extract_melody(path, beat_times, tonic, mode)
+        if per_beat:
+            # Attach the melody slice to each section by cumulative beats.
+            beat_i = 0
+            # Sections were built from `spans`; walk them in order.
+            for sec in sections:
+                nbeats = sum(b for _, b in sec["spans"])
+                sec["melody"] = per_beat[beat_i : beat_i + nbeats] or None
+                beat_i += nbeats
+
     return {
         "source": os.path.basename(path),
         "duration_s": round(duration, 1),
@@ -305,13 +316,58 @@ def segment_sections(spans, duration, n_beats):
     return sections
 
 
+def extract_melody(path: str, beat_times, tonic: str, mode: str):
+    """Optional melody extraction via Basic Pitch (polyphonic audio->notes).
+
+    Returns a per-beat list of spelled note names (or None). Melody in a
+    full mix is genuinely hard: Basic Pitch detects every harmonically
+    active note, so we select a LEAD LINE — per beat, the highest moderate-
+    to-strong note in the vocal register — then name it with librosa's
+    pitch spelling (sharps by default; the key detector also names keys
+    with sharps, e.g. A# rather than Bb, so the two agree). Fails soft: if
+    basic_pitch is not installed, returns None and the chart is chords-only.
+    """
+    try:
+        from basic_pitch.inference import predict  # noqa: PLC0415
+    except Exception:  # noqa: BLE001
+        return None
+    import librosa
+    import numpy as np
+
+    try:
+        _mo, _md, note_events = predict(path)
+    except Exception:  # noqa: BLE001
+        return None
+
+    def spell(midi):
+        name = librosa.midi_to_note(int(round(midi)), unicode=False)
+        return name
+
+    out = []
+    for i, t0 in enumerate(beat_times):
+        t1 = beat_times[i + 1] if i + 1 < len(beat_times) else t0 + 0.5
+        cands = [n for n in note_events if n[0] < t1 and n[1] > t0 and n[2] >= 60]
+        if not cands:
+            out.append(None)
+            continue
+        strong = [n for n in cands if n[3] >= 0.5]
+        pool = strong or cands
+        top = max(pool, key=lambda n: (round(n[2]), n[3]))
+        out.append(spell(top[2]))
+    return out
+
+
 def to_chart(analysis: dict, bars_per_line: int = 4) -> str:
     """Analysis -> chart DSL text (chart-dsl section of borge/songs.borg).
 
     TIME RULE: inside | ... | each space-separated chord glyph consumes
     ONE WHOLE BAR. A detected span of k beats therefore becomes round(k/4)
     bars (at least 1 for a sustained chord) — so a chord held two bars
-    prints twice, which is how the time actually reads."""
+    prints twice, which is how the time actually reads.
+
+    A section's melody (when extracted) prints as an m: line, one note per
+    beat; rests are r. Notes carry librosa's spelling (sharps), matching
+    the sharp-spelled key the detector emits."""
     lines = []
     lines.append(f"key {analysis['key']}")
     lines.append("meter 4/4")
@@ -329,6 +385,11 @@ def to_chart(analysis: dict, bars_per_line: int = 4) -> str:
             bars.extend([c] * nbars)
         for i in range(0, len(bars), bars_per_line):
             lines.append("| " + "  ".join(bars[i : i + bars_per_line]) + " |")
+        mel = sec.get("melody")
+        if mel:
+            toks = [m if m else "r" for m in mel]
+            for i in range(0, len(toks), 16):
+                lines.append("m: " + " ".join(toks[i : i + 16]))
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
@@ -340,9 +401,11 @@ def main() -> None:
     ap.add_argument("--json", action="store_true", help="emit analysis JSON instead of a chart")
     ap.add_argument("--save", metavar="SLUG", help="upsert a chordsong row with this slug")
     ap.add_argument("--title", default=None, help="title for --save (default: filename)")
+    ap.add_argument("--melody", action="store_true",
+                    help="also extract a melody line (needs basic-pitch; slow)")
     args = ap.parse_args()
 
-    a = analyze(args.path)
+    a = analyze(args.path, want_melody=args.melody)
     if args.json:
         print(json.dumps(a, indent=2))
         return
