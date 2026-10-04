@@ -248,6 +248,7 @@
           ".song-cell.fit-chromatic{border-color:#b4553f;background:#fbeeea}"
           ".song-cell.fit-pivot{border-color:#6b5ca5;background:#f1eefb}"
           ".song-lyrics{color:#6a6258;font-style:italic;margin:.3rem 0 .6rem;white-space:pre-wrap}"
+          ".song-melody{font-family:ui-monospace,monospace;color:#3f5d4a;margin:.25rem 0 .4rem;white-space:pre-wrap}"
           ".song-hdr{display:flex;flex-wrap:wrap;gap:.8rem;align-items:baseline;color:#6a6258}"
           ".song-keylinks a{margin-right:.4rem}"
           ".song-diagrams{display:flex;flex-wrap:wrap;gap:.8rem;margin:1rem 0}"
@@ -487,11 +488,11 @@ object (the wire idiom; the score IR itself stays dots-free)."
         (else "chromatic")))))
 
 (define songs/flush-section
-  (lambda (sec-name key meter tempo bars texts sections)
+  (lambda (sec-name key meter tempo bars texts melody sections)
     "Cons the current section onto the accumulator when non-empty."
-    (if (and (songs/blank? sec-name) (null? bars) (null? texts))
+    (if (and (songs/blank? sec-name) (null? bars) (null? texts) (null? melody))
       sections
-      (cons (list sec-name key meter tempo bars (reverse texts)) sections))))
+      (cons (list sec-name key meter tempo bars (reverse texts) melody) sections))))
 
 (define songs/fmod
   (lambda (n m)
@@ -772,7 +773,7 @@ object (the wire idiom; the score IR itself stays dots-free)."
     "Parse chart DSL text into (meta sections)."
     (songs/parse-lines (string-split (as-str body) "\n")
                        (songs/parse-key "C") (list 4 4) 100
-                       () (list) (list) (list) 1)))
+                       () (list) (list) (list) (list) 1)))
 
 (define songs/parse-acc
   (lambda (s)
@@ -821,38 +822,45 @@ object (the wire idiom; the score IR itself stays dots-free)."
               (if (null? pc) () (list pc mode)))))))))
 
 (define songs/parse-lines
-  (lambda (lines key meter tempo sec-name bars texts sections n)
-    "Fold chart lines into (meta sections)."
+  (lambda (lines key meter tempo sec-name bars texts melody sections n)
+    "Fold chart lines into (meta sections). The melody accumulator carries
+(pitch start dur) notes for the current section, laid at a running tick
+cursor independent of the bar lines (chord+melody share the tick grid)."
     (cond
       ((null? lines)
        (list (list key meter tempo)
-             (reverse (songs/flush-section sec-name key meter tempo bars texts sections))))
+             (reverse (songs/flush-section sec-name key meter tempo bars texts melody sections))))
       (else
         (let ((line (string-trim (car lines))))
           (cond
             ((string-eq line "")
-             (songs/parse-lines (cdr lines) key meter tempo sec-name bars texts sections (+ n 1)))
+             (songs/parse-lines (cdr lines) key meter tempo sec-name bars texts melody sections (+ n 1)))
             ((songs/starts-with? line ";")
-             (songs/parse-lines (cdr lines) key meter tempo sec-name bars texts sections (+ n 1)))
+             (songs/parse-lines (cdr lines) key meter tempo sec-name bars texts melody sections (+ n 1)))
             ((songs/starts-with? line "key ")
              (let ((k (songs/parse-key (substring line 4 (- (string-length line) 4)))))
-               (songs/parse-lines (cdr lines) (if (null? k) key k) meter tempo sec-name bars texts sections (+ n 1))))
+               (songs/parse-lines (cdr lines) (if (null? k) key k) meter tempo sec-name bars texts melody sections (+ n 1))))
             ((songs/starts-with? line "meter ")
              (let ((m (songs/parse-meter (substring line 6 (- (string-length line) 6)))))
-               (songs/parse-lines (cdr lines) key (if (null? m) meter m) tempo sec-name bars texts sections (+ n 1))))
+               (songs/parse-lines (cdr lines) key (if (null? m) meter m) tempo sec-name bars texts melody sections (+ n 1))))
             ((songs/starts-with? line "tempo ")
              (let ((t (songs/safe-int (substring line 6 (- (string-length line) 6)))))
-               (songs/parse-lines (cdr lines) key meter (if (null? t) tempo t) sec-name bars texts sections (+ n 1))))
+               (songs/parse-lines (cdr lines) key meter (if (null? t) tempo t) sec-name bars texts melody sections (+ n 1))))
+            ((songs/starts-with? line "m:")
+             (let* ((toks (songs/tokens (substring line 2 (- (string-length line) 2))))
+                    (parsed (songs/melody-parse toks (songs/melody-len melody))))
+               (songs/parse-lines (cdr lines) key meter tempo sec-name bars texts
+                                  (append melody (car parsed)) sections (+ n 1))))
             ((songs/starts-with? line "[")
-             (let* ((sections2 (songs/flush-section sec-name key meter tempo bars texts sections))
+             (let* ((sections2 (songs/flush-section sec-name key meter tempo bars texts melody sections))
                     (sh (songs/parse-section-header line key meter tempo)))
                (songs/parse-lines (cdr lines) (nth sh 1) (nth sh 2) (nth sh 3)
-                                  (nth sh 0) (list) (list) sections2 (+ n 1))))
+                                  (nth sh 0) (list) (list) (list) sections2 (+ n 1))))
             ((songs/starts-with? line "|")
              (let ((evs (songs/events-from-group (songs/strip-pipes line) meter (songs/bars-len bars))))
-               (songs/parse-lines (cdr lines) key meter tempo sec-name (append bars evs) texts sections (+ n 1))))
+               (songs/parse-lines (cdr lines) key meter tempo sec-name (append bars evs) texts melody sections (+ n 1))))
             (else
-              (songs/parse-lines (cdr lines) key meter tempo sec-name bars (cons line texts) sections (+ n 1)))))))))
+              (songs/parse-lines (cdr lines) key meter tempo sec-name bars (cons line texts) melody sections (+ n 1)))))))))
 
 ;; ---------- L1: chart DSL ----------
 
@@ -877,6 +885,113 @@ object (the wire idiom; the score IR itself stays dots-free)."
             ()
             (let ((a (songs/parse-acc (substring str 1 (- (string-length str) 1)))))
               (if (null? a) () (list li a)))))))))
+
+;; ---------- melody (m: lines) ----------
+
+(define songs/melody-midi
+  (lambda (p)
+    "Semitone number of a spelled melody pitch; the melody counterpart of
+songs/pitch-midi (spec borge/songs.borg section melody)."
+    (songs/pitch-midi p)))
+
+(define songs/melody-note
+  (lambda (tok)
+    "Parse a melody token -> (pitch start-tick dur-ticks) at cursor 0, or
+() for a rest. Pitch is a SPELLED pitch-class + octave: ((letter alter) oct),
+e.g. Bb4 -> ((6 -1) 4). Optional :N suffix = N BEATS (default 1 beat = 12
+ticks). r/- is a rest of the same duration."
+    (let* ((parts (string-split (as-str tok) ":"))
+           (head (string-trim (car parts)))
+           (beats (if (>= (count parts) 2)
+                    (let ((b (songs/safe-int (nth parts 1)))) (if (null? b) 1 b))
+                    1))
+           (dur (* beats 12)))
+      (if (or (string-eq head "r") (string-eq head "-") (string-eq head "_"))
+        (list () 0 dur)
+        (let ((n (string-length head)))
+          (if (< n 2)
+            ()
+            ;; last char is the octave digit; the rest is the pitch class
+            (let* ((oct-s (substring head (- n 1) 1))
+                   (oct (songs/safe-int oct-s))
+                   (pc (songs/parse-pc (substring head 0 (- n 1)))))
+              (if (or (null? oct) (null? pc))
+                ()
+                (list (list pc oct) 0 dur)))))))))
+
+(define songs/melody-parse
+  (lambda (tokens start)
+    "Parse whitespace-separated melody tokens -> a note list, each placed at
+running start tick + accumulated durations. Rests are dropped from the
+NOTE list but still advance time (a rest is absence, which the tick grid
+already carries). `|` is a readable bar marker and is skipped. Returns
+(notes next-tick); notes = (pitch start dur)."
+    (if (null? tokens)
+      (list () start)
+      (let ((tok (car tokens)))
+        (if (string-eq tok "|")
+          (songs/melody-parse (cdr tokens) start)
+          (let ((m (songs/melody-note tok)))
+            (if (null? m)
+              (songs/melody-parse (cdr tokens) start)
+              (let* ((pitch (car m)) (dur (nth m 2))
+                     (rest (songs/melody-parse (cdr tokens) (+ start dur))))
+                (if (null? pitch)
+                  rest
+                  (list (cons (list pitch start dur) (car rest)) (nth rest 1)))))))))))
+
+(define songs/melody-len
+  (lambda (mel)
+    "End tick of a melody note list (max start+dur)."
+    (if (null? mel)
+      0
+      (let ((e (+ (nth (car mel) 1) (nth (car mel) 2))))
+        (let ((rest (songs/melody-len (cdr mel))))
+          (if (> e rest) e rest))))))
+
+(define songs/pitch-midi
+  (lambda (p)
+    "Semitone number of a spelled pitch ((letter alter) octave)."
+    (let ((pc (car p)) (oct (car (cdr p))))
+      (+ (* (+ oct 1) 12) (songs/pc-midi pc)))))
+
+(define songs/pitch-str
+  (lambda (p)
+    "String of a spelled pitch: (pc octave) -> e.g. Bb4."
+    (string-append (songs/pc-str (car p)) (as-str (car (cdr p))))))
+
+(define songs/melody-key-names
+  (lambda (mel key)
+    "Spell each melody note in the section key (reuse spell-in-key), so a
+melody transposed/analyzed behaves like chord tones. Returns the note list
+with the pitch replaced by its key-spelled pitch."
+    (list/map
+      (lambda (n)
+        (let* ((p (car n)) (midi (songs/pitch-midi p))
+               (sp (songs/spell-in-key key (songs/fmod midi 12))))
+          (list (if (null? sp) p (list sp (car (cdr p)))) (nth n 1) (nth n 2))))
+      mel)))
+
+(define songs/melody-transpose
+  (lambda (mel from to)
+    "Transpose a melody note list from one key into another, respelling each
+pitch through the target key (same rule as chord events)."
+    (list/map
+      (lambda (n)
+        (let* ((p (car n))
+               (new-pc (songs/transpose-pc (car p) from to)))
+          (list (list new-pc (car (cdr p))) (nth n 1) (nth n 2))))
+      mel)))
+
+(define songs/melody-html
+  (lambda (mel target skey)
+    "Render a section's melody line as spelled pitches, transposed when a
+target key is set (the display projection of the melody voice)."
+    (if (null? mel)
+      ""
+      (let ((shown (if (null? target) mel (songs/melody-transpose mel skey target))))
+        (html/div (html/attr "class" "song-melody")
+          (html/text (string-join (list/map (lambda (n) (songs/pitch-str (car n))) shown) " ")))))))
 
 (define songs/parse-section-header
   (lambda (line key meter tempo)
@@ -916,16 +1031,30 @@ object (the wire idiom; the score IR itself stays dots-free)."
 
 (define songs/perform-section
   (lambda (sec dirs)
-    "One section -> performed section (JSON alist)."
+    "One section -> performed section (JSON alist), chords + melody voice."
     (let ((name (car sec)) (skey (nth sec 1)) (meter (nth sec 2))
-          (tempo (nth sec 3)) (bars (nth sec 4)))
+          (tempo (nth sec 3)) (bars (nth sec 4)) (melody (nth sec 6)))
       (list
         (cons "name" name)
         (cons "key" (songs/key-str skey))
         (cons "meter" meter)
         (cons "tempo" tempo)
         (cons "events"
-              (list/map (lambda (ev) (songs/performed-event ev skey dirs)) bars))))))
+              (list/map (lambda (ev) (songs/performed-event ev skey dirs)) bars))
+        (cons "melody"
+              (list/map (lambda (n) (songs/performed-note n skey dirs))
+                        (songs/melody-key-names melody skey)))))))
+
+(define songs/performed-note
+  (lambda (n key dirs)
+    "One melody note (pitch start dur) -> performed note (JSON alist); a
+mono voice carrying the same continuous fields as chord events."
+    (list
+      (cons "pitch" (songs/pitch-str (car n)))
+      (cons "start" (nth n 1))
+      (cons "dur" (nth n 2))
+      (cons "voice" "melody")
+      (cons "dyn" (songs/dir-get dirs "dyn" 0.8)))))
 
 (define songs/performed-event
   (lambda (ev key dirs)
@@ -1073,7 +1202,8 @@ chart (default) parses the DSL; program evaluates in the sandbox."
 (define songs/section-html
   (lambda (sec target roman?)
     "HTML for one section; transposes chord display when target key is set."
-    (let* ((name (car sec)) (skey (nth sec 1)) (bars (nth sec 4)) (texts (nth sec 5)))
+    (let* ((name (car sec)) (skey (nth sec 1)) (bars (nth sec 4))
+           (texts (nth sec 5)) (melody (nth sec 6)))
       (html/div (html/attr "class" "song-sec")
         (html/join
           (list
@@ -1081,6 +1211,7 @@ chart (default) parses the DSL; program evaluates in the sandbox."
               ""
               (html/h3 (html/text (string-append name (if (null? target) "" (string-append "  ·  in " (songs/key-str target)))))))
             (songs/bars-html bars target roman? skey)
+            (songs/melody-html melody target skey)
             (songs/lyrics-html texts)))))))
 
 (define songs/simple-acc?
@@ -1241,6 +1372,24 @@ Proper-list pairs; dots unsupported (representation invariant 3).")
                (songs/validate-lines (cdr lines)
                  (if (null? m) (cons (list n "meter" (string-append "bad meter: " (substring line 6 (- (string-length line) 6)))) errs) errs)
                  (+ n 1))))
+            ((songs/starts-with? line "m:")
+             (songs/validate-lines (cdr lines)
+               (songs/validate-melody (songs/tokens (substring line 2 (- (string-length line) 2))) errs n)
+               (+ n 1)))
             ((songs/starts-with? line "|")
              (songs/validate-lines (cdr lines) (songs/validate-bar (songs/tokens (songs/strip-pipes line)) errs n) (+ n 1)))
             (else (songs/validate-lines (cdr lines) errs (+ n 1)))))))))
+
+(define songs/validate-melody
+  (lambda (toks errs n)
+    "Report unrecognised melody tokens (bar markers and rests are fine)."
+    (cond
+      ((null? toks) errs)
+      ((string-eq (car toks) "|") (songs/validate-melody (cdr toks) errs n))
+      (else
+        (let ((m (songs/melody-note (car toks))))
+          (songs/validate-melody (cdr toks)
+            (if (null? m)
+              (cons (list n "melody" (string-append "unknown note: " (car toks))) errs)
+              errs)
+            n))))))

@@ -107,6 +107,15 @@ pub fn render(gpa: std.mem.Allocator, manifest: []const u8) ![]u8 {
             if (event != .object) continue;
             try addEvent(gpa, &notes, event.object, sec_per_tick);
         }
+        // Melody voice: one mono line, same tick grid as the chords.
+        if (section.object.get("melody")) |mel| {
+            if (mel == .array) {
+                for (mel.array.items) |note| {
+                    if (note != .object) continue;
+                    try addNote(gpa, &notes, note.object, sec_per_tick);
+                }
+            }
+        }
     }
 
     if (notes.items.len == 0) return EngineError.NoEvents;
@@ -205,6 +214,36 @@ fn addEvent(
     }
 }
 
+/// One melody note (pitch start dur) -> a brighter, upper-register tone.
+fn addNote(
+    gpa: std.mem.Allocator,
+    notes: *std.ArrayList(Note),
+    note: std.json.ObjectMap,
+    sec_per_tick: f64,
+) !void {
+    const p = note.get("pitch") orelse return;
+    if (p != .string) return;
+    const pc = notePitchClass(p.string) orelse return;
+    // Melody register: A4..G#5-ish. Use the octave digit from the spelled
+    // name when present (Bb4 -> 4), else fall back to the 5th octave.
+    var octave: i32 = 5;
+    if (p.string.len > 0) {
+        const last = p.string[p.string.len - 1];
+        if (last >= '0' and last <= '9') octave = last - '0';
+    }
+    const midi = (octave + 1) * 12 + pc;
+    const start_sec = (getNumber(note.get("start")) orelse 0.0) * sec_per_tick;
+    const dur_sec = (getNumber(note.get("dur")) orelse ticks_per_beat) * sec_per_tick;
+    const dyn = getNumber(note.get("dyn")) orelse 0.9;
+    try notes.append(gpa, .{
+        .freq = freqOf(midi),
+        .start_sec = start_sec,
+        .dur_sec = dur_sec,
+        .dyn = dyn,
+        .bright = 1.0,
+    });
+}
+
 fn freqOf(midi: i32) f64 {
     return 440.0 * std.math.pow(f64, 2.0, (@as(f64, @floatFromInt(midi)) - 69.0) / 12.0);
 }
@@ -218,8 +257,9 @@ fn getNumber(v: ?std.json.Value) ?f64 {
     };
 }
 
-/// Spelled note name (A, C, F#, Bb) -> pitch class 0..11 (C=0). Null when
-/// the name is not a chromatic note (we ignore weird spellings in the toy).
+/// Spelled note name (A, C, F#, Bb, Bb4, F#5) -> pitch class 0..11 (C=0).
+/// A trailing octave digit is accepted and ignored here (addNote reads it
+/// separately); null when the name is not a chromatic note.
 fn notePitchClass(name: []const u8) ?i32 {
     if (name.len == 0) return null;
     const base: i32 = switch (std.ascii.toUpper(name[0])) {
@@ -238,6 +278,7 @@ fn notePitchClass(name: []const u8) ?i32 {
         switch (name[i]) {
             '#' => accidental += 1,
             'b' => accidental -= 1,
+            '0'...'9' => {}, // octave digit; tolerated, parsed by the caller
             else => return null,
         }
     }
@@ -291,7 +332,25 @@ test "notePitchClass" {
     try std.testing.expectEqual(@as(?i32, 6), notePitchClass("F#"));
     try std.testing.expectEqual(@as(?i32, 10), notePitchClass("Bb"));
     try std.testing.expectEqual(@as(?i32, 5), notePitchClass("F"));
+    // Spelled pitches carry an octave digit (the melody voice's form);
+    // the pitch class must still resolve (regression: Bb4 was dropped).
+    try std.testing.expectEqual(@as(?i32, 10), notePitchClass("Bb4"));
+    try std.testing.expectEqual(@as(?i32, 0), notePitchClass("C5"));
+    try std.testing.expectEqual(@as(?i32, 6), notePitchClass("F#5"));
     try std.testing.expectEqual(@as(?i32, null), notePitchClass("H"));
+    try std.testing.expectEqual(@as(?i32, null), notePitchClass("Zz9"));
+}
+
+test "melody voice renders (regression: octave-digit pitches were dropped)" {
+    const gpa = std.testing.allocator;
+    const manifest =
+        \\{"performance":{"tempo":60,"sections":[
+        \\{"events":[],"melody":[{"pitch":"Bb4","start":0,"dur":12,"dyn":0.9}]}]}}
+    ;
+    const wav = try render(gpa, manifest);
+    defer gpa.free(wav);
+    try std.testing.expect(wav.len > 44);
+    try std.testing.expectEqualStrings("RIFF", wav[0..4]);
 }
 
 test "render a minimal manifest to a WAV" {
