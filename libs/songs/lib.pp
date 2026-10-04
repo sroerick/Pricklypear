@@ -8,8 +8,11 @@
 ;; uke diagrams(?inst=uke) + editor(?edit=1).
 ;;
 ;; Values are lists (no records). pitch-class = (letter-index alter).
-;; chord = (root bass quality degrees) with degrees = list of
-;; (degree . semitones). key = (tonic mode) with mode "major"/"minor".
+;; chord = (root bass quality degrees), degrees = list of the proper
+;; 2-list (degree semitones). Improper/dotted pairs are NOT used: the
+;; reader rejects dotted notation, so the IR is proper lists only
+;; (borge/songs.borg representation invariant 3).
+;; key = (tonic mode) with mode "major"/"minor".
 ;; song AST = (meta sections); meta = (key meter tempo).
 ;;
 ;; Kernel semantics this package relies on (verified live, admin/dev):
@@ -178,22 +181,24 @@
 
 (define songs/qualities
   (list
-    (cons "" (list (cons 3 4) (cons 5 7)))
-    (cons "m" (list (cons 3 3) (cons 5 7)))
-    (cons "7" (list (cons 3 4) (cons 5 7) (cons 7 10)))
-    (cons "maj7" (list (cons 3 4) (cons 5 7) (cons 7 11)))
-    (cons "m7" (list (cons 3 3) (cons 5 7) (cons 7 10)))
-    (cons "6" (list (cons 3 4) (cons 5 7) (cons 6 9)))
-    (cons "9" (list (cons 3 4) (cons 5 7) (cons 7 10) (cons 9 14)))
-    (cons "dim" (list (cons 3 3) (cons 5 6)))
-    (cons "m7b5" (list (cons 3 3) (cons 5 6) (cons 7 10)))
-    (cons "aug" (list (cons 3 4) (cons 5 8)))
-    (cons "sus2" (list (cons 2 2) (cons 5 7)))
-    (cons "sus4" (list (cons 4 5) (cons 5 7)))
-    (cons "sus" (list (cons 4 5) (cons 5 7)))
-    (cons "add9" (list (cons 3 4) (cons 5 7) (cons 9 14)))
-    (cons "dim7" (list (cons 3 3) (cons 5 6) (cons 7 9))))
-  "The finite chord-quality table: suffix -> degree->semitones map.")
+    (list "" (list 3 4) (list 5 7))
+    (list "m" (list 3 3) (list 5 7))
+    (list "7" (list 3 4) (list 5 7) (list 7 10))
+    (list "maj7" (list 3 4) (list 5 7) (list 7 11))
+    (list "m7" (list 3 3) (list 5 7) (list 7 10))
+    (list "6" (list 3 4) (list 5 7) (list 6 9))
+    (list "9" (list 3 4) (list 5 7) (list 7 10) (list 9 14))
+    (list "dim" (list 3 3) (list 5 6))
+    (list "m7b5" (list 3 3) (list 5 6) (list 7 10))
+    (list "aug" (list 3 4) (list 5 8))
+    (list "sus2" (list 2 2) (list 5 7))
+    (list "sus4" (list 4 5) (list 5 7))
+    (list "sus" (list 4 5) (list 5 7))
+    (list "add9" (list 3 4) (list 5 7) (list 9 14))
+    (list "dim7" (list 3 3) (list 5 6) (list 7 9)))
+  "The finite chord-quality table: suffix -> degree/semitone pairs.
+Each pair is the proper 2-list (degree semitones) -- dots are not
+supported by the reader (representation invariant 3).")
 (define songs/quality-names
   (list "" "m" "7" "maj7" "m7" "6" "9" "dim" "m7b5" "aug" "sus2" "sus4" "sus" "add9" "dim7")
   "Accepted quality suffixes, for error messages.")
@@ -250,7 +255,7 @@
     "Semitone pitch classes of all chord tones."
     (let ((root-midi (songs/pc-midi (car chord))) (degs (nth chord 3)))
       (cons root-midi
-            (list/map (lambda (d) (songs/fmod (+ root-midi (cdr d)) 12)) degs)))))
+            (list/map (lambda (d) (songs/fmod (+ root-midi (nth d 1)) 12)) degs)))))
 
 (define songs/triad-class
   (lambda (q)
@@ -646,6 +651,111 @@
     "List of (line kind message) chart parse problems."
     (songs/validate-lines (string-split (as-str body) "\n") (list) 1)))
 
+;; ---------- program front end (program-authority, borge/songs.borg) ----------
+;;
+;; A composition body is SOURCE with a front-end directive: `form chart`
+;; (default) parses the L1 DSL; `form program` evaluates Nopales source in
+;; the read-only example-eval sandbox and decodes its canonical form.
+;;
+;; The score IR is PROPER LISTS ONLY (representation invariant 3), so the
+;; native reader is the round-trip authority: (read-string (str score))
+;; equals the score. The sandbox returns a printed value, so the bridge is
+;; (example-eval BODY) -> (as-str) -> (json-parse); JSON is the WIRE
+;; serialization used by engines/manifests, and canonicalizing both front
+;; ends through it makes the honesty test parse(chart(p)) == eval(p)
+;; decidable with (equal?). (2026-10-03: dots removed from the model, which
+;; is what made the native reader able to round-trip a score at all.)
+
+(define songs/directive-index
+  (lambda (lines i)
+    "Index of the first non-blank, non-comment line, or ()."
+    (cond
+      ((null? lines) ())
+      (else
+        (let ((l (string-trim (car lines))))
+          (if (or (string-eq l "") (songs/starts-with? l ";"))
+            (songs/directive-index (cdr lines) (+ i 1))
+            i))))))
+
+(define songs/drop-n
+  (lambda (xs n)
+    "Drop the first n elements."
+    (if (or (<= n 0) (null? xs)) xs (songs/drop-n (cdr xs) (- n 1)))))
+
+(define songs/form
+  (lambda (body)
+    "Front-end directive of a composition body: program | chart (default)."
+    (let* ((lines (string-split (as-str body) "\n"))
+           (i (songs/directive-index lines 0)))
+      (if (null? i)
+        "chart"
+        (let* ((first (string-trim (nth lines i)))
+               (toks (songs/tokens first)))
+          (if (and (songs/starts-with? first "form ") (>= (count toks) 2))
+            (nth toks 1)
+            "chart"))))))
+
+(define songs/nondet?
+  (lambda (body)
+    "True when the body's directive marks the program :nondet."
+    (let* ((lines (string-split (as-str body) "\n"))
+           (i (songs/directive-index lines 0)))
+      (if (null? i)
+        #f
+        (string-contains? (string-trim (nth lines i)) ":nondet")))))
+
+(define songs/program-source
+  (lambda (body)
+    "The body minus its leading form-directive line, when one is present."
+    (let* ((lines (string-split (as-str body) "\n"))
+           (i (songs/directive-index lines 0)))
+      (if (or (null? i) (not (songs/starts-with? (string-trim (nth lines i)) "form ")))
+        (as-str body)
+        (string-join (songs/drop-n lines (+ i 1)) "\n")))))
+
+(define songs/json-value
+  (lambda (s)
+    "Decode a JSON string, unwrapping quoted-string layers."
+    (let ((v (json-parse (as-str s))))
+      (if (string? v)
+        (let ((sv (as-str v)))
+          (if (and (> (string-length sv) 1)
+                   (or (string-eq (songs/char-at sv 0) "[")
+                       (string-eq (songs/char-at sv 0) "{")))
+            (songs/json-value sv)
+            v))
+        v))))
+
+(define songs/canonical
+  (lambda (score)
+    "Canonical score value: JSON-normalized (dotted pairs -> proper lists)."
+    (json-parse (json-emit score))))
+
+(define songs/eval-program
+  (lambda (body)
+    "Evaluate a form program body in the read-only sandbox -> score value."
+    (songs/json-value
+      (as-str (example-eval
+                (string-append "(json-emit (begin "
+                               (songs/program-source body)
+                               "))"))))))
+
+(define songs/score
+  (lambda (body)
+    "A composition body -> canonical score value.
+chart (default) parses the DSL; program evaluates in the sandbox."
+    (songs/canonical
+      (if (string-eq (songs/form body) "program")
+        (songs/eval-program body)
+        (songs/parse body)))))
+
+(define songs/score-or-error
+  (lambda (body)
+    "songs/score, or (\"error\" message) when a program is refused or fails."
+    (guard
+      (lambda (e) (list "error" (nth e 1)))
+      (songs/score body))))
+
 ;; ---------- model ----------
 
 (define songs/all
@@ -684,21 +794,22 @@
 
 (define songs/uke-voicings
   (list
-    (cons "Am" "2000") (cons "A" "2100") (cons "A7" "0100")
-    (cons "Dm" "2210") (cons "D" "2220") (cons "D7" "2223")
-    (cons "Em" "0432") (cons "E" "4442") (cons "E7" "1202")
-    (cons "G" "0232") (cons "G7" "0212") (cons "C" "0003")
-    (cons "C7" "0001") (cons "F" "2010") (cons "Bb" "3211")
-    (cons "Bm" "4222") (cons "B" "4322") (cons "Gm" "0231")
-    (cons "Cm" "0333") (cons "F#m" "2120") (cons "Esus" "4400")
-    (cons "Esus4" "4400") (cons "Asus4" "2200"))
-  "Seed ukulele voicings (gCEA), chord-key -> 4 fret digits.")
+    (list "Am" "2000") (list "A" "2100") (list "A7" "0100")
+    (list "Dm" "2210") (list "D" "2220") (list "D7" "2223")
+    (list "Em" "0432") (list "E" "4442") (list "E7" "1202")
+    (list "G" "0232") (list "G7" "0212") (list "C" "0003")
+    (list "C7" "0001") (list "F" "2010") (list "Bb" "3211")
+    (list "Bm" "4222") (list "B" "4322") (list "Gm" "0231")
+    (list "Cm" "0333") (list "F#m" "2120") (list "Esus" "4400")
+    (list "Esus4" "4400") (list "Asus4" "2200"))
+  "Seed ukulele voicings (gCEA), chord-key -> 4 fret digits.
+Proper-list pairs; dots unsupported (representation invariant 3).")
 
 (define songs/uke-voicing
   (lambda (chord)
     "Frets string for a chord key, or ()."
     (let ((e (assoc (songs/chord-key chord) songs/uke-voicings)))
-      (if (null? e) () (cdr e)))))
+      (if (null? e) () (nth e 1)))))
 
 (define songs/distinct-chords
   (lambda (sections)
