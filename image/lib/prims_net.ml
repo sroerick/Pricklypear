@@ -44,6 +44,16 @@ let egress_pin = Egress.egress_pin
    --data-binary @file). Hardening (i-1787971188) covers both verbs:
    SSRF egress blocklist, 0600 O_EXCL temp files, Fun.protect
    cleanup. *)
+(* Build curl -H arguments for outbound headers. Each header MUST carry the
+   "-H " prefix: without it curl treats "K: V" as a malformed URL operand,
+   continues past it, and sends the request with NO headers (BORGE-1790984505,
+   silent header drop). Exposed so the regression test can assert the prefix. *)
+let curl_header_args (hdrs : (string * string) list) : string =
+  String.concat " "
+    (List.map
+       (fun (k, v) -> "-H " ^ Llm_client.shell_quote (k ^ ": " ^ v))
+       hdrs)
+
 let do_http (name : string)
     (meth : string)
     (body : string option)
@@ -60,13 +70,7 @@ let do_http (name : string)
   let real_hdrs =
     List.filter (fun (k, _) -> k <> "_timeout_ms") req_hdrs
   in
-  let hdr_args =
-    String.concat " "
-      (List.map
-         (fun (k, v) ->
-            shell_quote (k ^ ": " ^ v))
-         real_hdrs)
-  in
+  let hdr_args = curl_header_args real_hdrs in
   (* SSRF guard: refuse targets that resolve into loopback/private/
      link-local space so tenant lisp cannot reach internal services
      (DB, admin faces, cloud metadata). Opt-out: env

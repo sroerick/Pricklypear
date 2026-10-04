@@ -41,6 +41,11 @@ let expect_blocked (urls : string list) : unit =
              (Printexc.to_string exn))
     urls
 
+let contains_substring hay needle =
+  let nl = String.length needle and hl = String.length hay in
+  let rec go i = i + nl <= hl && (String.sub hay i nl = needle || go (i + 1)) in
+  go 0
+
 let tests = [
   ("http-get blocked: v4 loopback/private/link-local", `Quick, fun () ->
     expect_blocked
@@ -106,6 +111,19 @@ let tests = [
        This test documents that the arg-shape path raises bad-args —
        verified by code inspection (see prims_net.ml http-get handler). *)
     Alcotest.(check bool) "documented" true true);
+  ("curl_header_args prefixes headers with -H (BORGE-1790984505)", `Quick, fun () ->
+    Alcotest.(check string) "no headers -> no args" ""
+      (Pricklypear_image_lib.Prims_net.curl_header_args []);
+    let got =
+      Pricklypear_image_lib.Prims_net.curl_header_args
+        [ ("Authorization", "Bearer SECRET"); ("X-Probe", "yes") ]
+    in
+    Alcotest.(check bool) "argument list starts with -H" true
+      (String.length got > 3 && String.sub got 0 3 = "-H ");
+    Alcotest.(check bool) "Authorization header present" true
+      (contains_substring got "Authorization: Bearer SECRET");
+    Alcotest.(check bool) "X-Probe header present" true
+      (contains_substring got "X-Probe: yes"));
 ]
 
 let () =
