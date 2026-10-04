@@ -347,8 +347,11 @@
 
 (define songs/directives-default
   (lambda ()
-    "Default performance directives (data, seeded); proper-list entries."
-    (list (list "seed" 1) (list "dyn" 0.8) (list "artic" ""))))
+    "Default performance directives (data, seeded); proper-list entries.
+The nested strum value is a cons-cell alist so (json-emit) writes a JSON
+object (the wire idiom; the score IR itself stays dots-free)."
+    (list (list "seed" 1) (list "dyn" 0.8) (list "artic" "")
+          (list "strum" (list (cons "dir" "down") (cons "spread_ms" 18))))))
 
 (define songs/distinct-acc
   (lambda (sections acc)
@@ -926,7 +929,7 @@
 
 (define songs/performed-event
   (lambda (ev key dirs)
-    "One score event (chord start dur) -> performed event (JSON alist); carries continuous fields and spelled tones."
+    "One score event (chord start dur) -> performed event (JSON alist); carries continuous fields, spelled tones, and a strum model."
     (let* ((chord (car ev)) (start (nth ev 1)) (dur (nth ev 2))
            (bass (car (cdr chord))))
       (list
@@ -938,7 +941,8 @@
                         (songs/chord-tones chord)))
         (cons "bass" (if (null? bass) "" (songs/pc-str bass)))
         (cons "dyn" (songs/dir-get dirs "dyn" 0.8))
-        (cons "artic" (songs/dir-get dirs "artic" ""))))))
+        (cons "artic" (songs/dir-get dirs "artic" ""))
+        (cons "strum" (songs/dir-get dirs "strum" (list)))))))
 
 (define songs/pivot?
   (lambda (chord key)

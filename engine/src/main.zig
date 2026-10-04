@@ -4,22 +4,26 @@
 //! stdin, a 16-bit mono PCM WAV on stdout. The engine composes nothing,
 //! analyzes nothing, knows no keys — it interprets the manifest's
 //! performance events (spelled tones, integer ticks, continuous
-//! dynamics) into samples. Nopales owns the control plane.
+//! dynamics, strum models, slash bass) into samples. Nopales owns the
+//! control plane; this owns the data plane.
 //!
-//! This is deliberately the smallest thing that closes the loop
-//! manifest -> bytes -> media_blob -> /music. Real patches, bakes and
-//! the live/WASM hosts come later.
+//! This is deliberately small: it closes the loop manifest -> bytes ->
+//! media_blob -> /music. Real patches, bakes and the live/WASM hosts
+//! come later.
 const std = @import("std");
 
 const sample_rate: u32 = 22050;
 const ticks_per_beat: f64 = 12.0; // the IR's time grid (borge/songs.borg)
 
-/// One performed note we collected from the manifest.
+/// One sounding note, resolved to seconds.
 const Note = struct {
     freq: f64,
-    start_tick: f64,
-    dur_tick: f64,
+    start_sec: f64,
+    dur_sec: f64,
     dyn: f64,
+    /// Pluck brightness: 0 = pure sine, 1 = more harmonic content. The
+    /// bass stays rounder; upper chord tones pluck.
+    bright: f64,
 };
 
 const EngineError = error{ MalformedManifest, NoEvents };
@@ -45,6 +49,38 @@ pub fn main(init: std.process.Init) !void {
     try writer.interface.flush();
 }
 
+/// Synthesize one sample at time `t` (seconds) from the notes.
+fn sampleAt(notes: []const Note, t: f64) f64 {
+    const attack = 0.008; // seconds
+    const release = 0.06;
+    const decay_tau = 1.1; // pluck decay time constant
+    const sustain_floor = 0.22;
+    var mix: f64 = 0.0;
+    for (notes) |n| {
+        if (t < n.start_sec or t >= n.start_sec + n.dur_sec) continue;
+        const local = t - n.start_sec;
+        var env: f64 = 1.0;
+        if (local < attack) env = local / attack;
+        const from_end = n.dur_sec - local;
+        if (from_end < release) env = @min(env, from_end / release);
+        if (env < 0.0) env = 0.0;
+        // Pluck: exponential decay toward a sustain floor.
+        env *= sustain_floor + (1.0 - sustain_floor) * std.math.exp(-local / decay_tau);
+
+        // Fundamental plus a decaying harmonic stack for a plucked-string
+        // feel (brighter for upper tones, rounder for bass).
+        const w = 2.0 * std.math.pi * n.freq;
+        var osc = std.math.sin(w * t);
+        if (n.bright > 0.0) {
+            const h2 = std.math.sin(2.0 * w * t) * 0.28 * n.bright;
+            const h3 = std.math.sin(3.0 * w * t) * 0.12 * n.bright;
+            osc += (h2 + h3) * std.math.exp(-local / (decay_tau * 0.5));
+        }
+        mix += osc * env * n.dyn;
+    }
+    return mix;
+}
+
 /// Manifest JSON -> WAV bytes.
 pub fn render(gpa: std.mem.Allocator, manifest: []const u8) ![]u8 {
     const parsed = std.json.parseFromSlice(std.json.Value, gpa, manifest, .{}) catch
@@ -56,6 +92,7 @@ pub fn render(gpa: std.mem.Allocator, manifest: []const u8) ![]u8 {
     const perf = root.object.get("performance") orelse return EngineError.MalformedManifest;
     if (perf != .object) return EngineError.MalformedManifest;
     const tempo = getNumber(perf.object.get("tempo")) orelse 100.0;
+    const sec_per_tick = 60.0 / tempo / ticks_per_beat;
 
     var notes = std.ArrayList(Note).empty;
     defer notes.deinit(gpa);
@@ -68,70 +105,108 @@ pub fn render(gpa: std.mem.Allocator, manifest: []const u8) ![]u8 {
         if (events != .array) continue;
         for (events.array.items) |event| {
             if (event != .object) continue;
-            const chord_obj = event.object.get("chord") orelse continue;
-            _ = chord_obj;
-            const start = getNumber(event.object.get("start")) orelse 0.0;
-            const dur = getNumber(event.object.get("dur")) orelse ticks_per_beat;
-            const dyn = getNumber(event.object.get("dyn")) orelse 0.8;
-            const tones = event.object.get("tones") orelse continue;
-            if (tones != .array) continue;
-            for (tones.array.items) |tone| {
-                if (tone != .string) continue;
-                const pc = notePitchClass(tone.string) orelse continue;
-                // Octave choice: mid register, C4..B4 (midi 60..71).
-                const midi: i32 = 60 + pc;
-                const freq = 440.0 * std.math.pow(f64, 2.0, (@as(f64, @floatFromInt(midi)) - 69.0) / 12.0);
-                try notes.append(gpa, .{
-                    .freq = freq,
-                    .start_tick = start,
-                    .dur_tick = dur,
-                    .dyn = dyn,
-                });
-            }
+            try addEvent(gpa, &notes, event.object, sec_per_tick);
         }
     }
 
     if (notes.items.len == 0) return EngineError.NoEvents;
 
-    // seconds per tick from tempo (BPM); 12 ticks per beat.
-    const sec_per_tick = 60.0 / tempo / ticks_per_beat;
-
-    var max_tick: f64 = 0.0;
+    var max_sec: f64 = 0.0;
     for (notes.items) |n| {
-        const end = n.start_tick + n.dur_tick;
-        if (end > max_tick) max_tick = end;
+        const end = n.start_sec + n.dur_sec;
+        if (end > max_sec) max_sec = end;
     }
-    const total_samples: usize = @intFromFloat(max_tick * sec_per_tick * @as(f64, @floatFromInt(sample_rate)));
+    const total_samples: usize = @intFromFloat((max_sec + 0.2) * @as(f64, @floatFromInt(sample_rate)));
     if (total_samples == 0) return EngineError.NoEvents;
 
+    // Pass 1: find peak so we can normalize without clipping.
+    var peak: f64 = 0.0;
+    for (0..total_samples) |idx| {
+        const t = @as(f64, @floatFromInt(idx)) / @as(f64, @floatFromInt(sample_rate));
+        const v = @abs(sampleAt(notes.items, t));
+        if (v > peak) peak = v;
+    }
+    const gain: f64 = if (peak > 0.0) @min(0.9 / peak, 4.0) else 1.0;
+
+    // Pass 2: render normalized PCM.
     const pcm = try gpa.alloc(i16, total_samples);
     defer gpa.free(pcm);
-    @memset(pcm, 0);
-
-    const attack = 0.01; // seconds
-    const release = 0.05;
     for (pcm, 0..) |*sample, idx| {
         const t = @as(f64, @floatFromInt(idx)) / @as(f64, @floatFromInt(sample_rate));
-        const tick = t / sec_per_tick;
-        var mix: f64 = 0.0;
-        for (notes.items) |n| {
-            if (tick < n.start_tick or tick >= n.start_tick + n.dur_tick) continue;
-            const local = (tick - n.start_tick) * sec_per_tick; // seconds into the note
-            const note_secs = n.dur_tick * sec_per_tick;
-            var env: f64 = 1.0;
-            if (local < attack) env = local / attack;
-            const from_end = note_secs - local;
-            if (from_end < release) env = @min(env, from_end / release);
-            if (env < 0.0) env = 0.0;
-            mix += std.math.sin(2.0 * std.math.pi * n.freq * t) * env * n.dyn;
-        }
-        // Headroom: divide by a nominal 3-tone chord and clamp.
-        const scaled = mix / 3.0;
-        const clamped = std.math.clamp(scaled, -1.0, 1.0);
+        const clamped = std.math.clamp(sampleAt(notes.items, t) * gain, -1.0, 1.0);
         sample.* = @intFromFloat(clamped * 32767.0);
     }
 
     return encodeWav(gpa, pcm);
+}
+
+/// One performance event -> notes: the chord tones (optionally strummed)
+/// plus, for a slash chord, the bass note an octave down.
+fn addEvent(
+    gpa: std.mem.Allocator,
+    notes: *std.ArrayList(Note),
+    event: std.json.ObjectMap,
+    sec_per_tick: f64,
+) !void {
+    const start_sec = (getNumber(event.get("start")) orelse 0.0) * sec_per_tick;
+    const dur_sec = (getNumber(event.get("dur")) orelse ticks_per_beat) * sec_per_tick;
+    const dyn = getNumber(event.get("dyn")) orelse 0.8;
+
+    // Strum model: {dir, spread_ms}. Absent/empty => block chord.
+    var spread_sec: f64 = 0.0;
+    var downward = true;
+    if (event.get("strum")) |s| {
+        if (s == .object) {
+            if (getNumber(s.object.get("spread_ms"))) |ms| spread_sec = ms / 1000.0;
+            if (s.object.get("dir")) |d| {
+                if (d == .string and std.mem.eql(u8, d.string, "up")) downward = false;
+            }
+        }
+    }
+
+    const tones = event.get("tones") orelse return;
+    if (tones != .array) return;
+
+    var freqs = std.ArrayList(f64).empty;
+    defer freqs.deinit(gpa);
+    for (tones.array.items) |tone| {
+        if (tone != .string) continue;
+        const pc = notePitchClass(tone.string) orelse continue;
+        try freqs.append(gpa, freqOf(60 + pc)); // mid register (C4..B4)
+    }
+    if (freqs.items.len == 0) return;
+
+    // Down strum: low-to-high (order as given). Up strum: high-to-low.
+    const n = freqs.items.len;
+    for (freqs.items, 0..) |f, i| {
+        const order_idx = if (downward) i else n - 1 - i;
+        try notes.append(gpa, .{
+            .freq = f,
+            .start_sec = start_sec + @as(f64, @floatFromInt(order_idx)) * spread_sec,
+            .dur_sec = dur_sec,
+            .dyn = dyn * 0.9,
+            .bright = 0.8,
+        });
+    }
+
+    // Slash bass: sound the named bass an octave below, on the beat.
+    if (event.get("bass")) |b| {
+        if (b == .string and b.string.len > 0) {
+            if (notePitchClass(b.string)) |pc| {
+                try notes.append(gpa, .{
+                    .freq = freqOf(48 + pc), // C3..B3
+                    .start_sec = start_sec,
+                    .dur_sec = dur_sec,
+                    .dyn = dyn,
+                    .bright = 0.35,
+                });
+            }
+        }
+    }
+}
+
+fn freqOf(midi: i32) f64 {
+    return 440.0 * std.math.pow(f64, 2.0, (@as(f64, @floatFromInt(midi)) - 69.0) / 12.0);
 }
 
 fn getNumber(v: ?std.json.Value) ?f64 {
@@ -179,10 +254,10 @@ fn encodeWav(gpa: std.mem.Allocator, pcm: []const i16) ![]u8 {
     const byte_rate: u32 = sample_rate * 2; // mono * 16-bit
     const riff_size: u32 = 36 + data_bytes;
 
-    try appendBytes(&buf, gpa, "RIFF");
+    try buf.appendSlice(gpa, "RIFF");
     try appendU32(&buf, gpa, riff_size);
-    try appendBytes(&buf, gpa, "WAVE");
-    try appendBytes(&buf, gpa, "fmt ");
+    try buf.appendSlice(gpa, "WAVE");
+    try buf.appendSlice(gpa, "fmt ");
     try appendU32(&buf, gpa, 16); // PCM chunk size
     try appendU16(&buf, gpa, 1); // audio format: PCM
     try appendU16(&buf, gpa, 1); // channels: mono
@@ -190,17 +265,13 @@ fn encodeWav(gpa: std.mem.Allocator, pcm: []const i16) ![]u8 {
     try appendU32(&buf, gpa, byte_rate);
     try appendU16(&buf, gpa, 2); // block align
     try appendU16(&buf, gpa, 16); // bits per sample
-    try appendBytes(&buf, gpa, "data");
+    try buf.appendSlice(gpa, "data");
     try appendU32(&buf, gpa, data_bytes);
     for (pcm) |s| {
         const u: u16 = @bitCast(s);
         try appendU16(&buf, gpa, u);
     }
     return buf.toOwnedSlice(gpa);
-}
-
-fn appendBytes(buf: *std.ArrayList(u8), gpa: std.mem.Allocator, bytes: []const u8) !void {
-    try buf.appendSlice(gpa, bytes);
 }
 
 fn appendU16(buf: *std.ArrayList(u8), gpa: std.mem.Allocator, v: u16) !void {
@@ -236,4 +307,17 @@ test "render a minimal manifest to a WAV" {
     try std.testing.expectEqualStrings("RIFF", wav[0..4]);
     try std.testing.expectEqualStrings("WAVE", wav[8..12]);
     try std.testing.expectEqualStrings("data", wav[36..40]);
+}
+
+test "slash bass adds a lower note; strum spreads onsets" {
+    const gpa = std.testing.allocator;
+    const manifest =
+        \\{"performance":{"tempo":60,"sections":[
+        \\{"events":[{"chord":"Esus/A","start":0,"dur":48,
+        \\"tones":["E","A","B"],"bass":"A","dyn":0.8,
+        \\"strum":{"dir":"down","spread_ms":18}}]}]}}
+    ;
+    const wav = try render(gpa, manifest);
+    defer gpa.free(wav);
+    try std.testing.expect(wav.len > 44);
 }
