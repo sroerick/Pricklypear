@@ -1020,18 +1020,34 @@ target key is set (the display projection of the melody voice)."
 
 (define songs/perform
   (lambda (score dirs)
-    "Score + directives -> performance value; one-way enrichment, never mutates the score."
+    "Score + directives -> performance value; one-way enrichment, never mutates the score. Sections are SEQUENTIAL: each section is laid at the cumulative tick offset of the sections before it, so every performed event/melody note carries an ABSOLUTE start tick on ONE song timeline (the engine plays one timeline, not N overlapping ones)."
     (let ((meta (car score)) (sections (car (cdr score))))
       (list
         (cons "key" (songs/key-str (car meta)))
         (cons "meter" (nth meta 1))
         (cons "tempo" (nth meta 2))
-        (cons "sections"
-              (list/map (lambda (s) (songs/perform-section s dirs)) sections))))))
+        (cons "sections" (songs/perform-sections sections dirs 0))))))
+
+(define songs/section-end
+  (lambda (sec)
+    "End tick of one section: the later of its chord bars and its melody."
+    (let ((b (songs/bars-len (nth sec 4))) (m (songs/melody-len (nth sec 6))))
+      (if (> b m) b m))))
+
+(define songs/perform-sections
+  (lambda (sections dirs offset)
+    "Fold sections into performed sections, advancing the tick offset by each
+section's length so the timeline is contiguous."
+    (if (null? sections)
+      (list)
+      (cons (songs/perform-section (car sections) dirs offset)
+            (songs/perform-sections (cdr sections) dirs
+                                    (+ offset (songs/section-end (car sections))))))))
 
 (define songs/perform-section
-  (lambda (sec dirs)
-    "One section -> performed section (JSON alist), chords + melody voice."
+  (lambda (sec dirs offset)
+    "One section -> performed section (JSON alist), chords + melody voice,
+with `offset` added to every start tick (sequential song timeline)."
     (let ((name (car sec)) (skey (nth sec 1)) (meter (nth sec 2))
           (tempo (nth sec 3)) (bars (nth sec 4)) (melody (nth sec 6)))
       (list
@@ -1039,27 +1055,29 @@ target key is set (the display projection of the melody voice)."
         (cons "key" (songs/key-str skey))
         (cons "meter" meter)
         (cons "tempo" tempo)
+        (cons "start" offset)
         (cons "events"
-              (list/map (lambda (ev) (songs/performed-event ev skey dirs)) bars))
+              (list/map (lambda (ev) (songs/performed-event ev skey dirs offset)) bars))
         (cons "melody"
-              (list/map (lambda (n) (songs/performed-note n skey dirs))
+              (list/map (lambda (n) (songs/performed-note n skey dirs offset))
                         (songs/melody-key-names melody skey)))))))
 
 (define songs/performed-note
-  (lambda (n key dirs)
+  (lambda (n key dirs offset)
     "One melody note (pitch start dur) -> performed note (JSON alist); a
-mono voice carrying the same continuous fields as chord events."
+mono voice carrying the same continuous fields as chord events, with the
+section offset added to its start tick."
     (list
       (cons "pitch" (songs/pitch-str (car n)))
-      (cons "start" (nth n 1))
+      (cons "start" (+ (nth n 1) offset))
       (cons "dur" (nth n 2))
       (cons "voice" "melody")
       (cons "dyn" (songs/dir-get dirs "dyn" 0.8)))))
 
 (define songs/performed-event
-  (lambda (ev key dirs)
-    "One score event (chord start dur) -> performed event (JSON alist); carries continuous fields, spelled tones, and a strum model."
-    (let* ((chord (car ev)) (start (nth ev 1)) (dur (nth ev 2))
+  (lambda (ev key dirs offset)
+    "One score event (chord start dur) -> performed event (JSON alist); carries continuous fields, spelled tones, and a strum model, with the section offset added to its start tick."
+    (let* ((chord (car ev)) (start (+ (nth ev 1) offset)) (dur (nth ev 2))
            (bass (car (cdr chord))))
       (list
         (cons "chord" (songs/chord-str chord))
