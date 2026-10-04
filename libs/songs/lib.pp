@@ -306,6 +306,12 @@
         (nth (list "minor" "dim" "major" "minor" "minor" "major" "major") degree)
         (nth (list "major" "minor" "minor" "major" "major" "minor" "dim") degree)))))
 
+(define songs/dir-get
+  (lambda (dirs k d)
+    "Directive k from dirs, else d."
+    (let ((e (assoc k dirs)))
+      (if (null? e) d (nth e 1)))))
+
 ;; ---------- program front end (program-authority, borge/songs.borg) ----------
 ;;
 ;; A composition body is SOURCE with a front-end directive: `form chart`
@@ -331,6 +337,18 @@
           (if (or (string-eq l "") (songs/starts-with? l ";"))
             (songs/directive-index (cdr lines) (+ i 1))
             i))))))
+
+;; ---------- L4 ground floor: performance + manifest ----------
+;;
+;; score -> PERFORMANCE (pure function of score + DIRECTIVES; directives
+;; are data) -> MANIFEST (the control-plane/data-plane contract every
+;; renderer consumes). Proper lists only (invariant 3); JSON objects are
+;; (cons "key" value) alists, which (json-emit) emits as objects.
+
+(define songs/directives-default
+  (lambda ()
+    "Default performance directives (data, seeded); proper-list entries."
+    (list (list "seed" 1) (list "dyn" 0.8) (list "artic" ""))))
 
 (define songs/distinct-acc
   (lambda (sections acc)
@@ -665,6 +683,34 @@
       ""
       (html/div (html/attr "class" "song-lyrics") (html/text (string-join texts "\n"))))))
 
+(define songs/manifest-json
+  (lambda (body)
+    "A composition body -> manifest JSON string."
+    (json-emit (songs/manifest-value body (songs/directives-default)))))
+
+(define songs/manifest-response
+  (lambda (body)
+    "A composition body -> an application/json response; a refused or failing program answers an error object, never a hang."
+    (guard
+      (lambda (e)
+        (bytes-response "application/json" "0"
+          (json-emit (list (cons "ok" #f) (cons "error" (nth e 1))))))
+      (bytes-response "application/json" "0" (songs/manifest-json body)))))
+
+(define songs/manifest-value
+  (lambda (body dirs)
+    "A composition body -> the renderer manifest value (JSON-ready); deterministic for a seeded body."
+    (list
+      (cons "form" (songs/form body))
+      (cons "nondet" (songs/nondet? body))
+      (cons "seed" (songs/dir-get dirs "seed" 1))
+      (cons "performance" (songs/perform (songs/score body) dirs))
+      (cons "bakes" (list))
+      (cons "programs"
+            (list (list (cons "voice" "chords") (cons "patch" "uke/default"))))
+      (cons "video" (list (cons "cues" (list)) (cons "curves" (list))
+                           (cons "program" ""))))))
+
 (define songs/mark-loop
   (lambda (i fret)
     "A fret marker: open ring, fretted dot, or empty."
@@ -854,6 +900,46 @@
     "Canonical string of a pitch class."
     (string-append (nth songs/letters-uc (car pc)) (songs/acc-str (car (cdr pc))))))
 
+(define songs/perform
+  (lambda (score dirs)
+    "Score + directives -> performance value; one-way enrichment, never mutates the score."
+    (let ((meta (car score)) (sections (car (cdr score))))
+      (list
+        (cons "key" (songs/key-str (car meta)))
+        (cons "meter" (nth meta 1))
+        (cons "tempo" (nth meta 2))
+        (cons "sections"
+              (list/map (lambda (s) (songs/perform-section s dirs)) sections))))))
+
+(define songs/perform-section
+  (lambda (sec dirs)
+    "One section -> performed section (JSON alist)."
+    (let ((name (car sec)) (skey (nth sec 1)) (meter (nth sec 2))
+          (tempo (nth sec 3)) (bars (nth sec 4)))
+      (list
+        (cons "name" name)
+        (cons "key" (songs/key-str skey))
+        (cons "meter" meter)
+        (cons "tempo" tempo)
+        (cons "events"
+              (list/map (lambda (ev) (songs/performed-event ev skey dirs)) bars))))))
+
+(define songs/performed-event
+  (lambda (ev key dirs)
+    "One score event (chord start dur) -> performed event (JSON alist); carries continuous fields and spelled tones."
+    (let* ((chord (car ev)) (start (nth ev 1)) (dur (nth ev 2))
+           (bass (car (cdr chord))))
+      (list
+        (cons "chord" (songs/chord-str chord))
+        (cons "start" start)
+        (cons "dur" dur)
+        (cons "tones"
+              (list/map (lambda (m) (songs/spell-tone key m))
+                        (songs/chord-tones chord)))
+        (cons "bass" (if (null? bass) "" (songs/pc-str bass)))
+        (cons "dyn" (songs/dir-get dirs "dyn" 0.8))
+        (cons "artic" (songs/dir-get dirs "artic" ""))))))
+
 (define songs/pivot?
   (lambda (chord key)
     "True when a non-diatonic chord's root is the parallel mode's tonic."
@@ -980,98 +1066,6 @@ chart (default) parses the DSL; program evaluates in the sandbox."
       (lambda (e) (list "error" (nth e 1)))
       (songs/score body))))
 
-;; ---------- L4 ground floor: performance + manifest ----------
-;;
-;; score -> PERFORMANCE (pure function of score + DIRECTIVES; directives
-;; are data) -> MANIFEST (the control-plane/data-plane contract every
-;; renderer consumes). Proper lists only (invariant 3); JSON objects are
-;; (cons "key" value) alists, which (json-emit) emits as objects.
-
-(define songs/directives-default
-  (lambda ()
-    "Default performance directives (data, seeded); proper-list entries."
-    (list (list "seed" 1) (list "dyn" 0.8) (list "artic" ""))))
-
-(define songs/dir-get
-  (lambda (dirs k d)
-    "Directive k from dirs, else d."
-    (let ((e (assoc k dirs)))
-      (if (null? e) d (nth e 1)))))
-
-(define songs/spell-tone
-  (lambda (key midi)
-    "Spell a semitone in the key, falling back to best spelling."
-    (let ((sp (songs/spell-in-key key midi)))
-      (if (null? sp) (songs/pc-str (songs/best-spelling midi)) (songs/pc-str sp)))))
-
-(define songs/performed-event
-  (lambda (ev key dirs)
-    "One score event (chord start dur) -> performed event (JSON alist); carries continuous fields and spelled tones."
-    (let* ((chord (car ev)) (start (nth ev 1)) (dur (nth ev 2))
-           (bass (car (cdr chord))))
-      (list
-        (cons "chord" (songs/chord-str chord))
-        (cons "start" start)
-        (cons "dur" dur)
-        (cons "tones"
-              (list/map (lambda (m) (songs/spell-tone key m))
-                        (songs/chord-tones chord)))
-        (cons "bass" (if (null? bass) "" (songs/pc-str bass)))
-        (cons "dyn" (songs/dir-get dirs "dyn" 0.8))
-        (cons "artic" (songs/dir-get dirs "artic" ""))))))
-
-(define songs/perform-section
-  (lambda (sec dirs)
-    "One section -> performed section (JSON alist)."
-    (let ((name (car sec)) (skey (nth sec 1)) (meter (nth sec 2))
-          (tempo (nth sec 3)) (bars (nth sec 4)))
-      (list
-        (cons "name" name)
-        (cons "key" (songs/key-str skey))
-        (cons "meter" meter)
-        (cons "tempo" tempo)
-        (cons "events"
-              (list/map (lambda (ev) (songs/performed-event ev skey dirs)) bars))))))
-
-(define songs/perform
-  (lambda (score dirs)
-    "Score + directives -> performance value; one-way enrichment, never mutates the score."
-    (let ((meta (car score)) (sections (car (cdr score))))
-      (list
-        (cons "key" (songs/key-str (car meta)))
-        (cons "meter" (nth meta 1))
-        (cons "tempo" (nth meta 2))
-        (cons "sections"
-              (list/map (lambda (s) (songs/perform-section s dirs)) sections))))))
-
-(define songs/manifest-value
-  (lambda (body dirs)
-    "A composition body -> the renderer manifest value (JSON-ready); deterministic for a seeded body."
-    (list
-      (cons "form" (songs/form body))
-      (cons "nondet" (songs/nondet? body))
-      (cons "seed" (songs/dir-get dirs "seed" 1))
-      (cons "performance" (songs/perform (songs/score body) dirs))
-      (cons "bakes" (list))
-      (cons "programs"
-            (list (list (cons "voice" "chords") (cons "patch" "uke/default"))))
-      (cons "video" (list (cons "cues" (list)) (cons "curves" (list))
-                           (cons "program" ""))))))
-
-(define songs/manifest-json
-  (lambda (body)
-    "A composition body -> manifest JSON string."
-    (json-emit (songs/manifest-value body (songs/directives-default)))))
-
-(define songs/manifest-response
-  (lambda (body)
-    "A composition body -> an application/json response; a refused or failing program answers an error object, never a hang."
-    (guard
-      (lambda (e)
-        (bytes-response "application/json" "0"
-          (json-emit (list (cons "ok" #f) (cons "error" (nth e 1))))))
-      (bytes-response "application/json" "0" (songs/manifest-json body)))))
-
 (define songs/section-html
   (lambda (sec target roman?)
     "HTML for one section; transposes chord display when target key is set."
@@ -1096,6 +1090,12 @@ chart (default) parses the DSL; program evaluates in the sandbox."
     (let ((scale (songs/scale key)))
       (let ((i (songs/find-midi scale midi 0)))
         (if (null? i) () (nth scale i))))))
+
+(define songs/spell-tone
+  (lambda (key midi)
+    "Spell a semitone in the key, falling back to best spelling."
+    (let ((sp (songs/spell-in-key key midi)))
+      (if (null? sp) (songs/pc-str (songs/best-spelling midi)) (songs/pc-str sp)))))
 
 (define songs/split-first
   (lambda (s ch)
