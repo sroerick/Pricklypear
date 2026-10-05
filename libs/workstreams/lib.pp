@@ -386,41 +386,54 @@
                      "}")))
             (let
               ((body (dict-set* lf (list "status-map" json))))
-              (tree/upsert path "datum" "todo-list" body)))))))))
+              (tree/upsert path "datum" "todo-list" body))))))))
 
-(define workstreams/pulse-counts
-  (lambda (list-id nodes)
-    "Assoc list (status . count) over workstreams/status-vocab for the
-     open nodes of one stream. The list's status-map resolves once."
-    (let
-      ((override (workstreams/status-map-for-list list-id)))
-      (list/map
-        (lambda (st)
-          (cons st
-            (list/foldl
-              (lambda (acc n)
-                (if
-                  (string-eq
-                    (workstreams/status-resolve
-                      override
-                      (todo/item-state (dict-get n "body")))
-                    st)
-                  (+ acc 1)
-                  acc))
-              0 nodes)))
-        (workstreams/status-vocab)))))
+(define workstreams/pulse-nodes
+  (lambda ()
+    "ONE garden scan for the whole face: the caller's todo-item nodes.
+     Cards live in their creator's garden, so an identity sees its own
+     cards plus shared-space cards it can read — by the privacy model."
+    (tree/list (todo/tree/prefix "todo-item") 1 2000)))
 
-(define workstreams/pulse-row
-  (lambda (stream)
-    "One pulse row: (title list-id counts stale-count open-count)."
+(define workstreams/pulse-row-from
+  (lambda (nodes lid title)
+    "One pulse row from a PRE-SCANNED node list: (title list-id counts
+     stale-count open-count). Single-pass — no per-stream rescans."
     (let
-      ((lid (car stream))
-        (title (cdr stream)))
+      ((override (workstreams/status-map-for-list lid)))
       (let
-        ((nodes (workstreams/open-items lid))
-          (stale (workstreams/stale-items lid)))
-        (list title lid (workstreams/pulse-counts lid nodes)
-              (workstreams/len stale) (workstreams/len nodes))))))
+        ((mine (list/filter
+                 (lambda (n)
+                   (string-eq
+                     (as-str (dict-get (dict-get n "body") "list_id"))
+                     (as-str lid)))
+                 nodes)))
+        (let
+          ((open-n (list/filter workstreams/open-node? mine)))
+          (let
+            ((stale-th (workstreams/stale-threshold)))
+            (list title lid
+                  (list/map
+                    (lambda (st)
+                      (cons st
+                        (workstreams/len
+                          (list/filter
+                            (lambda (n)
+                              (string-eq
+                                (workstreams/status-resolve
+                                  override
+                                  (todo/item-state (dict-get n "body")))
+                                st)
+                              open-n))))
+                    (workstreams/status-vocab)))
+                  (workstreams/len
+                    (list/filter
+                      (lambda (n)
+                        (let
+                          ((c (dict-get n "created_at")))
+                          (if (null? c) #f (workstreams/old? c stale-th))))
+                      open-n))
+                  (workstreams/len open-n))))))))
 
 (define workstreams/pulse-count-cell
   (lambda (lid count)
@@ -461,25 +474,21 @@
                 (if (> stale 0) (string-append (as-str stale) " stale") "·")))))))))
 
 (define workstreams/pulse-table
-  (lambda ()
-    "The overview: one row per visible stream, coarse-status columns."
-    (let
-      ((rows (list/map workstreams/pulse-row (workstreams/stream-rows))))
-      (html/tag "table" (html/attr "class" "pulse")
+  (lambda (rows)
+    "The overview: one row per visible stream, coarse-status columns.
+     Takes the precomputed rows (single-pass)."
+    (html/tag "table" (html/attr "class" "pulse")
         (html/join
           (list
             (html/tag "tr" ""
               (html/join
-                (cons
-                  (html/tag "th" "" (html/text "stream"))
-                  (html/join
-                    (list
-                      (html/join
-                        (list/map
-                          (lambda (s) (html/tag "th" "" (html/text s)))
-                          (workstreams/status-vocab)))
-                      (html/tag "th" "" (html/text "stale")))))))
-            (html/join (list/map workstreams/pulse-tr rows))))))))
+                (append
+                  (list (html/tag "th" "" (html/text "stream")))
+                  (list/map
+                    (lambda (s) (html/tag "th" "" (html/text s)))
+                    (workstreams/status-vocab))
+                  (list (html/tag "th" "" (html/text "stale"))))))
+            (html/join (list/map workstreams/pulse-tr rows)))))))
 
 (define workstreams/pulse-summary
   (lambda (rows)
@@ -491,7 +500,7 @@
           (list/foldl
             (lambda (acc r)
               (+ acc
-                (cdr (workstreams/map-lookup "review" (list-ref r 2)))))
+                (workstreams/map-lookup "review" (list-ref r 2))))
             0 rows)))
       (html/p* (html/attr "class" "muted pulse-summary")
         (string-append
@@ -500,25 +509,68 @@
           (as-str review-n) " in review · "
           (as-str stale-n) " stale")))))
 
-(define workstreams/pulse-page
-  (lambda ()
-    "GET /pulse — the cross-stream indicator. Columns are the small shared
-     vocabulary; each stream keeps its real pipeline at /kanban?list=<id>."
+(define workstreams/pulse-rollup-from
+  (lambda (nodes streams)
+    "HUMAN-REVIEW rollup from the pre-scanned nodes: (card-id . stream)."
     (let
-      ((rows (list/map workstreams/pulse-row (workstreams/stream-rows))))
-      (html/page
-        (list
-          (html/h1 (html/text "Pulse"))
-          (html/p* (html/attr "class" "muted")
-            "Every open card you can see, grouped by the shared vocabulary. Each stream keeps its own real pipeline — open its board for the native columns and the add/move forms.")
-          (workstreams/pulse-summary rows)
-          (workstreams/pulse-table)
+      ((titles (list/map (lambda (s) (cons (as-str (car s)) (as-str (cdr s)))) streams)))
+      (let
+        ((hits
+           (list/filter
+             (lambda (c) (not (null? (cdr c))))
+             (list/map
+               (lambda (n)
+                 (cons (workstreams/node-id n)
+                   (workstreams/map-lookup
+                     (as-str (dict-get (dict-get n "body") "list_id"))
+                     titles)))
+               (list/filter
+                 (lambda (n)
+                   (and
+                     (workstreams/open-node? n)
+                     (string-eq (todo/item-state (dict-get n "body")) "HUMAN-REVIEW")))
+                 nodes))))))
+        (html/div (html/attr "class" "ws-rollup")
           (html/join
             (list
-              (workstreams/rollup-html)
+              (html/h2 (html/text "Ready for human review"))
+              (if
+                (null? hits)
+                (html/p* (html/attr "class" "muted") "Nothing in HUMAN-REVIEW right now.")
+                (html/ul ""
+                  (html/join
+                    (list/map
+                      (lambda (c)
+                        (html/li ""
+                          (html/join
+                            (list
+                              (workstreams/card-link (car c) (car c))
+                              (html/span (html/attr "class" "muted")
+                                (html/text (string-append " · " (cdr c))))))))
+                      hits))))))))))
+
+(define workstreams/pulse-page
+  (lambda ()
+    "GET /pulse — the cross-stream indicator. ONE scan feeds the whole
+     page: counts, stale flags, and the HUMAN-REVIEW rollup all derive
+     from the same node list."
+    (let
+      ((streams (workstreams/stream-rows)))
+      (let
+        ((nodes (workstreams/pulse-nodes)))
+        (let
+          ((rows (list/map
+                   (lambda (s) (workstreams/pulse-row-from nodes (car s) (cdr s)))
+                   streams)))
+          (html/page
+            (list
+              (html/h1 (html/text "Pulse"))
+              (html/p* (html/attr "class" "muted")
+                "Every open card you can see, grouped by the shared vocabulary. Each stream keeps its own real pipeline — open its board for the native columns and the add/move forms.")
+              (workstreams/pulse-summary rows)
+              (workstreams/pulse-table rows)
+              (workstreams/pulse-rollup-from nodes streams)
               (html/p* (html/attr "class" "muted ws-board-link")
                 (html/a "/workstreams" "per-stream detail")))))))))
 
-;; route publish — runs at seed/load-library time; ON CONFLICT keeps
-;; prior visibility on redeploys.
 (route "/pulse" "workstreams/pulse-page")
