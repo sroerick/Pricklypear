@@ -260,3 +260,265 @@
                 (html/a (string-append "/kanban?list=" lid) "open board"))
               (workstreams/stale-html stale)
               (html/void "hr" ""))))))))
+
+;; ------------------------------------------------------------------
+;; pulse — the cross-stream indicator (2026-10-05, roerick)
+;;
+;; TWO-LAYER decision (revises borge/workstreams.borg pipeline-model):
+;; each list keeps its OWN real pipeline (columns) — native boards stay
+;; per-list at /kanban; a SMALL shared vocabulary (queued/active/review/
+;; parked) rolls every list up into one indicator face, /pulse.
+;;
+;;   - list field `status-map` (JSON object string, col -> status) is the
+;;     optional per-list override; standard columns map by default;
+;;     unknown columns of open items read as "active".
+;;   - the per-item `pipeline` override (todo/state/item-pipeline) stays
+;;     but is NOT load-bearing for rendering; the old strict
+;;     matching/rendering contract is retired here.
+;;
+;; No item schema changes. One field per list, set once, purely
+;; presentational.
+;; ------------------------------------------------------------------
+
+(define workstreams/join-comma
+  (lambda (parts)
+    "Join strings with ', ' — used by the status-map JSON emitter."
+    (if
+      (null? parts)
+      ""
+      (if
+        (null? (cdr parts))
+        (car parts)
+        (string-append (car parts) ", " (workstreams/join-comma (cdr parts)))))))
+
+(define workstreams/status-vocab
+  (lambda ()
+    "The coarse-status columns of /pulse, in display order. Open items
+     only — done work shows in the standup, not the indicator."
+    (list "queued" "active" "review" "parked")))
+
+(define workstreams/status-map-default
+  (lambda ()
+    "Column -> coarse status for the STANDARD columns. Covers the shared
+     Board pipeline, the todo default states, and PARKED. Lists with
+     unusual columns either set a `status-map` override or their open
+     items read as active."
+    (list
+      (cons "" "queued")
+      (cons "TODO" "queued")
+      (cons "SPEC" "active")
+      (cons "CODE" "active")
+      (cons "WAITING" "active")
+      (cons "LOGIC-REVIEW" "review")
+      (cons "UI-REVIEW" "review")
+      (cons "HUMAN-REVIEW" "review")
+      (cons "PARKED" "parked")
+      (cons "DONE" "done")
+      (cons "CANCELLED" "done")
+      (cons "ARCHIVED" "done"))))
+
+(define workstreams/map-lookup
+  (lambda (k al)
+    "Value at key k in an assoc list of (col . status), else ()."
+    (if
+      (null? al)
+      ()
+      (if
+        (string-eq (as-str (car (car al))) (as-str k))
+        (cdr (car al))
+        (workstreams/map-lookup k (cdr al))))))
+
+(define workstreams/status-map-for-list
+  (lambda (list-id)
+    "The per-list override as an assoc list of (col . status), read from
+     the list's `status-map` field (a JSON object string). () when unset."
+    (let
+      ((lf (get (quote todo-list) (as-str list-id))))
+      (if
+        (null? lf)
+        ()
+        (let
+          ((sm (dict-get lf "status-map")))
+          (if
+            (or (null? sm) (string-eq (as-str sm) ""))
+            ()
+            (let
+              ((d (json-parse (as-str sm))))
+              (list/map
+                (lambda (k) (cons (as-str k) (as-str (dict-get d k))))
+                (dict-keys d)))))))))
+
+(define workstreams/status-resolve
+  (lambda (override col)
+    "Coarse status for column col: the list's override map, else the
+     default map, else active (an open column we have no opinion about)."
+    (let
+      ((own (workstreams/map-lookup col override)))
+      (if
+        (null? own)
+        (let
+          ((def (workstreams/map-lookup col (workstreams/status-map-default))))
+          (if (null? def) "active" (as-str def)))
+        (as-str own)))))
+
+(define workstreams/status-map-set
+  (lambda (list-id pairs)
+    "tree/upsert the LIST datum with a `status-map` override (pairs is an
+     assoc list of (column . coarse-status)). Mirrors kanban/columns-set.
+     Returns the upserted path."
+    (let
+      ((lf (get (quote todo-list) list-id)))
+      (if
+        (null? lf)
+        "no such list"
+        (let
+          ((path (node-path (quote todo-list) list-id)))
+          (let
+            ((json (string-append "{"
+                     (workstreams/join-comma
+                       (list/map
+                         (lambda (p)
+                           (string-append
+                             (json-emit (as-str (car p)))
+                             ":"
+                             (json-emit (as-str (cdr p)))))
+                         pairs))
+                     "}")))
+            (let
+              ((body (dict-set* lf (list "status-map" json))))
+              (tree/upsert path "datum" "todo-list" body)))))))))
+
+(define workstreams/pulse-counts
+  (lambda (list-id nodes)
+    "Assoc list (status . count) over workstreams/status-vocab for the
+     open nodes of one stream. The list's status-map resolves once."
+    (let
+      ((override (workstreams/status-map-for-list list-id)))
+      (list/map
+        (lambda (st)
+          (cons st
+            (list/foldl
+              (lambda (acc n)
+                (if
+                  (string-eq
+                    (workstreams/status-resolve
+                      override
+                      (todo/item-state (dict-get n "body")))
+                    st)
+                  (+ acc 1)
+                  acc))
+              0 nodes)))
+        (workstreams/status-vocab)))))
+
+(define workstreams/pulse-row
+  (lambda (stream)
+    "One pulse row: (title list-id counts stale-count open-count)."
+    (let
+      ((lid (car stream))
+        (title (cdr stream)))
+      (let
+        ((nodes (workstreams/open-items lid))
+          (stale (workstreams/stale-items lid)))
+        (list title lid (workstreams/pulse-counts lid nodes)
+              (workstreams/len stale) (workstreams/len nodes))))))
+
+(define workstreams/pulse-count-cell
+  (lambda (lid count)
+    "One count cell: link into the board when non-zero, muted dash when 0."
+    (if
+      (> (cdr count) 0)
+      (html/tag "td" (html/attr "class" "pulse-n")
+        (html/a (string-append "/kanban?list=" lid)
+          (html/text (as-str (cdr count)))))
+      (html/tag "td" (html/attr "class" "muted pulse-n") (html/text "·")))))
+
+(define workstreams/pulse-tr
+  (lambda (row)
+    "One stream's table row: title | queued active review parked | stale."
+    (let
+      ((title (list-ref row 0))
+        (lid (list-ref row 1))
+        (counts (list-ref row 2))
+        (stale (list-ref row 3))
+        (open-n (list-ref row 4)))
+      (html/tag "tr" ""
+        (html/join
+          (list
+            (html/tag "th" (html/attr "class" "pulse-stream")
+              (html/join
+                (list
+                  (html/a (string-append "/kanban?list=" lid) (html/text title))
+                  (html/span (html/attr "class" "muted")
+                    (html/text (string-append " (" (as-str open-n) " open)"))))))
+            (html/join
+              (list/map
+                (lambda (c) (workstreams/pulse-count-cell lid c))
+                counts))
+            (html/tag "td"
+              (html/attr "class"
+                (if (> stale 0) "pulse-stale" "muted pulse-stale0"))
+              (html/text
+                (if (> stale 0) (string-append (as-str stale) " stale") "·")))))))))
+
+(define workstreams/pulse-table
+  (lambda ()
+    "The overview: one row per visible stream, coarse-status columns."
+    (let
+      ((rows (list/map workstreams/pulse-row (workstreams/stream-rows))))
+      (html/tag "table" (html/attr "class" "pulse")
+        (html/join
+          (list
+            (html/tag "tr" ""
+              (html/join
+                (cons
+                  (html/tag "th" "" (html/text "stream"))
+                  (html/join
+                    (list
+                      (html/join
+                        (list/map
+                          (lambda (s) (html/tag "th" "" (html/text s)))
+                          (workstreams/status-vocab)))
+                      (html/tag "th" "" (html/text "stale")))))))
+            (html/join (list/map workstreams/pulse-tr rows))))))))
+
+(define workstreams/pulse-summary
+  (lambda (rows)
+    "One line: N open across M streams · K stale · R in review."
+    (let
+      ((open-n (list/foldl (lambda (acc r) (+ acc (list-ref r 4))) 0 rows))
+        (stale-n (list/foldl (lambda (acc r) (+ acc (list-ref r 3))) 0 rows))
+        (review-n
+          (list/foldl
+            (lambda (acc r)
+              (+ acc
+                (cdr (workstreams/map-lookup "review" (list-ref r 2)))))
+            0 rows)))
+      (html/p* (html/attr "class" "muted pulse-summary")
+        (string-append
+          (as-str open-n) " open across "
+          (as-str (workstreams/len rows)) " streams · "
+          (as-str review-n) " in review · "
+          (as-str stale-n) " stale")))))
+
+(define workstreams/pulse-page
+  (lambda ()
+    "GET /pulse — the cross-stream indicator. Columns are the small shared
+     vocabulary; each stream keeps its real pipeline at /kanban?list=<id>."
+    (let
+      ((rows (list/map workstreams/pulse-row (workstreams/stream-rows))))
+      (html/page
+        (list
+          (html/h1 (html/text "Pulse"))
+          (html/p* (html/attr "class" "muted")
+            "Every open card you can see, grouped by the shared vocabulary. Each stream keeps its own real pipeline — open its board for the native columns and the add/move forms.")
+          (workstreams/pulse-summary rows)
+          (workstreams/pulse-table)
+          (html/join
+            (list
+              (workstreams/rollup-html)
+              (html/p* (html/attr "class" "muted ws-board-link")
+                (html/a "/workstreams" "per-stream detail")))))))))
+
+;; route publish — runs at seed/load-library time; ON CONFLICT keeps
+;; prior visibility on redeploys.
+(route "/pulse" "workstreams/pulse-page")
