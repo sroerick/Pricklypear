@@ -721,6 +721,25 @@
             rows))
         projects))))
 
+(define workstreams/intake-section
+  (lambda
+    (rows)
+    "The intake block: every stream with NO project, rendered last.
+     Ungrouped rows carry () as their project name — filtering by the
+     literal string \"intake\" matches nothing (found by the live test:
+     the page rendered 200 with zero sections)."
+    (let
+      ((mine
+        (list/filter
+          (lambda (r) (or (null? (car r)) (string-eq (as-str (car r)) "")))
+          rows)))
+      (if
+        (null? mine)
+        ()
+        (list
+          (html/h2 (html/text "intake"))
+          (workstreams/pulse-table (list/map cdr mine)))))))
+
 (define workstreams/projects-table
   (lambda
     (projects rows)
@@ -730,7 +749,7 @@
     (html/join
       (append
         (workstreams/projects-sections projects rows)
-        (workstreams/project-section "intake" rows)))))
+        (workstreams/intake-section rows)))))
 
 (define workstreams/projects-page
   (lambda
