@@ -735,7 +735,11 @@
 (define workstreams/projects-page
   (lambda
     ()
-    (workstreams/projects-init!)
+    "NOTE: projects-init! is NOT called here on purpose — a delegated
+     render would abort on the deftype denial. The type is declared at
+     boot (the top-level init! call below, boot-admin context) and the
+     face renders fine with an undeclared type: reads return no rows and
+     the intake section still groups every stream."
     (let
       ((projects (workstreams/projects-all)))
       (let
