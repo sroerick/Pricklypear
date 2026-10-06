@@ -359,7 +359,16 @@ let promote_functions (t : Store_db.t) ~(source_id : string) ~(target_id : strin
                       "WHERE branch_id = $2 AND name = $3 " ^
                       "ON CONFLICT (branch_id, name) DO UPDATE " ^
                       "SET body = EXCLUDED.body, author = EXCLUDED.author, " ^
-                      "    doc = EXCLUDED.doc, package = EXCLUDED.package, " ^
+                      "    doc = EXCLUDED.doc, " ^
+                      (* branching.package-provenance (audit 2026-10-05): keep
+                         the TARGET's existing package stamp when it has one —
+                         the source (a garden branch where the def was made by
+                         interactive define) is usually unstamped, and resetting
+                         to NULL dropped promoted internals out of
+                         package-bindings, which made pp-sync pull refuse the
+                         whole package (vault-vs-registry name anomaly). If the
+                         target has no stamp either, fall back to the source's. *)
+                      "    package = coalesce(function_defs.package, EXCLUDED.package), " ^
                       "    updated_at = now() RETURNING name" in
                     let rows =
                       Store_db.exec conn

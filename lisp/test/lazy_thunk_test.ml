@@ -61,6 +61,37 @@ let failure_is_memoized () =
   Alcotest.(check bool) "second touch replays failure" true raised_second;
   Alcotest.(check int) "body ran once despite failure" 1 !count
 
+(* image.audit-2026-10-05: a force that fails with Budget_exceeded must
+   NOT memoize the failure — budget exhaustion is context-dependent (the
+   request that first touched the binding happened to be nearly spent),
+   and replaying it poisoned the binding for the whole session (every
+   later /notes render 500'd at full budget until rehydrate). The cell
+   must stay Unforced so a later lookup RETRIES the body under its own
+   (fresh) budget. *)
+let budget_failure_is_retryable () =
+  let env = Env.create () in
+  let count = ref 0 in
+  let mode = ref `fail in
+  let gated_eval (_env : env) (_expr : expr) : value =
+    incr count;
+    match !mode with
+    | `fail -> raise (Interp_error Budget_exceeded)
+    | `ok -> VInt 7L
+  in
+  Env.define_thunk env "recipe" ~force:gated_eval
+    (App (Lambda ([ "x" ], Var "x"), [ Lit (VInt 7L) ]));
+  let raised_first =
+    try ignore (eval_str env "recipe"); false
+    with Interp_error Budget_exceeded -> true
+  in
+  Alcotest.(check bool) "first force raised budget" true raised_first;
+  mode := `ok;
+  let v = eval_str env "recipe" in
+  Alcotest.(check string) "second touch retries and succeeds" "7"
+    (Reader.pp_value v);
+  ignore (eval_str env "recipe");
+  Alcotest.(check int) "success memoized (no third run)" 2 !count
+
 let cyclic_force_raises () =
   let env = Env.create () in
   (* self refers to itself: forcing marks Forcing, the inner lookup
@@ -92,6 +123,7 @@ let tests = [
   ("delay does not eval at definition", `Quick, delay_does_not_eval_at_definition);
   ("force runs body once, memoizes", `Quick, force_runs_body_once_memoizes);
   ("failure is memoized", `Quick, failure_is_memoized);
+  ("budget failure is retryable (not memoized)", `Quick, budget_failure_is_retryable);
   ("cyclic force raises", `Quick, cyclic_force_raises);
   ("forcing sees fully linked env", `Quick, forcing_resolves_through_fully_linked_env);
 ]

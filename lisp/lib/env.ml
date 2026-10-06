@@ -63,7 +63,17 @@ let rec force_value (v : value) : value =
                 cell := Forced v;
                 v
             | exception exn ->
-                cell := Failed exn;
+                (* Memoize only DETERMINISTIC failures. Budget_exceeded is
+                   context-dependent — the same body forces fine under a
+                   fresh budget, so memoizing it poisons the binding for
+                   the whole session (image.audit-2026-10-05: one /notes
+                   render near budget end failed the force of notes/ui/*
+                   thunks and every later /notes request 500'd at full
+                   budget until rehydrate). Leave the cell Unforced so a
+                   later lookup retries; everything else replays. *)
+                (match exn with
+                 | Interp_error Budget_exceeded -> cell := Unforced payload
+                 | _ -> cell := Failed exn);
                 raise exn))
   | v -> v
 

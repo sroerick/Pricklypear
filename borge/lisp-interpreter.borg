@@ -2276,7 +2276,7 @@
   )
 
   (subsection lazy-env-thunks
-   (doc "VThunk: memoized lazy bindings; env LOAD stores recipes, first reference cooks them; explicit (delay)/(force) surface")
+   (doc "VThunk: memoized lazy bindings; env LOAD stores recipes, first reference cooks them; explicit (delay)/(force) surface. VALUE and DETERMINISTIC failures memoize; Budget_exceeded does NOT (2026-10-05 audit: budget exhaustion is context-dependent — a force that failed near a request's budget end must stay retryable, or the binding is poisoned for the whole session; every later full-budget render replayed the failure until rehydrate).")
    (status implemented)
    (implements
     lisp/lib/ast.ml
@@ -2285,7 +2285,7 @@
     lisp/test/lazy_thunk_test.ml)
    (verify
     (build "dune build lisp")
-    (test "dune runtest lisp: thunk forces once, memoizes value AND failure, cyclic force raises, delay/force round-trip")
+    (test "dune runtest lisp: thunk forces once, memoizes value AND deterministic failure, budget failure is retryable (not memoized), cyclic force raises, delay/force round-trip")
     (smoke "(force (delay (+ 1 2))) = 3; forcing twice runs body once"))
    (details
     (doc (|
