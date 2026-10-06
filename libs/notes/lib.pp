@@ -1,5 +1,5 @@
 ;; package notes -- exported from live branch system/main
-;; Sync: scripts/pp_sync.py pull|push
+;; Sync: scripts/pp-sync.sh status|pull|snapshot
 
 (define notes/all-todos
   (lambda
@@ -1143,6 +1143,20 @@
   (lambda (n) (car (cdr (cdr (cdr n)))))
   "Extract the outline tree from a decoded note row.")
 
+(define notes/doc/path
+  (lambda
+    (slug)
+    (let
+      ((row (notes/doc/row (as-str slug))))
+      (if (null? row) () (notes/doc/row-path row))))
+  "Live tree path of an EXISTING note, taken from its stored row (_path);
+   () when no note row exists. This is ADDRESS, not CONSTRUCT: it never
+   guesses a folder and never materializes a path. Use notes/tree/note-path
+   only for a genuinely new note or an explicit move target. Resolves the
+   note-path-resolution BUG (2026-10-03): a slug-addressed caller that
+   reconstructed <root>.<slug> silently targeted a DIFFERENT subtree for a
+   foldered note (e.g. the agents note at data.note.u.admin.wiki.agents).")
+
 (define notes/doc/row
   (lambda
     (slug)
@@ -1181,20 +1195,6 @@
         ((p (dict-get (cdr row) "_path")))
         (if (null? p) "" (as-str p)))))
   "Tree path of a row (empty when absent).")
-
-(define notes/doc/path
-  (lambda
-    (slug)
-    (let
-      ((row (notes/doc/row (as-str slug))))
-      (if (null? row) () (notes/doc/row-path row))))
-  "Live tree path of an EXISTING note, taken from its stored row (_path);
-   () when no note row exists. This is ADDRESS, not CONSTRUCT: it never
-   guesses a folder and never materializes a path. Use notes/tree/note-path
-   only for a genuinely new note or an explicit move target. Resolves the
-   note-path-resolution BUG (2026-10-03): a slug-addressed caller that
-   reconstructed <root>.<slug> silently targeted a DIFFERENT subtree for a
-   foldered note (e.g. the agents note at data.note.u.admin.wiki.agents).")
 
 (define notes/doc/search
   (lambda

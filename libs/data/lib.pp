@@ -1,5 +1,5 @@
 ;; package data -- exported from live branch system/main
-;; Sync: scripts/pp_sync.py pull|push
+;; Sync: scripts/pp-sync.sh status|pull|snapshot
 
 (define data/get-field
   (lambda

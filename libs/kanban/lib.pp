@@ -818,20 +818,13 @@ function kbDrop(ev){
       (todo/item/all))))
 
 (define kanban/stray?
-  (lambda (columns row)
-    "True when card row belongs in the 'other' bucket of a board whose columns
-     is `columns`: either its state isn't a column, OR the card carries its
-     OWN `pipeline` override that differs from this board's columns
-     (borge/workstreams.borg pipeline-model rendering contract: an item on a
-     different pipeline is never a column of this face and never hidden — it
-     lands in the trailing other bucket)."
-    (let
-      ((state (as-str (dict-get (cdr row) "state")))
-        (own (dict-get (cdr row) "pipeline")))
-      (if
-        (and (not (null? own)) (not (string-eq (as-str own) "")))
-        (not (kanban/columns-equal? columns (json-parse (as-str own))))
-        (not (kanban/in-columns? columns state))))))
+  (lambda
+    (columns row)
+    (not
+      (kanban/in-columns?
+        columns
+        (as-str (dict-get (cdr row) "state")))))
+  "True when a card belongs in the board's 'other' bucket: its state is not      one of the board's columns. OBITUARY (audit 2026-10-05): the own-      pipeline disjunct is retired with the per-item pipeline override      (todo/state/item-pipeline) — one pipeline per list, so stray is simply      not-a-column.")
 
 (define kanban/swap
   (lambda

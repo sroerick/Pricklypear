@@ -1,5 +1,5 @@
 ;; package signup -- exported from live branch system/main
-;; Sync: scripts/pp_sync.py pull|push
+;; Sync: scripts/pp-sync.sh status|pull|snapshot
 
 (define signup/blank?
   (lambda (s) "True if trimmed s is blank." (blank? (string-trim (as-str s)))))

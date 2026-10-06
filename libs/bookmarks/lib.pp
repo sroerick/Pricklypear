@@ -1,5 +1,5 @@
 ;; package bookmarks -- exported from live branch system/main
-;; Sync: scripts/pp_sync.py pull|push
+;; Sync: scripts/pp-sync.sh status|pull|snapshot
 
 (define bookmarks/all
   (lambda () "Return up to 100 bookmark rows." (rows (quote bookmark) 100)))
