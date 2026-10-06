@@ -360,6 +360,10 @@
   (doc "Book chapter — full text inlined from borge/branching.borg")
   (inline borge/branching.borg)
  )
+ (section trees
+  (doc "Book chapter — tree primitives contract: the storage algebra + contracts for the node forest (notes, todos, list rows — everything addressed by path); a 15-op core set with total-function contracts, one path grammar, and a single store-rim visibility chokepoint. Full text inlined from borge/trees.borg")
+  (inline borge/trees.borg)
+ )
  (section lisp-interpreter
   (doc "Book chapter — full text inlined from borge/lisp-interpreter.borg")
   (inline borge/lisp-interpreter.borg)
