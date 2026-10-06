@@ -3218,30 +3218,21 @@
               (if (string-eq cs "") todo/state/list (json-parse cs))))))))
   "The state set (list of state strings) for a todo-list: the list's own\n     `columns` field when present and non-empty, else the global default\n     todo/state/list. THE per-list override kanban columns and the /todos\n     state machine both read through, so a list with custom columns cycles\n     only those states everywhere.")
 
-(define todo/state/item-pipeline
-  (lambda
-    (item-id)
-    (let
-      ((row (todo/tree/get "todo-item" (as-str item-id))))
-      (if
-        (null? row)
-        (cons "default" todo/state/list)
-        (let
-          ((own (dict-get row "pipeline")))
+(define todo/state/item-pipeline (lambda
+  (item-id)
+  (let
+    ((row (todo/tree/get "todo-item" (as-str item-id))))
+    (if
+      (null? row)
+      (cons "default" todo/state/list)
+      (let
+        ((list-id (todo/item/list-id row)))
+        (cons
           (if
-            (and (not (null? own)) (not (string-eq (as-str own) "")))
-            (cons "own" (json-parse (as-str own)))
-            (let
-              ((list-id (todo/item/list-id row)))
-              (cons
-                (if (todo/state/list-has-columns? list-id) "list" "default")
-                (todo/state/columns-for-list list-id))))))))
-  "Resolve item-id's effective pipeline to (source . columns-list), source in
-     own|list|default. Shared by columns-for-item / pipeline-for-item so the
-     resolution is computed once. borge/workstreams.borg pipeline-model order:
-       a) the item's OWN `pipeline` override, else
-       b) the item's LIST `columns`, else
-       c) the global todo/state/list.")
+            (todo/state/list-has-columns? list-id)
+            "list"
+            "default")
+          (todo/state/columns-for-list list-id)))))))
 
 (define todo/state/list
   (list "" "TODO" "DONE" "WAITING" "CANCELLED"))
@@ -3575,35 +3566,34 @@
                           (html/attr "autocomplete" "off"))))
                     (html/button (html/attr "type" "submit") "Add")))))))))))
 
-(define todo/ui/detail
-  (lambda
-    (id view)
-    (let
-      ((fields (todo/item/get id)))
-      (if
-        (null? fields)
-        (html/div
-          (html/attr "class" "card")
-          (html/join
-            (list
-              (html/p* (html/attr "class" "err") "Item not found.")
-              (html/a (string-append "/todos?view=" view) "← back"))))
+(define todo/ui/detail (lambda
+  (id view)
+  (let
+    ((fields (todo/item/get id)))
+    (if
+      (null? fields)
+      (html/div
+        (html/attr "class" "card")
+        (html/join
+          (list
+            (html/p* (html/attr "class" "err") "Item not found.")
+            (html/a (string-append "/todos?view=" view) "← back"))))
+      (let
+        ((title (todo/item/title fields)))
         (let
-          ((title (todo/item/title fields)))
+          ((notes (todo/item/notes fields)))
           (let
-            ((notes (todo/item/notes fields)))
+            ((due (todo/item/due fields)))
             (let
-              ((due (todo/item/due fields)))
+              ((state (todo/item/state fields)))
               (let
-                ((state (todo/item/state fields)))
+                ((acceptance (todo/item/acceptance fields))
+                  (branch (todo/item/branch fields))
+                  (branch-kind (todo/item/branch-kind fields)))
                 (let
-                  ((acceptance (todo/item/acceptance fields))
-                    (branch (todo/item/branch fields))
-                    (branch-kind (todo/item/branch-kind fields)))
-                  (let
-                    ((lid (todo/item/list-id fields)))
-                    (html/div
-                      (html/attr "class" "card todo-detail")
+                  ((lid (todo/item/list-id fields)))
+                  (html/div
+                    (html/attr "class" "card todo-detail")
                     (html/join
                       (list
                         (html/p*
@@ -3635,6 +3625,11 @@
                                 "state"
                                 (html/attr "id" "state")
                                 (todo/state/options-for-item state id))
+                              (html/label (html/attr "for" "assignee") "Assignee")
+                              (html/select
+                                "assignee"
+                                (html/attr "id" "assignee")
+                                (todo/ui/assignee-options (todo/item/assignee fields)))
                               (html/label (html/attr "for" "due") "Due (YYYY-MM-DD)")
                               (html/text-input
                                 "due"
@@ -3681,9 +3676,7 @@
                                   (html/attr "class" "todo-acceptance")
                                   (html/join
                                     (list
-                                      (html/p*
-                                        (html/attr "class" "muted")
-                                        "Acceptance")
+                                      (html/p* (html/attr "class" "muted") "Acceptance")
                                       (html/pre (html/text acceptance))))))
                               (html/div
                                 ""
@@ -3691,7 +3684,8 @@
                                   (list
                                     (html/button (html/attr "type" "submit") "Save")
                                     " "
-                                    (html/a (string-append "/todos?view=" view) "Cancel"))))))) (todo/ui/feed-html id view))))))))))))))
+                                    (html/a (string-append "/todos?view=" view) "Cancel")))))))
+                        (todo/ui/feed-html id view))))))))))))))
 
 (define todo/ui/feed-html
   (lambda
@@ -3788,49 +3782,69 @@
                 stamp
                 (html/p (html/text (as-str (dict-get e "text"))))))))))))
 
-(define todo/ui/handle-post
-  (lambda
-    ()
-    (let
-      ((action (as-str (request-param "action"))))
-      (cond
-        ((string-eq action "cycle")
-          (todo/item/cycle (request-param "id")))
-        ((string-eq action "delete")
-          (todo/item/delete (request-param "id")))
-        ((string-eq action "archive")
-          (todo/item/archive (request-param "id")))
-        ((string-eq action "add")
-          (todo/item/add
-            (request-param "list_id")
-            (request-param "title")))
-        ((string-eq action "create-list")
-          (todo/list/create (request-param "title")))
-        ((string-eq action "delete-list")
-          (todo/list/delete (request-param "list_id")))
-        ((string-eq action "cycle-note")
-          (notes/outline/cycle-todo
-            (request-param "slug")
-            (request-param "node-id")))
-        ((string-eq action "save")
+(define todo/ui/handle-post (lambda
+  ()
+  (let
+    ((action (as-str (request-param "action"))))
+    (cond
+      ((string-eq action "cycle")
+        (todo/item/cycle (request-param "id")))
+      ((string-eq action "delete")
+        (todo/item/delete (request-param "id")))
+      ((string-eq action "archive")
+        (todo/item/archive (request-param "id")))
+      ((string-eq action "add")
+        (todo/item/add
+          (request-param "list_id")
+          (request-param "title")))
+      ((string-eq action "create-list")
+        (todo/list/create (request-param "title")))
+      ((string-eq action "delete-list")
+        (todo/list/delete (request-param "list_id")))
+      ((string-eq action "cycle-note")
+        (notes/outline/cycle-todo
+          (request-param "slug")
+          (request-param "node-id")))
+      ((string-eq action "save")
+        (seq
           (todo/item/save
             (request-param "id")
             (request-param "title")
             (request-param "notes")
             (request-param "due")
             (request-param "state")
-            (request-param "list_id")))
-        ((string-eq action "comment")
+            (request-param "list_id"))
           (let
-            ((c (request-param "comment")))
-            (if
-              (or (null? c) (string-eq (as-str c) ""))
-              ()
-              (todo/comment/add (request-param "id") (as-str c)))))
-        (else
-          (todo/item/add
-            (todo/list/ensure-inbox)
-            (request-param "title")))))))
+            ((a (request-param "assignee")))
+            (todo/item/assign
+              (request-param "id")
+              (if (null? a) "" (as-str a))))))
+      ((string-eq action "comment")
+        (let
+          ((c (request-param "comment")))
+          (if
+            (or (null? c) (string-eq (as-str c) ""))
+            ()
+            (todo/comment/add (request-param "id") (as-str c)))))
+      (else
+        (todo/item/add
+          (todo/list/ensure-inbox)
+          (request-param "title")))))))
+(define todo/ui/assignee-option (lambda (u sel) (html/option u u sel)))
+(define todo/ui/assignee-options (lambda
+  (cur)
+  (html/join
+    (cons
+      (html/option
+        ""
+        "(unassigned)"
+        (string-eq (as-str cur) ""))
+      (list/map
+        (lambda
+          (u)
+          (todo/ui/assignee-option u (string-eq u (as-str cur))))
+        (list-usernames))))))
+
 
 (define todo/ui/main
   (lambda
@@ -3981,3 +3995,51 @@
     (let
       ((v (request-param "view")))
       (if (null? v) "everything" (as-str v)))))
+
+(define todo/handle-post (lambda
+  ()
+  (let
+    ((action (as-str (request-param "action"))))
+    (if
+      (string-eq action "comment")
+      (let
+        ((c (request-param "comment")))
+        (if
+          (or (null? c) (string-eq (as-str c) ""))
+          ()
+          (todo/comment/add (request-param "id") (as-str c))))
+      (if
+        (string-eq action "cycle")
+        (todo/cycle (request-param "id"))
+        (if
+          (string-eq action "delete")
+          (todo/delete (request-param "id"))
+          (if
+            (string-eq action "archive")
+            (todo/archive (request-param "id"))
+            (if
+              (string-eq action "add")
+              (todo/add
+                (request-param "list_id")
+                (request-param "title"))
+              (if
+                (string-eq action "create-list")
+                (todo/create-list (request-param "title"))
+                (if
+                  (string-eq action "delete-list")
+                  (todo/delete-list (request-param "list_id"))
+                  (if
+                    (string-eq action "cycle-note")
+                    (notes/cycle-node-todo
+                      (request-param "slug")
+                      (request-param "node-id"))
+                    (if
+                      (string-eq action "save")
+                      (todo/save
+                        (request-param "id")
+                        (request-param "title")
+                        (request-param "notes")
+                        (request-param "due")
+                        (request-param "state")
+                        (request-param "list_id"))
+                      (todo/add (todo/ensure-inbox) (request-param "title"))))))))))))))
