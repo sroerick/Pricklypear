@@ -1,0 +1,135 @@
+#!/bin/ksh
+# doasq — the privileged-request queue CLI (wyo.town).
+# Card 257693b2 / borge/doasq.borg. See doasq-exec for the runner side.
+#
+# Layout (created by the bootstrap, root):
+#   /var/doasq/requests/   hollis-writable: pending requests (755 hollis)
+#   /var/doasq/approvals/  roerick-writable ONLY (750 roerick) — the
+#                          unforgeable half: hollis can never write here
+#   /var/doasq/runs/       root-written outputs (755)
+#   /var/doasq/audit.log   root-appended; who/what/when/result
+#
+# Before the bootstrap runs, set DOASQ_DIR to a staging dir to file
+# requests; the bootstrap migrates them into /var/doasq.
+
+DOASQ_DIR="${DOASQ_DIR:-/var/doasq}"
+REQ="$DOASQ_DIR/requests"
+OK="$DOASQ_DIR/approvals"
+RUNS="$DOASQ_DIR/runs"
+
+die() { print -u2 -- "doasq: $*"; exit 1; }
+usage() {
+  print -u2 "usage: doasq submit -w \"why\" < cmd   (or: submit -w \"why\" -- COMMAND)"
+  print -u2 "       doasq list | show ID | approve ID | run ID | log [ID]"
+  exit 2
+}
+
+sha_of() { printf '%s' "$1" | openssl dgst -sha256 -r 2>/dev/null | cut -d' ' -f1; }
+
+new_id() {
+  print -r -- "$(date -u +%Y%m%dT%H%M%S)-$(id -un)-$(openssl rand -hex 2 2>/dev/null || print $$)"
+}
+
+cmd="${1:-}"; [ -n "$cmd" ] || usage
+shift
+
+case "$cmd" in
+submit)
+  why=""
+  while getopts "w:" o; do
+    case "$o" in w) why="$OPTARG" ;; *) usage ;; esac
+  done
+  shift $((OPTIND - 1))
+  [ "${1:-}" = "--" ] && shift
+  if [ $# -gt 0 ]; then
+    # argument mode: single line, quoting already lost — prefer stdin
+    command_text="$*"
+  else
+    # stdin mode (preferred): the command text EXACTLY as typed, any
+    # quoting, multi-line scripts allowed — the sha covers every byte
+    command_text="$(cat)"
+  fi
+  [ -n "$command_text" ] || die "empty command — nothing to submit"
+  [ -n "$why" ] || die "a plain-language -w why is required (the approver sees it + the full command)"
+  id="$(new_id)"
+  umask 022
+  {
+    print -r -- "id: $id"
+    print -r -- "requester: $(id -un)"
+    print -r -- "created: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    print -r -- "why: $why"
+    print -r -- "sha256: $(sha_of "$command_text")"
+    print -r -- "---"
+    print -r -- "$command_text"
+  } > "$REQ/$id.req" || die "cannot write $REQ — is the queue bootstrapped? (set DOASQ_DIR to stage)"
+  print -r -- "filed $id"
+  print -r -- "  why:  $why"
+  print -r -- "next: roerick runs: doasq approve $id   — then you run: doasq run $id"
+;;
+
+list)
+  [ -d "$REQ" ] || die "no queue at $DOASQ_DIR"
+  for f in "$REQ"/*.req; do
+    [ -f "$f" ] || continue
+    id="$(basename "$f" .req)"
+    st="pending"
+    [ -f "$OK/$id.used" ] && st="used"
+    [ -f "$OK/$id.running" ] && st="running"
+    [ -f "$OK/$id.ok" ] && st="APPROVED"
+    who="$(sed -n 's/^requester: //p' "$f")"
+    why="$(sed -n 's/^why: //p' "$f")"
+    print -r -- "$id  $st  $who  $why"
+  done
+  ;;
+
+show)
+  id="${1:-}"; [ -n "$id" ] || usage
+  f="$REQ/$id.req"
+  [ -f "$f" ] || die "no such request: $id"
+  cat "$f"
+  print -r -- "==="
+  if [ -f "$OK/$id.ok" ]; then print -r -- "approved:"; cat "$OK/$id.ok"
+  elif [ -f "$OK/$id.used" ]; then print -r -- "approved + consumed:"; cat "$OK/$id.used"
+  else print -r -- "NOT approved yet"; fi
+  [ -f "$RUNS/$id.out" ] && { print -r -- "== output:"; cat "$RUNS/$id.out"; }
+  ;;
+
+approve)
+  id="${1:-}"; [ -n "$id" ] || usage
+  [ "$(id -un)" = "roerick" ] || die "approve runs as roerick (the approvals dir enforces this too)"
+  f="$REQ/$id.req"
+  [ -f "$f" ] || die "no such request: $id"
+  [ -f "$OK/$id.ok" ] || [ -f "$OK/$id.used" ] || die "not approved"
+  [ -f "$OK/$id.ok" ] && die "already approved"
+  [ -f "$OK/$id.used" ] && die "already used (one-shot)"
+  req_sha="$(sed -n 's/^sha256: //p' "$f")"
+  cmd_text="$(sed -n '1,/^---$/d; p' "$f")"
+  [ "$(sha_of "$cmd_text")" = "$req_sha" ] || die "request tampered: sha mismatch — refuse"
+  umask 077
+  {
+    print -r -- "approved-by: roerick"
+    print -r -- "approved-at: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    print -r -- "sha256: $req_sha"
+  } > "$OK/$id.ok" || die "cannot write approvals — dir perms wrong"
+  print -r -- "approved $id"
+  print -r -- "  hollis now runs: doasq run $id"
+  ;;
+
+run)
+  id="${1:-}"; [ -n "$id" ] || usage
+  [ -x /usr/local/bin/doasq-exec ] || die "doasq-exec not installed — run the bootstrap first"
+  exec doas /usr/local/bin/doasq-exec "$id"
+  ;;
+
+log)
+  id="${1:-}"
+  if [ -n "$id" ]; then
+    [ -f "$RUNS/$id.out" ] || die "no output for $id"
+    cat "$RUNS/$id.out"
+  else
+    [ -f "$DOASQ_DIR/audit.log" ] && tail -20 "$DOASQ_DIR/audit.log" || print -r -- "(no audit log yet)"
+  fi
+  ;;
+
+*) usage ;;
+esac
