@@ -101,8 +101,8 @@
    fully-mechanical work (2026-09-26 plan pass; AUTO lane added 2026-09-27
    after the 0fac2ef3 dogfood run showed a pure kernel bug funneled through
    UI-REVIEW and parked on the human gate). ALREADY SUPPORTED by the
-   pipeline-model resolution order (item override > list columns > global
-   default) — a pipeline is data, so the split is writing lists, not code.
+   pipeline-model resolution order (the list's columns, else the global
+   default — a pipeline is data, so the split is writing lists, not code.
    THREE streams:
 
    FACES — pipeline TODO → CODE → UI-REVIEW → HUMAN-REVIEW → DONE. Anything
@@ -559,31 +559,33 @@
 
    RESOLUTION ORDER for an item's effective pipeline (final column set + the
    list the cycle/next machine cycles through):
-     a) the item's OWN pipeline override (per-item `pipeline` field) — absent
-        by default;
-     b) else the pipeline of the LIST the item lives in (the list's `columns`
+     a) the pipeline of the LIST the item lives in (the list's `columns`
         field, set via kanban/columns-set / todo/state/columns-for-list) —
         a workstream's list IS its pipeline today;
-     c) else the GLOBAL default (todo/state/list).
-   This is strictly backward-compatible: today only (b) exists, so cards,
-   issues, and note-todos keep working unchanged; (a) and the cross-kind reads
-   are additive.
+     b) else the GLOBAL default (todo/state/list).
+   OBITUARY (2026-10-05, roerick-approved audit; live on system/main): the
+   per-item `pipeline` override (the old tier-a) is RETIRED. Three stacked
+   machines made "which states does this card have?" a three-level
+   precedence question, forced kanban/stray? other-bucket logic to exist,
+   and broke board views for own-pipeline cards. A card that needs a
+   different pipeline belongs on a different LIST — the streams ARE lists.
+   The stale `pipeline` FIELD on todo-item datums is ignored (not deleted);
+   todo/state/pipeline-for-item returns 'list | 'default only. A card can
+   ride a different pipeline only by moving to a list that runs it.
 
-   RENDERING CONTRACT (this is what makes 'todos with other pipelines just
-   don't show up under kanban' true as law, not nuance): a columnar face
-   (kanban board, /workstreams) renders, for its chosen pipeline, every item
-   whose effective pipeline MATCHES that pipeline's state set; an item on a
-   different pipeline is not a column — it lands in the face's trailing
-   'other' bucket (kanban/other-bucket already implements exactly this) or its
-   own pipeline's view. Nothing is hidden or lost; items simply live on other
-   pipelines. A pipeline with no item ever on it is still a valid pipeline.
+   RENDERING CONTRACT (two-level edition): a columnar face (kanban board,
+   /pulse) renders, for its chosen pipeline, every item whose state is one of
+   that pipeline's columns; anything else lands in the face's trailing
+   'other' bucket (kanban/stray? = simply not-a-column since the retirement).
+   Nothing is hidden or lost; items simply live on other lists. A pipeline
+   with no item ever on it is still a valid pipeline.
 
-   PIPELINES ARE DATA, not code: a pipeline is the `columns`/`pipeline` field
-   of a list/item (a JSON array of state-name strings); there is no kernel
-   type and no enum to extend. Defining a new pipeline = writing a list. This
-   is why the todo/note/issue identity line can converge on one machine:
-   notes/issues gain richer status simply by referencing a pipeline; cards
-   already have one.
+   PIPELINES ARE DATA, not code: a pipeline is the `columns` field of a list
+   (a JSON array of state-name strings); there is no kernel type and no enum
+   to extend. Defining a new pipeline = writing a list. This is why the
+   todo/note/issue identity line can converge on one machine: notes/issues
+   gain richer status simply by referencing a pipeline; cards already have
+   one.
 
    CONVERGENCE (supersedes work-triage.borg unification-handoff): the card
    `state` machine (5+ states, per-list columns, events, recipes — everything
@@ -593,11 +595,11 @@
    the todo faces render notes/issues nodes whose pipeline matches. A quick
    note-heading todo may keep the outline `todo` 3-state shortcut, but any
    node that wants the full machine references a pipeline.")
-  (implements "libs/todo/lib.pp todo/state/columns-for-list + todo/state/next-for-list + item pipeline override"
-              "libs/kanban/lib.pp kanban/other-bucket (exists)"
+  (implements "libs/todo/lib.pp todo/state/columns-for-list + todo/state/next-for-item (two-level)"
+              "libs/kanban/lib.pp kanban/stray? (not-a-column)"
               "libs/notes/lib.pp issues lens reads pipeline"
-              "libs/workstreams/lib.pp columns read through resolution order")
-  (status planned)
+              "libs/workstreams/lib.pp pulse face reads the same columns")
+  (status implemented-live)
   (* agent note (|2026-09-25 roerick: 'we should basically describe the state
      pipeline/status machine as a list. a todo should be able to define its own
      state pipeline. everything in our todo list and our issues log should use
@@ -624,8 +626,9 @@
      columns-for-item/pipeline-for-item — the per-row shape 500'd /issues on the
      route budget.|) *)
   (verify
-   (test "an item's effective pipeline = own override > list columns > global default"
-         "a card on a non-board pipeline renders in the other bucket, never hidden"
+   (test "an item's effective pipeline = list columns, else the global default (two-level)"
+         "a card in a state the board has no column for renders in the other bucket, never hidden"
          "an issue whose node references the work-triage pipeline renders in kanban columns"
-         "a new pipeline is just writing a columns list — no kernel type")))
+         "a new pipeline is just writing a columns list — no kernel type"
+         "no todo/card writer reads the per-item `pipeline` field anymore")))
 )
