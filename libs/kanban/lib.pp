@@ -854,3 +854,55 @@ function kbDrop(ev){
                   "todo-item"
                   (dict-set* f2 (list "position" p1))))))))))
   "Swap the position fields of two cards (same column). Runs inside the\n     caller's transaction (see kanban/move-card note).")
+(define kanban/ensure-auto-lane
+  (lambda
+    ()
+    "Resolve-or-create the AUTO lane (stream-pipelines: the no-human-gate
+     agent stream). Root cause of the Auto accretion (13 dead Auto lists
+     in one garden, 2026-10-06): the lane was minted manually per session
+     — each run created a fresh garden list instead of reusing. This
+     resolves by title across the caller's visible lists (garden first,
+     shared next, per the todo/list/all merge) and only creates when
+     genuinely absent. Returns (id . fields)."
+    (let
+      ((hits
+        (list/filter
+          (lambda (row)
+            (string-eq (as-str (dict-get (cdr row) "title")) "Auto"))
+          (todo/list/all))))
+      (if
+        (null? hits)
+        (kanban/auto-lane-create)
+        (car hits)))))
+
+(define kanban/auto-lane-create
+  (lambda
+    ()
+    "Create the AUTO lane with the canonical columns + recipes verbatim
+     from the live lane (2026-10-06 snapshot; the spec source is
+     borge/workstreams.borg stream-pipelines). Created in the CALLER's
+     garden; promotion to a shared space is a deliberate migration, not
+     a side effect."
+    (todo/tree/create
+      "todo-list"
+      (dict-set*
+        "{}"
+        (list
+          "title"
+          "Auto"
+          "description"
+          "Intake (AUTO lane): fully-mechanical agent work — no SPEC column, no human gate. See borge/workstreams.borg stream-pipelines."
+          "is_default"
+          "false"
+          "columns"
+          (list "TODO" "CODE" "LOGIC-REVIEW" "HUMAN-REVIEW" "DONE" "PARKED")
+          "recipes"
+          (dict-set*
+            "{}"
+            (list
+              "TODO"
+              "Intake (AUTO lane): this stream has no SPEC column and no human gate. If the card needs a spec decision first or touches UI, schema migrations, auth, store, or prod promote, it does NOT belong in this list — move it to the Board list (FACES/KERNEL) and comment why. Otherwise set the card to CODE and comment the placement."
+              "LOGIC-REVIEW"
+              "You are the LOGIC REVIEWER for Pricklypear on the AUTO lane (workstreams.borg stream-pipelines) — this stream has NO human gate: your PASS closes the card. Review the card's work on its target branch against its acceptance criteria: read the change, run dune build + dune runtest (lisp/common at minimum), check borge drift after any .borg edit, and independently re-verify the stated evidence (run the smoke/test yourself, do not trust the comment). PASS -> end with DESTINATION: DONE plus your verdict + evidence comment. FAIL -> end with DESTINATION: CODE and a comment listing exactly what to fix. ESCALATION: if the card thread (todo-events + comments) already shows two FAIL verdicts for the same defect, do not loop again — end with DESTINATION: HUMAN-REVIEW and a comment explaining the repeated failure.")))))))    kanban/ensure-auto-lane
+    kanban/auto-lane-create
+  
