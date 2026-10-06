@@ -631,4 +631,38 @@
          "an issue whose node references the work-triage pipeline renders in kanban columns"
          "a new pipeline is just writing a columns list — no kernel type"
          "no todo/card writer reads the per-item `pipeline` field anymore")))
+
+
+ ;; ---------------------------------------------------------------------------
+ ;; PULSE PROJECTION (2026-10-05) — the cross-stream indicator face
+ ;; ---------------------------------------------------------------------------
+ (section pulse-projection
+  (doc "DECISION (roerick, 2026-10-05): heterogeneous pipelines are the
+   reality — a BUG card, an ops stream, and a faces card do not share one
+   state machine, and the strict RENDERING CONTRACT above (faces render
+   only matching-pipeline items) fragments the view the more streams
+   differ. REVISED to two layers.
+     - NATIVE (unchanged): each list's columns are its real pipeline;
+       boards stay per-list at /kanban?list=<id>. The shared Board is the
+       FACES stream's board, not a universal one.
+     - INDICATOR: a small shared vocabulary (queued/active/review/parked;
+       done covers terminal columns) rolls every visible list up into ONE
+       face, /pulse (libs/workstreams pulse-*): one row per stream, coarse
+       counts, stale flags, the HUMAN-REVIEW rollup, click-through to the
+       native boards.
+   The join is the per-list OPTIONAL `status-map` field (JSON object,
+   column -> coarse status). Standard columns map by default
+   (workstreams/status-map-default); an open column with no mapping reads
+   as active; a list overrides once via workstreams/status-map-set. No
+   item schema changes; nothing backfilled.
+   RETIRED by this decision: the strict rendering contract above — faces
+   render their OWN list natively; only /pulse projects across lists.
+   NOTE (reconciled with the pipeline-model OBITUARY above): the per-item
+   `pipeline` override was retired in the same 2026-10-05 audit, so
+   nothing here resurrects it — /pulse projects from each list's columns
+   (status-map), never from a per-item pipeline. The CONVERGENCE goal
+   above is replaced by: one VOCABULARY for indicators, native machines
+   for work.")
+  (implements "libs/workstreams/lib.pp pulse-* defines + workstreams/status-map-set + /pulse route")
+  (status implemented-live))
 )
