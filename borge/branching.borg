@@ -1935,4 +1935,68 @@
    )
   )
  )
+
+
+ (section branching-ast-ergonomics
+  (doc "DECISION (roerick 2026-10-06): branching operations are AST-aware,
+   never line-based. The unit of versioning is already the define (pin);
+   the unit of DIFF and MERGE becomes the SUBTREE of the define's
+   s-expression, compared in canonical pp_expr form (whitespace-
+   normalized). Three-way rule per subtree position: one side changed ->
+   take it; both changed identically -> keep; both changed differently ->
+   conflict, reported at the SUBTREE PATH (e.g. workstreams/pulse-page :
+   body : (list/map ...) — never a line hunk, never a whole-define
+   clobber). Hash = the canonical-sexp hash (the pin-hygiene hash) — no
+   text lines anywhere in the mechanism.")
+  (status draft)
+  (details
+   (doc "OPS TABLE — the ergonomics layer over branch_algebra.ml. The
+     algebra computes everything (classify: clean/ahead-new/ahead/behind/
+     diverged/synced; chain; pin hygiene); nothing surfaces it:
+       clone   -> fork (exists) + agents boot into <parent>/agent (exists)
+       status  -> NEW face+prim (branch/status ref): per-pin classify +
+                  counts + the divergent worklist. Closes the /branches
+                  stale-snapshot bug: rendered from the store, not the
+                  session snapshot (2026-10-05/06 incidents).
+       pull    -> NEW (branch/pull ref): every BEHIND pin adopts the
+                  parent's version (bulk unoverride) + report; diverged
+                  pins untouched (the obituary rule — no silent reversals).
+       push    -> NEW (branch/push ref [names]): agent-promote to the
+                  PARENT branch — the promote_to_personal generalization,
+                  gated by the parent's allow_agent_promote. Dependency
+                  closure runs FIRST: the holes check on the target — a
+                  promoted pin referencing a name unbound on the target is
+                  refused or auto-included (2026-10-05 incident:
+                  pulse-row-from promoted without workstreams/stale-node?
+                  -> system/main 500).
+       tree    -> NEW face: the forest — parents, children, per-edge
+                  (ahead/behind/diverged) counts. One page.
+       delete / rename -> NEW prims + UI (a 0-own-code branch could not
+                  be removed; renames were impossible).
+     GRANULARITY: the pin stays the unit of versioning; the AST makes the
+     DIFF subtree-granular inside a pin and makes RENAME/MOVE detectable
+     (hash-equal body under a new name = rename, not delete+add).")
+   (status draft))
+  (section ast-diff
+   (doc "sexp_diff.ml: pure structural diff on canonical sexps. Edit
+     script at subtree granularity. Round-trip property: applying the
+     script to the parent AST yields the child AST. Property-tested
+     against a naive reference (the branch_algebra pattern).")
+   (implements "image/lib/sexp_diff.ml (new, pure)")
+   (status draft))
+  (section ast-merge
+   (doc "Three-way merge at subtree granularity: base = the fork-point
+     body; per subtree, one-side-changed applies, both-identical applies,
+     both-changed-differently -> conflict at the subtree path. Diverged
+     defines are NEVER auto-merged (merge_applies obituary rule, extended
+     from pins to subtrees). Conflicts land in the conflict worklist face
+     with the conflicting subtree rendered.")
+   (status draft))
+  (section debts
+   (doc "Folded into this work: the /branches page renders session-
+     snapshot counters (stale) — must read the store; the promote body-
+     corruption incident (2026-10-05: promoted copies 500'd where the
+     in-session originals rendered — root-cause the promote's store
+     write); the /branches display shows two rows for one name
+     (branch-code row vs garden row) — needs an explicit label.")))
 )
