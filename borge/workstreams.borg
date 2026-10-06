@@ -665,4 +665,61 @@
    for work.")
   (implements "libs/workstreams/lib.pp pulse-* defines + workstreams/status-map-set + /pulse route")
   (status implemented-live))
+
+
+ (section projects-plan
+  (doc "DECISION (roerick 2026-10-06): projects are a GROUPING LEVEL above
+    lists — Basecamp-campsite shape, spec before build. A project is a
+    FIRST-CLASS DATUM, type project (never todo-project: type names bake
+    into row paths and agent context; the coupling to todos lives in the
+    POINTER, list.project_id, not in the project's name — the coupling is
+    one-directional, todos point at projects, a project never knows what
+    kind of children it has). Card question (a) resolved: first-class
+    datum + uuid pointer; the bare string-field variant is REJECTED —
+    denormalized identity: typos mint phantom projects, no metadata home,
+    rename = N list writes.")
+  (status draft)
+  (doc "DATUM — the exact store envelope (no new machinery; a new type value):
+    { type: project,
+      path: data.s.<space>.<b64(project)>.<hash>,
+      body: { title: wyo.town, slug: town, owner: roerick, order: 2,
+              color: #0b57a8, archived: #f, notes: campsite board, later } }
+    The todo-list datum gains ONE pointer field: project_id (uuid). Items
+    unchanged — project inherits through the list. IDENTITY vs ADDRESS:
+    the uuid is the identity (every pointer survives any reorganization),
+    the path is the address (movable) — the pair is what lets the model
+    graduate from pointer to containment without a migration cliff.")
+  (doc "PERMISSIONING — the datum's own path is the visibility boundary.
+    data.s = shared; the owner's garden = private; the same VIS chokepoint
+    (trees.borg, one rim) governs, so private-vs-shared projects need NO
+    new permission machinery. When containment lands (lists re-parented
+    under the project path), visibility at the project node covers its
+    lists AND their items by inheritance — subtree scoping without an ACL
+    system; the notes.borg private/instance/world tiers slot here.")
+  (doc "SURFACE — one face, the pulse one-scan pattern: project -> streams
+    -> counts (queued/active/review/parked/stale) + assignees. Cost: the
+    existing items+lists scan plus ONE indexed find by type (project) to
+    build the id->project map — no N+1 face. Containment later swaps that
+    find for children(projects-path). Defaults: the Board (0b21ffaa) stays
+    cross-project intake; existing streams backfill in one pass (glochid/
+    ppchat = one project, obsd/mainframe = infra, wyo.town = town); the
+    triage pass owns placement of NEW streams.")
+  (doc "NON-GOALS — no project-level pipeline, no project-specific states,
+    no nesting: project > list > card is exactly two levels of grouping,
+    one of state; ZERO new state names in every variant. Notes/docs
+    attaching to projects is DEFERRED (card question (c)) — the project
+    node's body is the home when it happens. Who may create projects:
+    admin/roerick first (question (d)). The /issues register stays
+    cross-project (question (b) recommendation stands).")
+  (doc "GRADUATION — phase 1: pointer model (project datum + list.project_id).
+    phase 2 (with trees.borg): lists re-parent UNDER the project path via
+    the tree move op; project_id survives in bodies; the face swaps one
+    resolution function and nothing else changes.")
+  (doc "DEPENDENCIES + ACCEPTANCE — eb24a8f0 (tree reads) and 42f13855
+    (one-scan faces) land or are designed-in first: the project face
+    multiplies whatever the stream scan costs. Acceptance: one face where
+    roerick sees per-project stream groups with live counts and can jump
+    into any stream board; adding a stream to a project is one field
+    write; zero new state names."))
+
 )
