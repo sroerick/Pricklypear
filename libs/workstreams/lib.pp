@@ -778,4 +778,4 @@
 ;; seed evaluates these as boot-admin (non-delegated); load-library
 ;; from a session binds the route locally for that session's branch.
 (workstreams/projects-init!)
-(route "/projects" workstreams/projects-page "shared")
+(route "/projects" "workstreams/projects-page" "private")
