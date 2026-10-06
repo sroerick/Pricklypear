@@ -399,41 +399,38 @@
   (lambda (nodes lid title)
     "One pulse row from a PRE-SCANNED node list: (title list-id counts
      stale-count open-count). Single-pass — no per-stream rescans."
-    (let
-      ((override (workstreams/status-map-for-list lid)))
-      (let
-        ((mine (list/filter
-                 (lambda (n)
-                   (string-eq
-                     (as-str (dict-get (dict-get n "body") "list_id"))
-                     (as-str lid)))
-                 nodes)))
-        (let
-          ((open-n (list/filter workstreams/open-node? mine)))
-          (let
-            ((stale-th (workstreams/stale-threshold)))
-            (list title lid
-                  (list/map
-                    (lambda (st)
-                      (cons st
-                        (workstreams/len
-                          (list/filter
-                            (lambda (n)
-                              (string-eq
-                                (workstreams/status-resolve
-                                  override
-                                  (todo/item-state (dict-get n "body")))
-                                st)
-                              open-n))))
-                    (workstreams/status-vocab)))
-                  (workstreams/len
-                    (list/filter
-                      (lambda (n)
-                        (let
-                          ((c (dict-get n "created_at")))
-                          (if (null? c) #f (workstreams/old? c stale-th))))
-                      open-n))
-                  (workstreams/len open-n))))))))
+    (let ((override (workstreams/status-map-for-list lid)))
+      (let ((mine (list/filter
+                    (lambda (n)
+                      (string-eq
+                        (as-str (dict-get (dict-get n "body") "list_id"))
+                        (as-str lid)))
+                    nodes)))
+        (let ((open-n (list/filter workstreams/open-node? mine)))
+          (let ((stale-th (workstreams/stale-threshold)))
+            (list
+              title
+              lid
+              (list/map
+                (lambda (st)
+                  (cons st
+                    (workstreams/len
+                      (list/filter
+                        (lambda (n)
+                          (string-eq
+                            (workstreams/status-resolve
+                              override
+                              (todo/item-state (dict-get n "body")))
+                            st))
+                        open-n))))
+                (workstreams/status-vocab))
+              (workstreams/len
+                (list/filter
+                  (lambda (n)
+                    (let ((c (dict-get n "created_at")))
+                      (if (null? c) #f (workstreams/old? c stale-th))))
+                  open-n))
+              (workstreams/len open-n))))))))
 
 (define workstreams/pulse-count-cell
   (lambda (lid count)
@@ -529,7 +526,7 @@
                    (and
                      (workstreams/open-node? n)
                      (string-eq (todo/item-state (dict-get n "body")) "HUMAN-REVIEW")))
-                 nodes))))))
+                 nodes)))))
         (html/div (html/attr "class" "ws-rollup")
           (html/join
             (list
@@ -547,7 +544,7 @@
                               (workstreams/card-link (car c) (car c))
                               (html/span (html/attr "class" "muted")
                                 (html/text (string-append " · " (cdr c))))))))
-                      hits))))))))))
+                      hits)))))))))))
 
 (define workstreams/pulse-page
   (lambda ()
