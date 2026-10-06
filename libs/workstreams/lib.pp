@@ -618,3 +618,155 @@
                 (html/a (string-append "/kanban?list=" lid) "open board"))
               (workstreams/stale-html stale)
               (html/void "hr" ""))))))))
+
+;; ---------------------------------------------------------------
+;; projects — Basecamp-style grouping above lists
+;; spec: borge/workstreams.borg projects-plan; card 4a73947e.
+;; A project is a first-class datum (type: project — never
+;; todo-project: type names bake into row paths and agent context;
+;; the coupling to todos lives in the pointer, list.project_id, not
+;; in the project's name). Items inherit the project through their
+;; list. The uuid is the identity; the path is the address.
+
+(define workstreams/projects-init!
+  (lambda
+    ()
+    "Ensure the project datum type exists. Guarded so a re-load is safe
+     and a non-admin load degrades to a no-op value (the
+     todo/comments-init! pattern); boot seeds types onto system/main as
+     admin. A delegated session also no-ops here by design."
+    (if
+      (null? (type-fields (quote project)))
+      (deftype
+        (quote project)
+        (quote title)
+        (quote slug)
+        (quote owner)
+        (quote order)
+        (quote color)
+        (quote archived)
+        (quote notes))
+      "project ok")))
+
+(define workstreams/projects-all
+  (lambda
+    ()
+    "Project datums the caller can see: garden rows + shared-space rows
+     merged by id, garden first (the todo/list/all dual-scan pattern).
+     Each is (id . fields)."
+    (todo/list/merge
+      (todo/tree/rows "project" 200)
+      (list/map
+        todo/tree/node->pair
+        (list/filter
+          (lambda
+            (nj)
+            (string-eq (as-str (dict-get nj "type")) "project"))
+          (tree/list (todo/tree/shared-prefix) 3 5000))))))
+
+(define workstreams/stream-fields
+  (lambda
+    ()
+    "Every non-default workstream as (id . fields): the full datum, not
+     just the title — the face needs project_id per stream. Board is
+     included like any other stream; without a project_id it renders
+     under intake, which is the Board's job anyway."
+    (list/filter
+      (lambda (row) (not (todo/list/default? (cdr row))))
+      (todo/list/all))))
+
+(define workstreams/project-name
+  (lambda
+    (projects pid)
+    "Project display title for a project_id, or () when ungrouped."
+    (if
+      (or (null? pid) (string-eq (as-str pid) ""))
+      ()
+      (let
+        ((hit
+          (list/filter
+            (lambda (p) (string-eq (as-str (car p)) (as-str pid)))
+            projects)))
+        (if (null? hit) () (as-str (dict-get (cdr (car hit)) "title")))))))
+
+(define workstreams/project-section
+  (lambda
+    (name rows)
+    "One project block: heading + the pulse stream table for its rows.
+     Returns () when the project has no visible streams, so sections
+     compose with append and empty ones vanish."
+    (let
+      ((mine
+        (list/filter
+          (lambda (r) (string-eq (as-str (car r)) name))
+          rows)))
+      (if
+        (null? mine)
+        ()
+        (list
+          (html/h2 (html/text name))
+          (workstreams/pulse-table (list/map cdr mine)))))))
+
+(define workstreams/projects-sections
+  (lambda
+    (projects rows)
+    "One section per project datum that has visible streams."
+    (list/filter
+      (lambda (sec) (not (null? sec)))
+      (list/map
+        (lambda
+          (p)
+          (workstreams/project-section
+            (as-str (dict-get (cdr p) "title"))
+            rows))
+        projects))))
+
+(define workstreams/projects-table
+  (lambda
+    (projects rows)
+    "Project sections, then intake (ungrouped streams) last. Rows are
+     (project-name . pulse-row); the pulse-row shape is reused whole, so
+     the stream/count table stays byte-identical to /pulse."
+    (html/join
+      (append
+        (workstreams/projects-sections projects rows)
+        (workstreams/project-section "intake" rows)))))
+
+(define workstreams/projects-page
+  (lambda
+    ()
+    (workstreams/projects-init!)
+    (let
+      ((projects (workstreams/projects-all)))
+      (let
+        ((streams (workstreams/stream-fields)))
+        (let
+          ((nodes (workstreams/pulse-nodes)))
+          (let
+            ((rows
+              (list/map
+                (lambda
+                  (s)
+                  (cons
+                    (workstreams/project-name
+                      projects
+                      (dict-get (cdr s) "project_id"))
+                    (workstreams/pulse-row-from
+                      nodes
+                      (car s)
+                      (as-str (dict-get (cdr s) "title")))))
+                streams)))
+            (html/page
+              (list
+                (html/h1 (html/text "Projects"))
+                (html/p*
+                  (html/attr "class" "muted")
+                  "Streams grouped by project. A stream without a project renders under intake — the Board stays the cross-project queue. ONE scan feeds the page: the pulse one-scan pattern.")
+                (workstreams/projects-table projects rows)
+                (html/p*
+                  (html/attr "class" "muted ws-board-link")
+                  (html/a "/pulse" "the flat indicator")))))))))
+  "GET /projects — project -> streams -> coarse-status counts, reusing
+     the pulse row machinery whole. Same single-pass model: one item
+     scan, one list scan, one indexed project scan; grouped by
+     list.project_id. A stream joins a project with one field write.")
