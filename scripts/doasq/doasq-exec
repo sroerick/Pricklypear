@@ -1,0 +1,75 @@
+#!/bin/ksh
+# doasq-exec — the root-side runner. Invoked ONLY via:
+#   doas /usr/local/bin/doasq-exec <id>
+# backed by the single doas rule:  permit nopass hollis cmd /usr/local/bin/doasq-exec
+#
+# Contract (borge/doasq.borg): verify-then-run, one-shot, fully audited.
+#   1. the request exists and its recorded sha256 matches its own command
+#      (self-consistency: nothing edited the request after filing)
+#   2. an approval exists whose sha256 matches the command (the approval
+#      covers EXACTLY the submitted text — any tamper is a mismatch)
+#   3. one-shot: the approval is claimed atomically (mv .ok -> .running)
+#      before anything runs; a second run finds no .ok
+#   4. full audit: ts, id, requester, approver, exit code, the ENTIRE
+#      command text, output captured to runs/<id>.out
+
+DOASQ_DIR="/var/doasq"
+REQ="$DOASQ_DIR/requests"
+OK="$DOASQ_DIR/approvals"
+RUNS="$DOASQ_DIR/runs"
+AUDIT="$DOASQ_DIR/audit.log"
+
+die() { print -u2 -- "doasq-exec: $*"; exit 1; }
+sha_of() { printf '%s' "$1" | openssl dgst -sha256 -r 2>/dev/null | cut -d' ' -f1; }
+
+id_arg="${1:-}"
+[ -n "$id_arg" ] || die "need a request id"
+case "$id_arg" in
+  *[!A-Za-z0-9_-]*) die "bad id (path safety)" ;;
+esac
+
+f="$REQ/$id_arg.req"
+[ -f "$f" ] || die "no such request: $id_arg"
+
+req_sha="$(sed -n 's/^sha256: //p' "$f")"
+[ -n "$req_sha" ] || die "request has no sha256"
+requester="$(sed -n 's/^requester: //p' "$f")"
+cmd_text="$(sed -n '1,/^---$/d; p' "$f')"
+[ -n "$cmd_text" ] || die "request has no command"
+
+# 1. self-consistency
+now_sha="$(sha_of "$cmd_text")"
+[ "$now_sha" = "$req_sha" ] || die "request tampered (sha mismatch) — refusing"
+
+# 2. approval
+okf="$OK/$id_arg.ok"
+[ -f "$okf" ] || die "not approved (no $id_arg.ok) — roerick runs: doasq approve $id_arg"
+ok_sha="$(sed -n 's/^sha256: //p' "$okf")"
+approver="$(sed -n 's/^approved-by: //p' "$okf")"
+[ -n "$approver" ] || die "approval missing approved-by"
+[ "$ok_sha" = "$req_sha" ] || die "approval does not cover this command (sha mismatch) — refusing"
+
+# 3. one-shot claim
+claim="$OK/$id_arg.running"
+mv -- "$okf" "$claim" 2>/dev/null || die "cannot claim approval — already running or used"
+restore_ok() { mv -- "$claim" "$okf" 2>/dev/null || true; }
+trap restore_ok EXIT
+
+out="$RUNS/$id_arg.out"
+: > "$out" || die "cannot write $out"
+
+print -u2 -- "doasq-exec: running $id_arg as root:"
+print -u2 -- "  $cmd_text"
+print -u2 -- "  (approved by $approver; output -> $out)"
+
+/bin/ksh -c "$cmd_text" >"$out" 2>&1
+rc=$?
+
+trap - EXIT
+mv -- "$claim" "$OK/$id_arg.used" 2>/dev/null || true
+
+print -r -- "ts=$(date -u +%Y-%m-%dT%H:%M:%SZ) id=$id_arg requester=$requester approved-by=$approver rc=$rc cmd=$cmd_text" >> "$AUDIT" 2>/dev/null || true
+
+print -u2 -- "doasq-exec: rc=$rc"
+tail -30 "$out" >&2
+exit "$rc"
