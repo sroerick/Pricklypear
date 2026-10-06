@@ -74,3 +74,22 @@ beyond what auth_log already keeps. Matches the fail-closed profile.
 - **P1 (next app touch, rides with tier_limits work):** usage_events
   migration, denial receipts, /admin/metrics.
 - **P2:** alert loop reading metrics, ntfy wiring, 5xx tracking.
+
+## 2026-10-06 revision: notify policy + retarget
+
+roerick 10-06: endpoint reports are OFF ntfy (noise); dead-box pages wanted.
+
+- Digest retired: the 15:00Z cron line is commented out on the box. Digest
+  mode still runs manually and lands in cron mail + logger only; it pushes
+  nothing.
+- Alerts (hourly :07) = tuna local liveness (127.0.0.1:18090, page after 2
+  consecutive misses, one clear on recovery) + disk /var >= 90%. The PP-db
+  checks (logins48h dead-box, media pressure, new-signup) are removed: PP
+  has been dark on town since 09-15 and they structurally misfired.
+- NTFY_URL set on the box: https://ntfy.sh/pp-alive-ce1c4616 (dedicated
+  dead-box topic). Self-hosted authed push stays open (board card c44e7f4e).
+- Outside-in dead-box watch on vultr.guest: public-audit/box-watch.sh, cron
+  */10, probes club.pricklypear.club + pricklypear.rocks/health, pages the
+  same topic after 2 consecutive misses, one clear on recovery.
+- vultr public-audit audit.sh pages on real ALERTs only; route-report.sh
+  retired from cron.
