@@ -770,3 +770,12 @@
      the pulse row machinery whole. Same single-pass model: one item
      scan, one list scan, one indexed project scan; grouped by
      list.project_id. A stream joins a project with one field write.")
+
+
+;; Boot + load-time activation: declare the project datum type and bind
+;; the face. Both are SAFE on re-load: the init! guards on type-fields
+;; (idempotent deftype), and rebinding a route updates in place. The
+;; seed evaluates these as boot-admin (non-delegated); load-library
+;; from a session binds the route locally for that session's branch.
+(workstreams/projects-init!)
+(route "/projects" workstreams/projects-page "shared")
