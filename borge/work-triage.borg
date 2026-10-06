@@ -4,7 +4,7 @@
  (* agent note (|2026-09-11 chapter created (gregor), roerick mandate: borge spec first, then execute and start carving out triage. Inputs: the 09-03 board triage convention (columns SPEC/CODE/LOGIC-REVIEW/UI-REVIEW/HUMAN-REVIEW/DONE/PARKED on the workspace list), work/* live since 09-10, uuid-edge prims live (link/unlink/out-links; an edge is a node at from.lnk.<uuid>, body {to, kind}, may dangle, resolves per-reader).|) *)
 
  (section board
-  (doc "One shared Board list (the workspace board, list 0b21ffaa 'Board') plus per-workstream lists (glochid, saguaro, …) that share the SAME column taxonomy — a workstream is just a list, so per-list custom columns (todo/state/columns-for-list) give every stream its own pipeline while the shared board stays the cross-stream overview. The column set is the list's PIPELINE (workstreams.borg pipeline-model): an ordered list of state names any work item references, with per-item override > list columns > global default. Columns are workflow stages, not owners; owners live in the card title prefix ([user]) or a todo-item assignee field. Card states: SPEC (needs a spec/decision before code), CODE (executable now), LOGIC-REVIEW / UI-REVIEW (needs a reviewer pass), HUMAN-REVIEW (needs roerick), DONE, PARKED (deliberately not moving). Incoming work lands in TODO by default; the triage pass places it. Junk lists are deletable via todo/delete-list (list + its items, one writer op; the default Inbox is protected by the default guard so a canonical inbox always survives). The old 'junk lists are filtered, never deleted' rule was retired 2026-09-25: it enshrined a 364-row landfill (267 duplicate default Inboxes from ensure-inbox accretion, 90 TempDeleteMe2) instead of fixing it. Hygiene rule: real (non-[ops]) cards are moved onto a real list before the junk list is deleted; auto-captured [ops] crash cards are noise and may be bulk-deleted after a snapshot.")
+  (doc "One shared Board list (the workspace board, list 0b21ffaa 'Board') plus per-workstream lists (glochid, saguaro, …) that share the SAME column taxonomy — a workstream is just a list, so per-list custom columns (todo/state/columns-for-list) give every stream its own pipeline while the shared board stays the cross-stream overview. The column set is the list's PIPELINE (workstreams.borg pipeline-model): an ordered list of state names any work item references — the list's columns, else the global default. Columns are workflow stages, not owners; owners live in the card title prefix ([user]) or a todo-item assignee field. Card states: SPEC (needs a spec/decision before code), CODE (executable now), LOGIC-REVIEW / UI-REVIEW (needs a reviewer pass), HUMAN-REVIEW (needs roerick), DONE, PARKED (deliberately not moving). Incoming work lands in TODO by default; the triage pass places it. Junk lists are deletable via todo/delete-list (list + its items, one writer op; the default Inbox is protected by the default guard so a canonical inbox always survives). The old 'junk lists are filtered, never deleted' rule was retired 2026-09-25: it enshrined a 364-row landfill (267 duplicate default Inboxes from ensure-inbox accretion, 90 TempDeleteMe2) instead of fixing it. Hygiene rule: real (non-[ops]) cards are moved onto a real list before the junk list is deleted; auto-captured [ops] crash cards are noise and may be bulk-deleted after a snapshot.")
   (status implemented)
   (verify
    (test "every card on the workspace list sits in a named column; TODO holds only unplaced intake")))
@@ -45,10 +45,11 @@
 
  (section unification-handoff
   (doc "The status-machine half of unification IS spec'd and owned by
-   borge/workstreams.borg pipeline-model (2026-09-25, roerick): pipeline = an
-   ordered list of state names that any work item (card, note-todo, issue)
-   references, with per-item override > list columns > global default, and
-   faces render only matching-pipeline items (others land in the other
+   borge/workstreams.borg pipeline-model (2026-09-25, roerick; two-level since
+   the 2026-10-05 audit retirement): pipeline = an ordered list of state
+   names that any work item (card, note-todo, issue) references — the LIST's
+   columns, else the global default (the per-item override is retired) — and
+   faces render only on-pipeline items (others land in the other
    bucket). This chapter consumes that: the triage pass reads one source
    (effective pipelines) instead of scraping two status mechanisms. The
    remaining long-pole halves (two-way note/card identity + foldable nesting)
