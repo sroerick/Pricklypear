@@ -27,6 +27,14 @@
       - same-list cross-side inserts conflict at the PARENT path
         (cross-side index frames are not interleavable — conservative
         v1 behavior, pinned);
+      - LIST FRAME RULE (2026-10-07 rework): a shared-identical edit
+        never leaves the live side's frame — theirs' whole frame wins
+        when theirs holds the only live non-shared edit (shared edit
+        FIRST or NOT first in theirs' frame), ours' frame wins
+        symmetrically, a key dropped by the earlier phases poisons
+        the surviving frame indices -> conflict at the parent, and a
+        FIXED slot of a conflicted list's container node (app.fn vs
+        the args list) still composes;
       - a list touched by one side only composes;
       - identical sides merge to themselves with zero conflicts;
       - hash re-validation: merged body hash equals the expected
@@ -40,7 +48,11 @@
         for splices) resolves in the BASE tree — the composition never
         strands an edit;
       - conflicts and surviving edits never share (or nest under) a
-        path;
+        path — with one precise exemption: a LIST-frame conflict is
+        reported at the container NODE path but owns only that node's
+        LIST children, so a surviving FIXED-SLOT edit of the same node
+        (app.fn while the args list is conflicted) is sound, not
+        "under" the conflict;
       - side-swap symmetry: the conflict PATH SET of
         merge(base, ours, theirs) equals that of
         merge(base, theirs, ours). *)
@@ -104,7 +116,7 @@ let print_triple (b, o, t) =
   Printf.sprintf "base=%s ours=%s theirs=%s" (Reader.pp_expr_flat b)
     (Reader.pp_expr_flat o) (Reader.pp_expr_flat t)
 
-(* test-local structural descendant test (mirrors Sexp_merge.is_under) *)
+(* test-local structural step equality (mirrors Sexp_merge.step_eq) *)
 let rec step_eq (a : Ast_path.step) (b : Ast_path.step) : bool =
   match (a, b) with
   | Ast_path.AppArg i, Ast_path.AppArg j -> i = j
@@ -112,18 +124,6 @@ let rec step_eq (a : Ast_path.step) (b : Ast_path.step) : bool =
   | Ast_path.LambdaParam i, Ast_path.LambdaParam j -> i = j
   | Ast_path.LetrecBinding x, Ast_path.LetrecBinding y -> x = y
   | a, b -> a = b
-
-let is_under (p1 : Ast_path.path) (p2 : Ast_path.path) : bool =
-  let rec go x y =
-    match (x, y) with
-    | [], _ -> true
-    | _ :: _, [] -> false
-    | a :: r1, b :: r2 -> step_eq a b && go r1 r2
-  in
-  go p2 p1
-  &&
-  let rec len = function [] -> 0 | _ :: r -> 1 + len r in
-  len p1 > len p2
 
 let edit_path (e : Sexp_diff.edit) : Ast_path.path =
   match e with
@@ -319,6 +319,111 @@ let cases : (string * (unit -> unit)) list =
        let r = Sexp_merge.merge base both both in
        expect_no_conflicts ~ctx:"same-sides" r;
        expect_body ~ctx:"same-sides" both r);
+
+    (* ---- LIST FRAME RULE pins (2026-10-07 rework of the phase-C
+       shared-edit hole found by the T2R review, loop #6) ---- *)
+
+    ("shared edit NOT first in theirs' frame composes to theirs (rule ii)", fun () ->
+       (* THE silent-mangle repro (T2R loop #6, ATTACK A): base
+          f(1,2,3); ours inserts 9@1 -> f(1,9,2,3); theirs deletes 1
+          AND inserts the identical 9@1 -> f(2,9,3). Theirs' script
+          order is [Delete(arg[0],0); Insert(arg[1],1,9)] (the walk
+          emits the delete first). Rule (ii): theirs holds the only
+          live non-shared edit and nothing was dropped, so THEIRS'
+          ENTIRE frame for the list is kept — f(2,9,3) exactly. The
+          pre-rework bug composed ours' copy of the shared insert
+          FIRST and theirs' delete AFTER -> f(9,2,3): neither side,
+          zero conflicts (silent mangle). *)
+       let base = Ast.App (v "f", [ vi 1; vi 2; vi 3 ]) in
+       let ours = Ast.App (v "f", [ vi 1; vi 9; vi 2; vi 3 ]) in
+       let theirs = Ast.App (v "f", [ vi 2; vi 9; vi 3 ]) in
+       let r = Sexp_merge.merge base ours theirs in
+       expect_no_conflicts ~ctx:"frame-theirs" r;
+       expect_body ~ctx:"frame-theirs" theirs r;
+       (* the merged script IS theirs' whole script, in theirs' order *)
+       if r.Sexp_merge.edits <> Sexp_diff.diff base theirs then
+         failf "frame-theirs: merged script %s <> theirs' script %s"
+           (Sexp_diff.edits_to_string r.Sexp_merge.edits)
+           (Sexp_diff.edits_to_string (Sexp_diff.diff base theirs)));
+
+    ("shared edit FIRST in theirs' frame still composes to theirs (rule ii control)", fun () ->
+       (* T2R loop #6 control (A2): base f(1,2,3); ours inserts 9@0 ->
+          f(9,1,2,3); theirs inserts the identical 9@0 then deletes 2
+          -> f(9,1,3). Same rule (ii) as the previous pin; pins that
+          the frame take-over did not break the already-sound shape. *)
+       let base = Ast.App (v "f", [ vi 1; vi 2; vi 3 ]) in
+       let ours = Ast.App (v "f", [ vi 9; vi 1; vi 2; vi 3 ]) in
+       let theirs = Ast.App (v "f", [ vi 9; vi 1; vi 3 ]) in
+       let r = Sexp_merge.merge base ours theirs in
+       expect_no_conflicts ~ctx:"frame-theirs-first" r;
+       expect_body ~ctx:"frame-theirs-first" theirs r);
+
+    ("mirror: ours' frame wins when theirs holds only the shared edit (rule ii)", fun () ->
+       (* ours = delete 1 + insert 9@1 -> f(2,9,3); theirs = the shared
+          insert only -> f(1,9,2,3). Ours' entire frame survives in
+          ours' order (shared keys already kept via ours' copies). *)
+       let base = Ast.App (v "f", [ vi 1; vi 2; vi 3 ]) in
+       let ours = Ast.App (v "f", [ vi 2; vi 9; vi 3 ]) in
+       let theirs = Ast.App (v "f", [ vi 1; vi 9; vi 2; vi 3 ]) in
+       let r = Sexp_merge.merge base ours theirs in
+       expect_no_conflicts ~ctx:"frame-ours" r;
+       expect_body ~ctx:"frame-ours" ours r;
+       if r.Sexp_merge.edits <> Sexp_diff.diff base ours then
+         failf "frame-ours: merged script %s <> ours' script %s"
+           (Sexp_diff.edits_to_string r.Sexp_merge.edits)
+           (Sexp_diff.edits_to_string (Sexp_diff.diff base ours)));
+
+    ("dropped key poisons surviving frame indices -> conflict at the parent (rule iv)", fun () ->
+       (* T2R loop #6, second instance of the class: base f(1,2,3);
+          ours inserts 7@0 then the shared 9@3 -> f(7,1,2,9,3); theirs
+          inserts 8@0 then the identical 9@3 -> f(8,1,2,9,3). The
+          arg[0] inserts conflict (7 vs 8) and are dropped; the shared
+          Insert(arg[3],3,9) is frame-relative to the dropped edit (9
+          lands BEFORE 3 only after the 7/8 splice). Keeping it would
+          apply 9@3 to f(1,2,3) -> f(1,2,3,9): a silent reorder. Rule
+          (iv): the whole list conflicts at the parent (the root,
+          path ""), alongside the exact arg[0] conflict. *)
+       let base = Ast.App (v "f", [ vi 1; vi 2; vi 3 ]) in
+       let ours = Ast.App (v "f", [ vi 7; vi 1; vi 2; vi 9; vi 3 ]) in
+       let theirs = Ast.App (v "f", [ vi 8; vi 1; vi 2; vi 9; vi 3 ]) in
+       let r = Sexp_merge.merge base ours theirs in
+       let paths =
+         List.sort compare
+           (List.map
+              (fun c -> Ast_path.path_to_string c.Sexp_merge.path)
+              r.Sexp_merge.conflicts)
+       in
+       if paths <> [ ""; "app.arg[0]" ] then
+         failf "frame-dropped: conflicts at [%s], expected the arg[0] \
+                exact conflict AND the parent-list conflict at the root"
+           (String.concat "; " paths);
+       if r.Sexp_merge.edits <> [] then
+         failf "frame-dropped: %d edits survived a frame-poisoned list"
+           (List.length r.Sexp_merge.edits);
+       expect_body ~ctx:"frame-dropped" base r);
+
+    ("fixed slot of a conflicted list's container composes (app.fn vs args)", fun () ->
+       (* rule (i) conflicts the ARGS LIST at the container node (the
+          root, path "") — but that node's FIXED slots are independent
+          subtrees: ours' app.fn change still composes, with base kept
+          at the conflicted list. base f(1,2); ours g(1,2,3); theirs
+          f(0,1,2) -> merged g(1,2), one conflict at the root. *)
+       let base = Ast.App (v "f", [ vi 1; vi 2 ]) in
+       let ours = Ast.App (v "g", [ vi 1; vi 2; vi 3 ]) in
+       let theirs = Ast.App (v "f", [ vi 0; vi 1; vi 2 ]) in
+       let r = Sexp_merge.merge base ours theirs in
+       expect_one_conflict ~ctx:"fixed-slot-list" r;
+       let c = List.hd r.Sexp_merge.conflicts in
+       if Ast_path.path_to_string c.Sexp_merge.path <> "" then
+         failf "fixed-slot-list: conflict at %s, expected the root"
+           (Ast_path.path_to_string c.Sexp_merge.path);
+       expect_body ~ctx:"fixed-slot-list" (Ast.App (v "g", [ vi 1; vi 2 ])) r;
+       if
+         r.Sexp_merge.edits
+         <> [ Sexp_diff.Replace ([ Ast_path.AppFn ], v "f", v "g") ]
+       then
+         failf "fixed-slot-list: surviving edits %s, expected only the app.fn replace"
+           (Sexp_diff.edits_to_string r.Sexp_merge.edits));
   ]
 
 (* ---- generative properties ---- *)
@@ -371,7 +476,40 @@ let prop_surviving_edits_resolve_in_base =
                 Ast_path.select_path b parent <> None)
          r.Sexp_merge.edits)
 
-(* conflicts and survivors never share or nest under a path. *)
+(* conflicts and survivors never share or nest under a path — with one
+   precise exemption: a LIST-frame conflict (both sides edited the
+   same list container) is reported at the container NODE path but
+   owns only that node's LIST children, so a surviving FIXED-SLOT edit
+   of the same node (app.fn while the args list is conflicted) composes
+   soundly and is not "under" the conflict. Whole-subtree conflicts
+   (same-path and ancestor phases) own every descendant — and the
+   implementation drops all descendants of those, so the exemption
+   never masks one; anything descending through a list-child step, or
+   equal to the conflict path, is still a violation. *)
+let is_list_child_step (s : Ast_path.step) : bool =
+  match s with
+  | Ast_path.AppArg _ | Ast_path.PrimArg _ | Ast_path.LambdaParam _
+  | Ast_path.LetrecBinding _ -> true
+  | _ -> false
+
+(* the step of [p] immediately below prefix [c], when [p] extends [c] *)
+let first_step_below (c : Ast_path.path) (p : Ast_path.path) :
+    Ast_path.step option =
+  let rec prefix_ok a b =
+    match (a, b) with
+    | [], _ -> true
+    | _ :: _, [] -> false
+    | x :: r1, y :: r2 -> step_eq x y && prefix_ok r1 r2
+  in
+  let rec drop k = function
+    | s :: _ when k = 0 -> Some s
+    | _ :: r -> drop (k - 1) r
+    | [] -> None
+  in
+  if List.length p > List.length c && prefix_ok c p then
+    drop (List.length c) p
+  else None
+
 let prop_conflicts_disjoint_from_edits =
   QCheck.Test.make
     ~name:"conflict paths disjoint from surviving edit paths" ~count:300
@@ -384,9 +522,13 @@ let prop_conflicts_disjoint_from_edits =
             List.for_all
               (fun c ->
                  let p = edit_path e in
-                 p <> c.Sexp_merge.path
-                 && not (is_under p c.Sexp_merge.path)
-                 && not (is_under c.Sexp_merge.path p))
+                 if p = c.Sexp_merge.path then false (* survivor AT a conflict *)
+                 else
+                   match first_step_below c.Sexp_merge.path p with
+                   | Some s -> not (is_list_child_step s)
+                   (* descending through the conflicted list is a
+                      violation; through a fixed slot it is sound *)
+                   | None -> true (* not under the conflict at all *))
               r.Sexp_merge.conflicts)
          r.Sexp_merge.edits)
 
