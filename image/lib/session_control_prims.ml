@@ -27,6 +27,43 @@ let split_branch_ref (s : string) : string * string =
   | [ n ] -> "system", n  (* bare name = system/<name> *)
   | _ -> "system", s
 
+(** T5 ast-merge (branching ast-merge): the eval-boundary side of
+    [Store.merge_branch]'s merge3 hook. The store hands us three OPAQUE
+    jsonb fn bodies — base (fork point), ours (source pin), theirs
+    (parent live) — and takes back either the merged jsonb body or the
+    conflict lines. The AST codec ([Ast.expr_of_body_json] /
+    [Ast.expr_to_body_json]) and the pure merge3 ([Sexp_merge]) live
+    HERE, never in store_*.ml (store-split opaque-body contract,
+    scripts/verify_store_split.sh). Conflicts are DATA: each line names
+    the exact subtree path + both sides' values; nothing is silently
+    resolved (the merged body keeps BASE at conflicted subtrees). The
+    merged body is re-validated by canonical round-trip (encode, decode,
+    same [Ast_diff.ast_hash]) before it is returned; a body that does
+    not parse (or fails re-validation) is an Error, never a guess. *)
+let merge3_hook ~(base : string) ~(ours : string) ~(theirs : string) :
+  (string, string list) result =
+  let open Pricklypear_lisp in
+  match
+    ( Ast.expr_of_body_json base,
+      Ast.expr_of_body_json ours,
+      Ast.expr_of_body_json theirs )
+  with
+  | Some b, Some o, Some t ->
+      let r = Sexp_merge.merge b o t in
+      if r.Sexp_merge.conflicts = [] then
+        let merged = Sexp_merge.merged_body r in
+        let json = Ast.expr_to_body_json merged in
+        (match Ast.expr_of_body_json json with
+         | Some back when Ast_diff.ast_hash back = Ast_diff.ast_hash merged ->
+             Ok json
+         | _ ->
+             Error [ "merged body failed canonical re-validation" ])
+      else
+        Error
+          (List.map Sexp_merge.conflict_to_string r.Sexp_merge.conflicts)
+  | _ ->
+      Error [ "body is not a parseable AST; three-way merge unavailable" ]
+
 (** Branch-owner authorization (i-1787970640, spec branching.personal-
     workspace): a session with username U (admin = t.is_admin || U =
     "admin") may target a branch owner O iff O = U or the session is
@@ -166,7 +203,8 @@ let register ~(hooks : hooks) (t : t) (tbl : Primitives.t) : unit =
             (match src_id, tgt_id with
              | Some s, Some tg ->
                  let r = Store.merge_branch t.store
-                            ~source_id:s ~target_id:tg in
+                            ~source_id:s ~target_id:tg
+                            ~merge3:merge3_hook in
                  (match r with
                   | Some res ->
                       (Pricklypear_lisp.Ast.VStr
