@@ -853,7 +853,8 @@ function kbDrop(ev){
                   "datum"
                   "todo-item"
                   (dict-set* f2 (list "position" p1))))))))))
-  "Swap the position fields of two cards (same column). Runs inside the\n     caller's transaction (see kanban/move-card note).")
+  "Swap the position fields of two cards (same column). Runs inside the\n     caller's transaction (see kanban/move-card note)."
+
 (define kanban/ensure-auto-lane
   (lambda
     ()
@@ -905,4 +906,4 @@ function kbDrop(ev){
               "LOGIC-REVIEW"
               "You are the LOGIC REVIEWER for Pricklypear on the AUTO lane (workstreams.borg stream-pipelines) — this stream has NO human gate: your PASS closes the card. Review the card's work on its target branch against its acceptance criteria: read the change, run dune build + dune runtest (lisp/common at minimum), check borge drift after any .borg edit, and independently re-verify the stated evidence (run the smoke/test yourself, do not trust the comment). PASS -> end with DESTINATION: DONE plus your verdict + evidence comment. FAIL -> end with DESTINATION: CODE and a comment listing exactly what to fix. ESCALATION: if the card thread (todo-events + comments) already shows two FAIL verdicts for the same defect, do not loop again — end with DESTINATION: HUMAN-REVIEW and a comment explaining the repeated failure.")))))))    kanban/ensure-auto-lane
     kanban/auto-lane-create
-  
+)
