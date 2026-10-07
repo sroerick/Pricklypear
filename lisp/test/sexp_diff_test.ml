@@ -122,7 +122,20 @@ let prop_apply_empty =
 
 (* 4. target-side path validity: every Replace/Insert path resolves in
    [b] to exactly the payload the edit claims (paths are TARGET
-   coordinates for everything that survives). *)
+   coordinates for everything that survives).
+
+   ONE documented exception (the T1R review's property-#4 oracle bug,
+   reworked 2026-10-07): when the last step is letrec.binding[NAME],
+   the exact [select_path] check uses FIRST-match name resolution —
+   but under duplicate binding names the container diffs POSITIONALLY
+   (sexp_diff.ml [has_duplicate_names] degradation) and selection is
+   never by name there. For such steps the oracle is the
+   NAME-MULTIPLICITY match: the payload must equal the body of SOME
+   binding named NAME in the target's parent letrec. When names are
+   unique this is exactly equivalent to [select_path]; when they are
+   not, first-match selection is simply not the address space. The
+   round-trip conjunct below stays unconditional and carries the real
+   correctness weight. *)
 let prop_paths_resolve_in_target =
   QCheck.Test.make
     ~name:"Replace/Insert paths resolve in the target with the claimed payload"
@@ -130,12 +143,24 @@ let prop_paths_resolve_in_target =
     (QCheck.make ~print:print_pair
        (QCheck.Gen.pair (gen_expr 3) (gen_expr 3)))
     (fun (a, b) ->
+       let payload_ok p payload =
+         match List.rev p with
+         | Ast_path.LetrecBinding nm :: rest_rev -> (
+             (* last step names a binding: check against the WHOLE
+                target container (name-multiplicity), not first-match
+                selection *)
+             match Ast_path.select_path b (List.rev rest_rev) with
+             | Some (Ast.Letrec (bs, _)) ->
+                 List.exists (fun (n, body) -> n = nm && body = payload) bs
+             | _ -> false)
+         | _ -> Ast_path.select_path b p = Some payload
+       in
        let eds = Sexp_diff.diff a b in
        List.for_all
          (fun ed ->
             match ed with
-            | Sexp_diff.Replace (p, _, to_) -> Ast_path.select_path b p = Some to_
-            | Sexp_diff.Insert (p, _, x) -> Ast_path.select_path b p = Some x
+            | Sexp_diff.Replace (p, _, to_) -> payload_ok p to_
+            | Sexp_diff.Insert (p, _, x) -> payload_ok p x
             | Sexp_diff.Delete _ -> true)
          eds
        && roundtrip_ok (a, b))
@@ -345,6 +370,38 @@ let cases : (string * (unit -> unit)) list = [
        [ Sexp_diff.Delete ([ Ast_path.LetrecBinding "h" ], 1) ]
        (Sexp_diff.diff a b);
      expect_roundtrip ~ctx:"letrec-del" a b);
+
+  (* the degradation, pinned deterministically (T1R review follow-up):
+     with a duplicate name on EITHER side, letrec.binding[NAME]
+     addressing is ambiguous, so the whole container diffs positionally
+     — every from-binding deletes at its CURRENT position (0 after each
+     prior delete), every to-binding inserts at its TARGET position, all
+     Deletes strictly before all Inserts, and NO edit descends into a
+     binding subtree by name. The oracle bug this pins: an insert's
+     payload may be the SECOND same-named binding, which first-match
+     [select_path] cannot address. *)
+  ("duplicate binding names: container degrades to positional Delete-then-Insert",
+   fun () ->
+     let body = Ast.var "x" in
+     (* target-side duplicates *)
+     let a = Ast.Letrec ([ ("f", vi 1) ], body) in
+     let b = Ast.Letrec ([ ("g", vi 2); ("g", vi 3); ("g", vi 4) ], body) in
+     expect_edits ~ctx:"letrec-dup-target"
+       [ Sexp_diff.Delete ([ Ast_path.LetrecBinding "f" ], 0);
+         Sexp_diff.Insert ([ Ast_path.LetrecBinding "g" ], 0, vi 2);
+         Sexp_diff.Insert ([ Ast_path.LetrecBinding "g" ], 1, vi 3);
+         Sexp_diff.Insert ([ Ast_path.LetrecBinding "g" ], 2, vi 4) ]
+       (Sexp_diff.diff a b);
+     expect_roundtrip ~ctx:"letrec-dup-target" a b;
+     (* source-side duplicates *)
+     let a2 = Ast.Letrec ([ ("h", vi 5); ("h", vi 6) ], body) in
+     let b2 = Ast.Letrec ([ ("f", vi 7) ], body) in
+     expect_edits ~ctx:"letrec-dup-source"
+       [ Sexp_diff.Delete ([ Ast_path.LetrecBinding "h" ], 0);
+         Sexp_diff.Delete ([ Ast_path.LetrecBinding "h" ], 0);
+         Sexp_diff.Insert ([ Ast_path.LetrecBinding "f" ], 0, vi 7) ]
+       (Sexp_diff.diff a2 b2);
+     expect_roundtrip ~ctx:"letrec-dup-source" a2 b2);
 
   ("Letrec binding body edit descends under the named binding", fun () ->
      let body = Ast.App (Ast.var "f", [ vi 1 ]) in
