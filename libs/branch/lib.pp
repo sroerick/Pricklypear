@@ -1,6 +1,6 @@
 ;; package branch -- the branch-ops status face (borge/branching.borg
 ;; branching-ast-ergonomics branch-ops). A human-readable rendering of
-;; (branch/status ref "summary"): counts, the diverged worklist (never
+;; the branch/status summary: counts, the diverged worklist (never
 ;; auto-applied), and the behind-pins count (the pull candidates).
 ;; Rendered FROM THE STORE via the prim — never the session snapshot
 ;; (the 2026-10-05/06 stale-counter incidents).
@@ -33,7 +33,7 @@
                     (html/text (string-append "Branch status — " ref)))
                   (html/p*
                     (html/attr "class" "muted")
-                    "Rendered from the store via (branch/status ref summary) — never the session snapshot. the full mode returns the complete JSON.")
+                    "Rendered from the store via the branch/status summary mode — never the session snapshot. The full mode returns the complete JSON.")
                   (html/p*
                     (html/attr "class" "muted")
                     (string-append
@@ -61,10 +61,12 @@
                     (string-append
                       "pins omitted in summary mode: "
                       (as-str omitted)
-                      " — full list: (branch/status ref)")))))))
+                      " — land via reseed-package for the full picture.")))))))))
     "GET /branch-status?ref=BRANCH — the store-rendered status face over
-     (branch/status ref summary). The diverged worklist is the
+     the branch/status summary mode. The diverged worklist is the
      never-auto-applied list (obituary rule); behind pins are the pull
-     candidates via (branch/pull ref). Defaults to the calling branch."))
+     candidates via branch/pull. Defaults to the calling branch.")
 
   (route "/branch-status" "branch/status-page" "private"))
+
+(route "/branch-status" "branch/status-page" "private")
