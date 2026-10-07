@@ -1973,6 +1973,13 @@
                   (ahead/behind/diverged) counts. One page.
        delete / rename -> NEW prims + UI (a 0-own-code branch could not
                   be removed; renames were impossible).
+       land    -> NEW prim (branch/land pkg name...): apply vault bodies
+                  to live main — the REPL form of pp-sync land, admin-
+                  gated + audited. SCOPE AMENDMENT (2026-10-07, found by
+                  roerick: a body fix required a bash incantation on the
+                  build box — the vault-authority model was scoped but
+                  its surface was CLI-only; an op the authority model
+                  requires must be a repl op).
      GRANULARITY: the pin stays the unit of versioning; the AST makes the
      DIFF subtree-granular inside a pin and makes RENAME/MOVE detectable
      (hash-equal body under a new name = rename, not delete+add).")
