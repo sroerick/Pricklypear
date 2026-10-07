@@ -39,6 +39,11 @@
  (libraries pricklypear-lisp alcotest yojson digestif))
 
 (test
+ (name sexp_diff_test)
+ (modules sexp_diff_test)
+ (libraries pricklypear-lisp qcheck qcheck-core.runner))
+
+(test
  (name stepping_test)
  (modules stepping_test)
  (libraries pricklypear-lisp alcotest))
