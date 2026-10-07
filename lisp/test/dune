@@ -44,6 +44,11 @@
  (libraries pricklypear-lisp qcheck qcheck-core.runner))
 
 (test
+ (name sexp_merge_test)
+ (modules sexp_merge_test)
+ (libraries pricklypear-lisp qcheck qcheck-core.runner))
+
+(test
  (name stepping_test)
  (modules stepping_test)
  (libraries pricklypear-lisp alcotest))
