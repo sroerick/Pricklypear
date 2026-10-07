@@ -748,7 +748,7 @@
      the stream/count table stays byte-identical to /pulse."
     (html/join
       (append
-        (workstreams/projects-sections projects rows)
+        (apply append (workstreams/projects-sections projects rows))
         (workstreams/intake-section rows)))))
 
 (define workstreams/projects-page
