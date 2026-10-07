@@ -802,3 +802,26 @@
 ;; from a session binds the route locally for that session's branch.
 (workstreams/projects-init!)
 (route "/projects" "workstreams/projects-page" "private")
+(define workstreams/date-prefix
+  (lambda
+    (s)
+    (let
+      ((t (as-str s)))
+      (if (>= (string-length t) 10) (substring t 0 10) t))))
+
+(define workstreams/stale-threshold
+  (lambda
+    ()
+    (as-str (date-add-days -3))))
+
+(define workstreams/old?
+  (lambda
+    (created threshold)
+    (string<=? (workstreams/date-prefix created) threshold)))
+
+(define workstreams/stale-node?
+  (lambda
+    (n th)
+    (let
+      ((c (dict-get n "created_at")))
+      (if (null? c) #f (workstreams/old? c th)))))
