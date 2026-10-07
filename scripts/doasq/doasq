@@ -99,7 +99,6 @@ approve)
   [ "$(id -un)" = "roerick" ] || die "approve runs as roerick (the approvals dir enforces this too)"
   f="$REQ/$id.req"
   [ -f "$f" ] || die "no such request: $id"
-  [ -f "$OK/$id.ok" ] || [ -f "$OK/$id.used" ] || die "not approved"
   [ -f "$OK/$id.ok" ] && die "already approved"
   [ -f "$OK/$id.used" ] && die "already used (one-shot)"
   req_sha="$(sed -n 's/^sha256: //p' "$f")"
