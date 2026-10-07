@@ -31,10 +31,10 @@ esac
 f="$REQ/$id_arg.req"
 [ -f "$f" ] || die "no such request: $id_arg"
 
-req_sha="$(sed -n 's/^sha256: //p' "$f")"
+req_sha="$(sed -n 's/^sha256: //p' $f)"
 [ -n "$req_sha" ] || die "request has no sha256"
-requester="$(sed -n 's/^requester: //p' "$f")"
-cmd_text="$(sed -n '1,/^---$/d; p' "$f')"
+requester="$(sed -n 's/^requester: //p' $f)"
+cmd_text="$(sed -n '1,/^---$/d; p' "$f")"
 [ -n "$cmd_text" ] || die "request has no command"
 
 # 1. self-consistency
@@ -44,8 +44,8 @@ now_sha="$(sha_of "$cmd_text")"
 # 2. approval
 okf="$OK/$id_arg.ok"
 [ -f "$okf" ] || die "not approved (no $id_arg.ok) — roerick runs: doasq approve $id_arg"
-ok_sha="$(sed -n 's/^sha256: //p' "$okf")"
-approver="$(sed -n 's/^approved-by: //p' "$okf")"
+ok_sha="$(sed -n 's/^sha256: //p' $okf)"
+approver="$(sed -n 's/^approved-by: //p' $okf)"
 [ -n "$approver" ] || die "approval missing approved-by"
 [ "$ok_sha" = "$req_sha" ] || die "approval does not cover this command (sha mismatch) — refusing"
 
