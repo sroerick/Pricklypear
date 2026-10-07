@@ -508,6 +508,141 @@ let register ~(hooks : hooks) (t : t) (tbl : Primitives.t) : unit =
          | _ ->
              (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("prune-synced", "no args", "bad-args"))))));
 
+  (* (branch/status ref) -> VStr JSON {branch, counts{6 statuses},
+     diverged[{kind,name}], pins[{kind,name,status,own}]}, or a plain
+     VStr denial / "no such branch: ref".
+
+     branching-ast-ergonomics branch-ops status row: per-pin classify +
+     counts + the divergent worklist, rendered FROM THE STORE
+     (Store.branch_status → Store.status_report) — the ONE classifier,
+     never the session snapshot (2026-10-05/06 stale-counter incidents;
+     /branches debt). Read-side authorization (branch_readable): system/*
+     is the shared defaults tree; another tenant's garden metadata is
+     denied. Denied for anonymous, like every branch prim. Server-only
+     (ref-addressed, fork/merge/checkout family). *)
+  Primitives.register_server_only tbl "branch/status"
+    (fun args ->
+      if t.manifest.username = "anonymous" then
+        (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("branch/status", "denied for anonymous", "denied"))))
+      else
+        match args with
+        | [ Pricklypear_lisp.Ast.VStr branch_ref ] ->
+            let owner, short = split_branch_ref branch_ref in
+            if not (branch_readable t owner) then
+              (Pricklypear_lisp.Ast.VStr
+                 (Printf.sprintf "denied: branch %s is owned by %s"
+                    branch_ref owner))
+            else
+              (match
+                 Store.lookup_branch_id_by_name t.store ~owner ~name:short
+               with
+               | None ->
+                   (Pricklypear_lisp.Ast.VStr
+                      (Printf.sprintf "no such branch: %s" branch_ref))
+               | Some branch_id ->
+                   let rows = Store.branch_status t.store ~branch_id in
+                   let rep = Store.status_report rows in
+                   let row_json (r : Store.branch_status_row) :
+                       Yojson.Safe.t =
+                     `Assoc
+                       [ ("kind",
+                          `String
+                            (match r.Store.st_kind with
+                             | Store.DiffFn -> "fn"
+                             | Store.DiffType -> "type"
+                             | Store.DiffRoute -> "route"))
+                       ; ("name", `String r.Store.st_name)
+                       ; ("status", `String (Store.st_status_s r.Store.st_status))
+                       ; ("own", `Bool r.Store.st_own)
+                       ]
+                   in
+                   Pricklypear_lisp.Ast.VStr
+                     (Yojson.Safe.to_string
+                        (`Assoc
+                          [ ( "branch",
+                              `String (owner ^ "/" ^ short) )
+                          ; ( "counts",
+                              `Assoc
+                                (List.map
+                                   (fun (s, n) -> (s, `Int n))
+                                   rep.Store.counts) )
+                          ; ( "diverged",
+                              `List (List.map row_json rep.Store.worklist) )
+                          ; ( "pins",
+                              `List (List.map row_json rep.Store.pins) )
+                          ])))
+        | _ ->
+            (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("branch/status", "bad args (need 1 branch ref)", "bad-args")))));
+
+  (* (branch/pull ref) -> VStr JSON {pulled:[{kind,name}],
+     skipped:[{kind,name}]} (skipped = diverged pins left alone), or a
+     plain VStr denial / "no such branch: ref"; system/main answers
+     {pulled:[],skipped:[],note:"system/main: no parent"}.
+
+     branching-ast-ergonomics branch-ops pull row: every BEHIND pin on
+     the ref adopts the parent's version via Store.pull_behind_pins —
+     the UNBIND path (per-kind delete), never a body copy (pin hygiene);
+     diverged pins untouched (obituary rule). Write-side authorization
+     (branch_owner_authorized — pull mutates the ref's rows, same rule
+     as unbind/prune-synced on the current branch). If the ref IS the
+     session's current branch, rehydrate so the env sees the revealed
+     parent bindings. Denied for anonymous; not gated on
+     agent_branch_lock (same class as unbind/prune-synced: syncing a
+     branch with its parent is not a branch-escape). *)
+  Primitives.register_server_only tbl "branch/pull"
+    (fun args ->
+      if t.manifest.username = "anonymous" then
+        (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("branch/pull", "denied for anonymous", "denied"))))
+      else
+        match args with
+        | [ Pricklypear_lisp.Ast.VStr branch_ref ] ->
+            let owner, short = split_branch_ref branch_ref in
+            if not (branch_owner_authorized t owner) then
+              (Pricklypear_lisp.Ast.VStr
+                 (Printf.sprintf "denied: branch %s is owned by %s"
+                    branch_ref owner))
+            else
+              (match
+                 Store.lookup_branch_id_by_name t.store ~owner ~name:short
+               with
+               | None ->
+                   (Pricklypear_lisp.Ast.VStr
+                      (Printf.sprintf "no such branch: %s" branch_ref))
+               | Some branch_id ->
+                   if branch_id = Store.system_main_id then
+                     (Pricklypear_lisp.Ast.VStr
+                        (Yojson.Safe.to_string
+                           (`Assoc
+                             [ ("pulled", `List [])
+                             ; ("skipped", `List [])
+                             ; ( "note",
+                                 `String "system/main: no parent" )
+                             ]))
+                        )
+                   else
+                     let pulled, skipped =
+                       Store.pull_behind_pins t.store ~branch_id
+                     in
+                     let pair_json (kind, name) : Yojson.Safe.t =
+                       `Assoc [ ("kind", `String kind);
+                                ("name", `String name) ]
+                     in
+                     let () =
+                       if pulled <> []
+                          && t.store.Store_db.branch_id = branch_id
+                       then (hooks.rehydrate) t
+                     in
+                     Pricklypear_lisp.Ast.VStr
+                       (Yojson.Safe.to_string
+                          (`Assoc
+                            [ ( "pulled",
+                                `List (List.map pair_json pulled) )
+                            ; ( "skipped",
+                                `List (List.map pair_json skipped) )
+                            ])))
+        | _ ->
+            (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("branch/pull", "bad args (need 1 branch ref)", "bad-args")))));
+
   (* (bench expr-string [n]) -> VFloat average microseconds per iteration.
      Parses once, warms up once, runs n times (default 1000) under a max
      budget so the bench loop itself never hits Budget_exceeded. Uses the
