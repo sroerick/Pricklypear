@@ -1948,55 +1948,128 @@
    body : (list/map ...) — never a line hunk, never a whole-define
    clobber). Hash = the canonical-sexp hash (the pin-hygiene hash) — no
    text lines anywhere in the mechanism.")
-  (status draft)
-  (details
-   (doc "OPS TABLE — the ergonomics layer over branch_algebra.ml. The
-     algebra computes everything (classify: clean/ahead-new/ahead/behind/
-     diverged/synced; chain; pin hygiene); nothing surfaces it:
-       clone   -> fork (exists) + agents boot into <parent>/agent (exists)
-       status  -> NEW face+prim (branch/status ref): per-pin classify +
-                  counts + the divergent worklist. Closes the /branches
-                  stale-snapshot bug: rendered from the store, not the
-                  session snapshot (2026-10-05/06 incidents).
-       pull    -> NEW (branch/pull ref): every BEHIND pin adopts the
-                  parent's version (bulk unoverride) + report; diverged
-                  pins untouched (the obituary rule — no silent reversals).
-       push    -> NEW (branch/push ref [names]): agent-promote to the
-                  PARENT branch — the promote_to_personal generalization,
-                  gated by the parent's allow_agent_promote. Dependency
-                  closure runs FIRST: the holes check on the target — a
-                  promoted pin referencing a name unbound on the target is
-                  refused or auto-included (2026-10-05 incident:
-                  pulse-row-from promoted without workstreams/stale-node?
-                  -> system/main 500).
-       tree    -> NEW face: the forest — parents, children, per-edge
-                  (ahead/behind/diverged) counts. One page.
-       delete / rename -> NEW prims + UI (a 0-own-code branch could not
-                  be removed; renames were impossible).
-     GRANULARITY: the pin stays the unit of versioning; the AST makes the
-     DIFF subtree-granular inside a pin and makes RENAME/MOVE detectable
-     (hash-equal body under a new name = rename, not delete+add).")
-   (status draft))
-  (section ast-diff
-   (doc "sexp_diff.ml: pure structural diff on canonical sexps. Edit
-     script at subtree granularity. Round-trip property: applying the
-     script to the parent AST yields the child AST. Property-tested
-     against a naive reference (the branch_algebra pattern).")
-   (implements "image/lib/sexp_diff.ml (new, pure)")
-   (status draft))
-  (section ast-merge
-   (doc "Three-way merge at subtree granularity: base = the fork-point
-     body; per subtree, one-side-changed applies, both-identical applies,
-     both-changed-differently -> conflict at the subtree path. Diverged
-     defines are NEVER auto-merged (merge_applies obituary rule, extended
-     from pins to subtrees). Conflicts land in the conflict worklist face
-     with the conflicting subtree rendered.")
-   (status draft))
-  (section debts
-   (doc "Folded into this work: the /branches page renders session-
-     snapshot counters (stale) — must read the store; the promote body-
-     corruption incident (2026-10-05: promoted copies 500'd where the
-     in-session originals rendered — root-cause the promote's store
-     write); the /branches display shows two rows for one name
-     (branch-code row vs garden row) — needs an explicit label.")))
+  (status planned)
+  (* agent note (|2026-10-07 ralph loop (branch ralph/spec-branching-rework): the 2026-10-06 draft restructured into book forms — the nested (section ast-diff / ast-merge / debts) drafts became subsections sexp-diff / ast-merge / branch-ops, each (status planned) with a details block preserving the draft text + a verify block (branch-status exemplar style). The OPS TABLE and GRANULARITY paragraphs moved from this section's details into branch-ops details; the debts list folded into branch-ops details too. roerick's DECISION doc above is VERBATIM, untouched. implements lines name only files that exist (the diff spine ast_diff.ml, the algebra branch_algebra.ml); unbuilt modules are named in details text instead. The section status 'draft' (not a valid borge status — lint flagged it) became 'planned', matching its subsections. 'branches are for CODE, not data' framing + shared-data-spaces untouched (T6, blocked on roerick).|) *)
+  (subsection sexp-diff
+   (doc "Pure structural diff of two exprs into a FLAT path-keyed edit script; apply round-trips the script")
+   (status planned)
+   (implements lisp/lib/ast_diff.ml)
+   (details
+    (doc (|
+         sexp_diff.ml: pure structural diff on canonical sexps. Edit
+         script at subtree granularity. Round-trip property: applying the
+         script to the parent AST yields the child AST. Property-tested
+         against a naive reference (the branch_algebra pattern).
+
+         SHAPE (ast-nodes part 2): diff(a,b) flattens the Ast_diff walk
+         (same/modified/replaced + list-LCS) into a FLAT path-keyed edit
+         script — Replace(path, from, to) | Insert(path, idx, expr) |
+         Delete(path, idx) — in the same child-path vocabulary the walk
+         already labels (if.test/then/else, lambda.params/body, let.name/
+         val/body, define.name/val, seq.a/b, quote.body, app.fn,
+         app.arg[i], prim.arg[i], letrec.binding[NAME], lambda.param[i]).
+         apply : edits -> expr -> expr replays the script onto the base
+         expr; a mid-sequence insert must NOT shift following siblings'
+         paths. The node selector it needs ships beside it in lisp/lib:
+         ast_path.ml (select_path / replace_path) — no second comparison
+         algorithm, no schema change.
+         NOT BUILT YET (named here, not in implements):
+         lisp/lib/ast_path.ml, lisp/lib/sexp_diff.ml,
+         lisp/test/sexp_diff_test.ml.
+    |))
+   )
+   (verify
+    (build "dune build")
+    (test "lisp/test/sexp_diff_test.ml — round-trip property apply(diff(a,b), a) = b over all 11 expr ctors and generated expr pairs against a naive reference (branch_algebra test pattern)")
+    (test "a mid-sequence insert does NOT shift following siblings' paths")
+    (smoke "diff+apply reuse Ast_diff's walk decisions (same/modified/replaced + list-LCS) — no second comparison algorithm")))
+  (subsection ast-merge
+   (doc "Three-way merge at subtree granularity; conflicts are DATA in the result, never silently resolved")
+   (status planned)
+   (details
+    (doc (|
+         Three-way merge at subtree granularity: base = the fork-point
+         body; per subtree, one-side-changed applies, both-identical
+         applies, both-changed-differently -> conflict at the subtree
+         path. Diverged defines are NEVER auto-merged (merge_applies
+         obituary rule, extended from pins to subtrees). Conflicts land
+         in the conflict worklist face with the conflicting subtree
+         rendered.
+
+         MECHANISM (ast-nodes part 3): ours = diff(base,ours),
+         theirs = diff(base,theirs) via sexp_diff; group edits by path;
+         disjoint paths compose with no cross-order; same path edited by
+         both: identical target -> keep once, different target ->
+         CONFLICT at the subtree path with ours+theirs values. Conflicts
+         are DATA in the result (merged body + conflict list) — never
+         silently resolved. Re-validate the merged body (canonical-sexp
+         hash). A merge always has a base: the fork point (base_gen via
+         the branch-status read path), or a code_history before-image.
+         NOT BUILT YET (named here, not in implements):
+         lisp/lib/sexp_merge.ml, lisp/test/sexp_merge_test.ml.
+    |))
+   )
+   (verify
+    (build "dune build")
+    (test "lisp/test/sexp_merge_test.ml — disjoint edits both present; both-identical applied once; both-different conflicts at the exact path; delete-vs-edit; nested lambda/letrec")
+    (test "property: merge(base, ours=base, theirs) = theirs exactly, and symmetrically")
+    (smoke "a conflict is reported with the exact subtree path + ours/theirs values, target unchanged")))
+  (subsection branch-ops
+   (doc "The ergonomics layer over branch_algebra.ml: status/pull/push/tree/delete/rename faces + prims, every surface rendered from the store")
+   (status planned)
+   (implements image/lib/branch_algebra.ml)
+   (details
+    (doc (|
+         OPS TABLE — the ergonomics layer over branch_algebra.ml. The
+         algebra computes everything (classify:
+         clean/ahead-new/ahead/behind/diverged/synced; chain; pin
+         hygiene); nothing surfaces it:
+           clone   -> fork (exists) + agents boot into <parent>/agent
+                      (exists)
+           status  -> NEW face+prim (branch/status ref): per-pin
+                      classify + counts + the divergent worklist. Closes
+                      the /branches stale-snapshot bug: rendered from the
+                      store, not the session snapshot (2026-10-05/06
+                      incidents).
+           pull    -> NEW (branch/pull ref): every BEHIND pin adopts the
+                      parent's version (bulk unoverride) + report;
+                      diverged pins untouched (the obituary rule — no
+                      silent reversals).
+           push    -> NEW (branch/push ref [names]): agent-promote to
+                      the PARENT branch — the promote_to_personal
+                      generalization, gated by the parent's
+                      allow_agent_promote. Dependency closure runs FIRST:
+                      the holes check on the target — a promoted pin
+                      referencing a name unbound on the target is refused
+                      or auto-included (2026-10-05 incident:
+                      pulse-row-from promoted without
+                      workstreams/stale-node? -> system/main 500).
+           tree    -> NEW face: the forest — parents, children,
+                      per-edge (ahead/behind/diverged) counts. One page.
+           delete / rename -> NEW prims + UI (a 0-own-code branch could
+                      not be removed; renames were impossible).
+
+         GRANULARITY: the pin stays the unit of versioning; the AST
+         makes the DIFF subtree-granular inside a pin and makes
+         RENAME/MOVE detectable (hash-equal body under a new name =
+         rename, not delete+add). pull_set is exactly the BEHIND pins
+         (per the classify decision table) that branch/pull would
+         adopt-parent; diverged/ahead/synced/clean NEVER in the pull
+         set.
+
+         DEBTS folded into this work: the /branches page renders
+         session-snapshot counters (stale) — must read the store; the
+         promote body-corruption incident (2026-10-05: promoted copies
+         500'd where the in-session originals rendered — root-cause the
+         promote's store write); the /branches display shows two rows
+         for one name (branch-code row vs garden row) — needs an
+         explicit label.
+    |))
+   )
+   (verify
+    (build "dune build image/test/branch_algebra_test.exe && ./_build/default/image/test/branch_algebra_test.exe")
+    (test "image/test/branch_algebra_test.ml — rename detection: hash-equal body under a new name = RENAMED(from,to); same-name-different-body vs different-name-same-body discriminate delete+add from rename")
+    (test "image/test/branch_algebra_test.ml — pull_set = exactly the BEHIND pins of classify on a randomized forest; diverged/ahead/synced/clean never in the pull set (naive reference)")
+    (smoke "(branch/status ref) renders per-pin classify + counts + the divergent worklist from Store.branch_status — the ONE classifier, read from the store, never the session snapshot")
+    (smoke "(branch/pull ref) adopts the parent's version on every BEHIND pin via the unbind path (never a body copy — pin hygiene); diverged pins untouched; returns the pulled + skipped-diverged lists"))))
 )
