@@ -16,7 +16,9 @@
         (let
           ((rep (json-parse (branch/status ref "summary"))))
           (let
-            ((counts (dict-get rep "counts")))
+            ((counts (dict-get rep "counts"))
+             (diverged (dict-get rep "diverged"))
+             (omitted (dict-get rep "pins_omitted")))
             (if
               (null? counts)
               (html/page
@@ -31,17 +33,18 @@
                     (html/text (string-append "Branch status — " ref)))
                   (html/p*
                     (html/attr "class" "muted")
-                    "Rendered from the store via (branch/status ref \"summary\") — never the session snapshot. Full JSON: (branch/status ref).")
+                    "Rendered from the store via (branch/status ref summary) — never the session snapshot. the full mode returns the complete JSON.")
                   (html/p*
-                    (html/attr "class" "ws-counts-line")
+                    (html/attr "class" "muted")
                     (string-append
                       "clean " (as-str (dict-get counts "clean"))
-                      " · ahead-new " (as-str (dict-get counts "ahead-new"))
-                      " · ahead " (as-str (dict-get counts "ahead"))
-                      " · behind " (as-str (dict-get counts "behind"))
-                      " · diverged " (as-str (dict-get counts "diverged"))
-                      " · synced " (as-str (dict-get counts "synced"))))
-                  (html/h2 (html/text "diverged (never auto-applied — obituary rule)"))
+                      " | ahead-new " (as-str (dict-get counts "ahead-new"))
+                      " | ahead " (as-str (dict-get counts "ahead"))
+                      " | behind " (as-str (dict-get counts "behind"))
+                      " | diverged " (as-str (dict-get counts "diverged"))
+                      " | synced " (as-str (dict-get counts "synced"))))
+                  (html/h2
+                    (html/text "diverged (never auto-applied — obituary rule)"))
                   (html/join
                     (list/map
                       (lambda
@@ -49,17 +52,18 @@
                         (html/p*
                           (html/attr "class" "muted")
                           (string-append
-                            (as-str (dict-get d "kind")) " "
+                            (as-str (dict-get d "kind"))
+                            " "
                             (as-str (dict-get d "name")))))
-                      (dict-get rep "diverged")))
+                      diverged))
                   (html/p*
                     (html/attr "class" "muted")
                     (string-append
                       "pins omitted in summary mode: "
-                      (as-str (dict-get rep "pins_omitted"))
-                      " — full list: (branch/status ref)")))))))))
+                      (as-str omitted)
+                      " — full list: (branch/status ref)")))))))
     "GET /branch-status?ref=BRANCH — the store-rendered status face over
-     (branch/status ref \"summary\"). The diverged worklist is the
+     (branch/status ref summary). The diverged worklist is the
      never-auto-applied list (obituary rule); behind pins are the pull
      candidates via (branch/pull ref). Defaults to the calling branch."))
 
