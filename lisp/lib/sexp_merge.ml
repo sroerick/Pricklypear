@@ -21,13 +21,27 @@
       drop one side. CONFLICT at the shorter (ancestor) path.
     - Edits into the SAME LIST CONTAINER (same parent path, both last
       steps list-child steps: app.arg[i] / prim.arg[i] /
-      lambda.param[i] / letrec.binding[NAME]) on BOTH sides are NOT
-      disjoint: script indices are application-time positions in each
-      side's OWN final list, so cross-side index frames cannot be
-      interleaved soundly without a list-level diff3 (deferred — tail
-      note). CONFLICT at the parent path. A list touched by only ONE
-      side composes fine (its whole script is that side's own frame,
-      which round-trips by construction).
+      lambda.param[i] / letrec.binding[NAME]) are resolved by the LIST
+      FRAME RULE, never composed piecemeal: splice indices are
+      application-time positions in each side's OWN frame for the
+      list, so cross-side frames cannot be interleaved and the list
+      resolves as ONE side's ENTIRE live frame — nonshared + shared
+      edits together, in that side's script order — or conflicts at
+      the parent path. Exactly: (i) both sides carry live non-shared
+      edits in the list -> CONFLICT at the parent; (ii) one side
+      carries the only live non-shared edits AND nothing in the list
+      was dropped by the same-path/ancestor phases -> THAT side's
+      entire live frame is kept (its copies of the shared edits
+      included, the other side's copies excluded) — a full per-side
+      frame round-trips by construction, so a shared-identical edit is
+      never spliced out of the live side's frame order (the
+      silent-reorder hole this rule closed, 2026-10-07 rework); (iii)
+      every edit in the list is shared-identical -> kept once (ours'
+      whole frame for the list); (iv) any key in the list was dropped
+      by the earlier phases while live keys remain -> CONFLICT at the
+      parent (surviving splice indices are frame-relative to the
+      dropped edits). A list touched by only ONE side is rule (ii)
+      with that side's whole script as its frame.
 
     Everything else — edits in structurally unrelated subtrees, or
     different fixed child slots of the same node (if.then vs if.else,
@@ -268,21 +282,57 @@ let merge (base : Ast.expr) (ours : Ast.expr) (theirs : Ast.expr) : result =
                 end)
            tkeys)
     okeys;
-  (* phase C — both sides edited the SAME LIST CONTAINER (at different
-     paths, else phases A/B handled it): cross-side index frames cannot
-     be interleaved soundly -> CONFLICT at the parent path; drop every
-     surviving edit in that list (both sides, shared included). *)
+  (* phase C — both sides touched the SAME LIST CONTAINER (at different
+     paths, else phases A/B handled them). Splice indices are
+     application-time positions in each side's OWN frame for the list,
+     so cross-side frames cannot be interleaved: each list resolves as
+     ONE side's ENTIRE live frame — or conflicts. Per list L (grouped
+     by container path):
+
+       live_o / live_t : each side's live NON-SHARED keys in L (a
+                         shared-identical edit is deduped and does not
+                         by itself make the frames interact)
+       dropped         : keys in L already dropped by phases A/B —
+                         registered too, because a dropped key poisons
+                         the frame indices of surviving same-list edits
+                         (their splices are relative to the dropped
+                         edit's position)
+
+     (i)  live_o and live_t both nonempty -> CONFLICT at the parent
+          (two independent frames cannot compose).
+     (ii) exactly one side live AND dropped = [] -> keep THAT side's
+          ENTIRE live frame for L: its nonshared + shared edits, in
+          THAT side's script order, taken from that side's script;
+          the other side's copies of the shared keys are excluded. A
+          full per-side frame applied to base's list reproduces that
+          side's list by construction (the diff round-trip), so the
+          result is exactly that side's body.
+     (iii) live_o = live_t = [] AND dropped = [] -> every edit in L is
+          shared-identical: keep once via ours' copies (OKeep) —
+          ours' whole frame for L, which round-trips by construction.
+     (iv) dropped <> [] AND any live key remains in L -> CONFLICT at
+          the parent (conservative: surviving splice indices are
+          frame-relative to the dropped edits — keeping them would
+          silently reorder). With NO live keys left in L, phases A/B
+          already conflicted the exact paths and nothing survives.
+
+     Non-list edits never enter this phase: fixed-slot edits are
+     order-immune (independent subtrees — a fixed slot of a
+     conflicted list's container node, e.g. app.fn while the args
+     list conflicts, composes soundly), and phase B already removed
+     ancestor/descendant pairs. *)
   let by_list :
     (string, Ast_path.path * string list * string list) Hashtbl.t =
     Hashtbl.create 16
   in
   let list_order = ref [] in
+  (* register EVERY key of the list — dropped ones included: whether a
+     list lost keys to phases A/B is part of the frame decision (iv). *)
   let register tbl keys side =
     List.iter
       (fun k ->
-         if status k <> Dropped then
-           let (p, _) = Hashtbl.find tbl k in
-           match list_parent p with
+         let (p, _) = Hashtbl.find tbl k in
+         match list_parent p with
            | None -> ()
            | Some parent ->
                let pk = key parent in
@@ -305,26 +355,55 @@ let merge (base : Ast.expr) (ours : Ast.expr) (theirs : Ast.expr) : result =
   List.iter
     (fun pk ->
        let (parent, os, ts) = Hashtbl.find by_list pk in
-       (* non-shared live keys per side: a shared identical edit was
-          already deduped and does not make the frames interact *)
+       let live k = status k <> Dropped in
        let nonshared side_keys other_tbl =
          List.filter
-           (fun k -> not (Hashtbl.mem other_tbl k) && status k <> Dropped)
+           (fun k -> live k && not (Hashtbl.mem other_tbl k))
            side_keys
        in
        let o_live = nonshared os ttbl in
        let t_live = nonshared ts otbl in
+       let dropped_keys = List.filter (fun k -> not (live k)) (os @ ts) in
        if o_live <> [] && t_live <> [] then begin
+         (* (i) two independent frames -> conflict at the parent *)
          add_conflict parent
            (Ast_path.select_path ours parent)
            (Ast_path.select_path theirs parent);
          List.iter drop os;
          List.iter drop ts
-       end)
+       end
+       else if dropped_keys = [] then begin
+         (* (ii)/(iii): one side owns the whole frame — or all-shared *)
+         let live_keys = List.filter live (os @ ts) in
+         if t_live <> [] then
+           (* (ii) theirs' frame: theirs' copies of the shared keys
+              replace ours' — flip the shared keys to TKeep so theirs'
+              script supplies the edits, in theirs' frame order *)
+           List.iter (fun k -> Hashtbl.replace st k TKeep) live_keys
+         else
+           (* (ii, ours live) / (iii): ours' frame — shared and
+              ours-only keys are already OKeep (ours' copies kept,
+              theirs' copies excluded by the TKeep filter); restated
+              for clarity *)
+           List.iter (fun k -> Hashtbl.replace st k OKeep) live_keys
+       end
+       else if List.exists live (os @ ts) then begin
+         (* (iv) dropped edits poison surviving frame indices *)
+         add_conflict parent
+           (Ast_path.select_path ours parent)
+           (Ast_path.select_path theirs parent);
+         List.iter drop os;
+         List.iter drop ts
+       end
+       (* else: every key in L was dropped by phases A/B — their exact
+          conflicts are already reported; nothing survives in L. *))
     (List.rev !list_order);
   (* compose: ours' surviving script (in ours' order), then theirs'
-     surviving TKeep edits (in theirs' order). Survivors never share a
-     list container, so per-list application-time frames stay intact. *)
+     surviving TKeep edits (in theirs' order). After phase C, the
+     surviving edits in any list container are ONE side's ENTIRE frame
+     for that list (and phases A/B never leave cross-side same-list
+     survivors either), so every per-list application-time frame stays
+     intact under [apply]. *)
   let kept (eds : Sexp_diff.edit list) (want : status) : Sexp_diff.edit list =
     List.filter
       (fun e ->
