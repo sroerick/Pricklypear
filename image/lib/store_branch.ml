@@ -1283,6 +1283,183 @@ type merge_result = {
   conflicts : string list;
 }
 
+(** T5 ast-merge (branching ast-merge): the eval-boundary three-way hook
+    injected into [merge_branch]. Three OPAQUE jsonb fn bodies in —
+    base (the fork-point body), ours (the source's own pin), theirs
+    (the parent-chain live body) — and either the MERGED jsonb body out,
+    or the conflict lines (each carrying the exact subtree path + both
+    sides' values). The store NEVER decodes bodies itself: the AST codec
+    and the pure merge3 live at the eval boundary (store-split
+    opaque-body contract, scripts/verify_store_split.sh — no
+    Pricklypear_lisp references in store_*.ml). With no hook injected
+    the merge keeps the pre-T5 behavior: diverged names come back as
+    plain name-level conflicts, bodies untouched. *)
+type merge3_hook =
+  base:string -> ours:string -> theirs:string ->
+  (string, string list) result
+
+(* ---- T5 ast-merge: diverged fn rows through the injected merge3 ---- *)
+
+(** The three opaque jsonb bodies of one diverged fn name, plus the
+    author/doc/package metadata the merged-body upsert copies from the
+    source row (same fields the ahead-copy upsert carries over).
+      ours   = the source branch's own pin row (function_defs) — diverged
+               implies own=true, so the row exists;
+      theirs = the parent-chain LIVE body, closest ancestor wins (the
+               anc walk of branch_status_conn's p_res, bodies read from
+               the function_defs mirror — the 009 mirror keeps it in
+               lockstep with tree live rows, and fn deletes remove the
+               row, so a JOIN is live-only, tombstone-free);
+      base   = the fork-point body via the branch-status read path — the
+               exact a_res walk (tree_versions at the direct parent,
+               gen <= base_gen; deeper ancestors unbounded; per-depth
+               newest gen; tombstone-filtered AFTER per-depth head
+               selection; closest depth wins). BASE AT BASE_GEN, never
+               head — a head-base would manufacture conflicts (the
+               classic three-way bug). *)
+type diverged_bodies = {
+  d_ours : string;
+  d_theirs : string;
+  d_base : string;
+}
+
+let diverged_fn_bodies (conn : Store_db.conn) ~(source_id : string)
+    ~(name : string) : (diverged_bodies, string) result =
+  let one ~what sql params =
+    match Store_db.exec conn ~params sql with
+    | [ [ c ] ] -> (match Pgx.Value.to_string c with
+        | Some s -> Ok s
+        | None -> Error (what ^ ": null body"))
+    | _ -> Error (what ^ ": no row")
+  in
+  (* ours: the source's own pin row. *)
+  let ours =
+    one ~what:(name ^ ": own pin")
+      "SELECT body::text FROM function_defs WHERE branch_id = $1 AND name = $2"
+      [ Pgx.Value.of_string source_id; Pgx.Value.of_string name ]
+  in
+  (* theirs: parent-chain live body, closest depth wins (mirrors p_res;
+     read from the function_defs mirror — tree_nodes carries only the
+     hash, not the body, and the 009 reverse trigger keeps the mirror
+     in lockstep with tree live rows; fn deletes remove the mirror row
+     too, so the JOIN is live-only, tombstone-free). *)
+  let theirs =
+    one ~what:(name ^ ": parent body")
+      (Store_common.chain_sql
+         (", anc AS ( " ^
+          "  SELECT c.depth, fd.body " ^
+          "  FROM chain c " ^
+          "  JOIN function_defs fd ON fd.branch_id = c.id " ^
+          "  WHERE c.depth >= 1 AND fd.name = $2 " ^
+          ") SELECT body::text FROM anc ORDER BY depth ASC LIMIT 1"))
+      [ Pgx.Value.of_string source_id; Pgx.Value.of_string name ]
+  in
+  (* base: the fork-point body (mirrors a_res exactly — see the type
+     comment). depth 1 is the direct parent, bounded by the source's
+     base_gen; deeper ancestors contribute their full head (the
+     documented status approximation). tree_versions.body is the NODE
+     ENVELOPE ({v,doc,body}); the AST is payload->'body' (the same
+     unwrap node_of_row does; hash domain = digest(payload->'body')).
+     The tombstone marker lives at the ENVELOPE top level (019/020), so
+     the filter reads the envelope while the value unwraps it. *)
+  let base =
+    one ~what:(name ^ ": base body")
+      (Store_common.chain_sql
+         (", vers_base AS ( " ^
+          "  SELECT c.depth, v.gen, v.body " ^
+          "  FROM tree_versions v " ^
+          "  JOIN chain c ON c.id = v.branch_id " ^
+          "  WHERE v.kind = 'fn' " ^
+          "    AND (string_to_array(v.path::text, '.'))[4] = " ^
+          "        tree_enc_label($2) " ^
+          "    AND (c.depth > 1 OR v.gen <= (SELECT COALESCE(base_gen, 0) " ^
+          "         FROM branches WHERE id = $1)) " ^
+          "), heads_base AS ( " ^
+          "  SELECT DISTINCT ON (depth) depth, gen, body " ^
+          "  FROM vers_base ORDER BY depth, gen DESC " ^
+          ") SELECT (body->'body')::text FROM heads_base " ^
+          "WHERE depth >= 1 AND (body->>'_tombstone') IS NULL " ^
+          "ORDER BY depth ASC LIMIT 1"))
+      [ Pgx.Value.of_string source_id; Pgx.Value.of_string name ]
+  in
+  match ours, theirs, base with
+  | Ok d_ours, Ok d_theirs, Ok d_base -> Ok { d_ours; d_theirs; d_base }
+  | Error e, _, _ | _, Error e, _ | _, _, Error e -> Error e
+
+(** Attempt the three-way merge of ONE diverged fn name (inside the
+    merge transaction).
+      Ok name  = the merged body was upserted into the target and the
+                 source's pin was UNBOUND (the resolved body subsumes
+                 the pin — the pull/unbind lifecycle, T4: a kept pin
+                 would hold the pre-merge body, re-classify as ahead
+                 once base_gen advances, and a re-merge would clobber
+                 theirs' subtree back to base).
+      Error ls = conflict lines (subtree paths + both sides' values from
+                 the hook) or the reason the three-way could not run
+                 (missing own pin / parent body / fork-point base — no
+                 base means no three-way, the name-level conflict of the
+                 pre-T5 behavior), each prefixed with the name. *)
+let merge_diverged_fn (conn : Store_db.conn) (hook : merge3_hook)
+    ~(source_id : string) ~(target_id : string) ~(name : string) :
+  (string, string list) result =
+  let conflict_line reason = [ Printf.sprintf "%s: %s" name reason ] in
+  match diverged_fn_bodies conn ~source_id ~name with
+  | Error e -> Error (conflict_line e)
+  | Ok b -> (
+      match hook ~base:b.d_base ~ours:b.d_ours ~theirs:b.d_theirs with
+      | Error lines ->
+          Error (List.map (fun l -> Printf.sprintf "%s: %s" name l) lines)
+      | Ok merged_json ->
+          (* Upsert the MERGED body into the target: author/doc/package
+             ride from the source row (same carry-over as the ahead-copy
+             upsert); updated_at = now() — this is a new target write,
+             not a copy of the source's timestamp. *)
+          let upsert_sql =
+            "INSERT INTO function_defs " ^
+            "  (branch_id, name, body, author, doc, package, updated_at) " ^
+            "SELECT $1, s.name, $4::jsonb, s.author, s.doc, s.package, now() " ^
+            "FROM function_defs s " ^
+            "WHERE s.branch_id = $2 AND s.name = $3 " ^
+            "ON CONFLICT (branch_id, name) DO UPDATE " ^
+            "  SET body = EXCLUDED.body, author = EXCLUDED.author, " ^
+            "      doc = EXCLUDED.doc, package = EXCLUDED.package, " ^
+            "      updated_at = EXCLUDED.updated_at " ^
+            "RETURNING name" in
+          let rows =
+            Store_db.exec conn
+              ~params:[
+                Pgx.Value.of_string target_id;
+                Pgx.Value.of_string source_id;
+                Pgx.Value.of_string name;
+                Pgx.Value.of_string merged_json;
+              ]
+              upsert_sql
+          in
+          if rows = [] then
+            Error
+              (conflict_line
+                 "source pin row vanished mid-merge; merged body not applied")
+          else
+            (* Unbind the source pin, revealing the merged body (same
+               machinery as pull: delete_fn journals the remove inside;
+               idempotent — an absent row is already the reveal state).
+               The FD row is deleted EXPLICITLY, not via the 009 reverse
+               mirror: the merged-body upsert above queued a forward
+               (table->tree) trigger whose transaction-scoped guard
+               (pp.tree_mirror, set at commit before this delete's
+               reverse trigger fires) would suppress the mirror's fd
+               delete for the whole transaction. *)
+            let _ =
+              Store_db.exec conn
+                ~params:[
+                  Pgx.Value.of_string source_id;
+                  Pgx.Value.of_string name;
+                ]
+                "DELETE FROM function_defs WHERE branch_id = $1 AND name = $2"
+            in
+            let _ = Tree_store.delete_fn conn ~branch_id:source_id ~name in
+            Ok name)
+
 (* ---- branch diff (branching.diff) ---- *)
 
 type diff_status = DiffAdded | DiffRemoved | DiffModified
@@ -1315,8 +1492,8 @@ let format_merge_result (r : merge_result) : string =
       Printf.sprintf "merged %d rows (%d conflicts: %s)"
         r.count (List.length cs) (String.concat ", " cs)
 
-let merge_branch (t : Store_db.t) ~(source_id : string) ~(target_id : string)
-  : merge_result option =
+let merge_branch ?merge3 (t : Store_db.t) ~(source_id : string)
+    ~(target_id : string) : merge_result option =
   (* Is this a merge into the source's direct parent? Read BEFORE the tx
      (the value is stable); the base advance runs AFTER the tx commits,
      because the deferred gen-bump triggers (017/019) fire at COMMIT —
@@ -1342,16 +1519,25 @@ let merge_branch (t : Store_db.t) ~(source_id : string) ~(target_id : string)
         | Some conn ->
             (* branching.branch-status S3: status-driven merge.
                [is_parent_merge] was resolved before the tx (see above). *)
-            let names, conflicts =
+            let names, merged_names, conflicts =
               if is_parent_merge then begin
                 let rows = branch_status_conn conn ~branch_id:source_id in
                 let fns =
                   List.filter (fun r -> r.st_kind = DiffFn) rows in
-                (* DIVERGED is deliberately NOT in the applied set:
-                   both sides moved, so auto-applying the source would
-                   silently reverse the parent's work. Diverged names
-                   come back as conflicts; re-define + re-merge resolves
-                   them (branching.merge S3, 2026-09 decision). *)
+                (* DIVERGED handling depends on the injected hook.
+                   Without one (pre-T5 callers: promote, tests), diverged
+                   names come back as plain name conflicts, bodies
+                   untouched. With the eval-boundary merge3 hook (T5,
+                   branching ast-merge), each diverged fn row attempts a
+                   three-way merge against the fork-point base:
+                   cleanly-merged rows apply BOTH sides' edits (the
+                   merged body is upserted into the target by
+                   [merge_diverged_fn], the source pin unbound — the
+                   resolved body subsumes the pin); conflicting rows
+                   come back as conflict lines with the exact subtree
+                   paths. Never auto-applied, never LWW — the merged
+                   body keeps BASE at conflicted subtrees, and a
+                   conflicted name's target row is untouched. *)
                 let ups =
                   List.filter_map
                     (fun r ->
@@ -1360,14 +1546,25 @@ let merge_branch (t : Store_db.t) ~(source_id : string) ~(target_id : string)
                       | _ -> None)
                     fns
                 in
-                let conf =
-                  List.filter_map
-                    (fun r ->
-                      if r.st_status = SDiverged then Some r.st_name
-                      else None)
-                    fns
+                let diverged =
+                  List.filter (fun r -> r.st_status = SDiverged) fns
                 in
-                (ups, conf)
+                (match merge3 with
+                 | None ->
+                     (ups, [], List.map (fun r -> r.st_name) diverged)
+                 | Some hook ->
+                     let merged, conf =
+                       List.fold_left
+                         (fun (merged, conf) (r : branch_status_row) ->
+                           match
+                             merge_diverged_fn conn hook ~source_id
+                               ~target_id ~name:r.st_name
+                           with
+                           | Ok name -> (name :: merged, conf)
+                           | Error lines -> (merged, conf @ lines))
+                         ([], []) diverged
+                     in
+                     (ups, merged, conf))
               end
               else begin
                 let sql =
@@ -1386,11 +1583,15 @@ let merge_branch (t : Store_db.t) ~(source_id : string) ~(target_id : string)
                 (List.filter_map
                    (function [ c ] -> Pgx.Value.to_string c | _ -> None)
                    rows,
-                 [] (* no shared base: no conflict report *))
+                 [], [] (* no shared base: no conflict report *))
               end
             in
-            (* Upsert only the selected names (per-name loop keeps binding
-               simple; merge sets are branch-scale, tens of rows). *)
+            (* Upsert only the ahead names by copy (per-name loop keeps
+               binding simple; merge sets are branch-scale, tens of
+               rows). Merged diverged names were ALREADY upserted with
+               their merged body by [merge_diverged_fn] — they must NOT
+               go through the copy loop, which would overwrite the
+               merged body with the source's pre-merge body. *)
             let count =
               List.fold_left
                 (fun acc name ->
@@ -1415,10 +1616,15 @@ let merge_branch (t : Store_db.t) ~(source_id : string) ~(target_id : string)
                   if rows = [] then acc else acc + 1)
                 0 names
             in
+            let count = count + List.length merged_names in
             (* tmp/eval-fast-path: merge writes scaffolding directly (the
                deferred mirror reaches tree_nodes) — journal the names so
-               sessions on the target chain rebind only these. *)
-            List.iter (fun name -> Def_journal.record_upsert ~branch_id:target_id ~name) names;
+               sessions on the target chain rebind only these. Merged
+               diverged names journal like any other applied name (the
+               source-side unbind journals its own remove inside
+               delete_fn). *)
+            List.iter (fun name -> Def_journal.record_upsert ~branch_id:target_id ~name)
+              (names @ merged_names);
             (* Advance the source's merge base AFTER commit (see above):
                post-commit, branch_generations carries the merge's own
                bump, so base_gen lands on the parent's true head — git's
