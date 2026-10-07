@@ -63,6 +63,38 @@ git -C "${WORKTREE}" fetch "${BARE_REPO}" "${REF}"
 git -C "${WORKTREE}" checkout -B "${BRANCH}" "${target_rev}"
 git -C "${WORKTREE}" reset --hard "${target_rev}"
 
+
+# PRE-BUILD DRIFT CHECK (hoisted 2026-10-07 from the post-promote tail):
+# the operator sees which libs/*.pp edits will NOT go live BEFORE the
+# build/ship/promote runs — the land (reseed-package) decision happens
+# with the full picture, not after the fact.
+pp_sync_bin="${WORKTREE}/_build/default/cli/bin/pp_sync.exe"
+if [ -n "${PP_USER:-}" ] && [ -n "${PP_PASS:-}" ]; then
+  if [ ! -x "${pp_sync_bin}" ]; then
+    ( cd "${WORKTREE}" && dune build cli/bin/pp_sync.exe ) >/dev/null 2>&1 \
+      || true
+  fi
+fi
+if [ -n "${PP_USER:-}" ] && [ -n "${PP_PASS:-}" ] && [ -x "${pp_sync_bin}" ]; then
+  changed_pkgs="$(git -C "${WORKTREE}" diff --name-only \
+      "${oldrev:-HEAD~1}" "${target_rev}" -- libs/*/lib.pp 2>/dev/null \
+    | sed -n 's|^libs/\([^/]*\)/lib\.pp$|\1|p' | sort -u)"
+  if [ -n "${changed_pkgs}" ]; then
+    log "Nopales .pp changed in this release — checking vault drift:"
+    for p in ${changed_pkgs}; do
+      "${pp_sync_bin}" status --url "${PP_URL:-https://pricklypear.rocks}" \
+        --user "${PP_USER}" --password "${PP_PASS}" "${p}" 2>&1 \
+        | sed 's/^/[drift] /' || true
+    done
+    log "body-stale names above are in git but NOT live — promote them from the"
+    log "habitat (personal/dev -> system/main), then pp-sync snapshot to refresh"
+    log "the vault. See borge/branching.borg vault-authority."
+  fi
+else
+  log "NOTE: kernel deployed; libs/*.pp edits to existing names are NOT live"
+  log "      (additive seed). Check with: pp-sync status <pkg> — see"
+  log "      borge/branching.borg vault-authority (card 8dff7c9e)."
+fi
 log "build release (opam switch ${OPAM_SWITCH})"
 # shellcheck disable=SC1090
 eval "$($(command -v opam) env --switch="${OPAM_SWITCH}" --set-switch)"
@@ -93,34 +125,6 @@ ssh -o BatchMode=yes "root@${TARGET_HOST}" \
 # exactly which .pp edits will not go live. Soft check: credentials
 # absent (or pp-sync not built) only prints the reminder.
 # ----------------------------------------------------------------
-pp_sync_bin="${WORKTREE}/_build/default/cli/bin/pp_sync.exe"
-if [ -n "${PP_USER:-}" ] && [ -n "${PP_PASS:-}" ]; then
-  if [ ! -x "${pp_sync_bin}" ]; then
-    ( cd "${WORKTREE}" && dune build cli/bin/pp_sync.exe ) >/dev/null 2>&1 \
-      || true
-  fi
-fi
-if [ -n "${PP_USER:-}" ] && [ -n "${PP_PASS:-}" ] && [ -x "${pp_sync_bin}" ]; then
-  changed_pkgs="$(git -C "${WORKTREE}" diff --name-only \
-      "${oldrev:-HEAD~1}" "${target_rev}" -- libs/*/lib.pp 2>/dev/null \
-    | sed -n 's|^libs/\([^/]*\)/lib\.pp$|\1|p' | sort -u)"
-  if [ -n "${changed_pkgs}" ]; then
-    log "Nopales .pp changed in this release — checking vault drift:"
-    for p in ${changed_pkgs}; do
-      "${pp_sync_bin}" status --url "${PP_URL:-https://pricklypear.rocks}" \
-        --user "${PP_USER}" --password "${PP_PASS}" "${p}" 2>&1 \
-        | sed 's/^/[drift] /' || true
-    done
-    log "body-stale names above are in git but NOT live — promote them from the"
-    log "habitat (personal/dev -> system/main), then pp-sync snapshot to refresh"
-    log "the vault. See borge/branching.borg vault-authority."
-  fi
-else
-  log "NOTE: kernel deployed; libs/*.pp edits to existing names are NOT live"
-  log "      (additive seed). Check with: pp-sync status <pkg> — see"
-  log "      borge/branching.borg vault-authority (card 8dff7c9e)."
-fi
-
 # Self-update AFTER success — never overwrite the running script mid-flight
 if [ -f "${WORKTREE}/scripts/post-receive-prod-hook.ksh" ]; then
   cp "${WORKTREE}/scripts/post-receive-prod-hook.ksh" \

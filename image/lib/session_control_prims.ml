@@ -563,54 +563,83 @@ let register ~(hooks : hooks) (t : t) (tbl : Primitives.t) : unit =
       if t.manifest.username = "anonymous" then
         (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("branch/status", "denied for anonymous", "denied"))))
       else
-        match args with
-        | [ Pricklypear_lisp.Ast.VStr branch_ref ] ->
-            let owner, short = split_branch_ref branch_ref in
-            if not (branch_readable t owner) then
-              (Pricklypear_lisp.Ast.VStr
-                 (Printf.sprintf "denied: branch %s is owned by %s"
-                    branch_ref owner))
-            else
-              (match
-                 Store.lookup_branch_id_by_name t.store ~owner ~name:short
-               with
-               | None ->
-                   (Pricklypear_lisp.Ast.VStr
-                      (Printf.sprintf "no such branch: %s" branch_ref))
-               | Some branch_id ->
-                   let rows = Store.branch_status t.store ~branch_id in
-                   let rep = Store.status_report rows in
-                   let row_json (r : Store.branch_status_row) :
-                       Yojson.Safe.t =
-                     `Assoc
-                       [ ("kind",
-                          `String
-                            (match r.Store.st_kind with
-                             | Store.DiffFn -> "fn"
-                             | Store.DiffType -> "type"
-                             | Store.DiffRoute -> "route"))
-                       ; ("name", `String r.Store.st_name)
-                       ; ("status", `String (Store.st_status_s r.Store.st_status))
-                       ; ("own", `Bool r.Store.st_own)
-                       ]
-                   in
-                   Pricklypear_lisp.Ast.VStr
-                     (Yojson.Safe.to_string
-                        (`Assoc
-                          [ ( "branch",
-                              `String (owner ^ "/" ^ short) )
-                          ; ( "counts",
-                              `Assoc
-                                (List.map
-                                   (fun (s, n) -> (s, `Int n))
-                                   rep.Store.counts) )
-                          ; ( "diverged",
-                              `List (List.map row_json rep.Store.worklist) )
-                          ; ( "pins",
-                              `List (List.map row_json rep.Store.pins) )
-                          ])))
-        | _ ->
-            (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("branch/status", "bad args (need 1 branch ref)", "bad-args")))));
+        let run_status branch_ref mode =
+          let owner, short = split_branch_ref branch_ref in
+          if not (branch_readable t owner) then
+            (Pricklypear_lisp.Ast.VStr
+               (Printf.sprintf "denied: branch %s is owned by %s"
+                  branch_ref owner))
+          else
+            (match
+               Store.lookup_branch_id_by_name t.store ~owner ~name:short
+             with
+             | None ->
+                 (Pricklypear_lisp.Ast.VStr
+                    (Printf.sprintf "no such branch: %s" branch_ref))
+             | Some branch_id ->
+                 let rows = Store.branch_status t.store ~branch_id in
+                 let rep = Store.status_report rows in
+                 let row_json (r : Store.branch_status_row) :
+                     Yojson.Safe.t =
+                   `Assoc
+                     [ ("kind",
+                        `String
+                          (match r.Store.st_kind with
+                           | Store.DiffFn -> "fn"
+                           | Store.DiffType -> "type"
+                           | Store.DiffRoute -> "route"))
+                     ; ("name", `String r.Store.st_name)
+                     ; ("status", `String (Store.st_status_s r.Store.st_status))
+                     ; ("own", `Bool r.Store.st_own)
+                     ]
+                 in
+                 (* summary mode: counts + the diverged worklist (capped)
+                    + a pins count — the full pins array for system/main
+                    ran ~260KB of JSON per call (2026-10-07 review). *)
+                 let diverged_rows =
+                   if mode = "summary" then
+                     let rec take n = function
+                       | [] -> []
+                       | x :: xs -> if n <= 0 then [] else x :: take (n - 1) xs
+                     in
+                     take 25 rep.Store.worklist
+                   else rep.Store.worklist
+                 in
+                 let diverged_field =
+                   ("diverged", `List (List.map row_json diverged_rows)) in
+                 let pins_field =
+                   if mode = "summary" then
+                     ( "pins_omitted",
+                       `Int (List.length rep.Store.pins) )
+                   else
+                     ( "pins", `List (List.map row_json rep.Store.pins) )
+                 in
+                 Pricklypear_lisp.Ast.VStr
+                   (Yojson.Safe.to_string
+                      (`Assoc
+                        [ ( "branch",
+                            `String (owner ^ "/" ^ short) )
+                        ; ( "mode", `String mode )
+                        ; ( "counts",
+                            `Assoc
+                              (List.map
+                                 (fun (s, n) -> (s, `Int n))
+                                 rep.Store.counts) )
+                        ; diverged_field
+                        ; pins_field
+                        ])))
+        in
+        (match args with
+         | [ Pricklypear_lisp.Ast.VStr branch_ref ] ->
+             run_status branch_ref "full"
+         | [ Pricklypear_lisp.Ast.VStr branch_ref;
+             Pricklypear_lisp.Ast.VStr "full" ] ->
+             run_status branch_ref "full"
+         | [ Pricklypear_lisp.Ast.VStr branch_ref;
+             Pricklypear_lisp.Ast.VStr "summary" ] ->
+             run_status branch_ref "summary"
+         | _ ->
+             (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("branch/status", "bad args (need branch ref [, full|summary])", "bad-args"))))));
 
   (* (branch/pull ref) -> VStr JSON {pulled:[{kind,name}],
      skipped:[{kind,name}]} (skipped = diverged pins left alone), or a
