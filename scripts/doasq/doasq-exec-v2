@@ -38,7 +38,7 @@ def sha_of(text):
     return hashlib.sha256(text.encode()).hexdigest()
 
 # -- gather the list's cards --
-rows = api('(tree/list "data.s.Ym9hcmQ1.dG9kby1saXN00" 0 200)').get("value", [])
+rows = api('(tree/list "data.s.Ym9hcmQ1.dG9kby1pdGVt0" 0 200)').get("value", [])
 list_row = next((r for r in rows
                  if r.get("type") == "todo-list"
                  and (r.get("body") or {}).get("title") == "doasq-requests"), None)

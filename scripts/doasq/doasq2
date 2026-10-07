@@ -53,7 +53,7 @@ if cmd == "submit":
             '(cons "sha" "%s"))' % (LIST_ID, title.replace('"', ''),
                                     json.dumps(text), sha))
     tail = iid.replace("-", "")
-    d = api('(tree/upsert "data.u.YWRtaW41.dG9kby1pdGVt0.%s" "datum" "todo-item" %s)' % (tail, body))
+    d = api('(tree/upsert "data.s.Ym9hcmQ1.dG9kby1pdGVt0.%s" "datum" "todo-item" %s)' % (tail, body))
     if not d.get("ok"):
         die("submit failed: " + str(d)[:200])
     print("filed %s" % iid)
