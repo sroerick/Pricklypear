@@ -821,6 +821,157 @@ let prune_synced_fn_pins (t : Store_db.t) : string list =
                     names)
           with exn -> Store_db.reraise ~op:"prune_synced_fn_pins" exn))
 
+(** branch-ops STATUS ROW MAPPING (branching-ast-ergonomics branch-ops,
+    T3 handoff): project what Store.branch_status read onto the pure
+    algebra's status_row so branch/pull consumes A.pull_rows — the ONE
+    pull-set computation. Field map: st_kind→r_kind ("fn"|"type"|"route"),
+    st_name→r_name, st_own→r_own, st_branch_hash→r_b, st_parent_hash→r_p,
+    st_base_hash→r_a. The resolved b/p/a hashes are exactly what the
+    algebra's classify consumes. *)
+let status_row_of (r : branch_status_row) : Branch_algebra.status_row =
+  { Branch_algebra.r_kind =
+      (match r.st_kind with
+       | DiffFn -> "fn"
+       | DiffType -> "type"
+       | DiffRoute -> "route");
+    r_name = r.st_name;
+    r_own = r.st_own;
+    r_b = r.st_branch_hash;
+    r_p = r.st_parent_hash;
+    r_a = r.st_base_hash }
+
+(** branch-ops STATUS REPORT (branch/status face): the pure fold over a
+    Store.branch_status read. The classification is NEVER re-derived here
+    — the rows ARE the store's classification (the ONE classifier, read
+    from the store, never the session snapshot — 2026-10-05/06 stale-
+    counter incidents); this only counts and shapes the worklist.
+
+    counts: all six statuses, always present (zero included), so callers
+    can render a stable panel. worklist: the DIVERGED rows in store order
+    — the names needing a human decision (never auto-resolved).
+    pins: the per-pin view worth rendering — every OWN pin plus every
+    non-clean row; the clean non-own bulk (the inherited defaults, many
+    thousands on a garden) is collapsed into counts. *)
+type status_report = {
+  counts : (string * int) list;      (* all six, fixed order *)
+  worklist : branch_status_row list; (* diverged rows, store order *)
+  pins : branch_status_row list;     (* own ∨ non-clean rows *)
+}
+
+let status_statuses = [ "clean"; "ahead-new"; "ahead"; "behind"; "diverged"; "synced" ]
+
+let status_report (rows : branch_status_row list) : status_report =
+  let count s =
+    List.length
+      (List.filter
+         (fun (r : branch_status_row) ->
+            String.equal (st_status_s r.st_status) s)
+         rows)
+  in
+  { counts = List.map (fun s -> (s, count s)) status_statuses;
+    worklist =
+      List.filter (fun (r : branch_status_row) -> r.st_status = SDiverged) rows;
+    pins =
+      List.filter
+        (fun (r : branch_status_row) ->
+           r.st_own || r.st_status <> SClean)
+        rows }
+
+
+(** branch-ops PULL (branch/pull): every BEHIND OWN pin adopts the
+    parent's version by UNBINDING the pin — the per-kind delete path
+    (fn via Tree_store.delete_fn so the def journal records the remove;
+    type/route via the tree-node path delete, whose 009 reverse mirror
+    cleans the scaffolding row) — NEVER a body copy: a copied body would
+    write a NEW pin (pin hygiene — the pin would be "synced" noise
+    instead of inheritance). The pull set is A.pull_rows over the mapped
+    store rows: exactly the OWN pins the ONE classify table renders
+    Behind. Rows WITHOUT an own pin classify Behind too when the parent
+    moved since the fork, but there is no pin to unbind — the branch
+    already inherits the parent's body live — so they are never adopted
+    (and never pinned by the pull). Diverged pins are untouched
+    (obituary rule: no silent reversals); ahead/ahead-new/synced/clean
+    likewise.
+
+    The deletions run in ONE SERIALIZABLE transaction (same shape as
+    prune_synced_fn_pins: deferred mirrors flush once at commit); a
+    per-pin failure is logged and skipped, never aborting the sweep.
+    system/main returns ([], []) (no parent — nothing can be behind a
+    root; also the hard stop before any delete on the inheritance root).
+    Returns (pulled, skipped): (kind, name) pairs, pulled = pins actually
+    unbound, skipped = diverged rows left alone. *)
+let pull_behind_pins (t : Store_db.t) ~(branch_id : string)
+  : (string * string) list * (string * string) list =
+  if branch_id = system_main_id then ([], [])
+  else
+    let rows = branch_status t ~branch_id in
+    let behind = Branch_algebra.pull_rows (List.map status_row_of rows) in
+    let skipped =
+      List.filter_map
+        (fun (r : branch_status_row) ->
+           if r.st_status = SDiverged then
+             Some
+               ( (match r.st_kind with
+                  | DiffFn -> "fn"
+                  | DiffType -> "type"
+                  | DiffRoute -> "route")
+               , r.st_name )
+           else None)
+        rows
+    in
+    let pulled =
+      match behind with
+      | [] -> []
+      | behind -> (
+          try
+            Store_db.with_transaction t (fun conn ->
+                match conn with
+                | None -> []
+                | Some conn ->
+                    List.filter_map
+                      (fun (r : Branch_algebra.status_row) ->
+                         let unbound =
+                           match r.Branch_algebra.r_kind with
+                           | "fn" -> (
+                               match
+                                 Tree_store.delete_fn conn ~branch_id
+                                   ~name:r.Branch_algebra.r_name
+                               with
+                               | Ok _ -> true
+                               | Error _ -> false)
+                           | "type" ->
+                               Tree_store.delete_path conn
+                                 ~path:(Tree_store.type_path ~branch_id
+                                          ~name:r.Branch_algebra.r_name)
+                                 ~recursive:false
+                               > 0
+                           | "route" ->
+                               Tree_store.delete_path conn
+                                 ~path:(Tree_store.route_path ~branch_id
+                                          ~route:r.Branch_algebra.r_name)
+                                 ~recursive:false
+                               > 0
+                           | _ -> false
+                         in
+                         if unbound then begin
+                           (* route table dirty for live sessions (the fn
+                              journal fires inside delete_fn; types ride
+                              the def_gen stamp backstop). *)
+                           if r.Branch_algebra.r_kind = "route" then
+                             Def_journal.record_routes ~branch_id;
+                           Some (r.Branch_algebra.r_kind,
+                                 r.Branch_algebra.r_name)
+                         end
+                         else begin
+                           Printf.eprintf "[store] pull_behind_pins %s:%s: unbind failed\n"
+                             r.Branch_algebra.r_kind r.Branch_algebra.r_name;
+                           None
+                         end)
+                      behind)
+          with exn -> Store_db.reraise ~op:"pull_behind_pins" exn)
+    in
+    (pulled, skipped)
+
 (** Temporarily rebind [t.branch_id] for the duration of [f], then restore.
     Used so seed_stdlib can write package defaults to system/main without
     polluting the user's personal branch. *)

@@ -215,6 +215,11 @@
  (libraries pricklypear-image pricklypear-lisp alcotest eio_main yojson pgx unix))
 
 (test
+ (name branch_ops_test)
+ (modules branch_ops_test)
+ (libraries pricklypear-image pricklypear-lisp alcotest eio_main yojson pgx unix))
+
+(test
  (name auth_throttle_test)
  (modules auth_throttle_test)
  (libraries pricklypear-image alcotest unix))
