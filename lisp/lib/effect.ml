@@ -195,6 +195,7 @@ let read_db_prims = [
   "function-source"; "function-doc"; "function-ast"; "package-bindings"; "package-exports";
   "export-package";
   "route-visibility";
+  "branch/status";  (* branch-ops status row: read-only fold of Store.branch_status *)
   "list-usernames"; "list-ssh-keys";
   "llm-key-status";
   "log-tail"; "ops/summary"; "ops/incidents"; "ops/activity";
@@ -292,6 +293,7 @@ let write_db_prims = [
   "media-put"; "media-put-raw"; "media-delete";
   (* branch-time writes *)
   "prune-synced"; "stub-function"; "unbind";
+  "branch/pull";  (* branch-ops pull row: bulk unbind of behind pins (store writes) *)
   (* retention writes *)
   "retention-delete-policy"; "retention-policy-set"; "retention-run";
   (* auth writes *)
