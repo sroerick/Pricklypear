@@ -61,11 +61,11 @@
                     (string-append
                       "pins omitted in summary mode: "
                       (as-str omitted)
-                      " — land via reseed-package for the full picture.")))))))))
+                      " — land via reseed-package for the full picture."))))))))
     "GET /branch-status?ref=BRANCH — the store-rendered status face over
      the branch/status summary mode. The diverged worklist is the
      never-auto-applied list (obituary rule); behind pins are the pull
-     candidates via branch/pull. Defaults to the calling branch.")
+     candidates via branch/pull. Defaults to the calling branch."))
 
   (route "/branch-status" "branch/status-page" "private"))
 
