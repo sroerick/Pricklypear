@@ -220,6 +220,11 @@
  (libraries pricklypear-image pricklypear-lisp alcotest eio_main yojson pgx unix))
 
 (test
+ (name ast_merge_store_test)
+ (modules ast_merge_store_test)
+ (libraries pricklypear-image pricklypear-lisp alcotest eio_main yojson pgx unix))
+
+(test
  (name auth_throttle_test)
  (modules auth_throttle_test)
  (libraries pricklypear-image alcotest unix))
