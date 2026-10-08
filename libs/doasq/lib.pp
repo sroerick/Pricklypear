@@ -9,86 +9,86 @@
 ;; exact command bytes; the runner re-verifies at run time.
 
 (package doasq
-  (export doasq/page doasq/request-page doasq/items doasq/approve!)
+  (export doasq/page doasq/request-page doasq/items doasq/approve!))
 
-  (define doasq/list-id
-    (lambda () "19eba8e4-87c8-48a8-b04f-4da6f499a180")
-    "The doasq-requests list uuid (shared space).")
+(define doasq/list-id
+  (lambda () "19eba8e4-87c8-48a8-b04f-4da6f499a180")
+  "The doasq-requests list uuid (shared space).")
 
-  (define doasq/items
-    (lambda
-      ()
-      "The queue's request cards: the shared-space todo-items whose
-       list_id is the doasq-requests list. Each is (id . fields)."
-      (list/filter
-        (lambda
-          (row)
-          (string-eq
-            (as-str (dict-get (cdr row) "list_id"))
-            (doasq/list-id)))
+(define doasq/items
+  (lambda
+    ()
+    "The queue's request cards: the shared-space todo-items whose
+     list_id is the doasq-requests list. Each is (id . fields)."
+    (list/filter
+      (lambda
+        (row)
+        (string-eq
+          (as-str (dict-get (cdr row) "list_id"))
+          (doasq/list-id)))
+      (list/map
+        todo/tree/node->pair
+        (list/filter
+          (lambda (nj) (string-eq (as-str (dict-get nj "type")) "todo-item"))
+          (tree/list (todo/tree/shared-prefix) 3 5000))))))
+
+(define doasq/path-for
+  (lambda
+    (id)
+    "The shared-space path of request id: the scan rows whose path
+     tail (32 chars, the undashed uuid) redashes to the id."
+    (let
+      ((paths
         (list/map
-          todo/tree/node->pair
+          (lambda (n) (as-str (dict-get n "path")))
           (list/filter
             (lambda (nj) (string-eq (as-str (dict-get nj "type")) "todo-item"))
-            (tree/list (todo/tree/shared-prefix) 3 5000))))))
-
-  (define doasq/path-for
-    (lambda
-      (id)
-      "The shared-space path of request id: the scan rows whose path
-       tail (32 chars, the undashed uuid) redashes to the id."
+            (tree/list (todo/tree/shared-prefix) 3 5000)))))
       (let
-        ((paths
-          (list/map
-            (lambda (n) (as-str (dict-get n "path")))
-            (list/filter
-              (lambda (nj) (string-eq (as-str (dict-get nj "type")) "todo-item"))
-              (tree/list (todo/tree/shared-prefix) 3 5000)))))
-        (let
-          ((plen 32)
-           (hit
-            (list/filter
-              (lambda
-                (p)
-                (string-eq
-                  (todo/tree/redash
-                    (substring p (- (string-length p) plen) plen))
-                  (as-str id)))
-              paths)))
-          (if (null? hit) () (car hit))))))
+        ((plen 32)
+         (hit
+          (list/filter
+            (lambda
+              (p)
+              (string-eq
+                (todo/tree/redash
+                  (substring p (- (string-length p) plen) plen))
+                (as-str id)))
+            paths)))
+        (if (null? hit) () (car hit))))))
 
-  (define doasq/approve!
-    (lambda
-      (id)
-      "The approve action: roerick's session only (the username gate —
-       a delegated admin token writes as admin and is refused HERE, and
-       the runner re-refuses at execution time: the event author must be
-       roerick). Writes the APPROVED state on the shared row and records
-       the transition event."
-      (if
-        (not (string-eq (as-str (whoami)) "roerick"))
-        "the approvals are roerick's to make"
-        (let
-          ((path (doasq/path-for id)))
-          (if
-            (null? path)
-            "no such request"
-            (let
-              ((node (tree/get path))
-               (fields (todo/tree/get "todo-item" id)))
-              (if
-                (null? fields)
-                "no such request"
-                (seq
-                  (tree/upsert
-                    path
-                    "datum"
-                    "todo-item"
-                    (dict-set fields "state" "APPROVED"))
-                  (todo/event/record id "SUBMITTED" "APPROVED")
-                  (string-append "approved " id))))))))))
+(define doasq/approve!
+  (lambda
+    (id)
+    "The approve action: roerick's session only (the username gate —
+     a delegated admin token writes as admin and is refused HERE, and
+     the runner re-refuses at execution time: the event author must be
+     roerick). Writes the APPROVED state on the shared row and records
+     the transition event."
+    (if
+      (not (string-eq (as-str (whoami)) "roerick"))
+      "the approvals are roerick's to make"
+      (let
+        ((path (doasq/path-for id)))
+        (if
+          (null? path)
+          "no such request"
+          (let
+            ((node (tree/get path))
+             (fields (todo/tree/get "todo-item" id)))
+            (if
+              (null? fields)
+              "no such request"
+              (seq
+                (tree/upsert
+                  path
+                  "datum"
+                  "todo-item"
+                  (dict-set fields "state" "APPROVED"))
+                (todo/event/record id "SUBMITTED" "APPROVED")
+                (string-append "approved " id)))))))))
 
-  (define doasq/page
+(define doasq/page
     (lambda
       ()
       (let
@@ -120,7 +120,7 @@
                 items))))))
   "GET /doasq — the queue: every request, its state, and the review link.")
 
-  (define doasq/request-page
+(define doasq/request-page
     (lambda
       ()
       (let
@@ -197,3 +197,6 @@
    verbatim, the sha, the requester, the state, and (roerick's session
    only) the approve action. The runner re-verifies everything at
    execution time.")
+
+(route "/doasq" "doasq/page" "private")
+(route "/doasq/request" "doasq/request-page" "private")
