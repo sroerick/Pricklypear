@@ -516,35 +516,14 @@
   "Escape s for embedding in a JSON string literal: backslash, quote,
 newline, CR, tab (coerces via as-str; backslash first).")
 
-(define list-ref
-  nth)
-
-(define list/filter
-  (lambda
-    (p xs)
-    (if
-      (null? xs)
-      (list)
-      (if
-        (p (car xs))
-        (cons (car xs) (list/filter p (cdr xs)))
-        (list/filter p (cdr xs))))))
-
-(define list/foldl
-  (lambda
-    (f acc xs)
-    (if
-      (null? xs)
-      acc
-      (list/foldl f (f acc (car xs)) (cdr xs)))))
-
-(define list/map
-  (lambda
-    (f xs)
-    (if
-      (null? xs)
-      (list)
-      (cons (f (car xs)) (list/map f (cdr xs))))))
+;; REMOVED 2026-10-04: fallback defines of list-ref, list/filter,
+;; list/foldl and list/map. All four are kernel-bound now (list-ref is
+;; a prim, see prims_pure.ml; the other three are eval.ml special
+;; forms, see the list/ note below), so on any current main these
+;; defines trip the redefine-kernel-prim guard and abort std seeding
+;; (reseed-package "std" died at form 3, 2026-09-29, issue card
+;; 6bd8f701). The names stay in std's export list; the kernel always
+;; provides them.
 
 ;; --- list/ ---
 ;; list/map, list/filter, list/foldl (and list/foldr) are KERNEL SPECIAL
