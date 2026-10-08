@@ -200,28 +200,32 @@ let register (t : t) (tbl : Primitives.t) : unit =
            resolution is surfaced with its winner. *)
         let client_paths = List.map fst diverge in
         let epochs = Sync.server_updated_at t.store client_paths in
-        List.fold_left
-          (fun (won, kept) (p, _) ->
-            let cl =
-              match List.assoc_opt p cb with
-              | Some env -> Sync.envelope_updated_at env
-              | None -> None
-            in
-            let client_wins =
-              match List.assoc_opt p epochs with
-              | Some sv -> Sync.lww_client_wins cl sv
-              | None -> false
-            in
-            if client_wins then
-              match List.assoc_opt p cb with
-              | Some env -> (
-                  match Sync.apply_client_node t.store ~env with
-                  | Ok () -> (p :: won, kept)
-                  | Error _ -> (won, p :: kept))
-              | None -> (won, p :: kept)
-            else (won, p :: kept))
-          ([], []) diverge
-      in
+          List.fold_left
+            (fun (won, kept, fails) (p, _) ->
+              let cl =
+                match List.assoc_opt p cb with
+                | Some env -> Sync.envelope_updated_at env
+                | None -> None
+              in
+              let client_wins =
+                match List.assoc_opt p epochs with
+                | Some sv -> Sync.lww_client_wins cl sv
+                | None -> false
+              in
+              if client_wins then
+                match List.assoc_opt p cb with
+                | Some env -> (
+                    match Sync.apply_client_node t.store ~env with
+                    | Ok () -> (p :: won, kept, fails)
+                    | Error msg ->
+                        (* the client won LWW but the apply was REJECTED — a
+                           failed push, not a server win; surface it so the
+                           client keeps + re-pushes instead of converging *)
+                        (won, kept, (p, msg) :: fails))
+                | None -> (won, p :: kept, fails)
+              else (won, p :: kept, fails))
+            ([], [], []) diverge
+        in
       match args with
       | [ cm; bodies ] ->
           (match parse_manifest cm, bodies with
@@ -235,21 +239,22 @@ let register (t : t) (tbl : Primitives.t) : unit =
                     let r = Sync.classify server c in
                     (* 1. ClientOnly pushes (server missing the node) —
                        no arbitration needed, the server has no copy. *)
-                    let applied_co =
-                      List.fold_left
-                        (fun n (p, _) ->
-                          match List.assoc_opt p cb with
-                          | Some env ->
-                              (match Sync.apply_client_node t.store ~env with
-                               | Ok () -> n + 1
-                               | Error _ -> n)
-                          | None -> n)
-                        0 r.client_only
-                    in
+                      let applied_co, co_fails =
+                        List.fold_left
+                          (fun (n, fails) (p, _) ->
+                             match List.assoc_opt p cb with
+                             | Some env ->
+                                 (match Sync.apply_client_node t.store ~env with
+                                  | Ok () -> (n + 1, fails)
+                                  | Error msg -> (n, (p, msg) :: fails))
+                             | None ->
+                                 (n, (p, "no client body for planned path") :: fails))
+                          (0, []) r.client_only
+                      in
                     (* 2. Diverge pairs LWW-arbitrate (sync-conflicts v0). *)
-                    let lww_won, lww_kept =
-                      lww_diverge ~server ~cb r.diverge
-                    in
+                      let lww_won, lww_kept, lww_fails =
+                        lww_diverge ~server ~cb r.diverge
+                      in
                     let applied = applied_co + List.length lww_won in
                     let bid = Store.current_branch_id t.store in
                     let gen =
@@ -275,15 +280,23 @@ let register (t : t) (tbl : Primitives.t) : unit =
                               `List (List.map
                                        (fun (p, _) -> `String p)
                                        (Sync.normalize r.diverge)))
-                           ; ("lww_client_won",
-                              `List (List.map (fun p -> `String p)
-                                       (List.rev lww_won)))
-                           ; ("lww_server_kept",
-                              `List (List.map (fun p -> `String p)
-                                       (List.rev lww_kept)))
-                           ; ("generation",
-                              `String (Int64.to_string gen))
-                           ]
+                             ; ("lww_client_won",
+                                `List (List.map (fun p -> `String p)
+                                         (List.rev lww_won)))
+                             ; ("lww_server_kept",
+                                `List (List.map (fun p -> `String p)
+                                         (List.rev lww_kept)))
+                             ; ("failed_paths",
+                                `List (List.map
+                                         (fun (p, _) -> `String p)
+                                         (List.rev (co_fails @ lww_fails))))
+                             ; ("failed_reasons",
+                                `Assoc (List.map
+                                          (fun (p, m) -> (p, `String m))
+                                          (List.rev (co_fails @ lww_fails))))
+                             ; ("generation",
+                                `String (Int64.to_string gen))
+                             ]
                           @ (llm_config_field ())))
                     in
                     (Pricklypear_lisp.Ast.VStr json))
@@ -357,11 +370,18 @@ let register (t : t) (tbl : Primitives.t) : unit =
                            ; ("lww_server_kept",
                               `List (List.map (fun p -> `String p)
                                        (List.rev report.lww_server_kept)))
-                           ; ("client_delete_paths",
-                              `List (List.map (fun p -> `String p)
-                                       (List.rev report.client_deletes)))
-                           ; ("pull_paths",
-                              `List (List.map (fun (p, _) -> `String p) pull))
+                             ; ("client_delete_paths",
+                                `List (List.map (fun p -> `String p)
+                                         (List.rev report.client_deletes)))
+                             ; ("failed_paths",
+                                `List (List.map (fun p -> `String p)
+                                         (List.rev report.failed)))
+                             ; ("failed_reasons",
+                                `Assoc (List.map
+                                          (fun (p, m) -> (p, `String m))
+                                          (List.rev report.failed_reasons)))
+                             ; ("pull_paths",
+                                `List (List.map (fun (p, _) -> `String p) pull))
                            ; ("merged_manifest",
                               `List (List.map
                                        (fun (p, h) ->
@@ -625,8 +645,12 @@ let register (t : t) (tbl : Primitives.t) : unit =
                      , `List (List.map (fun p -> `String p) (List.rev report.Sync.lww_client_won)) )
                    ; ( "lww_server_kept"
                      , `List (List.map (fun p -> `String p) (List.rev report.Sync.lww_server_kept)) )
-                   ; ( "failed_paths"
-                     , `List (List.map (fun p -> `String p) (List.rev report.Sync.failed)) )
+                     ; ( "failed_paths"
+                       , `List (List.map (fun p -> `String p) (List.rev report.Sync.failed)) )
+                     ; ( "failed_reasons"
+                       , `Assoc (List.map
+                                   (fun (p, m) -> (p, `String m))
+                                   (List.rev report.Sync.failed_reasons)) )
                    ; ("generation", `String (Int64.to_string gen))
                    ])))
       | _ ->

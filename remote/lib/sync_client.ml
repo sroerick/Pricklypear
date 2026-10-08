@@ -218,6 +218,18 @@ let materialize_node ~(lens : Lens_store.lens) (v : value) : bool =
       true
   | _ -> false
 
+(** A pulled envelope's path, tolerating both wire shapes (pre/post-f83827c:
+    VStr JSON text or decoded alist) — the convergence check needs to know
+    WHICH requested paths the server actually returned, because a push the
+    server rejected never comes back. *)
+let envelope_path (v : value) : string option =
+  match prim_json_of_value v with
+  | Ok (`Assoc kv) -> (
+      match List.assoc_opt "path" kv with
+      | Some (`String p) -> Some p
+      | _ -> None)
+  | _ -> None
+
 (** One sync round over the DELTA exchange (the chunked protocol;
      issue i-1789178161-87d0742f). Requires a recorded base (the caller
      checks). The round:
@@ -297,9 +309,6 @@ let run_delta_round ~(transport : transport) ~(lens : Lens_store.lens)
            List.filter_map (function `String s -> Some s | _ -> None) xs
        | _ -> []
      in
-     let int k =
-       match List.assoc_opt k kv with Some (`Int n) -> n | _ -> 0
-     in
      let plan_gen =
        match List.assoc_opt "generation" kv with
        | Some (`String g) -> (try Int64.of_string g with _ -> 0L)
@@ -349,52 +358,90 @@ let run_delta_round ~(transport : transport) ~(lens : Lens_store.lens)
            end)
          client_deletes;
        (* 3. push the client delta in body chunks *)
-       if changes <> [] then begin
-         let bodies =
-           List.filter_map
-             (fun (p, _) ->
-               match Lens_store.get ~lens p with
-               | Some env -> Some (p, env)
-               | None -> None)
-             changes
-         in
-         let chunks = chunk_bodies ~max_bytes:400_000 bodies in
-         List.iter
-           (fun chunk ->
-             let chunk_paths = List.map fst chunk in
-             let bodies_v =
-               Ast.VList
-                 (List.map
-                    (fun (p, env) ->
-                      Ast.VList [ Ast.VStr p; Ast.VStr env ])
-                    chunk)
-             in
-             (match
-                transport "sync/push2"
-                  [ Ast.VStr lens.Lens_store.branch; bodies_v; vstr_list deletes ]
-              with
+        (* 3. push the client delta in body chunks *)
+        let bodies =
+          List.filter_map
+            (fun (p, _) ->
+              match Lens_store.get ~lens p with
+              | Some env -> Some (p, env)
+              | None -> None)
+            changes
+        in
+        let pushed_paths = List.map fst bodies in
+        let rejected = ref [] in
+        let returned = Hashtbl.create (List.length changes + 1) in
+        if changes <> [] then begin
+          let chunks = chunk_bodies ~max_bytes:400_000 bodies in
+          List.iter
+            (fun chunk ->
+              let chunk_paths = List.map fst chunk in
+              let bodies_v =
+                Ast.VList
+                  (List.map
+                     (fun (p, env) ->
+                       Ast.VList [ Ast.VStr p; Ast.VStr env ])
+                     chunk)
+              in
+              (match
+                 transport "sync/push2"
+                   [ Ast.VStr lens.Lens_store.branch; bodies_v; vstr_list deletes ]
+               with
                | Ok v -> (
                    match prim_json_of_value v with
                    | Ok (`Assoc kv) ->
+                       (* helpers bound to THIS response: the plan-bound
+                          strs/int above close over sync/plan2's kv and
+                          would silently report zero pushes here *)
+                       let int k =
+                         match List.assoc_opt k kv with
+                         | Some (`Int n) -> n | _ -> 0
+                       in
+                       let strs k =
+                         match List.assoc_opt k kv with
+                         | Some (`List xs) ->
+                             List.filter_map
+                               (function `String s -> Some s | _ -> None) xs
+                         | _ -> []
+                       in
                        pushed_total := !pushed_total + (int "applied");
                        won_all := !won_all @ strs "lww_client_won";
                        kept_all := !kept_all @ strs "lww_server_kept";
+                       (* SURFACE rejections: the typed-boundary gate reports
+                          what it refused (path + reason on current servers).
+                          The round must NOT advance either base (gated below),
+                          so a rejected node re-pushes next round instead of
+                          being absorbed by the base (the 10-07 outage). *)
+                       let reasons =
+                         match List.assoc_opt "failed_reasons" kv with
+                         | Some (`Assoc rows) ->
+                             List.filter_map
+                               (function p, `String m -> Some (p, m) | _ -> None)
+                               rows
+                         | _ -> []
+                       in
                        (match List.assoc_opt "failed_paths" kv with
                         | Some (`List xs) ->
                             List.iter
                               (function
                                 | `String p ->
-                                    log "push %s: server rejected (kept locally; re-pushes next round)" p
+                                    let why =
+                                      match List.assoc_opt p reasons with
+                                      | Some m -> m
+                                      | None -> "reason not reported"
+                                    in
+                                    rejected := p :: !rejected;
+                                    log "push %s: server REJECTED: %s (kept locally; re-pushes next round)"
+                                      p why
                                 | _ -> ())
                               xs
                         | _ -> ())
                    | _ -> log "push2: bad json")
-              | Error e ->
-                  log "push2 failed: %s" (Printexc.to_string e);
-                  ok := false);
-             ignore chunk_paths)
-           chunks
-       end;
+               | Error e ->
+                   log "push2 failed: %s" (Printexc.to_string e);
+                   ok := false);
+              ignore chunk_paths)
+            chunks
+        end;
        (* 4. pulls — server-only list + every pushed path (convergence:
           the server envelope stamps the canonical hash; for an
           LWW-kept path it also replaces the stale local copy). *)
@@ -419,21 +466,49 @@ let run_delta_round ~(transport : transport) ~(lens : Lens_store.lens)
            in
            b :: batches rest
        in
-       List.iter
-         (fun batch ->
-           match transport "tree/get-many" [ vstr_list batch ] with
-           | Ok (Ast.VList envs) ->
-               let n = ref 0 in
-               List.iter
-                 (fun node ->
-                   if materialize_node ~lens node then incr n)
-                 envs;
-               pulled_total := !pulled_total + !n
-           | Ok _ -> log "pull batch: bad shape"
-           | Error e ->
-               log "pull batch failed: %s" (Printexc.to_string e);
-               ok := false)
-         (batches pull_paths);
+        List.iter
+          (fun batch ->
+            match transport "tree/get-many" [ vstr_list batch ] with
+            | Ok (Ast.VList envs) ->
+                let n = ref 0 in
+                List.iter
+                  (fun node ->
+                    (match envelope_path node with
+                     | Some p -> Hashtbl.replace returned p ()
+                     | None -> ());
+                    if materialize_node ~lens node then incr n)
+                  envs;
+                pulled_total := !pulled_total + !n
+            | Ok _ ->
+                log "pull batch: bad shape";
+                ok := false
+            | Error e ->
+                log "pull batch failed: %s" (Printexc.to_string e);
+                ok := false)
+          (batches pull_paths);
+        (* CONVERGENCE GATE: every pushed path must have come back from the
+           server. A push the server REJECTED never returns an envelope —
+           older servers report it only by omission (no failed_paths). A
+           round that fails convergence never advances either base (commit2
+           + the own-base stamp below are gated on ok), so the node re-pushes
+           next round instead of being silently absorbed by the base. *)
+        let missing =
+          List.filter (fun p -> not (Hashtbl.mem returned p)) pushed_paths
+        in
+        List.iter
+          (fun p ->
+            if not (List.mem p !rejected) then
+              log "push %s: not on server after round (kept locally; re-pushes next round)" p)
+          missing;
+        if !rejected <> [] || missing <> [] then begin
+          ok := false;
+          if !err = None then
+            err := Some
+              (if !rejected <> [] then
+                 "push rejected: " ^ String.concat ", " (List.rev !rejected)
+               else
+                 "push not applied: " ^ String.concat ", " missing)
+        end;
         diverge_total := List.length diverge;
         (* space paths surface locally: the server copy is authority. A
            locally-changed space row was force-pulled above (the edit is
@@ -463,7 +538,10 @@ let run_delta_round ~(transport : transport) ~(lens : Lens_store.lens)
           round: commit2 after a failed pull would advance the stored base
           past rows the client never received (the crash-window hole the
           stale-base guard above closes on recovery). *)
-       if not !ok then raise (Failure "round had failures — skipping commit");
+        if not !ok then
+          raise
+            (Failure
+               (Option.value !err ~default:"round had failures — skipping commit"));
        (match transport "sync/commit2" [ Ast.VStr lens.Lens_store.branch ] with
         | Ok v -> (
             match prim_json_of_value v with
@@ -630,20 +708,22 @@ let run_v1_round_inner ~(transport : transport) ~(lens : Lens_store.lens)
               | _ -> ());
              (* pull server copies (tree/get bypasses the rim's lens-local
                 reads on purpose: the pull must come from the server) *)
-             let pulled =
-               List.fold_left
-                 (fun n p ->
-                    match transport "tree/get" [ Ast.VStr p ] with
-                   | Ok v ->
-                       if materialize_node ~lens v then begin
-                         if not quiet then log "pulled %s" p;
-                         n + 1
-                       end else n
-                   | Error e ->
-                       log "pull %s: %s" p (Printexc.to_string e);
-                       n)
-                 0 pulls
-             in
+               let pull_failed = ref [] in
+               let pulled =
+                 List.fold_left
+                   (fun n p ->
+                      match transport "tree/get" [ Ast.VStr p ] with
+                      | Ok v ->
+                          if materialize_node ~lens v then begin
+                            if not quiet then log "pulled %s" p;
+                            n + 1
+                          end else (pull_failed := p :: !pull_failed; n)
+                      | Error e ->
+                          log "pull %s: %s" p (Printexc.to_string e);
+                          pull_failed := p :: !pull_failed;
+                          n)
+                   0 pulls
+               in
              (* mirror server deletions (Ours_del): the stale local copy
                 of a node the server deleted goes too *)
              let deleted =
@@ -673,20 +753,22 @@ let run_v1_round_inner ~(transport : transport) ~(lens : Lens_store.lens)
                    not (List.mem p pulls) && not (List.mem p client_deletes))
                  unstamped
              in
-             let converged =
-               List.fold_left
-                 (fun n (p, _) ->
-                    match transport "tree/get" [ Ast.VStr p ] with
-                   | Ok v ->
-                       if materialize_node ~lens v then begin
-                         if not quiet then log "converged %s (server hash)" p;
-                         n + 1
-                       end else n
-                   | Error e ->
-                       log "converge %s: %s" p (Printexc.to_string e);
-                       n)
-                 0 unstamped_pulls
-             in
+               let v1_missing = ref [] in
+               let converged =
+                 List.fold_left
+                   (fun n (p, _) ->
+                      match transport "tree/get" [ Ast.VStr p ] with
+                      | Ok v ->
+                          if materialize_node ~lens v then begin
+                            if not quiet then log "converged %s (server hash)" p;
+                            n + 1
+                          end else (v1_missing := p :: !v1_missing; n)
+                      | Error e ->
+                          log "converge %s: %s" p (Printexc.to_string e);
+                          v1_missing := p :: !v1_missing;
+                          n)
+                   0 unstamped_pulls
+               in
              (* the obituary rule, applied to sync losses: every LWW
                 resolution is surfaced with its winner *)
              List.iter (fun p -> log "LWW %s: client edit wins" p) won;
@@ -698,20 +780,33 @@ let run_v1_round_inner ~(transport : transport) ~(lens : Lens_store.lens)
                | Ok (Ast.VStr b) -> b
                | _ -> ""
              in
-             (* pin the merged state as the NEXT round's base + the
-                (branch, generation) merge-base coordinate *)
-             (match List.assoc_opt "merged_manifest" kv with
-              | Some (`List rows) ->
-                  let m =
-                    List.filter_map
-                      (function
-                        | `List [ `String p; `String h ] -> Some (p, h)
-                        | _ -> None)
-                      rows
-                  in
-                  if m <> [] then Lens_store.record_base_manifest ~lens m
-              | _ -> ());
-             Lens_store.record_snapshot ~lens ~branch ~generation:gen;
+               (* pin the merged state as the NEXT round's base + the
+                  (branch, generation) merge-base coordinate — ONLY on a
+                  fully-converged round: a push the server rejected (or a
+                  pull that failed) must NOT be absorbed by the base, or
+                  the node never re-pushes (the 10-07 push outage). *)
+               let missing = List.rev !v1_missing in
+               List.iter
+                 (fun p ->
+                   log "push %s: not on server after round (kept locally; re-pushes next round)" p)
+                 missing;
+               List.iter
+                 (fun p -> log "pull %s: not delivered — base not advanced" p)
+                 (List.rev !pull_failed);
+               if missing = [] && !pull_failed = [] then begin
+                 (match List.assoc_opt "merged_manifest" kv with
+                  | Some (`List rows) ->
+                      let m =
+                        List.filter_map
+                          (function
+                            | `List [ `String p; `String h ] -> Some (p, h)
+                            | _ -> None)
+                          rows
+                      in
+                      if m <> [] then Lens_store.record_base_manifest ~lens m
+                  | _ -> ());
+                 Lens_store.record_snapshot ~lens ~branch ~generation:gen
+               end;
              let activity =
                int "applied" + pulled + converged + deleted + List.length kept
              in
@@ -722,17 +817,23 @@ let run_v1_round_inner ~(transport : transport) ~(lens : Lens_store.lens)
                log "pushed=%d pulled=%d deleted=%d diverge=%d (won=%d lost=%d) gen=%s"
                  (int "applied") (pulled + converged) deleted (List.length diverge)
                  (List.length won) (List.length kept) gen_str;
-             report :=
-               { ok = true;
-                 error = None;
-                 pushed = int "applied";
-                 pulled = pulled + converged;
-                 deleted_local = deleted;
-                 diverge = List.length diverge;
-                 lww_client_won = won;
-                 lww_server_kept = kept;
-                 branch;
-                 generation = gen }
+               let failed = missing <> [] || !pull_failed <> [] in
+               report :=
+                 { ok = not failed;
+                   error =
+                     (if failed then
+                        Some
+                          ("not converged: "
+                           ^ String.concat ", " (missing @ List.rev !pull_failed))
+                      else None);
+                   pushed = int "applied";
+                   pulled = pulled + converged;
+                   deleted_local = deleted;
+                   diverge = List.length diverge;
+                   lww_client_won = won;
+                   lww_server_kept = kept;
+                   branch;
+                   generation = gen }
          | _ ->
              report := { !report with ok = false; error = Some "bad response shape" };
              log "bad response shape")
