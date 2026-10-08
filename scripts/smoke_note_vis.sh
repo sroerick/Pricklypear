@@ -17,12 +17,12 @@ PP_PASS="${PP_PASS:-admin}"
 EVAL="${PP_EVAL:-scripts/pp-eval.sh}"
 S=note-vis-fixture
 
-ev() { PP_URL="$PP_URL" PP_USER="$1" PP_PASS="$2" $EVAL -j "$3"; }
+ev() { PP_URL="$PP_URL" PP_USER="$1" PP_PASS="$2" $EVAL "$3"; }
 fail() { echo "FAIL $*" >&2; exit 1; }
 ok() { echo "OK  $*"; }
 
-# truthy: pp_value booleans arrive as "#t"/"#f" (JSON-quoted)
-truthy() { [ "$1" = '#t' ]; }
+# truthy: raw pp-eval prints pp_value booleans as true/false
+truthy() { [ "$1" = true ]; }
 
 echo "== seed (owner $PP_USER) =="
 ev "$PP_USER" "$PP_PASS" '(load-library "notes")' >/dev/null
