@@ -429,7 +429,18 @@ let classify_path_with_routes
   else
     match Hashtbl.find_opt routes path with
     | Some (handler, vis) -> `User (handler, vis)
-    | None -> `Unknown
+    | None ->
+        (* notes-cross read (note-vis-p1): /notes/<user>/<slug> is a
+           framework route outside the user-routes table, and the vis
+           floor in tree/find-by is the real gate (the lib never decides
+           visibility). Anonymous callers reach the handler, which
+           renders public rows and a bare not-found for private/users;
+           bad path shapes 400. User routes registered at a /notes/ path
+           keep their own vis classification above. *)
+        if String.starts_with ~prefix:"/notes/" path
+           && String.length path > String.length "/notes/"
+        then `Hard_public
+        else `Unknown
 
 (** Classify path for the request gate.
     Returns [`Hard_public | `Hard_private | `User of string * string
