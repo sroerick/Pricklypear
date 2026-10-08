@@ -6,7 +6,8 @@
 ;;
 ;; CONTRACT
 ;;   * TYPE is explicit in every call (default install: "memory"; the
-;;     agent's shared store: "gregor-memory" in cactus-ops);
+;;     agent's shared store: "agent-memory" + "agent-agenda" under the
+;;     caller's OWN user namespace — roerick 09-19, the one-tree home);
 ;;   * author = caller (rows are RLS-scoped; in a shared space, members
 ;;     see the space's rows);
 ;;   * all args are strings; TAGS is a JSON array string such as
@@ -17,10 +18,11 @@
 ;; DIALECT: lambda/let/let* bodies are single-expression on PP; wrap
 ;; multi-step bodies in (begin ...).
 ;;
-;; SETUP (admin, once per type):
-;;   (deftype 'memory 'mid 'ver 'cat 'uat 'scope 'ws 'title 'content 'tags 'src)
-;;   ; the shared agent store additionally needs its space:
-;;   (space-admit "gregor-memory" "cactus-ops")
+;; SETUP (admin, once per type) — the agent store types (roerick 09-19:
+;;   memories + agenda live under the caller's OWN user namespace,
+;;   data.u.<user>.<type> — no shared space, no space-admit needed):
+;;   (deftype 'agent-memory 'mid 'ver 'cat 'uat 'scope 'ws 'title 'content 'tags 'src)
+;;   (deftype 'agent-agenda 'aid 'ver 'cat 'uat 'ws 'status 'text 'memory_ids)
 ;;
 ;; DESKTOP USAGE
 ;;   (mem/remember "memory" "m-1789" "goal" "ship P1" "[\"town\"]")
