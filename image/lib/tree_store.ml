@@ -1178,14 +1178,20 @@ let find_by_body_field (conn : Store_db.conn) ~(kind : string option)
   else
     let scoped = prefix <> "" in
     let vis_on = match viewer with Some _ -> true | None -> false in
-    (* Placeholders: the kind match consumes $1..$base, an optional scope
-       filter takes $base+1, the optional vis floor takes the next two
-       (garden floor + viewer), and LIMIT always comes last. *)
+    (* Placeholders: the kind match consumes $1..$base; the remaining
+       clauses are numbered contiguously in emission order: scope
+       filter, vis floor (garden floor + viewer), LIMIT last. Skipped
+       clauses must not reserve numbers: Postgres rejects a statement
+       whose declared parameters are never referenced (42P18), which
+       killed every internal find-by (viewer=None) on PG 18. *)
     let base = match kind with Some _ -> 3 | None -> 2 in
     let scope_i = if scoped then base + 1 else 0 in
-    let floor_i = base + (if scoped then 1 else 0) + 1 in
+    let floor_i = if vis_on then (if scoped then scope_i else base) + 1 else 0 in
     let viewer_i = floor_i + 1 in
-    let limit_i = viewer_i + 1 in
+    let limit_i =
+      if vis_on then viewer_i + 1
+      else (if scoped then scope_i else base) + 1
+    in
     let vis_clause =
       if not vis_on then ""
       else
