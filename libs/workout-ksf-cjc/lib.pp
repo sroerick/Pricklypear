@@ -55,6 +55,11 @@
         (html/div (html/attr "style" "max-width:720px;margin:1em 0")
           (html/tag "canvas" (html/attr "id" "cjcChart") ""))
         (html/tag "script" ""
+          "")
+        (html/tag "script"
+          (html/attr "src" "https://cdn.jsdelivr.net/npm/chart.js@4.4.1")
+          "")
+        (html/tag "script" ""
           (string-append
             "var raw=" (workout-ksf-cjc/cjc-data-js) ";"
             "var pts=raw.split(',').map(s=>{var p=s.split(':');return[p[0],parseInt(p[1])]});"
@@ -63,3 +68,5 @@
             "datasets:[{label:'CJC rounds',data:pts.map(x=>x[1]),"
             "borderColor:'#2a7',tension:.3}]},options:{scales:{y:{beginAtZero:true}}}});"))
         (html/p (html/a "/workout" "<- Workout home"))))))
+
+(route "/workout/cjc" "workout-ksf-cjc/agenda" "private")
