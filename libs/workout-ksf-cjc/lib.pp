@@ -7,7 +7,8 @@
 
 (define workout-ksf-cjc/is-ksf
   (lambda (pair)
-    (workout/field (workout/car-or-null (cdr pair)) "program")))
+    (let ((f (workout/car-or-null (cdr pair))))
+      (string-eq (as-str (dict-get f "program")) "ksf"))))
 
 (define workout-ksf-cjc/get-sets
   (lambda (session-id)
@@ -19,7 +20,7 @@
   (lambda (pair)
     (html/li "" (html/text
       (string-append
-        (workout/session-date-of (workout/car-or-null (cdr pair)))
+        (as-str (dict-get (workout/car-or-null (cdr pair)) "date"))
         " - "
         (as-str (workout-ksf-cjc/get-sets (car pair)))
         " rounds @ 20kg")))))
@@ -34,7 +35,7 @@
       (list/map
         (lambda (pair)
           (string-append
-            (workout/session-date-of (workout/car-or-null (cdr pair)))
+            (as-str (dict-get (workout/car-or-null (cdr pair)) "date"))
             ":"
             (as-str (workout-ksf-cjc/get-sets (car pair)))))
         (workout-ksf-cjc/recent 999)))))
