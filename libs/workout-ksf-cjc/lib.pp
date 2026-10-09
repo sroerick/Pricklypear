@@ -80,3 +80,4 @@
             "datasets:[{label:'CJC rounds',data:pts.map(x=>x[1]),"
             "borderColor:'#2a7',tension:.3}]},options:{scales:{y:{beginAtZero:true}}}});"))
         (html/p (html/a "/workout" "<- Workout home"))))))
+)
