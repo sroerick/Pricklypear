@@ -103,8 +103,11 @@ case "${PP_USER_ID}" in
   hollis) export SSH_ID="${HOME}/.ssh/id_ed25519" ;;
   *) export SSH_ID="" ;;
 esac
-SSH_OPTS=(-o BatchMode=yes)
-[ -n "${SSH_ID}" ] && [ -r "${SSH_ID}" ] && SSH_OPTS+=(-i "${SSH_ID}" -o IdentitiesOnly=yes)
+SSH_ID_FLAG=""
+if [ -n "${SSH_ID}" ] && [ -r "${SSH_ID}" ]; then
+  SSH_ID_FLAG="-i ${SSH_ID} -o IdentitiesOnly=yes"
+fi
+SSH_BASE="-o BatchMode=yes ${SSH_ID_FLAG}"
 
 log "build release (opam switch ${OPAM_SWITCH})"
 # shellcheck disable=SC1090
@@ -119,11 +122,11 @@ release_id="$(print -r -- "${target_rev}" | cut -c1-12)"
 remote_path="${TARGET_STAGE}/${release_id}.tar.gz"
 
 log "scp -> ${TARGET_USER}@${TARGET_HOST}:${remote_path}"
-ssh "${SSH_OPTS[@]}" "${TARGET_USER}@${TARGET_HOST}" "mkdir -p ${TARGET_STAGE}"
-scp "${SSH_OPTS[@]}" "${archive}" "${TARGET_USER}@${TARGET_HOST}:${remote_path}"
+ssh ${SSH_BASE} "${TARGET_USER}@${TARGET_HOST}" "mkdir -p ${TARGET_STAGE}"
+scp ${SSH_BASE} "${archive}" "${TARGET_USER}@${TARGET_HOST}:${remote_path}"
 
 log "promote on ${TARGET_HOST}"
-ssh "${SSH_OPTS[@]}" "${TARGET_USER}@${TARGET_HOST}" \
+ssh ${SSH_BASE} "${TARGET_USER}@${TARGET_HOST}" \
   "doas ${REMOTE_PROMOTE_DOAS:-/home/deploy/bin/deploy-promote}"
 
 # ----------------------------------------------------------------
