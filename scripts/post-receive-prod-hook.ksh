@@ -96,6 +96,16 @@ else
   log "      (additive seed). Check with: pp-sync status <pkg> — see"
   log "      borge/branching.borg vault-authority (card 8dff7c9e)."
 fi
+# identity dispatch: each pushing uid ships with ITS OWN deploy key
+export PP_USER_ID="$(id -un)"
+case "${PP_USER_ID}" in
+  gregor) export SSH_ID="${HOME}/.ssh/pp_deploy_ed25519" ;;
+  hollis) export SSH_ID="${HOME}/.ssh/id_ed25519" ;;
+  *) export SSH_ID="" ;;
+esac
+SSH_OPTS=(-o BatchMode=yes)
+[ -n "${SSH_ID}" ] && [ -r "${SSH_ID}" ] && SSH_OPTS+=(-i "${SSH_ID}" -o IdentitiesOnly=yes)
+
 log "build release (opam switch ${OPAM_SWITCH})"
 # shellcheck disable=SC1090
 eval "$($(command -v opam) env --switch="${OPAM_SWITCH}" --set-switch)"
@@ -109,11 +119,11 @@ release_id="$(print -r -- "${target_rev}" | cut -c1-12)"
 remote_path="${TARGET_STAGE}/${release_id}.tar.gz"
 
 log "scp -> ${TARGET_USER}@${TARGET_HOST}:${remote_path}"
-ssh -o BatchMode=yes "${TARGET_USER}@${TARGET_HOST}" "mkdir -p ${TARGET_STAGE}"
-scp -o BatchMode=yes "${archive}" "${TARGET_USER}@${TARGET_HOST}:${remote_path}"
+ssh "${SSH_OPTS[@]}" "${TARGET_USER}@${TARGET_HOST}" "mkdir -p ${TARGET_STAGE}"
+scp "${SSH_OPTS[@]}" "${archive}" "${TARGET_USER}@${TARGET_HOST}:${remote_path}"
 
 log "promote on ${TARGET_HOST}"
-ssh -o BatchMode=yes "${TARGET_USER}@${TARGET_HOST}" \
+ssh "${SSH_OPTS[@]}" "${TARGET_USER}@${TARGET_HOST}" \
   "doas ${REMOTE_PROMOTE_DOAS:-/home/deploy/bin/deploy-promote}"
 
 # ----------------------------------------------------------------
