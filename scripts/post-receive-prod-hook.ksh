@@ -21,7 +21,7 @@ TARGET_USER="${TARGET_USER:-deploy}"
 TARGET_STAGE="${TARGET_STAGE:-/home/deploy/incoming}"
 REMOTE_PROMOTE="${REMOTE_PROMOTE:-/usr/local/sbin/pricklypear-promote}"
 zero_rev="0000000000000000000000000000000000000000"
-lockdir="${WORKTREE}.deploy.lock"
+lockdir="/home/hollis/apps/deploy-lock/${BRANCH%%/*}.lock"
 target_rev=""
 oldrev=""
 
