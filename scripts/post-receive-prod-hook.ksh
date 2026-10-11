@@ -10,6 +10,7 @@
 set -eu
 
 PATH="/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:${HOME}/.opam/poohstack/bin"
+export SSH_AUTH_SOCK="${SSH_AUTH_SOCK:-${HOME}/run/ship-agent.sock}"
 
 BRANCH="${BRANCH:-master}"
 REF="refs/heads/${BRANCH}"
@@ -112,8 +113,8 @@ ssh -o BatchMode=yes "${TARGET_USER}@${TARGET_HOST}" "mkdir -p ${TARGET_STAGE}"
 scp -o BatchMode=yes "${archive}" "${TARGET_USER}@${TARGET_HOST}:${remote_path}"
 
 log "promote on ${TARGET_HOST}"
-ssh -o BatchMode=yes "root@${TARGET_HOST}" \
-  "${REMOTE_PROMOTE} ${remote_path} ${release_id}"
+ssh -o BatchMode=yes "${TARGET_USER}@${TARGET_HOST}" \
+  "doas ${REMOTE_PROMOTE_DOAS:-/home/deploy/bin/deploy-promote}"
 
 # ----------------------------------------------------------------
 # VAULT-DRIFT REMINDER (borge/branching.borg vault-authority, card
