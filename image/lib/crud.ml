@@ -45,6 +45,20 @@ let session_user () : string =
   | Some c -> (Request_context.manifest c).username
   | None -> "anonymous"
 
+(* Delegated-session actor (migration 039, FED3 gate): on a delegated
+    token the manifest.username stays the OWNER (standing law) and
+    Manifest.actor names the agent credential that carried the write.
+    The CRUD write prims stamp this into the tree env key 'acted_by'
+    (the reverse mirror copies it into data_rows.acted_by for free).
+    Create writes it (NULL = plain owner session); update/upsert take
+    it as a COALESCE so non-stamped bookkeeping writers (restore, sync,
+    merge) never silently clear attribution. Scripts and jobs bind no
+    request context -> None, i.e. a plain owner write. *)
+let session_actor () : string option =
+  match Request_context.get () with
+  | Some c -> Pricklypear_common.Manifest.actor (Request_context.manifest c)
+  | None -> None
+
 (** product-experience §activity-ledger: emit an activity row for a
     datum write. Target is a PATH (type/id), never a body. The push is a
     mutex + queue op — zero synchronous DB work on this surface. *)
@@ -757,7 +771,8 @@ let create_outcome
   with_tree_tx store ~none:(fun () -> no_db "create") (fun conn ->
     guard_space_write conn ~prim:"create" ~type_name ~caller:author ~id:None;
     (* tree is truth; reverse trigger mirrors to data_rows *)
-    let id = Tree_store.insert_datum conn ~type_name ~fields_json ~author in
+    let id = Tree_store.insert_datum conn ~type_name ~fields_json ~author
+        ~acted_by:(session_actor ()) in
     (match id with
      | Ok s ->
          emit_write ~caller:author ~cls:"data.write" ~type_name ~id:s
@@ -795,7 +810,8 @@ let update_outcome
   with_tree_tx store ~none:(fun () -> no_db "update") (fun conn ->
     guard_space_write conn ~prim:"update" ~type_name ~caller
       ~id:(Some id);
-    let id' = Tree_store.update_datum conn ~type_name ~id ~fields_json in
+    let id' = Tree_store.update_datum conn ~type_name ~id ~fields_json
+        ~acted_by:(session_actor ()) in
     (match id' with
      | Ok s ->
          emit_write ~caller ~cls:"data.write" ~type_name ~id:s
@@ -920,7 +936,8 @@ let update_field_impl
              in
              let updated_json = Yojson.Safe.to_string (`Assoc updated) in
              let id' =
-               Tree_store.update_datum conn ~type_name ~id ~fields_json:updated_json
+            Tree_store.update_datum conn ~type_name ~id ~fields_json:updated_json
+              ~acted_by:(session_actor ())
              in
              (match id' with Ok s -> VStr s | Error _ -> VNil)))
 
@@ -2019,10 +2036,10 @@ let tree_upsert_outcome (store : Store.t) ~(path : string) ~(kind : string)
          (Error msg)
      | None ->
      with_tree_tx store ~none:(fun () -> no_db "tree/upsert") (fun conn ->
-       let r =
-         Tree_store.upsert_datum conn ~path ~type_name ~body_json ~author
-           ~rank:None
-       in
+        let r =
+            Tree_store.upsert_datum conn ~path ~type_name ~body_json ~author
+              ~rank:None ~acted_by:(session_actor ())
+        in
        emit_tree_write ~caller:author ~target:path
          ~outcome:(match r with Ok _ -> "ok" | Error _ -> "error");
        r))
