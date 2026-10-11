@@ -93,6 +93,8 @@ case "${1:-}" in
     agent-context) shift; exec $PP_REMOTE_BIN --lens "$LENS" --agent-context "$@" </dev/null ;;
     memory-put)    shift; exec $PP_REMOTE_BIN --lens "$LENS" --memory-put "$@" ;;
     memory-delete) shift; t="$1"; shift; exec $PP_REMOTE_BIN --lens "$LENS" --memory-type "$t" --memory-delete "$@" </dev/null ;;
+    memory-get)     shift; exec $PP_REMOTE_BIN --lens "$LENS" --memory-get "$@" ;;
+    memory-list)    shift; exec $PP_REMOTE_BIN --lens "$LENS" --memory-list "$@" ;;
   help|-h|--help)
     sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'
     exit 0 ;;
