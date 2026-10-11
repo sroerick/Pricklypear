@@ -49,6 +49,11 @@
  (modules crud_no_db_test)
  (libraries pricklypear-image pricklypear-lisp alcotest))
 
+
+(test
+ (name actor_provenance_test)
+ (modules actor_provenance_test)
+ (libraries pricklypear-image pricklypear-lisp pricklypear-common alcotest eio_main pgx unix mirage-crypto-rng.unix))
 (test
  (name branch_algebra_test)
  (modules branch_algebra_test)
