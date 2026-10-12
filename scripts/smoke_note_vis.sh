@@ -87,7 +87,7 @@ ok "public renders; users/private missing; bad shape 400"
 
 echo "== cleanup (owner) =="
 for x in p u g; do
-  ev "$PP_USER" "$PP_PASS" "(notes/delete \"$S-$x\")" >/dev/null
+  ev "$PP_USER" "$PP_PASS" "(notes/doc/delete \"$S-$x\")" >/dev/null
 done
 ok "fixtures deleted"
 echo "ALL OK"
