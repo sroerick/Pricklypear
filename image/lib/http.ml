@@ -123,6 +123,7 @@ let launch (env : route_env) (page_fn : Session.t -> unit) : unit =
                  ~env:(Session.env session)
                  ~is_admin:(Session.is_admin session)
                  ~routes:(Request_context.copy_routes (Session.routes session))
+                 ~source_ip:(Some env.source_ip)
              in
              (* SELECT the identity's session, then attach on IT.
                 image.per-identity-sessions: attach selects, never

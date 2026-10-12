@@ -2382,6 +2382,7 @@ let () =
           ~env:t.eval_state.env
           ~is_admin:t.is_admin
           ~routes:(Request_context.copy_routes t.routes)
+          ~source_ip:None
       in
       Request_context.with_current ctx (fun () ->
         match call_handler t ~request:req handler with

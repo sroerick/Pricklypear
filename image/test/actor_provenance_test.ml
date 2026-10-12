@@ -43,7 +43,7 @@ let with_bound_ctx ~(actor : string option) (f : unit -> unit) : unit =
       let ctx =
         Rc.make ~is_admin:false ~manifest:(mk_manifest ~actor ())
           ~env:(Pricklypear_lisp.Env.create ())
-          ~routes:(Hashtbl.create 4)
+          ~routes:(Hashtbl.create 4) ~source_ip:None
       in
       Rc.with_current ctx f)
 
