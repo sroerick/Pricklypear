@@ -64,10 +64,14 @@ let session_actor () : string option =
     mutex + queue op — zero synchronous DB work on this surface. *)
 let emit_write ~(caller : string) ~(cls : string) ~(type_name : string)
     ~(id : string) ~(outcome : string) : unit =
+  (* d1399ea3 boundary-origin: mutating rows carry the client source_ip
+     (Request_context fiber binding; None outside a request). IP-class
+     metadata stays OFF data rows themselves — the ledger is the boundary. *)
+  let origin : string option = Request_context.source_ip (Request_context.get () |> Option.get) in
   ignore
     (Activity_ledger.push ~actor:caller ~cls
        ~target:(Activity_ledger.path_target (type_name ^ "/" ^ id))
-       ~outcome ())
+       ~outcome ?source_ip:origin ())
 
 (** product-experience §activity-ledger: a cross-identity content read
     rescued by the 033 admin disjunct. Deliberate access is an attributed
@@ -2058,9 +2062,11 @@ let tree_children_html (store : Store.t) ~(prefix : string) ~(garden_root : stri
 let emit_tree_write ~(caller : string) ~(target : string) ~(outcome : string)
     : unit =
   if caller <> "" && caller <> "unknown" then
+    let origin : string option = Request_context.source_ip (Request_context.get () |> Option.get) in
     ignore
       (Activity_ledger.push ~actor:caller ~cls:"data.write"
-         ~target:(Activity_ledger.path_target target) ~outcome ())
+         ~target:(Activity_ledger.path_target target) ~outcome
+         ?source_ip:origin ())
 
 let tree_upsert_outcome (store : Store.t) ~(path : string) ~(kind : string)
     ~(type_name : string) ~(body_json : string) ~(author : string)

@@ -902,6 +902,7 @@ let register ~(hooks : hooks) (t : t) (tbl : Primitives.t) : unit =
                     ~env:(Request_context.env ctx)
                     ~is_admin:(Request_context.is_admin ctx)
                     ~routes:(Request_context.routes ctx)
+                    ~source_ip:(Request_context.source_ip ctx)
                 in
                 Request_context.with_current elevated_ctx
                   (fun () -> apply_lambda_auto lam)
