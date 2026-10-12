@@ -4,7 +4,7 @@
 # public); a second signed-in identity and an anonymous visitor probe
 # them; cleanup deletes the fixtures.
 #
-#   export PP_URL=http://127.0.0.1:18080 PP_USER=admin PP_PASS=admin
+#   export PP_URL=http://127.0.0.1:18080 PP_USER=admin PP_PASS=admin  # token corridor: run with PP_PASS empty
 #   export PP_USER2=john PP_PASS2=...   # second signed-in identity
 #   ./scripts/smoke_note_vis.sh
 # Second identity optional: those checks are skipped when unset.
@@ -13,7 +13,7 @@ set -eu
 cd "$(dirname "$0")/.."
 PP_URL="${PP_URL:-http://127.0.0.1:18080}"
 PP_USER="${PP_USER:-admin}"
-PP_PASS="${PP_PASS:-admin}"
+PP_PASS="${PP_PASS-}"   # empty stays empty: pp-eval falls back to PP_TOKEN Bearer
 EVAL="${PP_EVAL:-scripts/pp-eval.sh}"
 S=note-vis-fixture
 
