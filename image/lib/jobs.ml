@@ -479,13 +479,18 @@ let parse_cron (raw : string)
 let is_restricted (f : cron_field) : bool =
   match f with Any -> false | _ -> true
 
-(** Does the given UTC calendar time match the parsed cron? [t] is epoch
-    seconds. *)
-let cron_matches (cron : string) (t : float) : bool =
+(** Does the given calendar time match the parsed cron? [t] is epoch
+    seconds; [calendar] projects it (Unix.gmtime for UTC crons,
+    Unix.localtime for process-TZ crons, i.e. America/Denver in prod).
+    DST is handled by construction: the minute-by-minute search walks
+    real epochs, so a nonexistent spring-forward local time never
+    matches and a repeated fall-back hour fires twice, like vixie cron. *)
+let cron_matches_cal ~(calendar : float -> Unix.tm) (cron : string)
+    (t : float) : bool =
   match parse_cron cron with
   | None -> false
   | Some (m, h, dom, mon, dow) ->
-      let tm = Unix.gmtime t in
+      let tm = calendar t in
       let min = tm.Unix.tm_min
       and hour = tm.Unix.tm_hour
       and mday = tm.Unix.tm_mday
@@ -503,17 +508,21 @@ let cron_matches (cron : string) (t : float) : bool =
       in
       m_ok && h_ok && mon_ok && dom_dow_ok
 
+let cron_matches (cron : string) (t : float) : bool =
+  cron_matches_cal ~calendar:Unix.gmtime cron t
+
 (** Next fire time (epoch ms) strictly after [from_ms] matching the cron,
     searching minute-by-minute with a ~2-year horizon (avoids infinite
     loops). Returns None if the cron doesn't match within the horizon (e.g.
     an impossible Feb-30). *)
-let next_cron_ms (cron : string) (from_ms : int64) : int64 option =
+let next_cron_ms_with ~(calendar : float -> Unix.tm) (cron : string)
+    (from_ms : int64) : int64 option =
   try
     match parse_cron cron with
     | None -> None
     | Some _ ->
         let now_ms = Int64.of_float (Unix.gettimeofday () *. 1000.0) in
-        (* Start from the next whole minute strictly after from (UTC). *)
+        (* Start from the next whole minute strictly after from. *)
         let start_min =
           Int64.add (Int64.div from_ms 60_000L) 1L
         in
@@ -523,11 +532,27 @@ let next_cron_ms (cron : string) (from_ms : int64) : int64 option =
           then None
           else
             let t = Int64.to_float (Int64.mul min64 60_000L) /. 1000.0 in
-            if cron_matches cron t then Some (Int64.mul min64 60_000L)
+            if cron_matches_cal ~calendar cron t then Some (Int64.mul min64 60_000L)
             else search (Int64.add min64 1L)
         in
         search start_min
   with _ -> None
+
+let next_cron_ms (cron : string) (from_ms : int64) : int64 option =
+  next_cron_ms_with ~calendar:Unix.gmtime cron from_ms
+
+(** Cron matched against the image process's local zone (prod:
+    America/Denver via the 5cec9fe TZ knob). "0 15 * * *" means 15:00
+    local, DST included — retires the one-shot dst-flip class. *)
+let next_cron_ms_local (cron : string) (from_ms : int64) : int64 option =
+  next_cron_ms_with ~calendar:Unix.localtime cron from_ms
+
+(** The matcher for a schedule's [tz] column ("utc" default, "local" =
+    process zone). *)
+let next_cron_for_tz (tz : string) (cron : string) (from_ms : int64) :
+    int64 option =
+  if tz = "local" then next_cron_ms_local cron from_ms
+  else next_cron_ms cron from_ms
 
 (** Next fire for an every-ms interval: from + every_ms. *)
 let next_every_ms (every_ms : int64) (from_ms : int64) : int64 =
@@ -551,6 +576,7 @@ type schedule = {
   s_every_ms : int64 option;
   s_next_run : int64;
   s_enabled : bool;
+  s_tz : string;   (* "utc" (default) | "local" (image process zone) *)
 }
 
 let schedule_to_value (s : schedule) : value =
@@ -567,8 +593,9 @@ let schedule_to_value (s : schedule) : value =
              match s.s_every_ms with
              | Some e -> `Intlit (Int64.to_string e)
              | None -> `Null)
-          ; ("next_run", `Intlit (Int64.to_string s.s_next_run))
-          ; ("enabled", `Bool s.s_enabled) ]))
+           ; ("next_run", `Intlit (Int64.to_string s.s_next_run))
+           ; ("tz", `String s.s_tz)
+           ; ("enabled", `Bool s.s_enabled) ]))
 
 let row_to_schedule (row : Pgx.row) : schedule option =
   try
@@ -579,9 +606,10 @@ let row_to_schedule (row : Pgx.row) : schedule option =
     and submitted_by = Row.cell_string row 4
     and cron = Row.cell_string row 5
     and every_ms = Row.cell_int64 row 6
-    and next_run = Row.cell_int64 row 7
-    and enabled = Row.cell_string row 8
-    in
+      and next_run = Row.cell_int64 row 7
+      and enabled = Row.cell_string row 8
+      and tz = Row.cell_string row 9
+      in
     match name, fn, branch, submitted_by, next_run with
     | Some name, Some fn, Some branch, Some submitted_by, Some next_run ->
         Some {
@@ -596,15 +624,18 @@ let row_to_schedule (row : Pgx.row) : schedule option =
              | None, None -> None);
           s_next_run = next_run;
           s_enabled = (match enabled with Some "t" | Some "true" -> true | _ -> false);
+          s_tz = (match tz with Some "local" -> "local" | _ -> "utc");
         }
     | _ -> None
   with _ -> None
 
 (** Upsert a schedule row. [spec] is a 5-field cron string or an every-ms
-    integer. Computes the first next_run from now. *)
+    integer. [tz] is "utc" (default) or "local": cron fields matched
+    against the image process zone (America/Denver in prod) instead of
+    UTC. Computes the first next_run from now. *)
 let schedule_upsert ~(store : Store.t) ~(name : string) ~(spec : string)
     ~(fn : string) ~(args_json : string) ~(branch : string)
-    ~(submitted_by : string) () : value =
+    ~(submitted_by : string) ?(tz = "utc") () : value =
   match pg_conn store with
   | None -> VStr "schedule: no db connection"
   | Some conn ->
@@ -615,13 +646,15 @@ let schedule_upsert ~(store : Store.t) ~(name : string) ~(spec : string)
       | Some ms -> Some (Int64.of_int ms)
       | None -> None
     in
-    if cron = None && every_ms = None then
+    if tz <> "utc" && tz <> "local" then
+      VStr "schedule: tz must be \"utc\" or \"local\""
+    else if cron = None && every_ms = None then
       VStr "schedule: spec must be a 5-field cron or an every-ms integer"
     else
       let next_run =
         match cron with
         | Some c ->
-            (match next_cron_ms c now_ms with
+            (match next_cron_for_tz tz c now_ms with
              | Some n -> n
              | None -> Int64.add now_ms 60_000L)
         | None -> next_every_ms (Option.get every_ms) now_ms
@@ -629,14 +662,14 @@ let schedule_upsert ~(store : Store.t) ~(name : string) ~(spec : string)
       (try
         let sql =
           "INSERT INTO schedules (name, fn, args, branch, submitted_by, \
-           cron, every_ms, next_run, enabled) \
-           VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8, true) \
+           cron, every_ms, next_run, tz, enabled) \
+           VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8, $9, true) \
            ON CONFLICT (name) DO UPDATE SET fn = EXCLUDED.fn, \
              args = EXCLUDED.args, branch = EXCLUDED.branch, \
              submitted_by = EXCLUDED.submitted_by, cron = EXCLUDED.cron, \
              every_ms = EXCLUDED.every_ms, next_run = EXCLUDED.next_run, \
-             enabled = true \
-           RETURNING name::text"
+             tz = EXCLUDED.tz, enabled = true \
+             RETURNING name::text"
         in
         let rows =
           Store_db.exec conn
@@ -646,14 +679,14 @@ let schedule_upsert ~(store : Store.t) ~(name : string) ~(spec : string)
                 Pgx.Value.of_string submitted_by;
                 (match cron with Some c -> Pgx.Value.of_string c | None -> Pgx.Value.null);
                 (match every_ms with Some e -> Pgx.Value.of_int64 e | None -> Pgx.Value.null);
-                Pgx.Value.of_int64 next_run ]
+                Pgx.Value.of_int64 next_run; Pgx.Value.of_string tz ]
             sql
-        in
-        (match rows with
-         | row :: _ ->
-             (match Row.cell_string row 0 with Some n -> VStr n | None -> VStr name)
-         | [] -> VStr name)
-      with exn -> VStr ("schedule: " ^ Printexc.to_string exn))
+          in
+          (match rows with
+           | row :: _ ->
+               (match Row.cell_string row 0 with Some n -> VStr n | None -> VStr name)
+           | [] -> VStr name)
+        with exn -> VStr ("schedule: " ^ Printexc.to_string exn))
 
 (** Disable a schedule. *)
 let unschedule ~(store : Store.t) ~(name : string) () : value =
@@ -677,11 +710,11 @@ let list_schedules ~(store : Store.t) () : value =
   | None -> VList []
   | Some conn ->
     (try
-      let rows =
-        Store_db.exec conn
-          "SELECT name, fn, args::text, branch, submitted_by, cron, every_ms, \
-           next_run, enabled FROM schedules ORDER BY name"
-      in
+        let rows =
+          Store_db.exec conn
+            "SELECT name, fn, args::text, branch, submitted_by, cron, every_ms, \
+             next_run, enabled, tz FROM schedules ORDER BY name"
+        in
       let vals =
         List.filter_map
           (fun r -> match row_to_schedule r with Some s -> Some (schedule_to_value s) | None -> None)
@@ -703,30 +736,31 @@ let claim_due_schedule ~(store : Store.t) : schedule option =
       match pg_conn store with
       | None -> None
       | Some conn ->
-        let sql =
-          "SELECT name, fn, args::text, branch, submitted_by, cron, every_ms, \
-           next_run, enabled FROM schedules \
-           WHERE enabled AND next_run <= $1 \
-           ORDER BY next_run, name FOR UPDATE SKIP LOCKED LIMIT 1"
-        in
+          let sql =
+            "SELECT name, fn, args::text, branch, submitted_by, cron, every_ms, \
+             next_run, enabled, tz FROM schedules \
+             WHERE enabled AND next_run <= $1 \
+             ORDER BY next_run, name FOR UPDATE SKIP LOCKED LIMIT 1"
+          in
         let rows =
           Store_db.exec conn ~params:[ Pgx.Value.of_int64 now_ms ] sql
         in
         (match rows with row :: _ -> row_to_schedule row | [] -> None))
 
-(** Advance a schedule's next_run after it fired (cron or every-ms). An
-    impossible cron (next_cron_ms = None, e.g. Feb 30) DISABLES the
-    schedule here instead of rescheduling it: retrying in a minute
+(** Advance a schedule's next_run after it fired (cron or every-ms).
+    [tz] selects the cron calendar ("utc" default, "local" = process
+    zone). An impossible cron (next_cron_ms = None, e.g. Feb 30) DISABLES
+    the schedule here instead of rescheduling it: retrying in a minute
     re-fired the broken spec every minute forever (i-1789100668). *)
 let advance_schedule ~(store : Store.t) ~(name : string) ~(fired_at : int64)
-    ~(cron : string option) ~(every_ms : int64 option) : unit =
+    ~(cron : string option) ~(every_ms : int64 option) ?(tz = "utc") : unit =
   match pg_conn store with
   | None -> ()
   | Some conn ->
     let now_ms = Int64.of_float (Unix.gettimeofday () *. 1000.0) in
     let next =
       match cron, every_ms with
-      | Some c, _ -> next_cron_ms c now_ms
+      | Some c, _ -> next_cron_for_tz tz c now_ms
       | None, Some e -> Some (next_every_ms e now_ms)
       | None, None -> Some (Int64.add now_ms 60_000L)
     in

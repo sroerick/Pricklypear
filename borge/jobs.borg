@@ -308,12 +308,13 @@
     (smoke "two-step job killed between steps via forced retry: first step not re-executed (side-effect counter row stays 1)")))
 
   (subsection schedules
-   (doc "cron/every-ms schedules as rows; due-scan fires by submitting a job + advancing next_run; downtime collapses to one catch-up run")
+   (doc "cron/every-ms schedules as rows; due-scan fires by submitting a job + advancing next_run; downtime collapses to one catch-up run. Per-schedule tz (migration 032, roerick 09-11 'match cron with mountain time'): tz='utc' (default, historical meaning) or tz='local' — cron fields matched against the image process zone (prod: America/Denver via the 5cec9fe TZ knob), so \"0 15 * * *\" means 15:00 Denver, DST included. DST follows vixie-cron semantics: nonexistent spring-forward times never match, repeated fall-back hours fire twice. Retires the one-shot dst-flip class (b17824c9); re-create tz-carrying schedules (work-digest) with tz=local. Matcher is an injectable calendar fn (next_cron_ms_with) so tests pin a fixed-offset UTC-6 calendar without touching process TZ")
    (status implemented)
    (verify
     (build "dune build @all")
-    (test "image/test: jobs_test.ml schedules — cron next-fire computation (every-minute boundary, across-month Jan-1, impossible Feb-30 never matches) + every-ms drift/interval + spec classification (integer is not cron) + schedule CRUD/claim/advance/disable lifecycle on the schedules table")
-    (smoke "pp_eval '(schedule \"t\" \"* * * * *\" fn args)' → runner fires a job within a minute; (schedules) shows advanced next_run")
+    (test "image/test: jobs_test.ml schedules — cron next-fire computation (every-minute boundary, across-month Jan-1, impossible Feb-30 never matches) + every-ms drift/interval + spec classification (integer is not cron) + schedule CRUD/claim/advance/disable lifecycle on the schedules table + cron tz: local calendar vs utc (09:00 local = 15:00Z in MDT; matcher routes by tz string)")
+    (smoke "pp_eval '(schedule \"t\" \"* * * * *\" fn args)' → runner fires a job within a minute; (schedules) shows advanced next_run + tz field")
+    (smoke "(schedule \"t9\" \"0 15 * * *\" fn args \"local\") → (schedules) shows tz=\"local\" and next_run at 21:00Z (15:00 MDT)")
     (smoke "disable via (unschedule \"t\") → no further submissions")))
 
   (subsection non-goals
