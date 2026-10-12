@@ -30,3 +30,9 @@ roam
 tree
 weather
 menu
+
+# Tier limits (spec_town_profile P1 quotas, 09-13): tenants = non-admin
+# sessions (plus delegated tokens anywhere). Boot-time config: restart
+# to pick up edits. Malformed lines fail the boot seed, like bad names.
+@limit tenant writes-per-min=120 media-mb=64
+@limit instance max-users=50

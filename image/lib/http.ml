@@ -265,9 +265,56 @@ let launch (env : route_env) (page_fn : Session.t -> unit) : unit =
                      | _ -> redirect_response reqd "/");
                     ()
                   end
-                  else begin
-                    (* Product analytics (in-memory day counters). *)
-                    let uname = Session.username session in
+                   else begin
+                      (* Tier write rate limit (spec_town_profile P1):
+                         restricted sessions under a named profile are
+                         capped per-minute on mutating methods; a denial
+                         short-circuits to a bare 429 BEFORE analytics,
+                         shell eval, or DB work. Admins + the mainframe
+                         (no profile) are never throttled. *)
+                      let mutating =
+                        match env.meth with
+                        | `POST | `PUT | `DELETE -> true
+                        | _ -> false
+                      in
+                      let uname_gate = Session.username session in
+                      let page_fn =
+                        if (not mutating)
+                           || not (Session.restricted session)
+                           || uname_gate = "anonymous"
+                           || uname_gate = ""
+                        then page_fn
+                         else if
+                           (match Profile.tenant_limits () with
+                            | None -> true (* no limits configured: allow *)
+                            | Some l ->
+                                Tier_limits.allow_write
+                                  ~username:uname_gate
+                                  ~limit:l.Tier_limits.writes_per_min
+                                   ~now:(Unix.gettimeofday ()))
+                           then page_fn
+                        else fun _s ->
+                          ignore
+                            (Ops_log.info ~component:"http"
+                               ~context:
+                                 [ ("path", path); ("user", uname_gate) ]
+                               "write rate limit exceeded (429)");
+                          let body = "rate limit exceeded" in
+                          let headers =
+                            Httpun.Headers.of_list
+                              ([ ("content-type", "text/plain")
+                               ; ("content-length", string_of_int (String.length body))
+                               ; ("retry-after", "60") ]
+                              @ Timing.timing_header ()
+                              @ security_headers ())
+                          in
+                          let resp =
+                            Httpun.Response.create ~headers `Too_many_requests
+                          in
+                          safe_respond_with_string reqd resp body
+                      in
+                      (* Product analytics (in-memory day counters). *)
+                      let uname = Session.username session in
                     let is_authed =
                       uname <> "anonymous" && uname <> "public" && uname <> ""
                     in
