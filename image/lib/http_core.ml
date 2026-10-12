@@ -456,15 +456,18 @@ let has_prefix (path : string) (prefix : string) : bool =
       && String.sub path 0 (String.length prefix) = prefix
       && path.[String.length prefix] = '/')
 
+(* The five chrome-free front-door pages (http.ml renders them without
+   product nav). Single source of truth: the hard-public gate below and
+   http.ml's renderer both read this list, so a page cannot be public in
+   one layer and undocumented in another. *)
+let front_door_pages =
+  [ "/welcome"; "/background"; "/roadmap"; "/signup"; "/guestbook" ]
+
 let is_system_hard_public (path : string) : bool =
   path = "/login"
   || path = "/health"
   || path = "/logout"
-  || path = "/welcome"
-  || path = "/background"
-  || path = "/roadmap"
-  || path = "/signup"
-  || path = "/guestbook"
+  || List.mem path front_door_pages
   || path = "/book.pdf"
   || path = "/src.tgz"
   || path = "/code"
