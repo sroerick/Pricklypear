@@ -563,12 +563,31 @@
             "background"
             "var(--panel)"
             "overflow"
-            "hidden"))
+            "hidden"
+            ;; v5 focus-scroll: when the OOB swap autofocuses the focused
+            ;; pane, the browser scrolls every scrollable ancestor so the
+            ;; section is on-stage; these inline margins reserve peek
+            ;; space so the NEIGHBOR columns stay visible at the edges
+            ;; (niri semantics; the margin shrinks as the column grows).
+            "scroll-margin-inline"
+            "3rem"))
         (css/rule
           ".fs-pane.fs-third"
-          (list "flex-basis" "33.333%"))
-        (css/rule ".fs-pane.fs-half" (list "flex-basis" "50%"))
-        (css/rule ".fs-pane.fs-full" (list "flex-basis" "100%"))
+          (list "flex-basis" "33.333%" "scroll-margin-inline" "3rem"))
+        (css/rule ".fs-pane.fs-half" (list "flex-basis" "50%" "scroll-margin-inline" "1.5rem"))
+        (css/rule ".fs-pane.fs-full" (list "flex-basis" "100%" "scroll-margin-inline" "0"))
+        ;; v5 one-up: while ANY LIVE single pane exists it takes the
+        ;; whole strip and its strip siblings step aside (shelved and
+        ;; cross-desktop panes are already display:none; a shelved
+        ;; single releases the strip back). Rail-region panes are not
+        ;; strip siblings (glochid renders them in its rail box; a bare
+        ;; host shell shows pinned panes as columns) - the region guard
+        ;; keeps those visible.
+        (css/rule ".fs-pane.fs-single"
+          (list "flex-basis" "100%" "scroll-margin-inline" "0"))
+        (css/rule
+          ".fs-shell:has(.fs-pane.fs-single:not(.shelved)) .fs-pane[data-region=\"main\"]:not(.fs-single)"
+          (list "display" "none"))
         (css/rule
           ".fs-pane.focused"
           (list
