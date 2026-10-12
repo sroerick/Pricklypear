@@ -587,9 +587,9 @@ let test_schedule_crud () =
                  "pp-test-every" sch.J.s_name;
                Alcotest.(check bool) "every_ms captured" true
                  (sch.J.s_every_ms = Some 60_000L);
-               J.advance_schedule ~store ~name:sch.J.s_name
-                 ~fired_at:(now_ms ())
-                 ~cron:sch.J.s_cron ~every_ms:sch.J.s_every_ms
+                 J.advance_schedule ~store ~name:sch.J.s_name
+                   ~fired_at:(now_ms ())
+                   ~cron:sch.J.s_cron ~every_ms:sch.J.s_every_ms ~tz:"utc"
            | None -> Alcotest.fail "claim_due_schedule returned None");
           (* after advance, next_run is in the future -> no longer due *)
           (match J.claim_due_schedule ~store with
@@ -629,9 +629,9 @@ let test_impossible_cron_disables () =
                "pp-test-impossible" sch.J.s_name;
              (* pre-fix: advance rescheduled +60s -> refired every minute.
                 post-fix: no next match -> the schedule is disabled. *)
-             J.advance_schedule ~store ~name:sch.J.s_name
-               ~fired_at:(now_ms ())
-               ~cron:sch.J.s_cron ~every_ms:sch.J.s_every_ms;
+               J.advance_schedule ~store ~name:sch.J.s_name
+                 ~fired_at:(now_ms ())
+                 ~cron:sch.J.s_cron ~every_ms:sch.J.s_every_ms ~tz:"utc";
              (match J.claim_due_schedule ~store with
               | Some _ ->
                   Alcotest.fail "impossible cron still due after advance"

@@ -748,12 +748,13 @@ let claim_due_schedule ~(store : Store.t) : schedule option =
         (match rows with row :: _ -> row_to_schedule row | [] -> None))
 
 (** Advance a schedule's next_run after it fired (cron or every-ms).
-    [tz] selects the cron calendar ("utc" default, "local" = process
-    zone). An impossible cron (next_cron_ms = None, e.g. Feb 30) DISABLES
-    the schedule here instead of rescheduling it: retrying in a minute
-    re-fired the broken spec every minute forever (i-1789100668). *)
+    [tz] selects the cron calendar ("utc" or "local"): callers pass the
+    schedule's tz column value, "utc" when unset. An impossible cron
+    (next_cron_ms = None, e.g. Feb 30) DISABLES the schedule here instead
+    of rescheduling it: retrying in a minute re-fired the broken spec
+    every minute forever (i-1789100668). *)
 let advance_schedule ~(store : Store.t) ~(name : string) ~(fired_at : int64)
-    ~(cron : string option) ~(every_ms : int64 option) ?(tz = "utc") : unit =
+    ~(cron : string option) ~(every_ms : int64 option) ~(tz : string) : unit =
   match pg_conn store with
   | None -> ()
   | Some conn ->
