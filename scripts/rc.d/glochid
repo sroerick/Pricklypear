@@ -1,0 +1,44 @@
+#!/bin/ksh
+# /etc/rc.d/glochid - the shared glochid harness service (OpenBSD rc.d).
+#
+# Staged with pricklypear releases (rc.d/glochid). Install once on the
+# runtime host:
+#   install -m 555 <release>/rc.d/glochid /etc/rc.d/glochid
+#   rcctl enable glochid && rcctl start glochid
+#
+# Serves the glochid surface on 127.0.0.1:$GLOCHID_PORT (default 18093).
+# The image redirects the authenticated home here when PP_HOME_URL is
+# set in /etc/pricklypear/pricklypear.env and nginx routes a path to
+# this port. Config comes from /etc/pricklypear/glochid.env (separate
+# file so a glochid restart never bounces the image).
+
+daemon="/usr/local/libexec/pricklypear/current/glochid/glochid"
+daemon_user="_pricklypear"
+daemon_class=daemon
+daemon_timeout=30
+rc_bg=YES
+
+service_name="glochid"
+env_file="${GLOCHID_ENV_FILE:-/etc/pricklypear/glochid.env}"
+runtime_dir="${GLOCHID_RUNTIME_DIR:-/var/run/glochid}"
+pidfile="${runtime_dir}/glochid.pid"
+log_dir="${GLOCHID_LOG_DIR:-/var/log/glochid}"
+
+if [ -f "${env_file}" ]; then
+  set -a
+  . "${env_file}"
+  set +a
+fi
+
+export GLOCHID_PORT="${GLOCHID_PORT:-18093}"
+
+. /etc/rc.d/rc.subr
+
+rc_pre() {
+  install -d -o "${daemon_user}" -g "${daemon_user}" -m 0750 "${runtime_dir}" "${log_dir}"
+}
+
+rc_check() {
+  curl -s -o /dev/null -m 3 "http://127.0.0.1:${GLOCHID_PORT}/" || return 1
+  return 0
+}
