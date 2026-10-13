@@ -566,6 +566,32 @@ let test_shared_bookkeeping_keeps_acted_by () =
       Alcotest.(check string) "bookkeeping does not clear acted_by"
         "gregor" (stamp conn))
 
+let test_node_path_pk_fallback () =
+  with_s2 (fun store ~sp ~ty ->
+      let conn = Option.get (S.conn_of store) in
+      let id =
+        match Crud.create store ~type_name:ty
+                ~fields_json:(Printf.sprintf "{\"n\":1,\"space\":\"%s\"}" sp)
+                ~author:"alice" with
+        | Ast.VStr id -> id
+        | _ -> Alcotest.fail "create did not return id"
+      in
+      (match Crud.update_guarded store ~type_name:ty ~id
+               ~fields_json:(Printf.sprintf "{\"n\":9,\"space\":\"%s\"}" sp)
+               ~caller:"alice" with
+       | Ast.VStr _ -> ()
+       | _ -> Alcotest.fail "update-guarded failed on shared-space row (a1ce59db)"));
+      let sql =
+        "SELECT fields->>'n'::text FROM tree_data_rows \
+         WHERE id = $1::uuid"
+      in
+      let rows = S.exec conn ~params:[ s id ] sql in
+      (match rows with
+       | [ [ v ] ] ->
+           Alcotest.(check (option string)) "a1ce59db update lands" (Some "9")
+             (Pgx.Value.to_string v)
+       | _ -> Alcotest.fail "projection missing after shared update"))
+
 let () =
   Alcotest.run "data_spaces"
     [
@@ -593,7 +619,12 @@ let () =
           Alcotest.test_case "data-history: per-author before-images" `Quick
             test_history;
         ] );
-      ( "row-level space routing (034)",
+      ( "a1ce59db regression",
+        [
+          Alcotest.test_case "row-routed datum reachable + update lands" `Quick
+            test_node_path_pk_fallback;
+        ] );
+      ( "row-level space routing (034)"
         [
           Alcotest.test_case "body space routes; open write; id survives" `Quick
             test_row_level_routing;
