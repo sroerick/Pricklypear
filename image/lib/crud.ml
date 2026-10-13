@@ -1494,7 +1494,10 @@ let node_path (store : Store.t) ~(type_name : string) ~(id : string) : value =
              with
              | Some sp ->
                  VStr (Tree_store.datum_path ~space:(Some sp) ~type_name ~id ())
-             | None -> VStr (Tree_store.datum_path ~user ~type_name ~id ())))
+             | None ->
+                 (match path_by_node_pk conn ~id with
+                  | Some p -> VStr p
+                  | None -> VStr (Tree_store.datum_path ~user ~type_name ~id ()))))
    | None -> VStr (Tree_store.datum_path ~user ~type_name ~id ()))
 
 (** (type-fields 'type) -> VList of VStr field names | VNil if undeclared. *)
