@@ -1,0 +1,352 @@
+(project pricklypear-dabar
+ (doc "Pricklypear book chapter: dabar — BSB study library (reader + Strong's + interlinear)")
+ (status partial)
+ (* agent note (|2026-08-02 status reconcile: packaging/reader/nav/strongs/interlinear/note-bible-links/work-packages/non-goals shipped; only search-fts remains partial (find-text ILIKE, not tsvector FTS). Live /dabar+/strongs 200; bible/verse John 3 16 ok.|) *)
+ (convention ocaml-dune)
+ (section dabar
+  (doc "Bible study layer on the live image: plugin libs, seeds, routes")
+  (status partial)
+  
+  (verify
+   (build "dune build image")
+   (smoke "(load-library \"bible\") then (bible/verse \"John\" 3 16) has God/world")
+   (smoke "(load-library \"dabar\") installs study routes without breaking /bible")
+   (smoke "GET /bible prev/next or random works after WP1")
+   (smoke "GET /strongs and (strongs/get \"G26\") after Strong's seed")
+   (smoke "interlinear fragment for a seeded verse after WP3"))
+  (details
+   (doc (|
+        PRODUCT: Dabar on Pricklypear is a multi-user, live Bible
+        study environment built as *libraries* inside the user image
+        — not a port of the Dream dabar server.
+
+        PILLARS:
+        1. Plugin-shaped Nopales packages (libs/*/lib.pp + load-library).
+        2. Canon + lexicons in Postgres data_rows (shared across
+           branches). Personal notes/bookmarks are a SEPARATE module
+           (not this chapter).
+        3. htmx partials for reading/study panels (no SPA).
+        4. Seeds are offline scripts; recipes only install code.
+
+        NAMING (locked):
+        - bible/  — core reader (exists): verse, chapter, search,
+                    /bible, partials, dropdowns.
+        - dabar/  — study layer: Strong's, interlinear, study chrome
+                    that *uses* bible/*.
+        Do NOT rename existing bible/* without a migration plan.
+
+        RELATION TO wyo.tech/dabar:
+        - Donor of data formats, Strong's CSV, interlinear field
+          shapes, UX ideas (filters, prev/next, random).
+        - That repo has no borge book; this chapter is SoT for the
+          Pricklypear port. Link from root pricklypear.borg.
+   |))
+  )
+  (subsection packaging
+   (doc "Library layout, boot policy, deps on std/bible")
+   (status implemented)
+   (implements libs/bible/lib.pp libs/dabar/lib.pp scripts/seed_bible_bsb.py)
+   (verify
+    (smoke "libs/bible/lib.pp loads via load-library bible")
+    (smoke "libs/dabar/lib.pp loads via load-library dabar after bible")
+    (smoke "boot seed_stdlib loads bible and dabar"))
+
+   (details
+    (doc (|
+         LAYOUT:
+           libs/bible/lib.pp     — reader (shipped)
+           libs/dabar/lib.pp     — study (to add)
+           scripts/seed_bible_bsb.py
+           scripts/seed_strongs.py      (from dabar strongs.csv)
+           scripts/seed_interlinear.py  (from dabar bsb_tokens.csv)
+
+         BOOT:
+           seed_stdlib loads: std, weather, ui, layout, welcome, ai, outline, notes, signup, todo, contacts, plan, chat, bookmarks, calendar, flashcards, bible, dabar.
+           dabar is seeded on boot; no separate recipe step required.
+
+         DEPS:
+           dabar assumes bible/* and html/* (std) already bound.
+           Document in lib header; multi-file require is deferred.
+
+         INVARIANTS:
+           - No dabar-specific OCaml except generic find/FTS if needed.
+           - Routes under /bible stay bible-owned; /strongs and
+             /dabar/* may be dabar-owned.
+           - Kernel stays thin.
+    |))
+   )
+  )
+  (subsection reader
+   (doc "Existing bible/ reader — baseline for dabar")
+   (status implemented)
+   (verify
+    (smoke "31086+ bible-verse rows after full seed")
+    (smoke "GET /bible?book=John&chapter=3 renders chapter")
+    (smoke "HX-Request /bible returns fragment without chrome"))
+
+   (details
+    (doc (|
+         BASELINE (implemented):
+         - ref BSB:<Abbrev>:<c>:<v>
+         - (bible/verse book ch v), (bible/chapter …), (bible/search q)
+         - /bible + /partials/bible-chapter
+         - html/* selects for book/chapter/verse
+
+         - (bible/prev-ref) / (bible/next-ref) + UI
+         - (bible/random-row) + Surprise control
+         - empty/missing chapter UX
+    |))
+   )
+  )
+  (subsection navigation
+   (doc "Prev/next chapter and random verse")
+   (status implemented)
+   (verify
+    (smoke "next from John 3 → John 4 panel")
+    (smoke "prev from Genesis 1 stays or wraps per policy")
+    (smoke "(bible/random-row) returns a ref+text; UI button works"))
+
+   (details
+    (doc (|
+         Use bible/chapter-counts + book ordinal (bible-book rows).
+         Wrap policy v1: stop at ends (no wrap), or wrap OT/NT —
+         pick stop-at-ends for clarity.
+         Random: SQL ORDER BY random() LIMIT 1 via thin prim or
+         store helper; exposed as (bible/random-row).
+    |))
+   )
+  )
+  (subsection strongs
+   (doc "Strong's lexicon seed, lookup, pages")
+   (status implemented)
+   (implements libs/strongs/lib.pp)
+   (verify
+    (build "python3 scripts/seed_strongs.py --help exits 0")
+    (smoke "after seed: (strongs/get \"H430\") or G26 returns lemma/description")
+    (smoke "GET /strongs and GET /strongs?n=G26"))
+
+   (details
+    (doc (|
+         SOURCE: wyo.tech/dabar/src/tool/sql/strongs/strongs.csv
+         (and dabar Schema.Strongs shape: number, lemma, xlit,
+         pronounce, description).
+
+         TYPE: strongs-entry (or strongs)
+           number, lemma, xlit, pronounce, description
+         id/ref: fields.number unique (H430 / G26).
+
+         PACKAGE: prefer dabar/strongs-* or strongs/* under dabar
+         load; public names (strongs/get) OK if namespaced carefully.
+
+         UI: /strongs list/search stub; detail by number; links from
+         interlinear tokens.
+    |))
+   )
+  )
+  (subsection interlinear
+   (doc "Word-level interlinear fragments + toggles")
+   (status implemented)
+   (implements libs/dabar/lib.pp scripts/seed_interlinear.py scripts/seed_interlinear_dogfood.py)
+   (verify
+    (smoke "seed loads tokens for at least John 1 or full corpus")
+    (smoke "(dabar/inter \"John\" 1 1) returns HTML fragment")
+    (smoke "UI toggle plain vs interlinear on verse/chapter panel"))
+   (details
+    (doc (|
+         SOURCE: dabar inter_verse (bsb_sort, base_text, variant_text,
+         translit, parsing, parsing_str, heb_str, grk_str, verse_id,
+         heading, crossref, bsb_version).
+         Local file: wyo.tech/dabar build/dabar-bundle/tables/
+         bsb_tokens.csv (754647 token rows; reproduced by dabar-build
+         pipeline from src/tool/sql/bsb/bsb_tables.xlsx sheet
+         biblosinterlinear96 via extract_bsb_tables_raw.py +
+         build_dabar_bundle.py).
+
+         STORAGE v1: per-verse JSON on a type bible-interlinear
+           ref, tokens (JSON array of word objects), heading?, crossref?
+         keyed by same BSB:Abbrev:C:V ref as bible-verse.
+         ~31k per-verse rows total. Avoid millions of token rows.
+
+         RENDER DECISION (v1): pre-rendered HTML in the seeder.
+         Token JSON stored in fields.tokens for future Nopales-side
+         rendering; dabar/inter renders fields.html. Rendering
+         token JSON in Nopales needs a JSON-array prim — deferred.
+         Per-token fields kept: base_text, translit, parsing,
+         heb_str/grk_str (per verse language), bsb_sort (order).
+         Dropped for v1: variant_text, parsing_str, verse_id,
+         bsb_version, footnotes/par/quote marks.
+         Ref mapping: USFM book_identifier (gen/jhn/...) -> PP
+         bible-book abbrev via the BOOKS table in
+         scripts/seed_bible_bsb.py. verse_id \"John 3:16\" strings
+         are NOT used for keying.
+
+         UI: htmx toggle on /bible chapter view and /dabar verse
+         study; Strong's hrefs to /strongs?n=.
+
+         Full corpus seed may be large — allow --book John for dogfood.
+         Dogfood stub (seed_interlinear_dogfood.py, John 3:16 only)
+         is superseded by the real seeder.
+
+         (* agent note (|2026-08 recon: spec smokes said
+         bible/interlinear or dabar/inter — actual code is
+         dabar/inter-html; canonicalizing on dabar/inter as the
+         alias + dabar/inter-html for the fragment renderer.|) *)
+    |))
+   )
+  )
+  (subsection note-bible-links
+   (doc "Sexp bible refs in note bodies render to dabar routes")
+   (status implemented)
+   (* agent note (|2026-08-02: bible/link-href+link-html → /dabar?book=&chapter=&verse=; live (bible/link-html "Gen" 1 1 "") anchors Gen 1:1. bible/render-body handles (bible-ref …) outline form; garden-import normalizes [[bible:…]].|) *)
+   (implements libs/bible/lib.pp libs/dabar/lib.pp libs/roam/lib.pp)
+   (verify
+    (smoke "(bible/link-html \"Gen\" 1 1) anchors to /dabar?book=Gen&chapter=1&verse=1")
+    (smoke "(bible/parse-ref …) accepts Gen/Genesis forms used by link helper")
+    (smoke "note body with (bible John 3 16) renders clickable study link")
+    (smoke "bad book degrades to escaped prose, no crash"))
+   (details
+    (doc (|
+         notes.links-and-roam owns authoring syntax and reindex rules.
+         This subsection owns the RENDER TARGET helpers.
+
+         SYNTAX (canonical in note bodies):
+           (bible BOOK chapter)
+           (bible BOOK chapter verse)
+           (bible BOOK chapter verse-from verse-to)
+           (bible BOOK chapter verse "label")  ; optional label string
+
+         HELPERS (bible/ package; dabar may wrap chrome):
+           (bible/link-href book ch verse?) -> "/dabar?book=&chapter=&verse="
+           (bible/link-html book ch verse? label?) -> anchor HTML
+           Reuse bible/abbrev-of + bible/parse-ref + safe-chapter.
+
+         RENDER PIPELINE:
+           roam/render-body (or kernel render-links) recognizes the
+           bible sexp form and calls bible/link-html. Optional htmx
+           onto #dabar-panel when the page includes dabar chrome;
+           plain href navigation is always correct.
+
+         IMPORT:
+           Obsidian [[bible:Genesis2:3|L]] normalizes to sexps in
+           notes.garden-import — not re-parsed as wiki slugs.
+
+         NON-GOAL: storing bible edges in note-link; canon text stays
+         shared data_rows (bible-verse), not duplicated into gardens.
+    |))
+   )
+  )
+
+  (subsection search-fts
+   (doc "Postgres full-text search over verse text (not semantic)")
+   (status partial)
+   (* agent note (|2026-08-02 confirm partial: bible/search = find-text ILIKE on bible-verse text (live "love" → 40 hits + UI form). True tsvector/rank FTS + index still optional WP.|) *)
+   (verify
+    (smoke "bible/search love returns ranked hits"))
+   (details
+    (doc (|
+         OPTIONAL WP: expression index / tsvector on
+         data_rows.fields->>'text' for type bible-verse, or
+         generated column in a later migration.
+         Prim: find-text-fts or specialized bible search SQL.
+         NON-GOAL: pgvector, embedder, /api/search/semantic.
+    |))
+   )
+  )
+  (subsection daily-scripture
+   (doc "Verse-of-the-day, pushed to yourself: a deterministic picker, a deliver fn that lands the verse in your daily note and pings ntfy, fired by a jobs schedule. The product answer to 'at the very least I want to push daily scripture to myself.'")
+   (status planned)
+   (* agent note (|2026-12 plan pass: daily-scripture campaign. Substrate is ALL shipped — jobs/schedules (borge/jobs.borg), bible/random-row+verse+chapter-counts, calendar's daily-YYYY-MM-DD note convention, notes/doc upserts. New work pinned: this subsection's two Nopales fns, image.outbound-http's http-post, notify.ntfy-delivery's ntfy/send.|) *)
+   (verify
+    (build "dune build image")
+    (smoke "(dabar/daily-ref) called twice on the same day returns the same ref; advances next day")
+    (smoke "(dabar/daily-deliver) appends a (bible …) ref + verse text outline node to notes doc daily-<today>; second call same day is a no-op (idempotent)")
+    (smoke "(submit-job \"dabar/daily-deliver\" '()) -> job row done; daily note grew exactly one verse node")
+    (smoke "(schedule \"daily-scripture\" \"30 6 * * *\" \"dabar/daily-deliver\" '()) then (schedules) shows it; PP_TZ respected in cron fire time"))
+   (details
+    (doc (|
+         THE PICKER (dabar/daily-ref). DETERMINISTIC, not random:
+           n = days-since-epoch (floor (now-ms) / 86400000)
+           verse-index = n mod total-canonical-verses (~31086 BSB rows)
+           walk = book ordinal -> chapter-counts (bible/chapter-counts)
+                  -> (book chapter verse)
+         Same verse for every habitat user on the same day, survives
+         re-fire, no state to store, annual-ish cycle. bible/random-row
+         stays the Surprise control; it is NOT the daily picker.
+
+         THE DELIVERY (dabar/daily-deliver). Three writes, one job:
+           1. Verse text via (bible/verse book ch v).
+           2. Append into the DAILY NOTE (slug daily-YYYY-MM-DD, the
+              calendar package's convention — calendar/has-daily? then
+              shows the dot organically) as an outline node carrying a
+              (bible BOOK ch v) ref body -> note-bible-links renders
+              it as a one-click dabar study link. NOT notes/capture
+              into the Inbox: daily capture is a refile chore; the
+              daily note is where underlining/annotation happens.
+           3. (ntfy/send title body click-url) — lock-screen ping;
+              Click: opens /dabar?book=&chapter=&verse= (the existing
+              dabar/verse-study-from-params route).
+
+         IDEMPOTENCY: deliver checks the daily note's outline for an
+         existing node whose body carries today's dabar/daily-ref
+         before appending (jobs re-fire after retry must not double
+         the verse). with-step exists if the fn grows real stages;
+         the dedupe check is honest enough for v1.
+
+         THE SCHEDULE. Pinned at schedule time by the jobs substrate
+         (submitted_by + branch, jobs.node-shapes): the SCHEDULER
+         defines dabar/daily-ref + dabar/daily-deliver on their own
+         branch (garden rule — admin/personal or a dev branch, then
+         promote), then upserts:
+           (schedule \"daily-scripture\" \"30 6 * * *\" \"dabar/daily-deliver\" '())
+         Cron strings evaluate in image-local time; PP_TZ or offset
+         the cron fields, pinned at make time.
+
+         PROMOTE POLICY: the picker + deliver fn are shared-default
+         worthy (system/main) once dogfooded; each user's schedule row
+         and notification target stay personal (jobs rows are
+         submitted_by-scoped).
+    |))
+   )
+  )
+
+  (subsection work-packages
+   (doc "Core dabar features")
+   (status implemented)
+   (* agent note (|2026-08-02: v1 acceptance met — bible+dabar libs, Strong's, interlinear toggle, /dabar+/strongs live. Meta checklist subsection, not a separate code deliverable.|) *)
+   (details
+    (doc (|
+         Provides Strong's lexicon lookup and word-level interlinear study tools
+         that build upon the bible/ reader. Includes navigation (prev/next/random)
+         and optional full-text search over verse text.
+
+         NOT THIS CHAPTER: personal notes/bookmarks — separate module.
+
+         ACCEPTANCE v1 "dabar on PP":
+         - bible reader green on boot
+         - load-library dabar adds study without breaking /bible
+         - Strong's lookup + real interlinear corpus seed
+           (--book John dogfood, then full corpus)
+         - plain/interlinear htmx toggle on reader + study views
+         - no semantic search
+         - no notes/bookmarks here
+    |))
+   )
+  )
+  (subsection non-goals
+   (doc "Explicit exclusions")
+   (status implemented)
+   (* agent note (|2026-08-02: documentation-only exclusions; marked implemented as spec-complete.|) *)
+   (details
+    (doc (|
+         - Semantic search / pgvector / llama embedder
+         - Personal notes / bookmarks (separate module)
+         - Porting Dream dabar server into the image
+         - Audio
+         - Path-param routes /bible/John/3 until platform supports
+         - Multi-translation UI
+         - New unikernel or service binary for dabar
+    |))
+   )
+  )
+ )
+)

@@ -1,0 +1,8 @@
+(library
+ (name pricklypear_lisp)
+ (public_name pricklypear-lisp)
+ (modules ast reader env eval effect control special_forms route_gate
+          recursion complexity explain ast_diff ast_path sexp_diff
+          sexp_merge
+          budget pattern quote_value)
+ (libraries yojson digestif))

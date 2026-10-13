@@ -1,0 +1,162 @@
+(** Prim registration extracted from session.ml (Eio-floor Phase 4). *)
+open Session_types
+
+let register (t : t) (tbl : Primitives.t) : unit =
+  let deny_anon name =
+    (* Raise, don't return a VStr: a returned string is silently dropped
+       by (seq …), so a multi-write handler could partially succeed past
+       an anonymous denial. Raising aborts the whole eval. (BORGE-1785213376) *)
+    raise
+      (Pricklypear_lisp.Ast.Interp_error
+         (Pricklypear_lisp.Ast.User_error
+            (name ^ ": denied for anonymous", "bad-args")))
+  in
+  let actor () =
+    match Request_context.get () with
+    | Some c -> (Request_context.manifest c).username
+    | None -> t.manifest.username
+  in
+  (* (media-meta id) -> VStr json | VNil *)
+  Primitives.register tbl "media-meta"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr id ] ->
+          let uname = actor () in
+          if uname = "anonymous" then deny_anon "media-meta"
+          else
+          let m =
+            Media.get_meta t.store ~id
+              ~visible_to:(uname, Prims_db_common.is_verified_admin ~t ()) ()
+          in
+          (match m with
+           | None -> Pricklypear_lisp.Ast.VNil
+           | Some meta ->
+               (Pricklypear_lisp.Ast.VStr (Media.meta_to_json_string meta)))
+      | _ ->
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("media-meta", "need id", "bad-args")))));
+  (* (media-list [limit]) -> VList of meta json strings *)
+  Primitives.register tbl "media-list"
+    (fun args ->
+      let uname = actor () in
+      if uname = "anonymous" then deny_anon "media-list"
+      else
+        let limit =
+          match args with
+          | [] -> 50
+          | [ Pricklypear_lisp.Ast.VInt n ] -> Int64.to_int n
+          | _ -> 50
+        in
+        let rows =
+          Media.list t.store ~author:(Some uname) ~limit ()
+        in
+        let items =
+          List.map
+            (fun m ->
+              Pricklypear_lisp.Ast.VStr (Media.meta_to_json_string m))
+            rows
+        in
+        (Pricklypear_lisp.Ast.VList items));
+  (* (media-delete id) -> VStr id | VNil | denial *)
+  Primitives.register tbl "media-delete"
+    (fun args ->
+      let uname = actor () in
+      if uname = "anonymous" then deny_anon "media-delete"
+      else
+        match args with
+        | [ Pricklypear_lisp.Ast.VStr id ] ->
+            let res =
+              Media.delete t.store ~id ~actor:uname
+                ~is_admin:(Prims_db_common.is_verified_admin ~t ())
+            in
+            (match res with
+             | Ok (`Ok id') ->
+                 (Pricklypear_lisp.Ast.VStr id')
+             | Ok `Not_found -> Pricklypear_lisp.Ast.VNil
+             | Ok `Forbidden ->
+                 (Pricklypear_lisp.Ast.VStr
+                      "media-delete: not author or admin")
+             | Error e ->
+                 (Pricklypear_lisp.Ast.VStr ("media-delete: " ^ e)))
+        | _ ->
+            (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("media-delete", "need id", "bad-args")))));
+  (* (media-put content-type data-b64 [filename]) -> VStr id | error
+     Tiny payloads only (icons/fixtures). Real pushes: POST /api/media. *)
+  Primitives.register tbl "media-put"
+    (fun args ->
+      let uname = actor () in
+      if uname = "anonymous" then deny_anon "media-put"
+      else
+        let parse =
+          match args with
+          | [ Pricklypear_lisp.Ast.VStr ct
+            ; Pricklypear_lisp.Ast.VStr b64 ] ->
+              Ok (ct, b64, None)
+          | [ Pricklypear_lisp.Ast.VStr ct
+            ; Pricklypear_lisp.Ast.VStr b64
+            ; Pricklypear_lisp.Ast.VStr filename ] ->
+              Ok (ct, b64, Some filename)
+          | _ -> Error "media-put: need content-type, data-b64 [, filename]"
+        in
+        match parse with
+        | Error e -> (Pricklypear_lisp.Ast.VStr e)
+        | Ok (ct, b64, filename) ->
+            (match Media.b64_decode_opt (String.trim b64) with
+             | None ->
+                 (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("media-put", "invalid data-b64", "bad-args"))))
+             | Some data ->
+                 let res =
+                   Media.put t.store ~author:uname ~content_type:ct ~data
+                     ~filename ~max_bytes:Media.max_eval_put_bytes ()
+                 in
+                 (match res with
+                  | Ok r -> (Pricklypear_lisp.Ast.VStr r.id)
+                  | Error e ->
+                      (Pricklypear_lisp.Ast.VStr
+                         ("media-put: " ^ Media.put_error_message e)))));
+  (* (media-put-raw content-type data [filename]) -> VStr id | error
+     Like media-put but takes RAW bytes (no base64) and uses the
+     type-aware HTTP ceiling instead of the 256 KiB eval ceiling.
+     For package upload flows: a route handler receives the file part
+     bytes via (request-multipart) and hands them here — a 5 MiB image
+     or 64 MiB audio never passes through /api/eval, so the eval cap
+     does not apply. Anonymous denied, same as media-put. *)
+  Primitives.register tbl "media-put-raw"
+    (fun args ->
+      let uname = actor () in
+      if uname = "anonymous" then deny_anon "media-put-raw"
+      else
+        let parse =
+          match args with
+          | [ Pricklypear_lisp.Ast.VStr ct
+            ; Pricklypear_lisp.Ast.VStr data ] ->
+              Ok (ct, data, None)
+          | [ Pricklypear_lisp.Ast.VStr ct
+            ; Pricklypear_lisp.Ast.VStr data
+            ; Pricklypear_lisp.Ast.VStr filename ] ->
+              Ok (ct, data, Some filename)
+          | _ ->
+              Error "media-put-raw: need content-type, data [, filename]"
+        in
+        match parse with
+        | Error e -> (Pricklypear_lisp.Ast.VStr e)
+        | Ok (ct, data, filename) ->
+            let res =
+              Media.put t.store ~author:uname ~content_type:ct ~data
+                ~filename
+                ~max_bytes:(Media.max_http_bytes_for ct)
+                ()
+            in
+            (match res with
+             | Ok r -> (Pricklypear_lisp.Ast.VStr r.id)
+             | Error e ->
+                 (Pricklypear_lisp.Ast.VStr
+                    ("media-put-raw: " ^ Media.put_error_message e))));
+  (* (media-url id) -> VStr "/media/<id>" *)
+  Primitives.register tbl "media-url"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr id ] ->
+          (Pricklypear_lisp.Ast.VStr (Media.url_of_id id))
+      | _ ->
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("media-url", "need id", "bad-args")))))
+

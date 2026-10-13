@@ -1,0 +1,101 @@
+#!/usr/bin/env python3
+"""doasq-exec v2 — the habitat-native privileged-request runner.
+
+Invoked via the single doas rule (permit nopass hollis cmd doasq-exec).
+Reads APPROVED cards from the doasq-requests list through the habitat
+API using hollis's DATA-ONLY token (the delegation model: the agent's
+credential touches data; the execution is the root helper's job).
+
+Per card: verify the sha recorded at submission still matches the
+command bytes (tamper = refuse); verify the card state is APPROVED and
+the transition was made by roerick (the event log); run via ksh -c;
+post the output as a card comment; move the card to DONE. One-shot by
+state: DONE cards are never re-run.
+
+The audit = the card's event/comment trail + the activity ledger —
+the house's native audit, not a bespoke log.
+"""
+import base64, hashlib, json, subprocess, sys, urllib.request
+
+BASE = "https://pricklypear.rocks"
+TOKEN = open("/home/hollis/secrets/ppdesignate").read().strip()
+LIST_ID = open("/var/lib/doasq/list-id").read().strip() if __import__("os").path.exists("/var/lib/doasq/list-id") else "19eba8e4-87c8-48a8-b04f-4da6f499a180"
+APPROVER = "roerick"
+
+def api(expr, timeout=120):
+    req = urllib.request.Request(BASE + "/api/eval",
+        data=json.dumps({"expr": expr}).encode(),
+        headers={"Content-Type": "application/json",
+                 "Authorization": "Bearer " + TOKEN})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read().decode())
+
+def die(msg):
+    print("doasq-exec: " + msg, file=sys.stderr)
+    sys.exit(1)
+
+def sha_of(text):
+    return hashlib.sha256(text.encode()).hexdigest()
+
+# -- gather the list's cards --
+rows = api('(tree/list "data.s.Ym9hcmQ1.dG9kby1pdGVt0" 0 200)').get("value", [])
+list_row = next((r for r in rows
+                 if r.get("type") == "todo-list"
+                 and (r.get("body") or {}).get("title") == "doasq-requests"), None)
+if list_row is None:
+    die("the doasq-requests list is missing from the shared space")
+list_id = list_row["id"].replace("-", "")  # path tail form
+items = [r for r in rows
+         if r.get("type") == "todo-item"
+         and str((r.get("body") or {}).get("list_id", "")).replace("-", "") == list_id]
+
+approved = []
+for it in items:
+    b = it.get("body") or {}
+    if str(b.get("state", "")) == "APPROVED":
+        approved.append(it)
+
+if not approved:
+    print("doasq-exec: nothing APPROVED pending")
+    sys.exit(0)
+
+rc_all = 0
+for it in approved:
+    body = it.get("body") or {}
+    iid = it["id"]
+    title = str(body.get("title", "?"))[:70]
+    notes = str(body.get("notes", ""))
+    rec_sha = str(body.get("sha", ""))
+
+    # 1. tamper check: the recorded sha must match the current command bytes
+    if not rec_sha or sha_of(notes) != rec_sha:
+        print(f"doasq-exec: SKIP {iid} — sha mismatch (the card was edited after approval)")
+        api(f'(todo/db/update-field "todo-item" "{iid}" "state" "REJECTED")')
+        rc_all = max(rc_all, 1)
+        continue
+
+    # 2. the transition to APPROVED must exist in the card's event log,
+    #    made by roerick (the attribution check)
+    ev = api(f'(todo/event/list "{iid}")').get("value", [])
+    ev_text = json.dumps(ev)
+    if "APPROVED" not in ev_text or APPROVER not in ev_text:
+        print(f"doasq-exec: SKIP {iid} — no {APPROVER} approval transition in the event log")
+        continue
+
+    # 3. claim: state -> RUNNING (one-shot; a re-run sees RUNNING and skips)
+    api(f'(todo/db/update-field "todo-item" "{iid}" "state" "RUNNING")')
+
+    print(f"doasq-exec: running {iid} — {title}")
+    print(f"  command: {notes[:200]}{'...' if len(notes) > 200 else ''}")
+    proc = subprocess.run(["/bin/ksh", "-c", notes],
+                          capture_output=True, text=True, timeout=1800)
+    out = (proc.stdout + proc.stderr)[-8000:]
+
+    # 4. the output = a card comment; the card -> DONE
+    esc = out.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+    api(f'(todo/comment/add "{iid}" "EXECUTION rc={proc.returncode}\\n{esc}")')
+    api(f'(todo/db/update-field "todo-item" "{iid}" "state" "DONE")')
+    print(f"doasq-exec: {iid} rc={proc.returncode} (output posted as a card comment)")
+    rc_all = max(rc_all, proc.returncode)
+
+sys.exit(rc_all)

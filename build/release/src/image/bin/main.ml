@@ -1,0 +1,30 @@
+(** Pricklypear Image — entry point.
+
+    Always Eio_main + Httpun_eio + Io_eio PG; Lwt fully removed.
+    See single-image.runtime. *)
+
+open Pricklypear_image_lib
+
+let () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let ctx : Io_eio.Ctx.t =
+    Io_eio.Ctx.of_stdenv ~sw env
+  in
+  Io_eio.with_ctx ctx (fun () ->
+      Printf.eprintf
+        "[boot] Eio_main + Httpun_eio + Io_eio PG\n%!";
+      Boot.Phase.log "eio-event-loop";
+      (try
+         let cfg = Io_eio.Db.config_from_env () in
+         let st =
+           Io_eio.Db.make ~cfg
+             ~branch_id:"00000000-0000-0000-0000-000000000001" ()
+         in
+         let n = Io_eio.Db.health_query_sync st in
+         Printf.eprintf "[boot] Io_eio.Db health rows=%d\n%!" n
+       with e ->
+         Printf.eprintf "[boot] Io_eio.Db health failed: %s\n%!"
+           (Printexc.to_string e));
+      Boot.Phase.log "io-health-probe";
+      Boot.start_eio ~env ~sw)

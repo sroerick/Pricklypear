@@ -1,0 +1,489 @@
+(project pricklypear-workout
+ (doc "Pricklypear book chapter: workout journal — fluid program documents + standardized journal facts")
+ (status implemented)
+ (* agent note (|2026-08-02 status reconcile: libs/workout/lib.pp (~2.6k lines) seeded; live (workout/programs) => free/ksk1/ksk2/ksk3; session-list/volume/home-page present. All chapter subsections match shipped package.|) *)
+ (convention ocaml-dune)
+ (section workout
+
+  (doc "Training journal: programs as fluid trees, sessions/exercises as queryable facts, plan/run/capture packages")
+  (status implemented)
+  (verify
+   (build "dune build image")
+   (smoke "(load-library \"workout\") installs workout/… bindings and routes")
+   (smoke "GET /workout lists recent sessions + start controls")
+   (smoke "start free or program session creates workout-session in_progress with doc")
+   (smoke "log exercise facts on a session; volume query returns totals")
+   (smoke "complete session sets state complete and keeps exercise rows")
+   (smoke "resume in_progress session restores doc progress")
+   (smoke "pp_eval workout/session-list and workout/volume work for agents")
+   (smoke "seed_stdlib can load workout after calendar (or documented order)"))
+
+  (details
+   (doc (|
+        =========================================================
+        PRODUCT INTENT
+        =========================================================
+        A first-class training journal on the live image.
+
+        Domain tension (the whole design):
+          - Workouts / programs are extremely fluid (ladders, intervals,
+            dice, unilateral switches, freestyle blocks, rest schemes).
+          - Journal analytics must stay boring and queryable
+            (volume by exercise+load over a date range, streak of days
+            trained, what I did last Tuesday).
+
+        Resolution: hybrid model, two layers deliberately:
+          1. FLUID DOCUMENT  — sexp/json tree for program structure and
+             live run state. JSON and sexps are the same tree algebra;
+             storage print form is an implementation detail.
+          2. JOURNAL FACTS   — standardized workout-session +
+             workout-exercise data_rows projected from the document
+             (and/or quick-log UI) for history queries.
+
+        Inspired by:
+          - paper training logs (date, work done, notes)
+          - Simple program runners (KSK, Q&D, custom blocks)
+          - Pricklypear: objects in Postgres, UI as Nopales routes,
+            agents log/query via eval — no parallel REST API
+
+        NOT a social fitness network.
+        NOT a wearable/HR integration platform.
+        NOT an OCaml system page — this is a product package (Nopales).
+        NOT a pure document store (that fails volume queries).
+        NOT a fully normalized interval/rung schema (that fails fluidity).
+
+        Killer property: the same capture functions humans hit from
+        /workout are what agents call via pp_eval.
+
+        Prior design note (habitat, design-paused 2026-07-18) is
+        superseded by this chapter as authority. Keep the habitat note
+        as a pointer / human-readable mirror, not a second source of truth.
+
+        =========================================================
+        LAYERING
+        =========================================================
+        - libs/workout/lib.pp     — package workout/… (seed on system/main)
+        - data_rows types         — workout-session, workout-exercise
+        - Routes via (route …)    — /workout and session/run paths
+        - Optional nav entry      — ui/menu pin or seed menu link
+        - OCaml                   — existing CRUD/date/random prims only;
+                                    no new kernel prims required for v1
+
+        Programs are CODE (+ optional doc templates), not table rows:
+          each structured program owns a plan / run / capture triplet.
+        Free-form sessions still use the same journal types.
+
+        =========================================================
+        THREE MODELS CONSIDERED (and the choice)
+        =========================================================
+        M1. Pure document
+            One sexp/json object is the whole workout (plan + results).
+            Good fluidity; bad cross-session volume queries unless every
+            consumer understands every dialect.
+
+        M2. Pure tables
+            workouts + exercises [+ sets] only.
+            Good queries; bad fit for ladders/intervals/emoms/dice and
+            program-specific structure (wide nullable columns forever).
+
+        M3. Hybrid (CHOSEN)
+            Fluid document for prescription + live run state;
+            standardized session + exercise fact rows for the journal;
+            capture projects document → facts.
+            Programs may be weird. Facts answer a closed question set.
+
+        =========================================================
+        JOURNAL QUESTIONS (closed fact schema derives from these)
+        =========================================================
+        - Which days did I train?
+        - Which program / intensity?
+        - How much volume of exercise X (optionally at load Y) in range Z?
+        - What is the history of a single session?
+        - Did I finish, abandon, or leave in progress?
+        - What notes / how did it feel?
+
+        Anything not required by those questions stays inside the
+        fluid document (rungs, intervals, dice, rest schemes, UI cursor).
+
+        =========================================================
+        DATA MODEL (v1)
+        =========================================================
+        Types (deftype on load; fields are documentation + form UI).
+        Each row is ONE tree (JSON object in data_rows.fields). Nested
+        program variance lives under doc/params/progress/detail — never
+        new top-level columns per program.
+
+        workout-session
+          date            string YYYY-MM-DD
+          program         string  ; "ksk" | "qd" | "free" | …
+          intensity       string  ; "easy" | "medium" | "hard" | "" 
+                                  ; (NOT named "type" — overloaded elsewhere)
+          state           string  ; in_progress | complete | abandoned
+          notes           string
+          doc             string  ; JSON/sexp-print of the fluid workout
+                                  ; tree (plan + live progress). Source of
+                                  ; structural truth for resume/replay.
+          duration_sec    string int optional
+          author          string optional  ; whoami at create; v1 may be ""
+                                           ; (data_rows still shared)
+
+        workout-exercise   ; QUERY GRAIN — projected journal facts
+          session_id      uuid string of workout-session
+          exercise        string  ; canonical name, e.g. "Snatch L", "Swing"
+          weight          string number  ; "" if bodyweight / unset
+          unit            string  ; "kg" | "lb" | ""  (normalize in capture)
+          reps            string int     ; TOTAL completed reps (not per-set)
+          notes           string
+          detail          string optional JSON/sexp-print tree for
+                                  per-set or program-specific breakdown
+                                  when a program chooses to keep it
+
+        NO per-set fact table in v1.
+        NO side column — unilateral work uses naming ("Snatch L" / "Snatch R")
+          so aggregation stays a simple group-by on exercise name.
+        NO separate "program definitions" table — programs are code
+          (and templates inside plan functions / doc skeletons).
+         NO extra per-type ACL — the RLS floor scopes rows to their author
+           (data.u.<user>.*), with the data.shared.* seed readable by all.
+          Multi-user content isolation is multi-user.permissions later.
+        Orphan exercise rows (missing session) show under a virtual
+        "(orphan)" bucket in UI; agents can repair.
+
+        Field print form:
+          On-row storage may be JSON (current data_rows convention).
+          Conceptually every nested value is a sexp tree. Package helpers
+          MUST hide hand-built JSON strings from call sites
+          (workout/session-fields, workout/exercise-fields, dict-set*).
+
+        =========================================================
+        FLUID DOCUMENT SHAPE (open envelope, closed top-level)
+        =========================================================
+        session.doc is a tree. Recommended envelope (keys stable;
+        interior free):
+
+          {
+            "program": "ksk",
+            "intensity": "hard",
+            "params": { ... program-specific knobs ... },
+            "progress": { ... live cursor / elapsed / side ... },
+            "blocks": [ ... free structure: ladders, intervals, pairs ... ]
+          }
+
+        Examples (conceptual sexps; JSON equivalent is fine):
+
+          ;; Kettlebell Simple & Sinister-style hard day cursor
+          (workout-doc
+            (program ksk)
+            (intensity hard)
+            (params (top-rung 5) (time-cap-min 20)
+                    (load 24 kg) (exercise Snatch))
+            (progress (rung 3) (side L) (elapsed-sec 740))
+            (blocks
+              (ladder (rungs 1 2 3 4 5) (switch each-rung))))
+
+          ;; Free session
+          (workout-doc
+            (program free)
+            (blocks
+              (pair snatch (sets 5) (reps 2) (load 24 kg))
+              (pair front-squat (sets 3) (reps 5) (load 60 kg))
+              (interval row (rounds 10) (on 30) (off 30))))
+
+        Plan generators produce docs (or doc skeletons).
+        Run mode mutates progress inside doc (and may append detail).
+        Capture reads doc (+ any explicit log events) and projects facts.
+
+        =========================================================
+        CAPTURE PROJECTION CONTRACT
+        =========================================================
+        Bridge rule:
+          doc  --capture-->  session top-level fields + N exercise facts
+
+        Requirements:
+          - Idempotent per session: re-running capture replaces or
+            upserts exercise facts for that session_id; it must not
+            double-count volume on resume/refresh.
+          - Totals win: workout-exercise.reps is aggregate completed work.
+          - Program-specific structure stays in session.doc (and optional
+            exercise.detail); not exploded into new fact columns.
+          - Canonicalize exercise names and units in capture (title case
+            policy is package-defined; document in lib.pp).
+          - Abandoned/in_progress sessions may already have partial facts
+            from live writes; complete() finalizes state and may re-project.
+
+        Hybrid flavor for v1: H3 + H1
+          - Per-program capture functions (H3)
+          - Structured sessions always retain full doc (H1)
+          - Free/quick-log may build a minimal doc from facts (still store it)
+
+        =========================================================
+        PROGRAM ARCHITECTURE
+        =========================================================
+        Each structured program owns a function triplet under workout/:
+
+          (workout/<prog>-plan intensity-or-params) -> doc tree
+          (workout/<prog>-run session-id)           -> HTML (live UI)
+          (workout/<prog>-capture session-id)       -> session + facts
+
+        Day intensities are DATA inside one algorithm when structure
+        matches (e.g. KSK easy/medium/hard = top rung + time cap params).
+        Split functions only when day types differ structurally.
+
+        Intensity map example (package data, not tables):
+          ksk:
+            easy   -> top-rung 3, time-cap-min 10
+            medium -> top-rung 4, time-cap-min 15
+            hard   -> top-rung 5, time-cap-min 20
+
+        Macro strategy:
+          defprogram generating plan/run/capture is DEFERRED until ~3
+          real programs exist (compress repetition, don't anticipate).
+          Prefer quasiquote if/when language lands; hand-built list
+          expansions are error-prone (see language macro feedback).
+
+        v1 programs (suggested ship order):
+          1. free   — quick log + optional simple blocks (always first)
+          2. ksk    — ladder / time-cap runner (proves live run + projection)
+          3. qd     — optional second structured program (dice + aggregates)
+        Do not block journal MVP on ksk/qd polish — free log must work alone.
+
+        =========================================================
+        LIVE RUN / RESUME
+        =========================================================
+        - Creating a structured session stores state=in_progress and doc.
+        - Live writes: each completed rung/exercise POSTs soon so a dead
+          browser loses little; update doc.progress and upsert facts.
+        - Timer UI may embed a small JS widget (precedent: weather/script);
+          server remains authority for logged work.
+        - htmx for step transitions (complete rung → swap next step).
+        - Dice / random can be server-side (find-random or equivalent).
+        - Resume: load in_progress session by id (or latest for program),
+          re-enter run UI from doc.progress.
+        - Cleanup: list/filter abandoned in_progress older than N days;
+          mark abandoned via explicit UI/agent action (no silent delete).
+
+        =========================================================
+        PACKAGE API (workout/ prefix)
+        =========================================================
+        Sessions:
+          (workout/session-list [limit]) -> list of (id . fields)
+          (workout/session id) -> fields | ()
+          (workout/session-create program intensity [date] [doc]) -> id
+          (workout/session-update id fields-dict) -> id | ()
+          (workout/session-complete id [notes]) -> id
+          (workout/session-abandon id) -> id
+          (workout/session-in-progress [program]) -> id | ()
+
+        Exercises (facts):
+          (workout/exercises session-id) -> list
+          (workout/exercise-log session-id exercise weight unit reps
+                                [notes] [detail]) -> id
+            ;; upsert policy documented in lib.pp (by id or by
+            ;; session+exercise+weight+unit for live rungs)
+          (workout/exercise-delete id) -> id | ()
+
+        Queries:
+          (workout/volume exercise [from-date] [to-date] [weight] [unit])
+            -> total reps (number) or printable structure
+          (workout/history [from-date] [to-date] [limit]) -> sessions
+          (workout/session-summary id) -> session + exercises structure
+          (workout/exercise-names [limit]) -> distinct names for autocomplete
+
+        Doc helpers:
+          (workout/doc-parse s) -> dict/tree
+          (workout/doc-get doc key) / (workout/doc-set doc key val)
+          (workout/project session-id) -> re-run capture for program
+
+        Programs (v1+):
+          (workout/programs) -> list of program ids/titles available
+          (workout/<prog>-plan …)
+          (workout/<prog>-run session-id)    ; may be HTML page fn
+          (workout/<prog>-capture session-id)
+
+        HTML / routes:
+          (route "/workout" "workout/home-page")
+          (route "/workout/session" "workout/session-page")
+          (route "/workout/run" "workout/run-page")
+          (route "/workout/log" "workout/log-page")   ; quick log / edit facts
+          Exact query keys implementation discretion; prefer
+            ?id=uuid & ?program= & ?intensity=
+
+        Naming:
+          package directory libs/workout/
+          binding prefix workout/
+          types workout-session / workout-exercise
+
+        Data functions take explicit args (safe from /api/eval).
+        HTTP handlers are separate and thin.
+
+        =========================================================
+        HYPERMEDIA UI
+        =========================================================
+        /workout
+          - recent sessions (date, program, intensity, state, short volume)
+          - Start bar: program select + intensity (when applicable) + start
+          - Continue card if in_progress exists
+          - link to quick log (free)
+
+        /workout/session?id=
+          - session header + notes + state actions (complete/abandon)
+          - exercise fact table
+          - add/edit fact row (quick correction)
+          - if program structured and in_progress: Continue run
+
+        /workout/run?id=
+          - program-specific live UI from doc.progress
+          - complete-step controls POST → update doc + facts → swap UI
+          - timer widget as needed
+
+        /workout/log (optional alias of free capture)
+          - date, notes
+          - repeatable exercise rows (name, weight, unit, reps)
+          - save → session complete (or in_progress if want multi-step)
+
+        Mobile-first: large tap targets during run; minimal chrome.
+        Use existing product theme classes. No new OCaml CSS required.
+
+        =========================================================
+        SEED / NAV
+        =========================================================
+        - seed_stdlib: load-library "workout" after calendar
+          (needs date-today; order free as long as std/html exists)
+        - ui/menu: Workout → /workout on system seed when easy;
+          personal may pin. Not a kernel nav hard-code.
+
+        =========================================================
+        AGENT ACCESS
+        =========================================================
+        Image is the API:
+          pp_eval '(load-library "workout")'
+          pp_eval '(workout/session-create "free" "" )'
+          pp_eval '(workout/exercise-log id "Swing" "53" "lb" "75")'
+          pp_eval '(workout/session-complete id)'
+          pp_eval '(workout/volume "Swing" "2026-07-01" "2026-07-31")'
+        No workout-specific REST. Bulk backfill via agent loops.
+
+        =========================================================
+        NON-GOALS (v1)
+        =========================================================
+        - Wearables, HR zones, GPS, Apple Health / Google Fit sync
+        - Social feed, followers, public leaderboards
+        - Plate calculator / 1RM formulas as core (may be helpers later)
+        - Full periodization planner / mesocycle engine
+        - Per-set fact table / side column / equipment inventory
+        - defprogram macro before ~3 programs exist
+        - Branch-scoped journal rows (shared data_rows by design)
+        - OCaml system pages for training UX
+        - Treating JSON vs sexp print form as different product models
+
+   |))
+  )
+
+  (subsection model
+   (doc "Hybrid: workout-session + workout-exercise facts; session.doc fluid tree")
+   (status implemented)
+   (implements libs/workout/lib.pp)
+   (verify
+    (smoke "load-library defines workout-session and workout-exercise")
+    (smoke "session-create stores program intensity state date doc")
+    (smoke "exercise-log attaches facts to session_id with total reps")
+    (smoke "unilateral names work without a side column")))
+
+  (subsection document-and-capture
+   (doc "Fluid doc envelope + idempotent projection to exercise facts")
+   (status implemented)
+   (implements libs/workout/lib.pp)
+   (verify
+    (smoke "structured session retains doc through run updates")
+    (smoke "capture/project does not double-count on second run")
+    (smoke "volume query uses facts only, not doc scraping")))
+
+  (subsection programs
+   (doc "plan/run/capture triplets; free first; ksk/qd optional structured")
+   (status implemented)
+   (implements libs/workout/lib.pp)
+   (verify
+    (smoke "workout/programs lists at least free")
+    (smoke "free quick-log creates complete session + facts")
+    (smoke "optional: ksk plan returns doc with params+blocks")))
+
+  (subsection ui
+   (doc "Routes /workout, session, run, log; resume in_progress")
+   (status implemented)
+   (implements libs/workout/lib.pp)
+   (verify
+    (smoke "GET /workout 200 after load-library")
+    (smoke "start + complete free session visible in recent list")
+    (smoke "in_progress shows continue entry point")))
+
+  (subsection agent-access
+   (doc "pp_eval workout/… as the API")
+   (status implemented)
+   (verify
+    (smoke "pp_eval workout/session-list and workout/volume"))
+  )
+
+  (subsection nutrition
+   (doc "libs/food — daily meal templates + calorie/macros logging: the body-format sibling of the workout session doc (same day-living family, weight alongside food/calories)")
+   (status implemented)
+   (implements libs/food/lib.pp)
+   (verify
+    (smoke "(load-library \"food\") defines food/* helpers; food/add-template logs a meal row keyed by day-type + meal"))
+  )
+
+  (subsection program-state-and-gates
+   (doc "Spec docs/plans/workout-gating.md. Outcome-driven programs (KSF C&J, run/walk, SCT core, Quicksilver stretch) cannot pre-materialize calendars: the next session is a pure function of stored program state + date. Two additive types: workout-program-state (one ACTIVE row per program; new writes supersede, history preserved) and workout-gate (the asserted-gate ledger: checkpoints passed, soreness flags, range-ownership — derived gates are NEVER stored, they recompute from journal facts at capture). workout/suggest generates today's session on demand (pure, idempotent); workout/session-complete evaluates gates and turns the state over; workout/gate-status summarizes cursor + ledger for agents. Nested lists are not legal dict values — summaries render as strings (see gates-summary). Toy program \"toy\" (advance after every 3 completions) proves the loop end-to-end via pp_eval. Calendar untouched — ksk1 keeps its scheduler.")
+   (status implemented)
+   (implements libs/workout/lib.pp)
+   (verify
+    (build "dune build @all")
+    (smoke "(load-library \"workout\") defines workout-program-state + workout-gate and machinery fns")
+    (smoke "suggest toy renders the fresh-session doc; 3 completed toy sessions turn state over to level 2 in gate-status")
+    (smoke "abandoned sessions do not advance derived gates")
+    (smoke "workout/gate-assert records ledger rows; gate-status renders them as a summary string"))
+
+  (subsection ksf
+   (doc "Kettlebells StrongFirst C&J (Pavel) built on the gating machinery. Plan A: single-bell long-cycle both days, sets every 30s (weak arm on top of the minute), rep ladder CJ -> CJC -> CJCJ -> CJCJC -> CJCJCJ. A cleared session (Duration fact >= 30 min) advances one +clean/+jerk step; the ladder end hands off to Plan B; 6 short sessions in a row flip to Plan B (RM-retest doctrine). Plan B: cleans day / jerks day (Fri = C, Sun = J under the 2-day variant), sets of 3 -> 4 -> 5 per 30s capped at P5. Clock rail: every 8 completed sessions a 2-session deload (one bell lighter, -4kg/-9lb) holds the pattern. workout/ksf-configure after the LC RM test (weaker arm 6-12RM; targets men 40% BW / women 30% BW max 24kg). Started sessions carry today's suggestion doc so deload/pattern flags ride into gates. Get-ups are side dishes: v1 users log them as facts (LC C&J L/R split + Duration are the recognized exercises).")
+   (status implemented)
+   (implements libs/workout/lib.pp)
+   (verify
+    (smoke "ksf-configure seeds state; suggest renders LCCJ docs on Fri/Sun, OFF otherwise; Plan B suggests C on Fri and J on Sun")
+    (smoke "cleared sessions advance CJ -> CJC -> ... -> CJCJCJ -> handoff to Plan B at P3")
+    (smoke "stall: six short sessions flip phase A to Plan B with retest note")
+    (smoke "deload rail: since_deload >= 8 starts deload_left=2; deload sessions suggest bell -4kg, hold pattern, decrement deload_left")
+    (smoke "home start card creates ksf sessions carrying today's suggestion doc"))
+  )
+
+  (subsection run5k
+   (doc "Run-to-5K walk/run builder on the gating machinery. Week table (18 weeks): Friday = ratio session (shifting jog:walk ratio in a fixed box), Sunday = long session (box grows 20 to ~45 min, w18 = RACE). Deload weeks are table-encoded repeats. Gates: each completed session ticks in_week; after 2 the week turns over - unless a sore gate was asserted mid-week, which repeats the week. Sore asserts are consumed via a monotonic ledger marker (sore_mark) so a mid-week flag survives the intervening session's eval. Talk test (conversational) is the intensity ceiling; maps to workout/gate-assert for the human flow.")
+   (status implemented)
+   (implements libs/workout/lib.pp)
+   (verify
+    (smoke "run5k-configure seeds week 1; suggest renders A goal Fri, B goal Sun, OFF otherwise")
+    (smoke "clean week of 2 completions advances the week; week 5 Sunday renders 60/60/9")
+    (smoke "mid-week sore assert repeats the week exactly once (marker consumed on the decision)")
+    (smoke "home start card creates run5k sessions carrying today's goal doc"))
+  )
+  (subsection sct
+   (doc "Systematic Core Training (Geoff Neupert) on the gating machinery. Three sequential phase sub-cursors - stability (12 session columns) -> strength (9) -> power (12) - driven by the session tables (dead bug columns, hollow hold seconds, leg-raise reps, tuck/L-sit hold seconds, hanging reps, ground holds, kickstand->SL deadlifts). Friday = floor work, Sunday = floor + supported/hanging (bar + 16-32kg bells available, hanging selectable straightaway); ground-based enters at strength S7; power = Sunday carry blocks (24kg / 2x24kg, rotating suitcase -> rack -> overhead -> bottoms-up -> farmers -> double rack -> double overhead, minutes 7 -> 10, RPE waves 7/8/9). Micro-dose on OFF days (breathing + dead bugs + neck drills; submax floor set in strength phase) - the daily practice, never the progressing surface. Session columns advance on every completed sct session, capped at the phase benchmark column; promotion is EXPLICIT: benchmark day renders benchmark_due, then (workout/sct-promote) asserts the ledger (stability-exit / strength-exit) and moves the phase.")
+   (status implemented)
+   (implements libs/workout/lib.pp)
+   (verify
+    (smoke "sct-configure seeds stability s1; suggest renders session-table content per phase and day")
+    (smoke "12 completed sessions cap at the benchmark column; suggest marks benchmark_due")
+    (smoke "sct-promote asserts stability-exit / strength-exit and moves the phase")
+    (smoke "OFF days render the daily micro-dose (stability menu; submax extra in strength phase)"))
+  )
+  (subsection stretch
+   (doc "Quicksilver leapfrog on the gating machinery. Cycle A advances the Front Split (light: reverse hamstring + kneeling lunge prying; medium: pulses+holds to 10/30s; heavy: extended isometric) while the Loaded Straddle holds at Cossack pulses; Cycle B flips. Rhythm rail: Sunday = advancing slot (Pulses+Holds, or Extended Isometric on alternating Sundays once the range is owned - upgrade-only iso_unlocked), Wednesday = medium maintenance slot, everything else prying only. Promotion: own-the-range asserts unlock the iso tool (monotonic ledger marker); (workout/stretch-flip) is explicit when the advancing goal is achieved. Journaling is sparse by design - Sunday/Wednesday slots journaled, daily prying is day-activity. Scene family: all four sct/ksf/run5k/stretch programs + the natively-seeded ksk1-3 live in one journal with shared volume queries (LC C&J, Snatch L/R, Dead Bug reps, Duration minutes ...).")
+   (status implemented)
+   (implements libs/workout/lib.pp)
+   (verify
+    (smoke "stretch-configure seeds cycle A; suggest renders Front Split pulses on Sunday (extended iso only after own-the-range), Cossack maintenance on Wednesday, light prying otherwise")
+    (smoke "own-the-range asserts unlock iso_upgrade-only (never downgrades)")
+    (smoke "stretch-flip asserts cycle-achieved and swaps the leapfrog cycle; cycle B suggests Straddle advancement on Sunday")
+    (smoke "home start card creates stretch sessions carrying the slot doc"))
+  )
+  )
+ )
+)

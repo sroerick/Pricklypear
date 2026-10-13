@@ -1,0 +1,61 @@
+(project pricklypear-work-triage
+ (doc "Work triage: the flow that turns incoming work (kanban cards, note todos, filed issues) into a ranked, owned, flowing board. Owns the triage CONVENTION and the issue-board bridge. Does NOT re-spec work/* (roerick's digest/rank/claim layer, admin/personal), the todo/note identity line (chat-ui spec), or the issue ledger mechanics (notes.borg). Phase 1 (this chapter, partial): triager-owned edges join issues to cards; a planner define ranks the board and flags stuck; the triage pass runs on demand and posts one lobby line. Phase 2 (decision pending): shared issue ledger in an open space so edges resolve for every reader. Phase 3 = the chat-ui todo unification (two-way identity, indexing, foldable nesting) — spec'd there, built later.")
+ (status partial)
+ (* agent note (|2026-09-11 chapter created (gregor), roerick mandate: borge spec first, then execute and start carving out triage. Inputs: the 09-03 board triage convention (columns SPEC/CODE/LOGIC-REVIEW/UI-REVIEW/HUMAN-REVIEW/DONE/PARKED on the workspace list), work/* live since 09-10, uuid-edge prims live (link/unlink/out-links; an edge is a node at from.lnk.<uuid>, body {to, kind}, may dangle, resolves per-reader).|) *)
+
+ (section board
+  (doc "One shared Board list (the workspace board, list 0b21ffaa 'Board') plus per-workstream lists (glochid, saguaro, …) that share the SAME column taxonomy — a workstream is just a list, so per-list custom columns (todo/state/columns-for-list) give every stream its own pipeline while the shared board stays the cross-stream overview. The column set is the list's PIPELINE (workstreams.borg pipeline-model): an ordered list of state names any work item references — the list's columns, else the global default. Columns are workflow stages, not owners; owners live in the card title prefix ([user]) or a todo-item assignee field. Card states: SPEC (needs a spec/decision before code), CODE (executable now), LOGIC-REVIEW / UI-REVIEW (needs a reviewer pass), HUMAN-REVIEW (needs roerick), DONE, PARKED (deliberately not moving). Incoming work lands in TODO by default; the triage pass places it. Junk lists are deletable via todo/delete-list (list + its items, one writer op; the default Inbox is protected by the default guard so a canonical inbox always survives). The old 'junk lists are filtered, never deleted' rule was retired 2026-09-25: it enshrined a 364-row landfill (267 duplicate default Inboxes from ensure-inbox accretion, 90 TempDeleteMe2) instead of fixing it. Hygiene rule: real (non-[ops]) cards are moved onto a real list before the junk list is deleted; auto-captured [ops] crash cards are noise and may be bulk-deleted after a snapshot.")
+  (status implemented)
+  (verify
+   (test "every card on the workspace list sits in a named column; TODO holds only unplaced intake")))
+
+ (section triage-pass
+  (doc "A triage pass is a read-plan-act loop, run by the triager (gregor) on demand: (1) READ: open cards via find-rows, my open issues via the ledger, staleness via data-history per card. (2) PLAN: place new cards into columns, flag stuck (open >3 days since newest data-history version), match issues to cards, mark cards DONE whose work verifiably shipped (spec/commit/live behavior, cited). (3) ACT: kanban/move-card for placements, notes/issues/resolve for closes, link for new edges, ONE consolidated lobby line with the worklog convention from spec_standup_v2. The pass never moves a card to hide staleness: stuck is flagged in the report, not parked.
+
+   STREAM PLACEMENT RULE (workstreams.borg stream-pipelines, 2026-09-27): the
+   pass also picks the STREAM a new card lands in, by kind + blast radius.
+   AUTO list (no human gate, LOGIC-REVIEW PASS closes the card) when kind ∈
+   {BUG, CLEANUP, SMELL, docs} AND no UI surface AND acceptance is
+   machine-checkable AND no schema migration. KERNEL list when non-UI but
+   high-blast-radius (migrations, auth, store, promote-adjacent). FACES
+   (Board) whenever routes/rendering/interaction change. When in doubt,
+   place the MORE gated stream (AUTO < KERNEL < FACES) — the human gate is
+   cheap, an unreviewed prod regression is not.")
+  (implements "libs (planned: libs/triage)" "image/lib/prims_data.ml link/out-links")
+  (status partial)
+  (* agent note (|2026-09-11 phase 1 shipped as plain defines on gregor/personal: triage/list-id, triage/cards (open cards, updated_at DESC), triage/issues (my ledger), triage/stale (data-history age >= 3d), triage/plan (pure planner, returns placements + flags + matches), apply via kanban/move-card + link. Planner is pure: act only after eyeballing the plan.|) *)
+  (verify
+   (test "a pass leaves a lobby line listing every move, flag, and close with refs"
+         "planner output precedes every mutation; no card moves without a plan entry"
+         "stuck cards are flagged in the report and keep their column")))
+
+ (section issue-board-bridge
+  (doc "Issues live as outline headings under log/issues in each user's garden; cards live on the shared board. The bridge is EDGES from the issue node to the card node (kind tracks, triager-owned, so the edge home is the triager's garden and resolves in the triager's lens), plus the issue nid in card.notes so non-triager readers get a text ref. Close-out: when a linked card lands DONE, the pass calls notes/issues/resolve on the issue. Cross-garden limitation, recorded: an edge from my issue to a shared card resolves for me; other readers see the card's nid ref. This is why phase 2 exists.")
+  (implements "image/lib/prims_data.ml link" "migrations/026_tree_edges.sql")
+  (status partial)
+  (verify
+   (test "issue -> card edge resolves via out-links for the edge owner; dangling to-path renders unlinked, never errors"
+         "card DONE + tracks edge -> issue resolved in the same pass")))
+
+ (section shared-ledger
+  (doc "DECISION PENDING (roerick): the issue ledger's home. Per-garden ledgers (today) keep write isolation but fragment the join: each user's edges resolve only for themselves, and /rank sees one lens. A shared open space (like chat-lobby) would make one ledger visible to all identities and let edges resolve for everyone; the cost is re-homing existing per-garden issues past the clobber-family bugs, so it wants a careful one-time migration, not a bulk copy. Until decided, the bridge stays triager-owned per phase 1.")
+  (status partial)
+  (verify
+   (test "after the decision, exactly one ledger convention is live and the other is recorded as retired")))
+
+ (section unification-handoff
+  (doc "The status-machine half of unification IS spec'd and owned by
+   borge/workstreams.borg pipeline-model (2026-09-25, roerick; two-level since
+   the 2026-10-05 audit retirement): pipeline = an ordered list of state
+   names that any work item (card, note-todo, issue) references — the LIST's
+   columns, else the global default (the per-item override is retired) — and
+   faces render only on-pipeline items (others land in the other
+   bucket). This chapter consumes that: the triage pass reads one source
+   (effective pipelines) instead of scraping two status mechanisms. The
+   remaining long-pole halves (two-way note/card identity + foldable nesting)
+   still belong to the chat-ui/todos line; they are NOT this chapter's build.")
+  (status partial)
+  (verify
+   (test "triage pass still works if the unification lands: same columns, same report shape"
+         "an issue node referencing the work-triage pipeline renders in the triage board columns")))
+)

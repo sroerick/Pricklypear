@@ -1,0 +1,4 @@
+(test
+ (name common_test)
+ (modules common_test)
+ (libraries pricklypear-common alcotest yojson))

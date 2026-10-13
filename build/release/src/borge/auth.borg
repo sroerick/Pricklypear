@@ -1,0 +1,1485 @@
+(project pricklypear-auth
+ (doc "Pricklypear book chapter: auth")
+ (status partial)
+ (* agent note (|2026-08-02 status reconcile: multi-user-product, user-subdomains, route-visibility → implemented. Still partial: verification (argon2), user-ssh-repl (credential yes, full SSH door no).|) *)
+ (convention ocaml-dune)
+ (section auth
+  (doc "Multi-user identity: credentials, sessions, login, and binding each human to their garden")
+  (status partial)
+  
+  (details
+   (doc (|
+        Auth is in-process in the single image (image/lib/auth_password.ml,
+        image/lib/auth_store.ml). It provides password verify, session mint/verify,
+        SSH-key verify, and user CRUD; topology per single-image.borg.
+   |))
+  )
+  (subsection credentials-store
+   (doc "The users, credentials, sessions, auth_log tables in Postgres")
+   (status implemented)
+   (details
+    (doc (|
+         Tables (added by migrations, see migrations):
+
+           users (id uuid PK, username text UNIQUE,
+                  is_admin bool,
+                  user_type text NOT NULL DEFAULT 'human',  -- 'human' | 'agent'
+                  parent_user_id uuid NULL REFERENCES users(id),
+                                                   -- agent's parent human; NULL for humans
+                  allow_agent_promote bool NOT NULL DEFAULT true,
+                                                   -- human's toggle: may their agent promote
+                                                   -- into their personal branch
+                  created_at timestamptz)
+
+           credentials (id uuid PK, user_id uuid FK,
+                        kind text,        -- 'ssh_key'|'password'|'web_token'|'api_key'|'llm_key'
+                                          -- |'delegated_token' (auth.delegation-tokens)
+                        public_data jsonb,  -- SSH key material / llm last4+meta;
+                                            -- null for password (hash is secret);
+                                            -- delegated_token: {actor, label?, token_last4}
+                        secret_data jsonb,   -- argon2 hash for password;
+                                            -- api_key token hash/reference;
+                                            -- llm_key provider secret (never list);
+                                            -- delegated_token: {token_hash}
+                        created_at timestamptz,
+                        last_used_at timestamptz)
+
+           sessions (id uuid PK,            -- the token's opaque id
+                     user_id uuid FK,
+                     token_hash text,      -- SHA-256 of token; lookup target
+                     expires_at timestamptz,
+                     created_at timestamptz,
+                     revoked_at timestamptz NULL)
+
+           auth_log (id uuid PK, user_id text NULL,
+                     kind text, success bool,
+                     source_ip text,
+                     happened_at timestamptz)
+
+         KEY STORAGE (
+          in-Postgres, role-isolated):
+         - Other credentials (password hashes via
+           argon2id, SSH public keys) in Postgres
+           permanently; that's correct and stable
+           (these are public verification material,
+           not signing keys).
+    |))
+   )
+  )
+  (subsection verification
+   (doc "verify(cred) / lookup / mint / verify_token — the four pure functions")
+   (implements image/lib/auth_store.ml image/lib/auth_password.ml common/lib/auth_types.ml)
+   (status partial)
+   (* agent note (|2026-12: password champion is now argon2id with a transparent upgrade on successful legacy verify (auth_store.verify_password -> set_password). Legacy sha256$salt$digest rows still verify and are rewritten in place on first post-cutover login — no flag day, no dual-entry. BORGE-1785545259 closed (supersedes lost-id 1783831698 refs). Token/ssh_key paths unchanged.|) *)
+   (details
+    (doc (|
+         SSH KEY VERIFICATION:
+         1. Call verify_ssh_key(presented_key) -> May<user_id>
+         2. Auth: parse key, SELECT FROM credentials
+            WHERE kind='ssh_key' AND public_data = key.
+            Return user_id or denied.
+         3. Auth logs to auth_log.
+
+         PASSWORD VERIFICATION (for web login):
+         1. User POSTs username+password to /login.
+         2. Auth: SELECT secret_data FROM credentials
+            WHERE kind='password' AND user_id=
+            (SELECT id FROM users WHERE username=$1).
+            Verify against the stored password hash.
+            Champion is argon2id PHC-encoded; legacy
+            sha256$salt$digest rows STILL verify and a
+            successful legacy verify triggers a
+            transparent in-place rewrite to argon2id
+            (no flag day). Return user_id or denied.
+         3. Auth logs to auth_log.
+
+         TOKEN MINTING (after web login):
+         1. Auth: generate random token bytes (32B).
+         2. Auth: INSERT INTO auth_sessions
+            (user_id, token_hash=sha256(token),
+             expires_at=...).
+         3. Auth: return the raw token. Client stores
+            it as the pp_session cookie (HttpOnly).
+
+         TOKEN VERIFICATION (on web requests):
+         1. Client sends token cookie. The image calls
+            Auth_store.verify_token(token).
+         2. Auth: sha256 the raw token, look up the
+            auth_sessions row by token_hash; check not
+            revoked and not expired. Return user_id or
+            denied.
+         3. Auth logs to auth_log.
+
+         API TOKEN VERIFICATION (for agents / pp_eval Bearer):
+         1. Client sends Authorization: Bearer <opaque_token>.
+         2. Auth: SHA-256 the token, SELECT FROM credentials
+            WHERE kind='api_key' AND
+            secret_data->>'token_hash' = $1. Return user_id
+            or denied.
+         3. Auth logs to auth_log; updates last_used_at.
+         4. Tokens are per-user credential rows. No global
+            tokens; every token belongs to a user_id. Generate/
+            rotate/revoke via /admin/users or a Nopales prim.
+            The raw token is returned once at creation.
+
+         DELEGATED TOKEN VERIFICATION (see auth.delegation-tokens):
+         the Bearer probe falls through kind='api_key' to
+         kind='delegated_token'; on a hit the RESOLVED IDENTITY
+         is the credential's owner (user_id) and public_data.actor
+         names the carrying agent. The factory is the same
+         token_hash lookup; the difference is purely in how the
+         resolved identity builds a session (owner manifest,
+         delegated flag, no admin, no code persistence).
+
+         TOKEN FORMAT (minimal, NOT JWT):
+         opaque_id (32B random) || HMAC(opaque_id)
+         We control both ends; don't need JWT's
+         cross-system interop claims. Hash stored in
+         auth_sessions table enables revocation.
+    |))
+   )
+  )
+  (subsection bootstrap-admin
+   (doc "First-admin creation via env var on auth first boot")
+   (implements image/lib/auth_store.ml)
+   (status implemented)
+   (details
+    (doc (|
+         Bootstrapping the first user, with no users yet:
+
+         1. At auth boot, if the users table is empty,
+            check env vars PP_BOOTSTRAP_USER and
+            PP_BOOTSTRAP_PASSWORD (default: admin/admin).
+         2. If set, INSERT into users
+            (username=$PP_BOOTSTRAP_USER, is_admin=true)
+            and into credentials (kind='password',
+            public_data=null,
+            secret_data=argon2 hash of $PP_BOOTSTRAP_PASSWORD,
+            user_id=the new user).
+         3. Auth boot: warn loudly in logs that
+            bootstrap was used, and recommend clearing
+            the env vars afterward.
+         4. After first boot, the env vars are ignored.
+
+         Subsequent users: added by an admin via the
+         admin UI (which authenticates via auth) calling
+         an auth primitive (create-user username,
+         add-credential user_id ssh_key, etc.). These
+         primitives require is_admin=true on the calling
+         session.
+
+         No interactive bootstrap flow needed; the env-var
+         pattern is simple, standard, and audit-logged.
+    |))
+   )
+  )
+  (subsection audit-log
+   (doc "Every verification logged to auth_log")
+   (status implemented)
+   (details
+    (doc (|
+         Every call to verify_ssh_key, password
+         verification, mint, and verify_token writes a
+         row to auth_log:
+           (user_id NULL if unknown/failed,
+            kind: 'ssh_key'|'password'|'mint'|'verify_token',
+            success bool,
+            source_ip text,
+            happened_at timestamptz default now())
+
+         WHY from day one (despite personal-OS scope):
+         - Cheap to add (one INSERT per verify call).
+         - Invaluable when something goes wrong
+           (compromised key? malicious insider? audit
+           compliance if ever needed?).
+         - Painful to retrofit (verification call sites
+           scattered; adding log calls everywhere later
+           means finding every one).
+         - Standard practice; non-controversial.
+
+         The log is append-only in practice
+         (no UPDATE/DELETE on auth_log). Retention
+         policy deferred; for now, keep forever
+         (cheap rows).
+    |))
+   )
+  )
+  (subsection rpc-from-supervisor
+   (doc "Deprecated: auth is in-process; no RPC boundary")
+   (status deprecated)
+   (details
+    (doc (|
+        Retired by the single-image pivot: auth is in-process.
+        The supervisor no longer calls auth over RPC.
+    |))
+   )
+  )
+  (subsection multi-user-product
+   (doc "COMPLETE multi-user product: many humans, each with identity, session, garden, authorship")
+   (status implemented)
+   (* agent note (|2026-08-02: users+sessions+personal branches+admin promote gate+logout revoke shipped (web-login/identity-and-branch/user-management). Cotenant isolation v1; per-user process fleet still future.|) *)
+   (verify
+    (smoke "two users login independently; each sees own personal pins")
+    (smoke "Alice define does not create own pin on Bob's branch")
+    (smoke "non-admin cannot merge to system/main")
+    (smoke "agent install on Alice session writes alice/personal only")
+    (smoke "logout revokes session; next request requires login"))
+   (details
+    (doc (|
+         ============================================================
+         MULTI-USER IS THE SYSTEM
+         ============================================================
+
+         Pricklypear is a multi-user Lisp OS. Multiple humans share
+         one deployment. Each human has:
+           - a user row + credentials
+           - a browser (and/or API) session
+           - a personal branch garden: <username>/personal
+           - authorship on their defines (function_defs.author)
+           - isolation from other users' gardens and (when fleet
+             is live) from other users' processes
+
+         single-image.borg simplifies HOW WE SHIP THE BINARY
+         (one process to build/restart). It does NOT mean one human.
+         multi-user.cotenant-isolation (one process, session +
+         branch scoped) is the v1 isolation model;
+         multi-user.isolation (per-user image process) remains a
+         future hardening axis, not the shipping topology.
+
+         ============================================================
+         PERSONAS
+         ============================================================
+
+         Operator/admin — first user; can create users, merge to
+           system/main, manage credentials, revoke sessions.
+         Human user — logs in, works on <user>/personal, inherits
+           system/main defaults, cannot admin-merge to system.
+         Agent (as user) — authenticated as a human or service
+           account; installs Nopales on that identity's branch;
+           branch-locked for the task duration.
+         Anonymous — only public routes (/login, health as policy).
+
+         ============================================================
+         USER STORIES (complete set)
+         ============================================================
+
+         US-BOOTSTRAP — First admin
+           Empty users table → bootstrap admin from env
+           (PP_BOOTSTRAP_USER / PP_BOOTSTRAP_PASSWORD) OR one-time
+           /setup form that creates admin then disables itself.
+           is_admin=true. Site thereafter requires auth.
+
+         US-LOGIN — Browser sign-in
+           GET /login → username + password form.
+           POST /login → verify → mint session → Set-Cookie
+           pp_session (HttpOnly; Secure; SameSite=Lax; Path=/).
+           Redirect /. Bad credentials → generic error + auth_log.
+
+         US-LAND — Land in my computer
+           After login (or valid cookie):
+             1. Resolve user_id, username, is_admin from session.
+             2. Ensure branch <username>/personal exists as EMPTY
+                child of system/main (inheritance, not full copy).
+             3. Image runtime identity = that user.
+             4. Checkout <username>/personal if not already.
+             5. (whoami) / chrome meta / define author = username.
+           Alice never receives Bob's personal as current branch.
+
+         US-LOGOUT — Sign out
+           POST /logout → revoke auth_sessions row → clear cookie
+           → /login.
+
+         US-SESSION — Stay signed in
+           Every non-public request: load session by cookie →
+           valid unexpired unrevoked → attach identity; else
+           redirect /login (HTML) or 401 (API).
+
+         US-INVITE — Admin creates user
+           Admin UI/API: create_user(username, is_admin?),
+           set password credential, optional temp password.
+           New user can US-LOGIN and gets own personal garden.
+
+         US-AGENT — Agent or laptop as a user
+           Authenticate via same session cookie (cookie jar) OR
+           API key credential (Authorization: Bearer …) bound to
+           a user_id. install_function / define write that user's
+           current branch. Agent branch lock forbids checkout/
+           fork/merge mid-task. Author may be agent:<model> with
+           provenance; capability still runs as the user.
+
+         US-SUBDOMAIN — Personal host name
+           Each user has a stable URL on a wildcard base domain:
+             https://{username}.{PP_BASE_DOMAIN}/
+           After login Alice lands on her subdomain (or is
+           redirected there). Private work and public garden
+           pages resolve against her branch chain. See
+           auth.user-subdomains.
+
+         US-LLM-KEY — Bring your own model key
+           Each user may store an LLM provider key (credentials
+           kind llm_key). AI prims (propose-function, llm-*) use
+           the session user's key; operator env LLM_API_KEY is
+           fallback only. See auth.user-llm-keys.
+
+         US-SSH-REPL — Key-based shell into my image
+           User registers an SSH public key (credentials kind
+           ssh_key). Real SSH (or approved OpenBSD ForceCommand
+           bridge) authenticates the key, attaches identity,
+           opens the Nopales REPL on <user>/personal. See
+           auth.user-ssh-repl.
+
+         US-CHAT — Talk to other humans on the box
+           Authenticated users share a lobby and DMs
+           (multi-user.chat). (chat/say …) / /chat. Not email;
+           same-deployment only.
+
+         US-PLAN — Unix .plan status
+           Each user sets a short sticky plan (multi-user.user-plan).
+           (plan "…") / /plan / /u/:user (finger). Complements chat.
+
+         US-COTENANT — Logical multi-user in one process (THE v1
+           model):
+           One image process serves many sessions; identity is
+           per-request; personal branch is per-session; no cross-
+           user write to another's personal. Correct namespacing
+           with a shared-process blast radius.
+
+         US-ISOLATION — Process isolation (future hardening axis)
+           Logging in boots or attaches that user's image process
+           (multi-user.isolation). Alice's wedge does not take Bob
+           offline. Auth never sees fleet; fleet never sees raw
+           passwords — only user_id from verify. Not the shipping
+           topology in v1.
+
+         US-PERMS — Authorization
+           - define/route/deftype → current branch only
+           - merge to system/* → admin only
+           - merge to own owner/* → free for that owner
+           - admin user CRUD → admin session only
+           - data_rows shared (existing rule) unless future
+             row-level owner column is added
+
+         US-AUDIT — Failures are boring and logged
+           auth_log for login success/fail, logout, admin acts.
+           No username enumeration in errors.
+
+         ============================================================
+         END-TO-END STORY
+         ============================================================
+
+         1. Deploy; bootstrap admin.
+         2. Admin opens https://{PP_BASE_DOMAIN}/ → /login →
+            signs in → redirect https://admin.{PP_BASE_DOMAIN}/
+            on admin/personal.
+         3. Admin creates user "alice" + password.
+         4. Alice signs in → https://alice.{PP_BASE_DOMAIN}/
+            on alice/personal (empty garden), inherits main.
+         5. Alice pastes her LLM key in /settings/keys; AI tools
+            bill her provider, not the operator's env key.
+         6. Alice registers ~/.ssh/id_ed25519.pub; later
+            `ssh alice@host -p PP_SSH_PORT` opens her REPL.
+         7. Alice edits ui/menu → pin on alice/personal only.
+         8. Bob signs in on bob.* → bob/personal; no Alice pins.
+         9. Agent with Alice session/API key installs → alice/personal.
+         10. Alice logout; cookie dead on her host.
+         11. With fleet (later): Alice's process is hers; Bob's is his.
+             Cotenant single-image remains valid for v1 of
+             subdomain + keys (identity per request / SSH session).
+
+         ============================================================
+         OBJECTS (complete)
+         ============================================================
+
+         users(id, username UNIQUE, is_admin, created_at)
+         credentials(id, user_id, kind, public_data, secret_data,
+                     created_at, last_used_at)
+           kind: password | api_key | ssh_key | llm_key | …
+           ssh_key.public_data: { "openssh": "ssh-ed25519 AAAA… comment" }
+           llm_key.secret_data: { "api_key": "…" }  (* never echo back *)
+           llm_key.public_data: { "last4": "…", "base"?: url, "model"?: str }
+         auth_sessions(id, user_id, token_hash, expires_at,
+                       created_at, revoked_at, user_agent, source_ip)
+         auth_log(id, user_id NULL, kind, success, source_ip,
+                  happened_at)
+
+         Runtime image session (per connection / request):
+           user_id, username, is_admin
+           store.branch_id → <username>/personal (default)
+           author for define = username | agent:<model>
+
+         Password hashing: argon2id (implemented 2026-12:
+         auth_password.ml champion matches Argon2 ID at
+         t_cost=2, m_cost=65536, parallelism=1); interim
+         sha256$salt$digest rows verify transparently and are
+         rewritten to argon2id on successful login in-place.
+
+         Session token: opaque random id; store only HMAC/hash in
+         DB; cookie carries raw id. Revocable. Expiry required.
+
+         ============================================================
+         HTTP SURFACE (complete)
+         ============================================================
+
+         Public:
+           GET  /login
+           POST /login
+           GET  /health   (policy: public or authed — choose public
+                           for ops probes)
+
+         Authenticated (any user):
+           POST /logout
+           all product routes (/, /todos, /notes, /api/eval, …)
+           identity-dependent branch + author
+
+         Admin:
+           /admin/users  (list, create, set password, revoke sessions)
+           merge policy to system/* already enforced in Nopales prims
+
+         API:
+           Cookie session OR Authorization: Bearer <api_key>
+           same identity attachment as browser
+
+         nginx: TLS termination; reverse proxy to image(s).
+         Complete system does NOT rely on htpasswd as the user
+         database. htpasswd may exist only as emergency break-glass.
+
+         ============================================================
+         FLEET ATTACH (future design sketch — per-user processes)
+         ============================================================
+
+         v1 REALITY: identity attaches in-process at login;
+         one image serves all sessions (see single-image.auth).
+
+         In a future per-user-process topology, on successful
+         login / SSH verify an attach layer would resolve
+         user_id → boot-or-attach a per-user image with env:
+           PP_USER_ID, PP_USERNAME, PP_BRANCH_ID, PP_BRANCH_NAME
+         and proxy HTTP/REPL to that instance. Auth's component
+         verifies + mints only; it never boots images.
+
+         ============================================================
+         RELATION TO BRANCHES (already built)
+         ============================================================
+
+         system/main     — package defaults (seed from libs/*.pp)
+         <user>/personal — empty-child garden; pins are "own"
+         Effective Functions list = deduped closest-wins
+         Agent locked to current branch during agent-task
+
+         Auth does not replace branching; it answers WHO is
+         on which garden.
+
+         ============================================================
+         NON-GOALS
+         ============================================================
+
+         - OAuth / OIDC / social login
+         - Email magic links (unless added later as a credential kind)
+         - Sharing one password (htpasswd) among humans as the
+           permanent multi-user model
+         - Per-user process isolation as a blocker for subdomain/
+           llm_key/ssh_key (those ship on cotenant single-image first)
+         - Custom domains per user (only {user}.{PP_BASE_DOMAIN} v1)
+    |))
+   )
+  )
+  (subsection user-subdomains
+   (doc "Per-user Host: {username}.{PP_BASE_DOMAIN} as personal garden URL")
+   (status implemented)
+   (* agent note (|2026-08-02: classify_host Host_garden + PP_BASE_DOMAIN in http_core; http.ml attach path uses host_mode; garden_url helper. Off when env unset.|) *)
+   (implements image/lib/http.ml image/lib/http_core.ml image/lib/session.ml)
+   (verify
+    (build "dune build image")
+    (smoke "Host: alice.example → garden context username=alice")
+    (smoke "logged-in alice on alice.example sees alice/personal")
+    (smoke "logged-in alice on bob.example cannot write bob garden")
+    (smoke "apex base domain serves welcome/login; post-login redirects to user host"))
+   (details
+    (doc (|
+        Subdomain feature: when PP_BASE_DOMAIN is set, requests to
+        {username}.{PP_BASE_DOMAIN} resolve to the user's personal
+        branch garden (<username>/personal). The image parses the
+        Host header, validates the username against the users table,
+        and attaches that identity; otherwise, legacy single-host
+        mode (path-only) applies.
+    |))
+   )
+  )
+    (subsection branch-faces
+     (doc "Reserved-label second-level hosts {face}.{user}.{PP_BASE_DOMAIN} render a work branch — the agent demo without a promote")
+      (status partial)
+      (implements image/lib/http_core.ml image/lib/http.ml image/lib/session_registry.ml image/test/face_hosts_test.ml)
+      (* agent note (|2026-10-12 BUILT (overnight run): classify_host gains Host_userbranch of (user, face) in http_core.ml. Strip the base-domain suffix; the remainder MUST be exactly two labels, first in the reserved set (agent, dev, fixed in code), second DNS-valid; the users-table/branch existence check rides the face-branch lookup at attach, so an unknown user or a missing branch renders the STUB PAGE (a real answer, not a 404 host). http.ml: the face branch parks the session; session_registry's key is generalized to (identity, served branch) with anonymous@park:<ref>, so the identity's own session is never re-parked under its feet. FACE->BRANCH fixed: agent -> <user>/agent, dev -> <user>/dev. Private-path confinement extends Host_garden's rule verbatim (whoami must be the face owner); https-only bounce for logged-in faces (a plain-http bounce drops the Secure session cookie). Tests: image/test/face_hosts_test.ml (host grammar + routing), full dune build + runtest green. DEPLOY PRE-REQS done 2026-10-12: prod wildcard TLS *.gregor via ACME DNS-01 on Epik + the nginx faces vhost. STILL OPEN: the GEN-PINNED paragraph here, ?at=<cp-name> face rendering; the checkpoints substrate (branching.checkpoints) is built, the face lens does not accept a named gen yet.|) *)
+     (* agent note (|2026-10-12 plan-phase ratification: roerick picked two-level reserved labels over the hyphen-suffix and path-prefix options (in-conversation tonight: "two-level reserved labels looks amazing"). Written directly in plan phase, no issue filed. Depends on: branching.checkpoints (the ?at= face), security.origin-authenticated-verbs (prod gate).|) *)
+     (details
+      (doc (|
+           ==========================================================
+           WHY
+           ==========================================================
+           user-subdomains exposes <user>/personal only. Agents
+           workshop in <parent>/agent (branching.agent-promote);
+           everything that reaches the human's garden must be
+           promoted first. There is no way to SHOW work unlanded.
+           A HOST per work branch closes the loop: the human
+           browses the agent's face, reads branch/status, and only
+           then decides branch/push (branching.branch-ops). The
+           agent never writes the human's branch.
+
+           ==========================================================
+           HOST GRAMMAR (locked 2026-10-12)
+           ==========================================================
+             {face}.{user}.{PP_BASE_DOMAIN}
+             face :: agent | dev    -- RESERVED LABELS, fixed in code
+
+           - RESERVED-ONLY: the label set is closed in code (starts:
+             agent, dev). Branch-name-as-hostname is explicitly out —
+             arbitrary labels are names a host grammar cannot
+             validate, multi-dot remainders are DNS ambiguity, and
+             every label would be one more route-hijack surface.
+             Adding a label is a kernel change, not data.
+
+           - classify_host gains Host_userbranch of (user, face):
+             strip the base-domain suffix; the remainder MUST be
+             exactly two DNS labels — first in the reserved set,
+             second passing the users-table check user-subdomains
+             already performs. Anything else falls to Host_unknown
+             exactly as today (single-label gardens unchanged).
+
+           - FACE->BRANCH is fixed: agent -> <user>/agent (the boot
+             workshop), dev -> <user>/dev. A face whose branch does
+             not exist renders a stub page (a real answer, not a
+             404 host).
+
+           ==========================================================
+           SERVING MODEL (composes the per-identity session work)
+           ==========================================================
+           - Session_registry generalizes its key from identity to
+             (identity, served branch): one session per pair, parked
+             on the face branch — own store connection, lazy env,
+             staleness stamps, all the 2026-08-21 machinery
+             unchanged.
+           - AUTH: the session cookie's Domain (.base) spans faces
+             unchanged, so the owner browsing their own face is
+             themselves; anonymous stays anonymous per branch.
+           - PRIVATE-PATH confinement extends Host_garden's rule
+             verbatim: private on a face requires whoami = face
+             owner; mismatch bounces like gardens.
+           - PUBLIC routes render against the FACE branch lens
+             (visible-public only) — the already-shipped product
+             model: a public route is raw HTML its owner authors;
+             branch_readable's cross-tenant CODE-copy gate is
+             untouched.
+           - DATA NEVER MOVES: a face renders shared data through
+             the branch's code; RLS keys on the requester, never on
+             the face owner.
+
+           ==========================================================
+           GEN-PINNED RENDERING (?at=)
+           ==========================================================
+           {face}.{user}.base/path?at=<cp-name> renders the branch
+           as of a checkpoint (branching.checkpoints): the gen-
+           bounded read substrate already answers "value at gen";
+           the face lens accepts a named gen instead of head.
+           Review handoffs carry stable URLs — "look at it as it
+           stood at before-lens-rework". Pure read: ?at= never
+           restores anything.
+
+           ==========================================================
+           DEPLOY PRE-REQS (order matters)
+           ==========================================================
+             - DNS/TLS: gardens ride the apex wildcard (*.{base});
+               faces need per-user wildcards (*.{user}.{base}) via
+               ACME DNS-01. RESOLVED 2026-10-12: the zone lives on
+               Epik (ns3/ns4.epik.com); Epik User API v2 does
+               per-record create/remove and lego ships an epik
+               provider since v4.5.0 (EPIK_SIGNATURE + IP whitelist
+               of the calling box). NEVER the v1 sethostrecords op —
+               it replaces the whole record set. Staging first (LE is
+               picky about failed challenges). Escape hatch if the
+               API proves flaky: delegate NS to Cloudflare/deSEC;
+               automation only ever touches challenge TXT rows.
+           - PROD STAYS DARK until security.origin-authenticated-
+             verbs lands: public-route same-origin scripts +
+             /api/eval cookie auth widen with every subdomain, and
+             faces multiply those vectors. PP_BASE_DOMAIN remains
+             the single switch; Host_legacy never changes.
+      |))
+     )
+     (verify
+      (build "dune build image")
+      (smoke "Host: agent.alice.example parses Host_userbranch (\"alice\",\"agent\") and serves alice/agent public routes to an anonymous visitor")
+      (smoke "private path on a face with a logged-in non-owner bounces to the visitor's garden, Host_garden-style")
+      (smoke "face whose branch is missing renders the stub page, not a Host_unknown 404")
+      (smoke "shared cookie: logged-in alice is alice on alice.base and on agent.alice.base")
+      (smoke "?at=<cp-name> renders the branch as of the checkpoint, differing from head where later writes exist"))
+    )
+  (subsection user-llm-keys
+   (doc "Per-user LLM provider keys; session AI uses user key with env fallback")
+   (status implemented)
+   (implements image/lib/auth_store.ml image/lib/envelope.ml image/lib/llm_client.ml image/lib/session.ml image/lib/http_pages.ml)
+   (verify
+    (build "dune build image")
+    (smoke "user sets llm_key; propose-function uses it not empty env")
+    (smoke "user without key falls back to LLM_API_KEY env if set")
+    (smoke "GET settings never returns raw api_key; last4 only")
+    (smoke "Bob cannot read Alice llm_key credential"))
+   (details
+    (doc (|
+         ==========================================================
+         1. WHY
+         ==========================================================
+
+         Today llm_client reads process env LLM_API_KEY only.
+         Multi-user means Alice's AI spend and provider choice
+         cannot be the operator's single key. Each human brings
+         (or is issued) their own key; the image selects by
+         session identity.
+
+         ==========================================================
+         2. CREDENTIAL SHAPE
+         ==========================================================
+
+         kind = 'llm_key'
+
+         secret_data jsonb (NEVER returned on list/get APIs):
+           { "api_key": "<provider secret>" }
+
+         public_data jsonb (safe to show):
+           { "last4": "ab12"           // last 4 of key
+           , "label": "synthetic"      // optional
+           , "base":  "https://…"      // optional override of LLM_API_BASE
+           , "model": "hf:…"           // optional override of LLM_MODEL
+           }
+
+         Policy v1: at most ONE active llm_key per user
+         (replace on set, like password). Multiple providers
+         later via label/id.
+
+         Storage: Postgres credentials row; same role as other
+         secrets. No encryption-at-rest beyond PG in v1 (same
+         acceptance as password hashes / session signing risk
+         profile — personal/small-team). Document footgun.
+
+         NOT the same as kind=api_key (that authenticates
+         INTO pricklypear as Bearer). llm_key authenticates
+         OUT to an LLM provider.
+
+         ==========================================================
+         3. RESOLUTION ORDER (llm_client)
+         ==========================================================
+
+         When a session invokes AI (propose-function, llm-inner,
+         llm-outer, llm-rewrite, llm-seed, agent portal, …):
+
+           1. If session has user_id AND credentials llm_key
+              present → use that api_key; apply public_data
+              base/model overrides if set.
+           2. Else if env LLM_API_KEY non-empty → operator
+              fallback (dev).
+           3. Else → clear error "no LLM key configured
+              (add one in /settings/keys or set LLM_API_KEY)".
+
+         Threading: llm_client functions take optional
+         ~auth_ctx / ~api_key / ~base / ~model rather than only
+         reading env. Session layer fills from credential lookup
+         (cached per request OK; invalidate on set/delete).
+
+         Anonymous / no session: AI prims denied (hard-private
+         routes already); no env key leak via public pages.
+
+         ==========================================================
+         4. HTTP + LISP SURFACE
+         ==========================================================
+
+         Browser (authenticated user, self-service):
+           GET  /settings/keys     form: status last4, set, clear
+           POST /settings/keys     body: api_key, optional base, model
+           POST /settings/keys/clear
+
+         Admin may set/clear for another user via /admin/users
+         (optional v1; self-service is enough for dogfood).
+
+         Nopales prims (session user only unless admin):
+           (set-llm-key key [base] [model]) → "ok" / last4
+           (clear-llm-key) → VNil
+           (llm-key-status) → dict/list: configured?, last4, base?, model?
+             NEVER returns raw secret.
+
+         auth_store:
+           set_llm_key user_id ~key ?base ?model
+           clear_llm_key user_id
+           get_llm_key_meta user_id → public_data option
+           get_llm_key_secret user_id → string option
+             (* only called from server-side AI path *)
+
+         ==========================================================
+         5. SECURITY
+         ==========================================================
+
+         - Raw key only in POST body / Nopales arg / secret_data
+         - Logs: never print full key (llm_client already prints
+           model/url — keep it that way)
+         - CSRF: same cookie session rules as other POSTs
+         - User A cannot get_llm_key_secret for user B
+         - Export/pp_sync: do NOT dump secret_data into lib.pp
+
+         ==========================================================
+         5b. THE LOCAL-FIRST EXPORT EXCEPTION (2026-12)
+         ==========================================================
+
+         The "secret_data NEVER returned on get/list APIs" rule has
+         exactly ONE exception, pinned here for local-first: a
+         sync/push round (borge/local-first.borg sync) MAY return the
+         CALLER's OWN llm credential as ROUND METADATA —
+         llm_config: {api_key, base} — so a lens can hit the provider
+         invisibly after sync, exactly the way the online session
+         resolves it server-side. This is NOT a datum: it never
+         enters the tree (no data.u.<user> row, no pp-sync snapshot,
+         no /data browser row, no corpus-code read path). The client
+         records it in <lens>/__config.json — lens-root metadata,
+         excluded from the node manifest like __ancestry.json /
+         __base.json / __snapshot.json.
+
+         MODEL IS NOT EXPORTED. Model is a per-surface dial, not user
+         data to replicate: each surface (image /settings/keys,
+         glochid) populates a dropdown from the provider's own ABI
+         (GET {base}/models with the resolved key) and persists its
+         OWN choice locally. Sync carries base (the endpoint) so the
+         ABI is reachable; the choice itself never travels.
+
+         Server-asserted identity: llm_config is resolved from the
+         caller's session/basic-auth user — a client can only ever
+         receive its own key, never another user's.
+
+         ==========================================================
+         6. PHASES
+         ==========================================================
+
+         Phase 1: auth_store llm_key CRUD + llm_client ~api_key
+           threading + session resolution + (llm-key-status)
+         Phase 2: /settings/keys UI + set/clear prims
+         Phase 3: optional per-user base/model; admin override UI
+
+         Success: two users, two keys, simultaneous propose-
+         function calls hit distinct Authorization headers
+         (observable via mock/test double or request log redacted).
+    |))
+   )
+  )
+  (subsection user-ssh-repl
+   (doc "Per-user SSH public keys open an identity-bound Nopales REPL")
+   (status partial)
+   (* agent note (|2026-08-02 confirm partial: ssh_key credentials + verify_ssh_key + /settings/ssh UI shipped; full sshd/awa REPL attach still bridge/docs (archive/deploy/ssh-repl-bridge.md), not closed product door.|) *)
+   (implements image/lib/auth_store.ml image/lib/repl_endpoint.ml)
+   (verify
+    (build "dune build image")
+    (smoke "add ssh_key credential for alice; verify_ssh_key resolves alice")
+    (smoke "SSH or bridge session attaches whoami=alice branch=alice/personal")
+    (smoke "unknown key denied + auth_log")
+    (smoke "password-only user without ssh_key cannot SSH"))
+   (details
+    (doc (|
+         ==========================================================
+         1. WHY
+         ==========================================================
+
+         Multi-user OS framing wants a real shell path:
+           ssh alice@pricklypear.host -p $PP_SSH_PORT
+         → Nopales REPL as alice on alice/personal.
+
+         credentials.kind=ssh_key is already in the schema and
+         historical supervisor/awa design. Single-image retired
+         the supervisor fleet, so SSH must attach identity
+         in-process (or via OpenBSD sshd ForceCommand bridge).
+
+         Browser login remains primary for v1 web; SSH is the
+         power-user / agent-adjacent REPL door.
+
+         ==========================================================
+         2. CREDENTIAL SHAPE
+         ==========================================================
+
+         kind = 'ssh_key'
+         public_data jsonb:
+           { "openssh": "ssh-ed25519 AAAA…[ comment]"
+           , "fingerprint": "SHA256:…"   // computed on insert
+           , "label": "laptop"           // optional
+           }
+         secret_data: null (public keys only; no private keys)
+
+         Multiple ssh_key rows per user allowed (laptop, desktop).
+         Admin or self-service add/revoke.
+
+         auth_store:
+           add_ssh_key user_id ~openssh_pubkey ?label
+             → parse type (ed25519 required v1; rsa deferred)
+             → store normalized openssh string + fingerprint
+           list_ssh_keys user_id → public metas
+           revoke_ssh_key credential_id
+           verify_ssh_key presented_openssh_or_blob → user option
+             (* compare fingerprint or canonical blob *)
+
+         auth_log kind='ssh_key' success true/false.
+
+         ==========================================================
+         3. TRANSPORT OPTIONS (pick primary + ops escape)
+         ==========================================================
+
+         Option A — awa-ssh IN THE IMAGE (product primary)
+           - Image listens on PP_SSH_PORT when set (opt-in;
+             unset = no SSH listener — same spirit as old
+             PP_AWA_SSH_PORT).
+           - Host key: seed in system_keys id
+             'image_ssh_hostkey_seed' (or reuse naming from
+             historical supervisor_ssh_hostkey_seed).
+           - Pubkey auth against credentials ssh_key for the
+             claimed username (SSH user name = users.username).
+           - On success: create/attach in-process session
+             identity (user_id, username, branch personal),
+             bridge channel to existing REPL endpoint semantics
+             (line editor / eval loop).
+           - CRITICAL: authenticated username MUST propagate
+             into the REPL session (historical awa 0.3.1 gap
+             where exec_callback lacked username — use awa
+             version on poohstack that exposes auth identity,
+             or map channel after auth event). No anonymous REPL.
+
+         Option B — OpenBSD sshd ForceCommand (ops escape)
+           - System sshd on a dedicated port/user
+           - authorized_keys generated/synced from credentials
+             (periodic script or AuthorizedKeysCommand)
+           - ForceCommand runs pp_repl_bridge that speaks to
+             image REPL with fixed identity from key mapping
+           - Document in archive/deploy/openbsd-prod-branch-deploy.md
+           - Acceptable if awa-in-image slips; product stories
+             still require verify_ssh_key + key management UI.
+
+         v1 make should implement credential CRUD + verify +
+         ONE working door (A preferred). B is documented backup.
+
+         Line-protocol pubkey pipe (nc + raw key) is DEV ONLY;
+         not the multi-user product surface.
+
+         ==========================================================
+         4. SESSION ATTACH AFTER SSH AUTH
+         ==========================================================
+
+         Same as US-LAND / identity-and-branch:
+           ensure <username>/personal
+           checkout personal
+           whoami = username
+           author = username
+           budgets from multi-user.budgets
+
+         REPL eval uses that session's env/prims — same as
+         browser /api/eval for that user. No shared global env
+         across SSH users on cotenant: each SSH connection has
+         its own Session.t (or equivalent).
+
+         Disconnect: drop session memory; do not revoke browser
+         cookies. Optional: no auth_sessions row for SSH (ephemeral
+         connection identity) OR mint a short-lived session for
+         audit — v1 ephemeral is fine; auth_log the login.
+
+         ==========================================================
+         5. HTTP / UI
+         ==========================================================
+
+         GET/POST /settings/ssh  — list fingerprints, add pubkey,
+           revoke. Self-service.
+         Admin /admin/users — add/revoke ssh keys for a user.
+
+         Nopales:
+           (add-ssh-key "ssh-ed25519 AAAA…") → fingerprint
+           (list-ssh-keys) → list of {fingerprint,label}
+           (revoke-ssh-key fingerprint-or-id)
+
+         ==========================================================
+         6. RELATION TO DEPRECATED PATHS
+         ==========================================================
+
+         image.ssh-interface and supervisor.* remain deprecated
+         as multi-process topology. This subsection is the
+         single-image successor: keys in auth credentials,
+         listener in image (or sshd bridge), identity in-process.
+
+         Do not revive authd RPC for verify_ssh_key in v1;
+         call auth_store directly inside the image.
+
+         ==========================================================
+         7. PHASES
+         ==========================================================
+
+         Phase 1: auth_store ssh_key add/list/revoke/verify +
+           /settings/ssh + Nopales prims + auth_log
+         Phase 2: awa-ssh (or sshd bridge) attach → REPL with
+           real whoami; PP_SSH_PORT opt-in
+         Phase 3: harden hostkey rotation docs; agent use of
+           SSH as alternative to HTTP Basic
+
+         Success narrative:
+           Admin creates alice; alice pastes pubkey; alice runs
+           ssh alice@host -p $PP_SSH_PORT; REPL prints
+           whoami => alice; (define …) pins alice/personal.
+    |))
+   )
+  )
+  (subsection login-experience
+   (doc "What log in means: I present credentials and land in MY live image")
+   (status implemented)
+   (verify
+    (smoke "human authenticates and lands on username/personal")
+    (smoke "unknown credential denied; no image attach for stranger")
+    (smoke "two concurrent users keep distinct identities"))
+
+   (details
+    (doc (|
+         Product bar (from multi-user-product):
+         1. Present credential (password browser, API key,
+            or SSH key when SSH front door is live).
+         2. Verify → user_id (never proceed on failure).
+         3. Mint or resume session; attach identity.
+         4. Ensure <username>/personal; set runtime branch.
+         5. With fleet: boot/attach that user's image.
+         6. User works; logout/revoke ends session.
+
+         Success: "I logged into my computer as me."
+         Failure modes never leak other users' existence
+         beyond generic invalid-credentials.
+    |))
+   )
+  )
+  (subsection web-login
+   (doc "Browser password login, session cookie, middleware, logout")
+   (status verified)
+   (implements image/lib/http.ml image/lib/session.ml image/lib/auth_password.ml image/lib/auth_store.ml image/lib/auth_throttle.ml)
+   (verify
+    (build "dune build")
+    (smoke "POST /login valid -> Set-Cookie -> GET / as that user")
+    (smoke "POST /login invalid -> 401 + auth_log fail")
+    (smoke "POST /logout revokes; subsequent GET / redirects login")
+    (smoke "Alice and Bob cookies do not cross personal branches"))
+
+   (details
+    (doc (|
+         Complete browser path (part of multi-user-product):
+
+         GET  /login
+           Public form: username, password. No product chrome
+           that assumes identity.
+
+         POST /login
+           Body: username, password (+ CSRF token when forms
+           are cookie-authenticated for other posts).
+           verify_password against credentials.kind=password.
+           On success: insert auth_sessions; Set-Cookie
+           pp_session=<opaque>; redirect /.
+           On failure: auth_log; same error for bad user/pass.
+
+         Middleware (request gate — see auth.route-visibility)
+           Always ATTEMPT identity resolve (cookie then Basic).
+           Classify path (system public / system private / user
+           route visibility). Private + no identity → login
+           redirect (HTML) or 401 (API). Public may proceed
+           anonymously. Identity present → attach user even on
+           public paths (optional auth).
+
+         POST /logout
+           Revoke session; clear cookie; redirect /login.
+
+         Password: argon2id verify/hash in complete system.
+         Cookie flags: HttpOnly; Secure; SameSite=Lax; Path=/.
+
+         nginx: TLS + reverse_proxy only for this path.
+         htpasswd is not the user database.
+
+         HARD PUBLIC (kernel, not user-route table):
+           /login /health /logout
+           /welcome /book.pdf /src.tgz
+           /code /code/*  /assets /assets/*
+           /.well-known/agent.json
+           /agent.txt
+           (public release face — product-experience.public-release;
+            /book HTML explainer is private, not hard-public;
+            /agent private portal stays hard-private)
+         User-route public/private: auth.route-visibility.
+    |))
+   )
+  )
+  (subsection route-visibility
+   (doc "Public vs private HTTP routes: store-backed visibility + OCaml request gate")
+   (status implemented)
+   (* agent note (|2026-08-02: migration 006 visibility; public-route + route-visibility prims; live (route-visibility "/welcome") => public; /pages visibility column.|) *)
+   (implements image/lib/http.ml image/lib/session.ml image/lib/store.ml migrations/006_route_visibility.sql)
+   (verify
+    (build "dune build image")
+    (smoke "migration 006 adds view_bindings.visibility default private")
+    (smoke "(route \"/x\" \"h\") stays private; unauth GET /x → login redirect")
+    (smoke "(route \"/pub\" \"h\" 'public) ; unauth GET /pub → 200 handler")
+    (smoke "logged-in GET /pub still attaches whoami (optional auth)")
+    (smoke "unauth GET /data and /admin/users and /api/eval still denied")
+    (smoke "unauth GET /bindings /edit/foo /repl denied")
+    (smoke "/pages shows public|private badge per route")
+    (smoke "child branch inherits parent public route until override")
+    (smoke "re-(route path handler) without visibility keeps existing visibility OR defaults private — document choice; prefer KEEP on handler-only update"))
+   (details
+    (doc (|
+         =========================================================
+         WHY
+         =========================================================
+         The image already has a single request gate (launch in
+         image/lib/http.ml): hard public allowlist, else require
+         session/Basic. That is correct kernel shape — but it cannot
+         express "this Nopales page is a public share link."
+
+         Product needs:
+           - Default-private user routes (todos, notes, gardens)
+           - Opt-in public user routes (marketing, shared deck view)
+           - Kernel paths that are NEVER public via Nopales
+           - Optional auth: public page still richer when logged in
+
+         NOT this subsection:
+           - Per-row ACLs / Alice-vs-Bob data isolation
+             (multi-user.permissions — later)
+           - Capability bits on functions (separate)
+           - OAuth / JWT (still out; wyo.auth / session cookie)
+
+         =========================================================
+         GATE ALGORITHM (authoritative)
+         =========================================================
+         For every HTTP request to the image:
+
+         1. Parse path (strip query).
+         2. Resolve identity OPTIONALLY:
+              cookie pp_session → else HTTP Basic → else None.
+            Do not fail yet; just compute user_opt.
+         3. Classify path into one of:
+
+            A. SYSTEM_HARD_PUBLIC
+               /login  /health  /logout
+               /welcome /book.pdf /src.tgz
+               /code and /code/*
+               /assets and /assets/*
+               /.well-known/agent.json
+               /agent.txt
+               (extend only by OCaml change; see
+                product-experience.public-release;
+                /book is NOT hard-public;
+                /agent is NOT hard-public)
+
+            B. SYSTEM_HARD_PRIVATE
+               Always require identity (Nopales cannot open these):
+               /admin and /admin/*
+               /data and /data/*
+               /api/eval /api/agent /api/agent-task /api/ai/*
+               /api/edit/* /api/recipe/*
+               /bindings /binding/* /edit/* /repl
+               /branches and /branches/*
+               /types /pages /page/* /inspect/*
+               /agent
+               (Implementation: prefix/exact table in http.ml;
+                when unsure, DEFAULT PRIVATE.)
+
+            C. USER_ROUTE
+               Session.lookup_route path succeeds →
+               visibility from route record:
+                 "private" (default) | "public"
+
+            D. UNKNOWN
+               No system page, no user route → still require auth
+               before 404 (do not leak route existence to anonymous
+               via different status; v1 may 302 login then 404 after
+               login — acceptable). Prefer: unauth → login redirect
+               for HTML; 401 for API Accept.
+
+         4. Decision:
+            - If class A → proceed (login form has no product chrome).
+            - If class B or C-private or D:
+                user_opt None → deny (302 /login?next= or 401)
+                user_opt Some → attach_from_user → proceed
+            - If class C-public:
+                user_opt Some → attach_from_user → proceed
+                user_opt None → proceed as ANONYMOUS (below)
+
+         5. PP_AUTH_DISABLED=1 → proceed all (dev escape; unchanged).
+
+         No multi-layer middleware DSL. One gate function.
+
+         =========================================================
+         ANONYMOUS SESSION (public + no identity)
+         =========================================================
+         - (whoami) → "anonymous" (string) or document VNil — pick
+           one in make; prefer VStr "anonymous" for easy tests.
+         - Branch: system/main (read package defaults). Do NOT create
+           or checkout a personal garden for anonymous.
+         - author for any accidental write: "anonymous"
+         - WRITE POLICY v1: CRUD prims (create/update/delete) and
+           define/route/fork/merge/checkout are DENIED for anonymous
+           (raise clear error or return error VStr). Public pages are
+           read-oriented. public-write (POST forms that mutate) is
+           PHASE 2 — not v1.
+         - Chrome: product ui/nav MAY render; avoid admin links.
+           If ui/nav fails, emergency chrome only.
+
+         =========================================================
+         SCHEMA (additive migration 006_route_visibility.sql)
+         =========================================================
+         ALTER TABLE view_bindings
+           ADD COLUMN IF NOT EXISTS visibility text
+           NOT NULL DEFAULT 'private';
+         -- allowed values: 'private' | 'public'
+         -- no CHECK required if app validates; optional CHECK OK
+
+         Fork copy of view_bindings MUST copy visibility
+         (UPDATE fork INSERT column lists).
+
+         list_routes / register_route SELECT/INSERT visibility.
+         Default private for all existing rows (DEFAULT).
+
+         scripts/dev.sh migration loop: add 006_route_visibility.
+
+         =========================================================
+         LISP API
+         =========================================================
+         (route path handler)
+           → register private route (default). If route already
+             exists and only handler changes, KEEP prior visibility
+             (so re-seed does not clobber an intentional public).
+             If brand-new route → private.
+
+         (route path handler 'public)
+         (route path handler "public")
+           → register/update route with visibility=public.
+           Third arg also accepts 'private / "private".
+
+         (public-route path handler)
+           → sugar for (route path handler 'public)
+
+         (route-visibility path) → "public" | "private" | ()
+           () if no visible route on current branch chain.
+
+         Agent tools: register_route gains optional visibility
+         field (default private).
+
+         =========================================================
+         INHERITANCE
+         =========================================================
+         Same recursive CTE as today: nearest branch wins for a
+         path. Child can override parent public→private or
+         private→public by re-routing on personal.
+
+         =========================================================
+         UI
+         =========================================================
+         /pages table: column Visibility (public|private).
+         Optional: make-public / make-private forms later;
+         v1 Nopales/REPL is enough.
+
+         =========================================================
+         SECURITY NOTES
+         =========================================================
+         - Public handler still runs full Nopales: author must not
+           leak secrets in public pages. Document footgun.
+         - System hard-private list is deny-by-default for kernel
+           surfaces; never consult view_bindings to open /admin.
+         - data_rows remain shared storage; public route ≠ row ACL.
+           Sharing one deck is handler logic (filter by id), not
+           "all flash-card rows are public."
+         - /api/eval stays hard-private (agents use Basic auth).
+
+         =========================================================
+         PHASES
+         =========================================================
+         Phase 1 (this subsection make):
+           migration 006, store/session route record, route prim
+           arity, gate algorithm, anonymous read, /pages badge,
+           smokes above.
+         Phase 2:
+           public POST / public-write visibility value;
+           next= return path after login; CSRF for cookie posts.
+         Phase 3:
+           share tokens / signed URLs for single-resource public
+           access without opening a whole route (flashcards).
+
+         =========================================================
+         ACCEPTANCE NARRATIVE
+         =========================================================
+         Dev marks (route "/hello" "hi-page" 'public). Logged-out
+         browser opens /hello and sees the page. Same browser on
+         /todos still hits login. /data still login. After login,
+         /hello shows whoami in chrome. Re-seed of private routes
+         does not wipe an intentional public flag when only the
+         handler is updated.
+    |))
+   )
+  )
+  (subsection user-management
+   (doc "Admin creates and manages users and credentials")
+   (status implemented)
+   (verify
+    (smoke "admin creates user + password; new user logs in on own personal")
+    (smoke "non-admin cannot create users")
+    (smoke "admin can revoke all sessions for a user"))
+
+   (details
+    (doc (|
+         Complete admin surface:
+           create_user(username, is_admin?, user_type?, parent_user_id?)
+           set_password(user_id, password)
+           add_credential(user_id, kind, …)  ; api_key, ssh_key
+           list_users / get_user
+           revoke_sessions(user_id)
+           revoke_credential(id)
+           create_agent(parent_username)     ; user_type='agent', parent=human
+           issue_token(user_id, label?)       ; kind='api_key', returns raw token once
+           rotate_token(credential_id)        ; revoke old + issue new
+           revoke_token(credential_id)        ; delete credential row
+
+         First admin: bootstrap-admin (env) when users empty.
+         All later humans: this API/UI only.
+
+         Agent users: user_type='agent', parent_user_id = the
+         human they belong to. One agent account; model identity
+         lives in the function_def author field, not the username.
+         Agents auth via Bearer token (issue_token), not password.
+         Agents inherit the parent's llm_key — get_llm_key_secret
+         falls back to parent_user_id when the agent has no own
+         llm_key row. Global tokens are disabled; all tokens are
+         per-user rows in credentials.
+
+         UI: /admin/users (admin session required).
+         Enforcement: is_admin on session; 403 otherwise.
+
+         Credentials order of support in complete system:
+           password (web-login),
+           api_key (agents/pp_eval Bearer — auth INTO the OS),
+           ssh_key (SSH REPL door — auth.user-ssh-repl),
+           llm_key (provider key OUT to LLM — auth.user-llm-keys).
+
+         Admin UI should grow links to manage ssh_key and llm_key
+         per user; self-service /settings/* is the human path.
+    |))
+   )
+  )
+  (subsection delegation-tokens
+   (doc "On-behalf-of tokens: an agent authenticates with its own bearer credential and acts AS the owner — data grants only, never code")
+   (status implemented)
+   (* agent note (|spec written + make done 2026-09-14 after the workout-incident diagnosis: roerick's designated agent could not post workouts as him because (a) every CRUD create binds author=whoami from the request manifest, (b) the datum RLS floor (migrations/013+033) confines writes to data.u.<caller>.*, and (c) spec_delegation had enforcement gates in session.ml but NO token producer (session.ml: delegated = false, 'no token producer yet'). This subsection is the producer half and the producer is NOW LANDED. Enforcement half (9c83efe, pre-existing): delegated sessions never persist code (define/route/package), load seeded packages only, never reseed, never deftype. MAKE LANDING 2026-09-14 (all in-image, NO migration — credentials.kind is free text, the migration-008 (kind, token_hash) index already serves lookup): verify_delegated_token/mint_delegated_token/list/revoke in auth_store.ml (actor MUST name an extant user - deny closed, provenance is not aspirational); resolve_identity Bearer probe falls through api_key to delegated_token and returns (owner, actor); Session_registry.select keys delegated sessions 'owner@by:actor' so they never collide with the owner's own session; attach_identity ?delegated ?actor forces is_admin=false, sets manifest.actor, locks the branch (cleared on transition back to self attach, defensive); prims mint-delegated-token / list-delegated-tokens / revoke-delegated-token / current-actor (classified: read_db for reads, WriteDb for writes - the boot classification assertion caught the buckets, as designed); Manifest.t ?actor with VS round-trip (payloads from pre-delegation images load as self); agent.txt DELEGATION section. TESTS: image delegation_test D6 (attach producer: owner manifest + actor + admin NOT inherited + lock) + D7 (self attach resets provenance); common manifest actor round-trip + back-compat (no actor key = self). LIVE SMOKE on the dev kernel-lab (dune runtest green): Bearer-wrote a workout-session as delegated gregor-actor - row landed author=admin with (whoami)=admin, (current-actor)=gregor; delegated (define) evaluated but did NOT persist (function-source empty); delegated (checkout) blocked by the lock; revoke => next request 401; self admin sessions unaffected throughout. STORY: roerick hands agent-prickle a delegated token; the agent runs (whoami) => admin (the owner), creates workout rows that land in data.u.admin.* with author=admin, and cannot persist a single define. The gate is the token scope, not the Nopales surface. DEPLOY NOTE: needs an image promote to reach prod; prod's designated-agent workout flow = owner mints once on prod, agent ships the Bearer token in place of Basic.|) *)
+   (details
+    (doc (|
+         ==================================================================
+         WHY
+         ==================================================================
+
+         An agent (user_type='agent', or any secondary identity)
+         authenticates with its OWN api_key and therefore acts AS
+         ITSELF: every write binds author = caller and lands in
+         data.u.<agent>.*. Handing the agent the OWNER's api_key
+         fixes attribution only by collapsing identity entirely
+         (the bearer IS the owner: full admin surface, code
+         persistence, no provenance). Neither pole gives "act as
+         me, with data only".
+
+         The fix is a third credential kind that separates
+         AUTHENTICATION (the agent, provenance) from ACTING
+         IDENTITY (the owner, whose space and authorship the
+         request uses):
+
+           kind = 'delegated_token'
+             user_id    = the OWNER the session acts for
+             public_data = { "actor": "<agent-username>",   ;; REQUIRED: who carries it
+                             "label": "…",                  ;; optional
+                             "token_last4": "xxxx" }
+             secret_data = { "token_hash": sha256(raw) }   ;; same domain as api_key
+
+         Raw token returned ONCE at mint; only the hash is stored;
+         revocable per-credential (delete the row). No schema
+         migration: credentials.kind is free text and the (kind,
+         secret_data->>'token_hash') index from migration 008
+         already serves the lookup.
+
+         ==================================================================
+         VERIFY PATH
+         ==================================================================
+
+         The Bearer probe in resolve_identity becomes ordered:
+
+           1. cookie pp_session (unchanged)
+           2. Bearer -> verify_token (kind='api_key') — unchanged
+           3. Bearer -> verify_delegated_token (kind='delegated_token')
+           4. Basic (unchanged)
+
+         verify_delegated_token resolves the OWNER user row plus
+         public_data.actor (denied when actor is missing/blanks or
+         names no extant user — provenance must be real, not
+         aspirational). auth_log kind='delegated' per verify;
+         last_used_at updated like api_key. Revocation takes effect
+         on the NEXT request because identity resolve re-runs every
+         request (the session cache never short-circuits verify).
+
+         Basic-auth IS NOT delegated: a delegated token travels only
+         as Bearer. (A Basic pair is a password — full trust by
+         definition.)
+
+         ==================================================================
+         SESSION SHAPE (the resolve path's job)
+         ==================================================================
+
+         A delegated request resolves to (owner_user, actor) and
+         attaches a session with:
+
+           manifest.username = owner.username     ;; (whoami) = owner
+           manifest.user_id  = owner.id
+           manifest.actor    = Some actor         ;; provenance
+           is_admin          = false              ;; data-only tier EVEN IF
+                                                  ;; the owner is admin
+                                                  ;; (spec_town_profile:
+                                                  ;; delegated tokens always
+                                                  ;; carry the data-only tier)
+           delegated         = true
+           branch            = owner/<personal-or-agent-home> — the same
+                               home attach_identity picks for the OWNER
+           agent_branch_lock = true               ;; no checkout/fork/merge
+                                                  ;; mid-delegation
+
+         Registry: the per-identity session cache (image.per-identity-
+         sessions) keys DELEGATED sessions separately — key is
+         "<owner>@by:<actor>", never colliding with the owner's own
+         session (whose authorized surface differs: real admin flag,
+         code persistence). Session.construction dedupes by the same
+         key, single-flight unchanged.
+
+         ==================================================================
+         WHAT A DELEGATED SESSION MAY DO (enforcement: session.ml,
+         Session_types.restricted — ALREADY LANDED, 9c83efe)
+         ==================================================================
+
+         MAY:
+           - read/write data via CRUD prims; rows are attributed to
+             the OWNER (author=owner) inside the OWNER's datum space;
+             RLS pp.user = owner — the agent sees exactly the owner's
+             view of the data plane;
+           - call package fns, run routes, eval anything that is not
+             a code/schema write;
+           - (current-actor) => the agent identity (see below).
+
+         MAY NOT:
+           - persist code: define/route/package persistence skipped;
+           - load non-seeded libraries; reseed-package; deftype;
+           - checkout/fork/merge (agent_branch_lock);
+           - anything is_admin gates (create-user, promote, …) —
+             is_admin is forced false.
+
+         ==================================================================
+         PROVENANCE: ACTOR PER WRITE
+         ==================================================================
+
+         kernel: Manifest.t gains ?actor (None = self). Prims:
+
+           (current-actor)  => VStr actor when carried by a delegated
+                             token; VStr (whoami) when self. Never
+                             raises; never returns another user's name
+                             beyond the declared actor.
+
+         Packages that care stamp provenance into their own fields
+         (e.g. a workout writer may add "actor": (current-actor))
+         — the KERNEL never rewrites data_rows.author: attribution
+         stays the owner; actor is provenance, CASE-preserved, and
+         advisory to callers.
+
+         auth_log carries the per-request provenance
+         (kind='delegated').
+
+         ==================================================================
+         LISP SURFACE (mints, lists, revokes)
+         ==================================================================
+
+           (mint-delegated-token actor [label] [for-username])
+               Owner-only for self by default. ADMIN may name
+               for-username to mint on another owner's behalf.
+               Returns the raw token ONCE (same contract as issue-token).
+           (list-delegated-tokens)      — caller's own rows (id, actor,
+                                          label, last4, last_used_at)
+           (revoke-delegated-token id)  — owner (or admin) deletes the
+                                          credential row
+
+         agent.txt gains a DELEGATION section: owners mint, paste the
+         token once to the agent; agents send
+         Authorization: Bearer <token> and verify with
+         (whoami)/(current-actor) before working.
+
+         ==================================================================
+         NON-GOALS
+         ==================================================================
+
+         - No scopes/grants matrix in v1: delegated = data-only, full
+           data. A scoped grant surface (per-type/per-space) is
+           future work riding data_spaces (migration 029).
+         - No expiry on delegated v1 tokens (same standing as api_key;
+           revoke is the control).
+         - No delegation of ADMIN capability, ever: an owner who is
+           admin passes NO admin through the token. Use the owner's
+           own session for admin work.
+         - Basic-auth delegation and pp_session cookie delegation are
+           explicitly rejected shapes.
+    |))
+   )
+   (verify
+    (build "dune build @all")
+    (test "delegation_test: delegated manifest carries actor; gates deny code persists")
+    (smoke "owner mints delegated token for agent-prickle; agent Bearer-writes a workout-session row; row lands data.u.<owner>.* author=<owner>; (whoami)=<owner>; (current-actor)=<agent>")
+    (smoke "delegated (define) does NOT persist; after image restart (or fresh session) the name is unbound")
+    (smoke "delegated session (checkout \"other/personal\") denied (agent_branch_lock)")
+    (smoke "revoke-delegated-token: next request with the raw token resolves anonymous/401")
+    (smoke "owner's own admin session is unaffected by concurrent delegated traffic (registry key owner@by:actor)"))
+  )
+  (subsection identity-and-branch
+   (doc "Session identity drives personal garden and authorship")
+   (status implemented)
+   (verify
+    (smoke "whoami equals session username after login")
+    (smoke "define lands on username/personal")
+    (smoke "Functions origin own only for true personal pins"))
+
+   (details
+    (doc (|
+         On every authenticated request / image attach:
+
+           For human users:
+             ensure_branch owner=username name=personal
+               parent=system/main  (EMPTY child; CTE inherit)
+             store.branch_id = that id
+             manifest.username = username
+             manifest.branch_name = username/personal
+
+           For agent users (user_type='agent'):
+             ensure_branch owner=parent_username name=agent
+               parent=system/main  (EMPTY child; sibling of
+               the parent's personal). The agent's default
+               workshop is <parent>/agent, NOT the parent's
+               personal.
+             store.branch_id = that id
+             manifest.username = agent identity (whoami returns
+               the agent, not the parent)
+             manifest.branch_name = parent/agent
+
+         (define name body) persists with author=username
+         (or agent:<model> when agent installs under policy).
+
+         Agent llm_key: get_llm_key_secret falls back to the
+         parent human's key when the agent has no own llm_key row.
+
+         Functions UI: effective one-name-one-row; origin own
+         vs inherited (already implemented).
+
+         Agent-task: agent_branch_lock blocks checkout/fork/merge
+         (already implemented); must run under the user's session.
+
+         Changing user mid-process (cotenant): rebind identity +
+         checkout personal for that user; never leave previous
+         user's pins writable.
+    |))
+   )
+  )
+ )
+)

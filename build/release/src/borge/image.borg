@@ -1,0 +1,2834 @@
+(project pricklypear-image
+ (doc "Pricklypear book chapter: image")
+ (status partial)
+ (* agent note (|2026-08-02 status reconcile: flipped htmx/http-robustness/system-browser/tree-browser/function-editor/inspector/dnu-stubs → implemented. Still partial: repl-experience (linenoise), per-request-context (store phase).|) *)
+ (convention ocaml-dune)
+ (section image
+  (doc "The per-user unikernel: Nopales interpreter, REPL endpoint, htmx interface")
+  (status partial)
+  
+  (subsection boot
+   (doc "Single-image boot process: initialize Postgres, load stdlib, start services")
+   (implements image/lib/boot.ml image/lib/loader.ml image/lib/session.ml scripts/measure-boot.sh)
+   (status verified)
+   (verify
+    (build "dune build image")
+    (smoke "image boots + serves / and /health + REPL accepts connections"))
+
+   (details
+    (doc (|
+         On boot, the image:
+         1. Reads identity from process environment:
+            PP_USERNAME (REPL prompt), PP_BRANCH_NAME, PP_BRANCH_ID.
+         2. Connects to Postgres via pgx_lwt.
+         3. Applies pending migrations (additive-only).
+         4. Runs seed_stdlib: loads libs/*.pp into system/main.
+         5. Starts the REPL endpoint (internal line protocol
+            on PP_REPL_PORT if set).
+         6. Starts the htmx server (httpaf-lwt-unix) on PP_HTTP_PORT.
+         7. Registers health endpoint at /health.
+
+         The image is STATELESS across reboots w.r.t. user
+         data: anything that must survive is in Postgres.
+         In-memory REPL state (define'd locals in a session)
+         does NOT survive reboot unless the user persisted
+         via (store) or similar.
+   |))
+
+    (subsection boot-seed-batch
+     (doc "Boot seed batch-loads existing names once; additive persist skips per-name SELECT")
+     (status implemented)
+     (verify
+      (build "dune build image")
+      (smoke "warm boot: image.log shows one [session] boot seed: N packages, M defs in <ms>ms line and ZERO get_by_path-per-define round trips; first POST /api/eval after boot < 2s")
+      (smoke "cold boot (fresh DB): every seeded name is present in (list-bindings); package provenance stamped"))
+     (details
+      (doc (|
+           Boot seed is ADDITIVE (branching.seed-policy option A):
+           existing system/main rows are never clobbered. The
+           expensive part of seed_stdlib is NOT rehydrate (it
+           suppresses refresh and rehydrates once via
+           checkout_personal at boot end) — it is that
+           persist_function_if_absent / register_route_if_absent
+           each performed a Tree_store.get_by_path SELECT per
+           name. With ~1800 defines + ~34 routes that was
+           ~1800 PG round trips on EVERY boot, warm or cold.
+
+           BATCHED SEED: seed_stdlib preloads the set of existing
+           function names AND route paths on system/main ONCE
+           (two queries) into a per-store seed-membership cache.
+           persist_function_if_absent and register_route_if_absent
+           consult that cache instead of issuing get_by_path per
+           call:
+             - name in cache  -> skip entirely (no SELECT, no
+               UPDATE, no upsert). Additive seed never touches
+               existing rows.
+             - name absent    -> upsert into the store AND insert
+               into the cache, so later duplicate defines in the
+               same seed pass are skipped too.
+           The cache is populated only for the seed_additive boot
+           pass on system/main; interactive load_library and
+           reseed-package keep their existing per-call semantics.
+
+           INVARIANT: additive seed never overwrites an existing
+           body. Skipping the existing-name path therefore
+           preserves seed-policy exactly.
+
+           INVARIANT: boot logs one summary line
+             [session] boot seed: <n> packages, <m> defs in <ms>ms
+           so first-eval latency regressions are visible in
+           /tmp/pp-dev/image.log.
+      |)))
+    )
+
+    (subsection boot-request-cost
+     (doc "/api/* never triggers the UI shell; identity attach never rehydrates an unchanged branch")
+     (status implemented)
+     (verify
+      (build "dune build image")
+      (smoke "POST /api/eval with a cold ui-shell cache does NOT evaluate ui/nav or ui/css; GET / does")
+      (smoke "two identical Basic-auth POST /api/eval calls in a row trigger zero rehydrate"))
+     (details
+      (doc (|
+           Two per-request costs are removed or confirmed cheap
+           for the agent path.
+
+           refresh_ui_shell INVARIANT: the UI shell (ui/nav,
+           ui/css) exists for HTML chrome. The request gate calls
+           refresh_ui_shell ONLY for paths that render chrome.
+           /api/* handlers NEVER trigger a ui/nav or ui/css eval,
+           even when the shell cache is cold. (The 60s TTL cache
+           already amortizes HTML-page requests; this removes the
+           cold-first-eval cost from the agent path entirely.)
+
+           attach_identity INVARIANT (already holds, documented):
+           if the resolved identity's username equals the
+           session's current manifest username, attach is a
+           manifest-field update only — it MUST NOT call
+           ensure_personal_branch / checkout_personal /
+           rehydrate. Rehydrate happens only when the branch
+           actually changes (prev <> username or explicit
+           checkout). Repeated Basic-auth requests from the same
+           user therefore never rehydrate.
+      |)))
+    )
+   )
+  )
+  (subsection lazy-env-load
+   (doc "load_defs binds VThunk recipes instead of evaluating bodies; rehydrate is one CTE + decode, never a body eval")
+   (status implemented)
+   (implements
+    image/lib/session.ml)
+   (verify
+    (build "dune build image")
+    (smoke "rehydrate of the full branch chain completes in ms; zero [session] load def lines logged")
+    (smoke "a def whose body executes only runs (and logs failure) on FIRST reference, not at checkout/attach"))
+   (details
+    (doc (|
+         The image half of lisp-interpreter.lazy-env-thunks.
+
+         load_defs walks the recursive-CTE def list (parents first,
+         child overrides) and binds each name to a VThunk payload
+         whose force evaluator is the SESSION's rim eval
+         (Control_rim.run around Eval.eval with the current budget
+         when one is active, fresh budget otherwise). Macro bodies
+         keep the old eager path (VMacro construction is pure, no
+         eval). Defs whose stored body is an APPLICATION form — data
+         captured as code (rb/* recipes, outline experiments, seeds) —
+         no longer execute at boot/checkout/attach; they cook once on
+         first reference, under the forcing request's budget, and
+         memoize (value OR failure).
+
+         SEMANTIC CHANGE (deliberate): nothing at image scope may
+         rely on load-time side effects of stored def bodies. A def
+         is a recipe, not an init hook. If boot order matters for a
+         real side effect, it belongs in boot code, not in
+         function_defs. Alphabetical-load-order breakage of the old
+         scheme (rb/* evaluated before recipe was defined → 28 defs
+         failing on EVERY rebuild, re-running partial side effects
+         each flip) disappears: forcing resolves through the fully
+         linked env.
+    |))
+   )
+  )
+  (subsection per-identity-sessions
+   (doc "One Session.t per attached identity (env+routes+store handle); attach selects, never mutates; anonymous gets its own parked session")
+   (status implemented)
+   (implements
+    migrations/028_branch_def_gen.sql
+    image/lib/session_registry.ml
+    image/lib/def_journal.ml
+    image/lib/session.ml
+    image/lib/http.ml
+    image/lib/http_core.ml
+    image/lib/boot.ml)
+   (verify
+    (build "dune build image")
+    (smoke "alternating anonymous GET /welcome and Basic-auth POST /api/eval: neither pays a rehydrate when nothing changed")
+    (smoke "a define by admin is visible to the anonymous session within one staleness check")
+    (smoke "concurrent requests for two users run page work in parallel (no head-of-line blocking)"))
+   (details
+    (doc (|
+         PROBLEM (measured on prod 2026-08-21)
+           One shared Session.t + per-request attach meant every
+           alternating-user request flipped the session's branch and
+           paid a FULL rehydrate under the global request_mutex
+           (60-120s on admin/personal with ~4000 defs × strict eval).
+           boot-request-cost's invariant ('rehydrate only when the
+           branch actually changes') was vacuous: with one session,
+           every OTHER user's request IS a branch change. The
+           cotenant race that Request_context snapshots band-aid
+           exists only because the session is shared.
+
+         MODEL
+           Session_registry owns a Hashtbl identity -> Session.t:
+             - one long-lived anonymous session, parked on
+               system/main, serves all unauthenticated traffic
+               (public face: /welcome, /agent.txt, public routes)
+             - one session per authenticated username, built lazily
+               on first attach, parked on that identity's branch
+             - each session has its OWN Store.t (own pgx connection):
+               checkout mutates only its own store, and the global
+               pgx sequencer serialization between users disappears
+             - attach = resolve identity -> select (or create) ->
+               cheap staleness check -> serve. Attach NEVER checks
+               out another identity's branch.
+
+         STALENESS
+           A parked session must notice writes on its visible chain
+           (another user's promote, an agent's define). At attach,
+           one cheap query per session — count(*)+max(updated_at)
+           over function_defs / view_bindings / type_defs on the
+           session's branch chain — compared against the values at
+           last load; mismatch triggers rehydrate (cheap under
+           lazy-env-load). Attach cost when idle: one indexed
+           round trip, ~ms.
+
+         CONSEQUENCES
+           - Invariant 4's cotenant race is deleted at the root:
+             Request_context remains as the per-request snapshot
+             discipline, but no concurrent attach can mutate the
+             session a page is reading, because page work runs on
+             the identity's own session.
+           - request_mutex narrows to registry table access; page
+             work across identities parallelizes (subject to PG).
+           - Sessions are never expired in v1 (user count is small;
+             revisit with an LRU if a public signup flow appears).
+           - Boot session remains for boot/seed/jobs-runner use.
+    |))
+   )
+  )
+
+  (subsection session-split
+   (doc "The session split: session.ml was a 2.5k-line monolith mixing the interpreter driver, control prims, boot seeding, and the UI shell cache")
+   (status implemented)
+   (* agent note (|2026-09 split i-1788671109-1, pinned by scripts/verify_session_split.sh: session_control_prims.ml owns the DB-touching control prims (fork/merge/route/checkout/unbind/prune-synced/bench + private __with_transaction__/__step__/with-public-write) and the branch-ref helpers, parameterized by a hooks record (rehydrate + checkout_to) so the module cycle stays broken; boot_seed.ml owns the additive libs seed, package discovery, the agents-note seed, personal/agent branch bootstrap, and the first-load recipes, parameterized by an ops record (load_library, eval_one, rehydrate, checkout_to); session_types.ml groups the 25-field Session.t into ui_shell and eval_state sub-records. The script pins that control-prim registrations live ONLY in session_control_prims and that the split modules register nothing else.|) *)
+   (implements
+    image/lib/session_control_prims.ml
+    image/lib/boot_seed.ml
+    scripts/verify_session_split.sh)
+   (verify
+    (build "ksh scripts/verify_session_split.sh")
+    (smoke "control-prim registrations live only in session_control_prims; family modules register nothing else"))
+  )
+  (subsection function-stat-ring
+   (doc "function_stat telemetry lives OUTSIDE the object tree: request path pushes to an in-process ring, a background fiber flushes into a DEDICATED table (migration 031) and prunes to the newest 1000; the only reader is the per-fn last-run widget (Crud.function_stat_last)")
+   (status implemented)
+   (implements
+    image/lib/function_stats.ml
+    migrations/031_function_stat.sql
+    image/lib/crud.ml
+    image/lib/session.ml
+    image/lib/boot.ml)
+   (verify
+    (build "dune build image")
+    (smoke "burst of labeled evals produces zero synchronous data_rows writes; flush fiber lands them <= 30s later"))
+   (details
+    (doc (|
+         ORIGINAL DESIGN (shipped, then replaced): every labeled
+         /api/eval called Crud.create synchronously for a
+         function_stat row — a SERIALIZABLE insert + fsync on the
+         request path — and retention paid the full TREE write per
+         row (mirrors, RLS, tree_versions). At ~76k rows a retention
+         DELETE was a 25-minute transaction that took prod down
+         TWICE (incident 2026-09-08: the unchunked 54k-row first
+         pass, then the per-row cost even in 2000-row chunks; the
+         rc.d watchdog probe gained curl -m 5 so it can no longer
+         hang).
+
+         TELEMETRY IS NOT CONTENT (HARD RULE): function_stat rows are
+         perf samples, never ledger. They must not pay the tree's
+         write path at all, and must never re-enter the tree.
+
+         FINAL DESIGN (migration 031, deploy fe78dbe): the ring
+         survives on the WRITE side — request path pushes to an
+         in-process ring (capacity 512, drop-oldest), the same
+         http-robustness ops-incidents medicine. The background
+         flush fiber now INSERTs plain rows into the DEDICATED
+         function_stat table (id, fn, fields jsonb, author,
+         created_at; (fn, created_at DESC) index) — no mirrors, no
+         RLS, no versions; retention is a set-based DELETE keeping
+         the newest keep_rows=1000 (plain rows: milliseconds, no
+         triggers), on a ~10min beat with a first pass at boot
+         (PP_FUNCSTAT_PRUNE=0 is the kill switch). Crash loss is
+         acceptable — perf stats, not ledger. The ONLY reader is the
+         per-fn "last run" widget, Crud.function_stat_last (newest
+         run by created_at DESC — the pre-031 ASC read returned the
+         FIRST-ever run and mislabeled it 'last run'). Legacy datum
+         rows (type_name='function_stat') were drained on prod
+         (replica-mode set-based deletes) and are inert — not
+         migrated, because samples are not ledger; operators may
+         drop residuals at will.
+    |))
+   )
+  )
+  (subsection ssh-interface
+   (doc "Deprecated: SSH access removed in single-image pivot")
+   (status deprecated)
+   (verify
+    (build "dune build @all")
+    (smoke "SSH access removed — use browser /repl or POST /api/eval"))
+   (details
+    (doc (|
+         The single-image pivot removed supervisor and SSH.
+         Interactive access is via:
+         - Browser REPL at /repl
+         - Agent API at POST /api/eval
+         - Optional line-protocol REPL on PP_REPL_PORT (if set)
+   |))
+   )
+  )
+  (subsection repl-endpoint
+   (doc "Image's internal REPL endpoint, not full SSH")
+   (status implemented)
+   (verify
+    (build "dune build image")
+    (smoke "define over the line REPL persists to the store; a second session sees it"))
+
+   (details
+    (doc (|
+         The image does NOT run an SSH server. It optionally
+         exposes a line-protocol REPL — a simple TCP socket
+         on PP_REPL_PORT (unset = no listener), intended as
+         an operator surface on a trusted network. The
+         primary interactive surfaces are the browser /repl
+         and POST /api/eval (both authenticated).
+
+         Protocol (minimal, framed):
+           - Connect: operator opens TCP to image:PP_REPL_PORT
+           - Auth: none on the socket itself — the port is
+             bound for operators only; do not expose it
+             beyond the trusted network
+           - Exchange: lines of UTF-8. User input flows
+             in; REPL output flows out.
+           - The image's session.ml tracks this connection
+             as a session; on disconnect, session ends.
+
+         The endpoint is in image/lib/repl_endpoint.ml.
+         It owns: accepting connections, wiring the stream
+         to the line editor (lineedit.ml), and the REPL
+         read-eval-print loop itself.
+   |))
+   )
+  )
+  (subsection repl-experience
+   (doc "What the user sees: prompt, multi-line, line editing, meta-commands")
+   (implements image/lib/lineedit.ml)
+   (status partial)
+   (* agent note (|2026-08-02 confirm partial: lineedit.ml is minimal read_line stub; linenoise history/cursor still TODO. browser-repl covers interactive UX.|) *)
+   (verify
+    (build "dune build image")
+    (smoke "define + apply works end to end through the REPL"))
+   (details
+    (doc (|
+         THE PROMPT:
+           alice/main>           -- showing user + current branch
+           alice/main (def) |     -- mid-multiline-define
+
+         READING INPUT:
+         - The REPL reads s-expressions. It keeps reading
+           lines until parens are balanced and strings
+           closed (standard Nopales REPL behavior). The
+           reader tells us 'incomplete' so we know to
+           prompt for more, not to evaluate yet.
+         - One REPL turn = one s-expression (which may
+           span many lines).
+         - Comments: ; to end of line, as in the reader.
+
+         LINE EDITING:
+         - Real line editing matters for a dev tool.
+           Raw SSH PTY + a line-editing layer.
+         - Library choice deferred to build time:
+           ocaml-linenoise is the leading candidate
+           (small, Mirage-compatible-ish). Pure OCaml.
+         - Supports: cursor movement, history (up/down),
+           Ctrl-A/E, backspace, delete.
+         - Search/history-reverse-search: nice-to-have,
+           not v1-blocking.
+
+         EVALUATION + PRINTING:
+         - Evaluate the s-expression in the session env.
+         - On success: pretty-print the resulting value.
+           VList -> (a b c), VLambda -> #<lambda>,
+           VRef -> #<ref event:uuid>, VInt -> 42, etc.
+         - On error: print the error with location if
+           possible (line/col from the reader), then a
+           continuation prompt. Don't kill the session.
+
+         META-COMMANDS (Nopales forms, not a separate
+         command lexer — the reader handles them, the
+         eval loop recognizes them as special forms):
+           (define name expr)         bind + persist to store
+           (edit name)                print htmx URL for AST editor
+           (fork parent child)        create a branch
+           (checkout branch)         switch session's branch
+           (merge source target)      reviewer flow
+           (describe 'type)           show type schema
+           (list-bindings)           current env
+           (load "file")              eval a file's contents
+           (help)                     list specials
+           Any other Nopales form        evaluate + print result
+
+         SESSION STATE:
+         - (define ...) persists to the store: survives
+           image reboot (loaded on next boot of the
+           branch).
+         - REPL-local let bindings (e.g. (let ((x 5))
+           ...) at top level): session-local, not
+           persisted. Like bash variables.
+         - Switching branch (checkout) within a session
+           keeps REPL locals but changes which function
+           defs are visible. (Decision: this is the
+           'working directory' model — you carry your
+           locals across branch switches.)
+   |))
+   )
+  )
+  (subsection htmx-interface
+   (doc "User routes accept GET and POST; request context available via dynamic-binding prims. bible/* and other handler-only fns now guarded (require_request raises Interp_error User_error on direct /api/eval; api_eval catches as clean JSON error — fixes inbox c5-1054).")
+   (implements image/lib/http.ml image/lib/session.ml image/lib/primitives.ml image/lib/prims_request.ml)
+   (status implemented)
+   (* agent note (|2026-08-02: request-method/param/params + redirect prims; user routes GET/POST via http.ml; auth/lib/http.ml path retired (in-process).|) *)
+   (verify
+    (build "dune build image")
+    (smoke "POST user route hits same path handler; (request-method) => POST")
+    (smoke "POST form-urlencoded body: (request-param \"title\") returns field")
+    (smoke "GET query: (request-param \"q\") returns query value")
+    (smoke "multipart route POST: (request-multipart) parses the file part; urlencoded bodies still capped at 64 KiB; multipart capped at the media ceiling")
+    (smoke "(media-put-raw \"audio/wav\" bytes \"t.wav\") inside a route handler stores a >256 KiB blob; media-put still enforces 256 KiB")
+    (smoke "(redirect \"/todos\") => 303 Location: /todos")
+    (smoke "POST /api/recipe/todo then POST /todos title=… creates row + redirects; GET /todos lists it"))
+   (details
+    (doc (|
+         The image's htmx endpoint serves two kinds of pages:
+
+         1. SYSTEM pages (always present, part of the OCaml image):
+            /health            health check
+            /inspect/binding/<name>  pretty-print one function_def's AST
+            /inspect/row/<type>/<id> browse any stored value
+            /branches          list + fork/merge UI
+            /types             type browser (type_defs)
+            /data …            data rows browser (full CRUD;
+                               see image.data-browser)
+            /bindings          function browser (per branch)
+
+         2. USER pages (defined as functions in the store):
+            registered via (route "/path" fn-name).
+            The route handler runs with a REQUEST CONTEXT
+            (method, path, params) and returns a value the
+            system renders (HTML, redirect, text, etc).
+
+         Routes ARE functions in the store. Adding a route
+         = (route "/foo" 'foo-handler). This makes the
+         user-facing UI part of the live image, editable
+         via the same mechanisms as everything else.
+
+         ROUTE VISIBILITY:
+         User routes default private (session required).
+         (route path handler 'public) opts into anonymous GET.
+         Kernel paths (/data /admin /api/eval /bindings /edit …)
+         are hard-private in OCaml and cannot be opened by Nopales.
+         Gate runs before handler dispatch.
+
+         pure-html (the dream_html HTML generation core,
+         usable WITHOUT Dream) is used for HTML generation
+         (use Hx.* not raw strings at the OCaml layer).
+
+         REQUEST CONTEXT (dynamic, handler-scoped):
+         Zero-arg handlers keep working: (define hi-page (lambda () (render-html "…")))
+         Interactive handlers read request via prims while the
+         HTTP dispatch is inside call_handler:
+           (request-method)     -> VStr \"GET\" | \"POST\"
+           (request-path)       -> VStr path without query
+           (request-param k)    -> VStr value | VNil if missing
+           (request-params)     -> VStr JSON object of all params
+           (request-body)       -> VStr raw body (\"\" on GET)
+           (request-multipart)  -> VList of (name filename content-type
+                                   data) string lists; VNil fields when
+                                   the part omits them; raises
+                                   User_error on non-multipart requests
+                                   or a malformed body. Added for
+                                   package upload flows (music): the
+                                   multipart route-POST body cap is the
+                                   media ceiling (64 MiB audio + slack,
+                                   http.route_body_cap); urlencoded and
+                                   other bodies keep the 64 KiB form
+                                   cap. Store the file part via
+                                   (media-put-raw type bytes [filename])
+                                   — like media-put but RAW bytes and
+                                   the type-aware HTTP ceiling instead
+                                   of the 256 KiB eval ceiling.
+
+         HANDLER RETURN VALUES:
+         1. render-html tagged VStr (__html__:…)
+            -> 200 text/html, body = raw HTML inside chrome
+         2. bare VStr -> 200 text/html, <p> escaped text
+         3. other values -> 200 text/html, <pre> pp_value
+         4. (redirect path) -> tagged VStr __redirect__:path
+            -> HTTP 303 See Other, Location: path, empty/minimal body
+            Path must be absolute-on-host.
+   |))
+   )
+  )
+
+  (subsection http-robustness
+   (doc "HTTP server robustness under load, peer disconnect, and DB liveness")
+   (implements image/lib/http.ml image/lib/http_core.ml image/lib/http_agent.ml image/lib/http_data.ml image/lib/http_branches.ml image/lib/session.ml image/lib/session_types.ml image/lib/io_eio.ml image/lib/store_db.ml image/lib/request_context.ml image/lib/fd_gauge.ml scripts/rc.d/pricklypear scripts/openbsd/pricklypear-watchdog.ksh scripts/openbsd/pricklypear-promote.ksh)
+   (status implemented)
+   (* agent note (|2026-08-02: closed-writer swallow, request_mutex narrowed to gate, page-work queue, Store.health_check on /health, http_robust tests present.|) *)
+   (verify
+    (build "dune build image")
+    (smoke "abort N concurrent requests mid-response; image stays up, /health 200 throughout")
+    (smoke "open SSE /api/agent stream, disconnect client; no Fatal error in image.log, process pid unchanged")
+    (smoke "fire M concurrent mixed routes (page + SSE + /api/eval); all complete or peer-gone, zero process exits")
+    (smoke "GET /health returns ok:true only when SELECT 1 on store succeeds; ok:false + non-2xx when DB path is dead")
+    (smoke "rcctl check fails when /health reports ok:false; watchdog restarts a live-but-poisoned image")
+    (test "image/test/http_robust_test.ml — closed-writer guard returns () not raises; catch-body does not re-write to dead writer")
+    (test "image/test/io_eio_test.ml — Sequencer.enqueue survives a raised SQL-like exception and subsequent enqueue still runs"))
+   (details
+    (doc (|
+         The httpaf body writer raises
+         Failure("cannot write to closed writer") when you write
+         to a response whose client has disconnected. On a
+         single-image process, one uncaught closed-writer
+         exception is a process exit. These invariants make a
+         peer-disconnect a non-event, and define the concurrency
+         model so the server does not serialize all traffic
+         behind one lock.
+
+         =========================================================
+         INVARIANT 1 — PEER-DISCONNECT IS NEVER FATAL
+         =========================================================
+         Every code path that writes an HTTP response body MUST
+         tolerate a closed/gone writer by returning () (or a
+         benign `Peer_gone signal), never by raising. A client
+         closing its tab is the single most common event on a web
+         server; it must not take the process down.
+
+         Mechanism (http_core.ml):
+
+           - is_closed_writer_exn : exn -> bool
+           - safe_respond_with_string : respond_with_string
+             wrapped; swallows the closed-writer Failure
+           - safe_close_writer : close_writer wrapped;
+             swallows the closed-writer Failure
+
+         EVERY response helper routes through the guarded
+         path: html_response, text_response, json_response,
+         fragment_response, redirect_response.
+
+         The httpaf error_handler (http.ml error_handler) writes
+         unguarded via Body.write_string + close_writer; it MUST
+         be guarded the same way — it runs on connection-level
+         errors where the peer is very often already gone.
+
+         =========================================================
+         INVARIANT 2 — ERROR RECOVERY MUST NOT RE-WRITE A DEAD WRITER
+         =========================================================
+         launch's Lwt.catch exception branch (http.ml) currently
+         responds to a handler failure by calling html_response
+         ... ~status:`Internal_server_error on the same reqd. If
+         the original failure was a closed-writer (peer gone), the
+         recovery write fails the same way and escapes the catch.
+
+         Rule: the catch branch MUST detect the closed-writer case
+         (is_closed_writer_exn on the caught exn) and, instead of
+         rendering a 500 page, just safe_close_writer the
+         (already-dead) writer and return. Only when the writer
+         is still alive do we render the 500 error page.
+
+         Concretely: in the (fun exn -> ...) handler, branch:
+           if is_closed_writer_exn exn -> safe_close_writer; Lwt.return_unit
+           else -> Ops_incidents emit + html_response 500
+         This breaks the throw-in-the-catch loop that would
+         otherwise turn one peer-disconnect into a process exit.
+
+         =========================================================
+         INVARIANT 3 — ui/nav FAILURE IS NOT PER-REQUEST NOISE
+         =========================================================
+         refresh_ui_shell runs on every request (http.ml launch).
+         When ui/nav is broken on the branch it logs a [warn]
+         line PER REQUEST — under HN traffic this produced
+         hundreds of warn lines and wasted a Nopales eval per page.
+
+         Rule: refresh_ui_shell MUST cache its failure state per
+         branch (at least short-TTL in-memory): once ui/nav has
+         failed on a branch, do not re-attempt and re-warn on every
+         request; downgrade to a single debug line (or a periodic
+         retry on the order of minutes, not per-request). The
+         emergency chrome fallback already serves the page; the
+         spam is pure waste. This is not a crash fix but a
+         log-hygiene + cost fix surfaced by the same incident.
+
+         =========================================================
+         INVARIANT 3.5 — INCIDENT AUTO-FILING IS ASYNC, NOT IN THE
+         REQUEST FIBER (2026-08 incident-write amplification)
+         =========================================================
+         A repeating route failure (e.g. ui/home unbound on a
+         branch) used to call Ops_incidents.emit_and_maybe_file on
+         EVERY page hit: a synchronous Crud.create (+ tree-mirror
+         trigger writes + a TODO row) inside the request fiber,
+         multiple serialized PG round-trips per request — observed
+         as GET / taking 10-40s with DB writes mid-request.
+
+         Rule: Ops_incidents buffers events in an in-process ring
+         (dedup by fingerprint, count++ coalescing as today); a
+         background fiber flushes the ring at most once every N
+         seconds. Request-path cost of auto-filing is a ring push
+         ONLY — zero DB ops. One repeating bug = one incident row +
+         one TODO total, not one per page view.
+
+         =========================================================
+         INVARIANT 4 — CONCURRENCY: IDENTITY ATTACH IS SERIALIZED,
+         PAGE WORK IS NOT (immutable-env + narrowed mutex)
+         =========================================================
+         Status quo: a single global request_mutex
+         (http_core.ml) is held for the ENTIRE request lifecycle
+         — identity resolve, classify, refresh_ui_shell, AND
+         page_fn (including slow LLM/SSE streaming). This serializes
+         the whole site to one-request-at-a-time and, worse, lets
+         one streaming agent chat block /login and / for everyone.
+
+         The naive fix (just release the mutex before page_fn) is
+         UNSAFE because Session.t is one shared mutable record and
+         page work reads two shared mutable fields:
+           (1) t.env — rehydrate does Hashtbl.clear t.env.bindings
+               IN PLACE. VLambda closures capture env by reference
+               (env = { bindings: Hashtbl.t; parent }), so a
+               concurrent rehydrate during page eval would empty the
+               binding table an in-flight lambda is reading through
+               its captured env -> unbound-var mid-page.
+           (2) t.manifest — attach_identity mutates t.manifest in
+               place; prims (crud, agent) read t.manifest.username
+               live via the !t ref they close over. A concurrent
+               other-user attach would flip the username mid-page
+               -> wrong-user attribution for writes.
+
+         RULE (two parts):
+
+         4a. IMMUTABLE-ENV REHYDRATE (the correctness prerequisite).
+             rehydrate MUST NOT mutate the existing env's binding
+             table in place. Instead it builds a FRESH env record
+             (new Hashtbl, same parent chain) and swaps
+             Session.t.env to point at it. Session.t.env becomes a
+             mutable field. The OLD env record stays intact for the
+             lifetime of any VLambda closure that captured it, so a
+             concurrent rehydrate cannot corrupt an in-flight page's
+             captured environment. This is the foundation that
+             makes any mutex-narrowing safe.
+
+         4b. NARROWED MUTEX. request_mutex protects ONLY the
+             identity-attach critical section (resolve_identity +
+             attach_from_user / attach_anonymous + classify + the
+             post-attach refresh_ui_shell). The mutex is released
+             BEFORE page_fn runs. Page work — user-route handlers,
+             /api/eval, and the agent SSE streaming loop — runs
+             WITHOUT the global lock, against the (now-immutable)
+             env captured by closures.
+
+         4c. PER-REQUEST CONTEXT (fix for BORGE-1784434193 cotenant
+             race). After the identity gate, a fresh Request_context.t
+             is built from the attached manifest/env/routes and passed
+             to all page work. Prims and dispatch read the context
+             instead of live Session.t fields. Anonymous attach can
+             no longer flip an in-flight personal-branch page.
+
+             SUPERSEDED ROOT CAUSE (image.per-identity-sessions):
+             the cotenant race existed because ONE Session.t was
+             shared across identities. With per-identity sessions,
+             attach no longer mutates a session another request is
+             reading; Request_context stays as the snapshot
+             discipline, but 4a's fresh-env-swap requirement ceases
+             to be load-bearing for cross-user safety (still useful
+             for same-session rehydrate during long page work).
+
+  (subsection per-request-context
+   (doc "Request_context.t + dynamic binding to eliminate cotenant race")
+   (status partial)
+   (* agent note (|2026-08-02 confirm partial: Request_context.t snapshots manifest+env+copied routes; prims use dynamic binding. Remaining: store on context (phase 3) + full prim audit.|) *)
+   (implements
+     image/lib/request_context.ml
+     image/lib/http.ml
+     image/lib/session.ml
+     image/lib/primitives.ml
+     image/lib/crud.ml)
+   (verify
+     (build "dune build image")
+     (smoke "admin/personal route survives concurrent anonymous attach")
+     (test "image/test/http_robust_env_test.ml extended for manifest isolation"))
+   (details
+    (doc (|
+         Shipped mechanism (direct-style, post-H1):
+         - Request_context.t record (manifest snapshot, env, routes, store, request)
+           in image/lib/request_context.ml.
+         - Request_context.current is a dynamically-bound per-request
+           snapshot; prims read the snapshot, not the live shared
+           Session.t ref. with-public-write re-binds an elevated
+           context for the body so static gate and runtime guard agree.
+         - Route dispatch reads context.routes; page work after the
+           attach gate runs against the snapshot, so a concurrent
+           anonymous attach cannot swap the manifest mid-render.
+         - Session.t still used for attach gate + rehydrate/checkout_to.
+         - The earlier plan to change the prim ABI to
+           Request_context.t -> value list -> value Lwt.t is retired:
+           H1 made the prim ABI direct-style (prim_fn = value list ->
+           value, Control.perform_prim) and the context travels by
+           dynamic binding instead of an explicit first argument.
+         - Remaining: full env/routes snapshot isolation depth and the
+           audit that every prim reads the snapshot (phase 2).
+    |))
+   )
+
+         
+
+         SCOPE / MULTI-TENANT CAVEAT (honest): the manifest race
+         (4b concern 2) is NOT fully closed by this work. Prims
+         still read t.manifest live via the !t ref. This is safe
+         ONLY while concurrent requests share one identity (one
+         authed user, plus anonymous traffic sharing
+         manifest.username=anonymous): t.manifest reads during
+         page work then cannot attribute a write to the wrong
+         user. Cotenant operation with DISTINCT authed users
+         concurrent needs a per-request manifest context threaded
+         through the prim dispatch so prims read the request's
+         manifest, not the shared record. That is deferred to a
+         follow-up borge issue (ABI surgery on prim_fn; not a
+         crash/throughput fix). Until it lands, cotenant hosting
+         of multiple simultaneously-active users carries this
+         documented caveat.
+
+         The single shared Postgres connection (Store.t.conn)
+         remains a throughput ceiling, NOT a correctness risk under
+         the narrowed mutex: pgx_lwt serializes all operations on a
+         connection internally via its per-connection Sequencer
+         (type t = conn Sequencer.t; every execute/with_transaction
+         goes through Sequencer.enqueue = Lwt_mutex.with_lock on a
+         per-connection mutex). Concurrent Pg.execute calls on the
+         same conn therefore QUEUE safely — no wire interleave, no
+         corruption. So narrowing request_mutex does NOT require a
+         separate db_mutex: DB prims stay correct (serialized by pgx)
+         and page rendering (Nopales eval, HTML build — the slow part)
+         runs lock-free. The single conn is still a throughput
+         ceiling (a pool is a separate later iteration), but it
+         cannot corrupt under concurrency.
+
+         =========================================================
+         INVARIANT 5 — ACCEPT-SIDE CONNECTION CAP
+         =========================================================
+         Status quo: serve (http.ml) calls
+         Httpaf_lwt_unix.Server.create_connection_handler with no
+         limit and Lwt_io.establish_server_with_client_socket with
+         no backlog/fd cap. Under a spike the accept loop can
+         exhaust fds or memory even after crashes are fixed.
+
+         Rule: gate the acceptor on a bounded semaphore (an
+         Lwt_semaphore or a counter with a max, default 256
+         in-flight requests, configurable via PP_HTTP_MAX_INFLIGHT).
+         Requests beyond the cap are rejected early with a 503
+         (or simply not accepted until a slot frees). This bounds
+         fd/memory usage to a known ceiling regardless of traffic.
+         The cap is a safety valve, not a throughput target —
+         normal load should be well under it.
+
+         NOTE: this is defense-in-depth on top of the crash fix.
+         The crash fix (invariants 1-3) is what stops the death
+         loop; the cap (invariant 5) plus the mutex narrowing
+         (invariant 4) are what make the server survive the next
+         traffic spike on throughput, not just on not-crashing.
+
+         PER-IDENTITY FAIR-SHARE (card 1bdeb856): the single global
+         256 cap is a SAFETY valve, not a fair allocator. One
+         authenticated tenant can park ~256 in-budget-but-slow evals
+         — (sleep 60) chains are in-budget — and starve every other
+         tenant, including anonymous public routes queued behind the
+         same gate. security.borg budgets-are-security argues limiter
+         units should be THE RESOURCE, so a small per-identity
+         concurrent-eval bucket (default 4,
+         PP_HTTP_MAX_INFLIGHT_PER_USER; <=0 disables) is checked IN
+         ADDITION to the global cap, ACQUIRED BEFORE it so a tenant
+         cannot occupy every global slot while waiting. The key is
+         derived pre-identity from the presented credential (hash of
+         session cookie / Bearer token; Basic username; else source
+         ip; else "anonymous"), so the raw secret is never stored and
+         the credential IS the identity for gating.
+
+         =========================================================
+         INVARIANT 6 — EIO PG SEQUENCER MUST NOT PERMANENTLY POISON
+         =========================================================
+         Incident 2026-07-22 (pricklypear.rocks): under PP_IO=eio the
+         live image kept serving /health 200 while every auth/DB call
+         failed with Eio__Eio_mutex.Poisoned(_). Login and Basic auth
+         both surfaced as "Invalid username or password" because
+         auth_store.password_hash_for_user catches all exceptions and
+         returns None. The process stayed up for days; the watchdog
+         never fired because /health never touched the DB.
+
+         Root cause: Io_eio.Pgx_io.Sequencer.enqueue used
+         Eio.Mutex.use_rw ~protect:true. Eio documents that use_rw
+         DISABLES the mutex forever if fn raises — any SQL error
+         (or cancel) permanently kills the single shared PG conn
+         sequencer. Subsequent enqueues raise Poisoned.
+
+         Rule: the pgx Sequencer critical section MUST unlock on
+         exception (use_ro-style unlock-and-re-raise), while still
+         using Cancel.protect so cancellation cannot leave the
+         wire mid-message. Do NOT call use_rw for the sequencer:
+         a raised Pgx/PostgreSQL error does not mean the mutex
+         resource invariant is broken — the connection protocol
+         recovers; only the operation failed. Optional later:
+         detect hard I/O death and reconnect Store.t.conn; that is
+         separate from not poisoning the lock.
+
+         Mechanism (io_eio.ml Sequencer.enqueue):
+
+           lock; Cancel.protect (fun () -> f v); unlock
+           on exception: unlock; re-raise
+
+         Never poison. Never leave the mutex locked.
+
+         =========================================================
+         INVARIANT 7 — /health PROBES DB LIVENESS AND CONTENTION
+         =========================================================
+         /health remains hard-public and outside the inflight page
+         cap (invariant 5 note). But "ok" MUST mean the image can
+         still talk to Postgres on the store path used by auth and
+         prims — not merely "process is alive and JSON encodes".
+
+         Rule:
+           - GET /health runs SELECT 1 (Store.health_check) on
+             Session.store via the same dual-conn exec path, PLUS a
+             cheap, lock-free contention probe (Store.health_check_deep)
+             reading pg_stat_activity DB-wide: backends blocked on a
+             lock (pg_blocking_pids non-empty) and backends idle in
+             transaction older than 30s (BORGE-1790987437). "Same store
+             path" means the write/lock contention domain, not only a
+             no-lock SELECT 1 — a leaked tx held tree-write locks for
+             ~30min (2026-10-02) while SELECT 1 stayed green.
+           - On success: HTTP 200, {"ok": true, ... error: null}.
+           - On failure (no conn, query error, Poisoned residual,
+             timeout): HTTP 503, {"ok": false, error: "..."}.
+           - Contention: blocked_backends > 0 OR idle_in_tx > 0 flips
+             /health to 503 ("lock pileup …" / "leaked transaction …")
+             so the watchdog and promote gate act on a wedge instead of
+             waiting it out. Both counts are reported additively in the
+             health JSON (old consumers ignore them).
+           - Cheap: two quick round-trips; must not take request_mutex
+             or the inflight page semaphore. The probe takes no locks
+             and is bounded by the catalog; it cannot queue behind page
+             work (invariant 5).
+           - rc.d rc_check and the promote health loop MUST match
+             ok:true (not merely the substring "ok" — "ok": false
+             must fail the check).
+           - Watchdog: when rcctl check fails, stop/kill stale
+             image (pidfile + pkill -U runtime user on bin/image)
+             then start. Plain rcctl start is insufficient when a
+             live-but-poisoned process still holds :18080 without a
+             usable pidfile (EADDRINUSE on start).
+           - rc_stop / promote restart path: always clear the port
+             before start (pkill runtime image; rm stale pidfile).
+
+         This closes the class of failures where the accept loop
+         is healthy but the DB mutex/conn is dead — the failure
+         mode that locked out all logins while looking green.
+
+         =========================================================
+         INVARIANT 8 — FD USAGE IS OBSERVABLE BEFORE IT FAILS
+         =========================================================
+         Incident 2026-10-02 (pricklypear.rocks): the image wedged
+         ~16min with accept() dying on Eio.Io ("Too many open
+         files") while /health still answered 200 — the count was
+         invisible until it was fatal, so nothing warned first.
+         The process soft limit was the generic daemon class's
+         openfiles-cur=128, BELOW the accept-side cap (invariant 5,
+         default 256): a burst could exhaust fds before the cap was
+         ever reached.
+
+         Rule:
+           - /health reports open_fds + fd_limit (additive; an old
+             image omits them, parsers default to 0).
+           - A boot fiber logs one gauge line per minute and raises
+             an Ops_log warning at 75% of the soft limit.
+           - The service login class must sit ABOVE the accept-side
+             cap: /etc/login.conf.d/pricklypear sets
+             openfiles-cur/max=1024 (rc.subr selects a per-service
+             class; postgresql precedent). The promote script
+             installs it idempotently.
+           - Counting: OpenBSD /dev/fd is a static 64-entry table,
+             not a per-process view — the gauge fstat-sweeps fd
+             numbers up to the soft limit.
+           - Promote's health probe is BOUNDED (curl -m 5) exactly
+             like rc_check: an unbounded probe could block the gate
+             past its whole 120s budget on a wedged-but-listening
+             image (2026-09-08 lesson).
+
+   |))
+   )
+  )
+  (subsection primitives-layer
+   (doc "image/lib/primitives.ml: the impure fns registered at boot")
+   (implements image/lib/primitives.ml image/lib/crud.ml image/lib/session.ml pure/prims_pure.ml image/lib/prims_time.ml image/lib/prims_crypto.ml image/lib/prims_db.ml image/lib/prims_net.ml image/lib/prims_media.ml image/lib/prims_graph.ml image/lib/prims_request.ml image/lib/call_graph.ml)
+   (status implemented)
+   (verify
+    (build "dune build image && cd lisp && dune build && dune runtest")
+    (test "image/test/primitives_test.ml 48 alcotest cases; lisp/test/eval_test.ml 30 pure tests"))
+   (details
+    (doc (|
+         See lisp-interpreter.primitives for the full
+         primitive list. This subsection covers the IMAGE
+         layer's responsibility: registering them with
+         the interpreter at boot.
+
+         The interpreter is pure and knows nothing about
+         Postgres, htmx, or SSH. The IMAGE layer:
+         1. Opens a Postgres connection (v1: pgx_lwt +
+            custom Io_unix shim; Solo5 later may use
+            pgx_lwt_mirage behind the same Store.t).
+         2. Constructs an initial env with VPrim values
+            bound to names like 'get', 'create', etc.
+         3. The interpreter's Prim call dispatches by name
+            to the OCaml function the image registered.
+         4. Each primitive handles its own transaction
+            (SERIALIZABLE by default) and permission
+            checks (per multi-user.permissions; author-
+            scoped filtering still partial).
+
+         This separation is what makes the interpreter
+         testable without any services running (pure
+         lisp/test/eval_test.ml, no DB, no HTTP).
+
+         v1 SHIPPED registration path: real.
+         Kernel I/O prims shipped (Effect.pure_prims / Net):
+           http-get (Net; admin/agent), xml-parse, html-decode,
+           parse-date, url-encode/decode, sha1, string helpers,
+           random-uuid, now, now-ms, now-iso, sleep (Lwt, max 60s/call).
+         DEFERRED: Solo5 pgx path; host cron/scheduler table.
+
+         define-docstring (lisp-interpreter): image registers
+         (function-doc name) and wires Store.persist_function
+         ?doc so top-level define can document bindings into
+         function_defs.doc. See that subsection for surface
+         syntax and redefine/clear rules.
+   |))
+   )
+  )
+  (subsection stdlib-round-2
+   (doc "sort: the one pure prim market-data packages actually lack (BORGE-1788622799 resolution). Recon: the rest of the wishlist already shipped — min/max/abs/nth/mod; find-rows (crud.ml) is the server-side filtered row fetch, i.e. the dataframe duty at the SQL layer; and the whole ?-suffix predicate family (string-contains?, string-starts-with?, equal?, reverse, length, ...) predates this — it was invisible to doc inventories because AGENTS.md's prim list is v1-stale and regexes dropped the question marks. No rows-where, no columnar frame VM in the kernel: Postgres + the OCaml bench are the heavy tiers (borge/upsets.borg two-tier compute).")
+   (status implemented)
+   (verify
+    (build "dune build @all (lisp + image + client)")
+    (test "image/test/primitives_test.ml: sort numeric/string/mixed-error (8 cases)")
+    (smoke "(sort (list 3 1 2)) => (1 2 3) on the image (eval or /repl)"))
+   (* agent note (|2026-09-05 plan+make in one cycle (operator directed): issue BORGE-1788622799 asked for sort/min/max/abs/string-contains/rows-where; recon shrank it to sort ALONE — min/max/abs/nth/mod ship, string-contains? ships (the ?-suffix predicate family was invisible to doc inventories), find-rows (crud.ml) is the server-side filtered rows fetch. sort implemented in pure/prims_pure.ml (prim_sort: stable ascending, numeric or lexicographic, mixed kinds User_error), registered in primitives.ml, 8 alcotest cases in image/test/primitives_test.ml (196 total green), smoke-verified live on the dev lab image (dune rebuild + restart required — a running image does not hot-load prims).|) *)
+   (details
+    (doc (|
+         SURFACE (additive — lisp-interpreter.frozen-surface
+         additive rule):
+           (sort lst)               ; stable ascending; all-number lists
+                                    ; sort numerically (int/float mixed),
+                                    ; all-string lists lexicographically;
+                                    ; mixed kinds are a User_error
+
+         NON-GOALS (recorded so they stay non-goals): no comparator
+         argument (compose in Nopales when a custom order is needed);
+         no kernel dataframe / columnar frame construct — the database
+         is the query engine and the OCaml bench is the heavy tier;
+         no raw sql prim (it would bypass branch scoping and break
+         multi-user isolation).
+         |)))
+  )
+  (subsection outbound-http
+   (doc "(http-post url headers-json body) — send-side sibling of the shipped http-get. Same curl-backed shape, same gate, same payload contract. The first consumer is notify.ntfy-delivery (lock-screen push from jobs schedules).")
+   (status planned)
+   (* agent note (|2026-12 plan pass: daily-scripture campaign. The Net effect tag already exists in the lattice (lisp/lib/effect.ml tag 8; net_prims = [http-get]); http-get is shipped (prims_net.ml, curl-backed, admin/agent-only). http-post is the additive send half.|) *)
+   (verify
+    (build "dune build image")
+    (smoke "(http-post \"http://127.0.0.1:18080/health\" \"{}\" \"x\") as admin returns a payload dict with ok/status/body")
+    (smoke "anonymous + non-admin/non-agent caller -> denied Prim_error, same gate as http-get")
+    (smoke "unreachable host raises transient Prim_error (curl (7) ...), NOT a payload dict")
+    (smoke "(ntfy/send ...) from a jobs schedule delivers (integration smoke with notify.ntfy-delivery)"))
+   (details
+    (doc (|
+         SURFACE (one prim, additive — lisp-interpreter.frozen-surface
+         additive rule):
+           (http-post url)                          ; empty headers, empty body
+           (http-post url headers-json)             ; body = \"\"
+           (http-post url headers-json body)        ; full form
+
+         SEMANTICS: the EXACT http-get contract, send half:
+           - Curl-backed (do_http_get's shape in prims_net.ml):
+             -X POST --data-binary @body_tmp, same temp-file dance,
+             same shell_quote discipline, same -D/-o split.
+           - headers-json: same \"Assoc string->string\" format as
+             http-get; \"_timeout_ms\" reserved header honored the
+             same way (default 20000).
+           - Returns the SAME payload dict VStr:
+             {ok, status, headers, body, err, kind}; 4xx/5xx are
+             returned (kind = http-client-error / http-server-error),
+             never raised.
+           - status=0 / curl transport error RAISES Prim_error
+             transient (design note §4b), so guard handlers and the
+             jobs runner's attempts/backoff see a real failure.
+           - Effect: Net. Add \"http-post\" to net_prims in
+             lisp/lib/effect.ml (additive tag use; lattice unchanged).
+
+         GATE (unchanged from http-get): identity confinement, not host
+         confinement. anonymous -> denied; non-admin, non-*/*agent ->
+         denied (\"admin/agent/human only\"). Rationale carried from
+         http-get: SSRF risk is bounded by who may call, not by a
+         destination allowlist. Host allowlist (PP_HTTP_ALLOW_HOSTS)
+         stays DEFERRED — name it here so nobody thinks it shipped:
+         if outbound http ever opens to non-admin users, an allowlist
+         lands first.
+
+         NON-GOALS (v1): http-request general method surface (PUT/PATCH
+         /DELETE) — add when a consumer needs it, same shape;
+         streaming/chunked bodies; connection reuse; a native Eio
+         client replacing curl (the deps for tls-eio already build on
+         the image for remote/'s client, but curl is honest and
+         shipped — port only if curl's process-spawn cost measurably
+         hurts, e.g. notify fan-out loops).
+    |))
+   )
+  )
+  (subsection system-browser
+   (doc "The live environment UI: browse branches, functions, types as a place you live")
+   (status implemented)
+   (* agent note (|2026-08-02: /bindings /pages /types live; ui/nav shell; live GET /bindings?pkg=todo + /pages 200.|) *)
+   (verify
+    (build "dune build image")
+    (smoke "GET / shows user+branch chrome and links to about/functions/repl")
+    (smoke "product nav comes from (ui/nav) when shell loaded; not silent OCaml product twin")
+    (smoke "product CSS comes from (ui/css) / ui/theme when shell loaded; not silent full OCaml design-system twin")
+    (smoke "nav has no /edit/hello; Pages links to /pages")
+    (smoke "GET /pages columns: page URL + handler function")
+    (smoke "GET /page/hello shows route + handler + callee list")
+    (smoke "GET /bindings lists packages including (kernel) and (root)/workspace pkgs")
+    (smoke "GET /bindings?pkg=(kernel) lists primitives e.g. create, +")
+    (smoke "GET /bindings?pkg=(kernel)&fn=create shows read-only prim docs")
+    (smoke "GET /bindings?pkg=todo lists todo/* functions")
+    (smoke "GET /bindings?pkg=todo&fn=list shows function detail + edit link")
+    (smoke "GET /bindings?q=todo filters; mobile-width usable (nav wraps)")
+    (smoke "define todo/list + call (todo/list); used-by shows /todos when routed")
+    (smoke "function detail shows Callers + Callees panels from shared graph")
+    (smoke "function detail links Impact / Changes / Inspect / Edit")
+    (smoke "wide desktop: three panes packages|functions|detail when viewport wide"))
+   (details
+    (doc (|
+         VOCABULARY (must not conflate):
+         - Page / endpoint = route URL (e.g. /hello)
+         - Function = named binding (e.g. hi-page or todo/list)
+         - Package = in-branch name prefix (todo/), NOT a branch
+         - Branch = versioned code world (system/main)
+         A page RUNS a function; you EDIT functions, OPEN pages.
+         Packages ORGANIZE functions inside one branch.
+
+         ==========================================================
+         SMALLTALK COMBO PACK — browser is the hub
+         ==========================================================
+         Steal five things; they compound through THIS surface:
+
+           1. Senders + change impact  → image.inspector
+           2. Branch change set        → branching.change-set
+           3. Value + closure inspect  → image.inspector (shipped+)
+           4. doesNotUnderstand holes  → image.dnu-stubs
+           5. Three-pane package browser → THIS section
+
+         Shared spine (do not rebuild per feature):
+           - static App-Var graph (collect_var_apps + reverse)
+           - define/install hooks (persist_define + impact + transcript)
+           - AST pretty / inspect routes already on host UI
+
+         The browser is where a human or agent LIVES: pick a package,
+         open a function, see callers/callees/routes/impact/holes,
+         jump to edit or inspect, open branch changes. Not five apps.
+
+         v1 SHIPPED:
+         - Chrome: whoami, branch, uptime, nav
+         - Home entry points + AI propose form
+         - /about concepts guide
+         - /pages list + /page/<path> inspector
+         - Flat /bindings table (name, effects, author, edit, inspect)
+         - Mobile three-step drilldown (?pkg=&fn=)
+
+         FUNCTIONS BROWSER (/bindings) — Smalltalk-ish drilldown:
+
+         PHILOSOPHY:
+         - Majority of programs are Nopales bindings in function_defs.
+         - Kernel primitives are OCaml (performant, trusted); still
+           BROWSABLE so the system is legible, but read-only.
+         - Optional future: mark some OCaml modules as "image libs"
+           for hot paths; not required for this cut.
+
+         MOBILE FIRST (three-step drilldown, not three columns):
+         URL state via query params (works on phones):
+           Step 1  GET /bindings
+                   → list packages only (big tap targets)
+                   Always includes virtual package "(kernel)"
+                   Workspace packages from prefix grouping + "(root)"
+           Step 2  GET /bindings?pkg=todo
+                   → list functions in that package
+                   Kernel: list prim names in catalog
+           Step 3  GET /bindings?pkg=todo&fn=list
+                   → detail pane (DETAIL CONTRACT below)
+                     workspace OR read-only kernel doc (primitives)
+         Back links: Functions → package → (back to packages).
+         Mobile stacked drilldown remains canonical at ~390px.
+
+         DESKTOP THREE-PANE (combo pack — same URLs, wider layout):
+           When viewport ~900px+, ONE page MAY show three columns:
+             left: packages | middle: functions in pkg | right: detail
+           Selection still ?pkg=&fn= (shareable, no SPA). htmx MAY
+           refresh middle/right; full GET without JS still correct.
+           Do not force three columns on phones.
+
+         DETAIL CONTRACT (step 3 / right pane) — compounds the pack:
+           Workspace function_defs always show:
+             - kind, effects, author, updated
+             - source pretty + Inspect AST/JSON
+             - [Edit] → /edit/<name>
+             - Callers (direct reverse) + Callees (direct forward)
+               from image.inspector shared graph helpers
+             - Used-by routes via used-by-routes on DETAIL only
+               (package index stays handler-direct — no N*depth)
+             - Impact badge if name pending in impact-queue
+             - Holes: unbound App Vars (image.dnu-stubs) + [Stub]
+             - Link to branch Changes when name is own-row override
+           Kernel prims: read-only docs only (no Edit/Stub).
+
+         KERNEL CATALOG:
+         - Virtual package name: "(kernel)" (not a real binding prefix)
+         - Source: prim registry + short docs (name, summary, effects)
+         - Kind badge: primitive | function
+         - No Save on primitives; link to About/docs if needed
+
+         WORKSPACE (existing + keep):
+         - Group by package_of_name; search q=; author filter
+         - used-by pages; create package+local form
+         - Edit only for function_defs rows
+
+         UI SHELL AS LISP (authoritative):
+
+         RULE: If a human thinks of it as "the environment UI"
+         (navbar, home workspace, app menus), it is Nopales on a
+         branch — not a parallel OCaml product skin.
+
+         - Product shell bindings (required when seed runs):
+             ui/menu   — menu tree (prefer zero-arg lambda that
+                         returns a list; eager lists are fragile
+                         if they call menu/* at define-time)
+             ui/nav    — (lambda () (render-html (menu/bar …)))
+             ui/home   — (lambda () …) home body HTML
+             ui/theme  — css/sheet data (tokens + rules); Nopales,
+                         not a CSS string blob
+             ui/css    — (lambda () (css/render ui/theme))
+                         adapter only; session caches its string
+         - libs/ui/lib.pp seeds system/main (load-library "ui" /
+           seed_stdlib). Personal may pin overrides; inherit main
+           when no pin. Prefer thunks over eager value pins.
+         - Chrome nav uses (ui/nav); GET / uses (ui/home);
+           full-page <style> uses rendered (ui/css) — see
+           image.product-theme.
+         - Identity strip only (brand, username, branch, uptime)
+           stays OCaml — not product structure.
+         - Kernel OCaml pages stay OCaml until deliberately moved:
+           /login, /health, auth middleware, /bindings,/branches,
+           /edit, /inspect, emergency recovery. These are host UI,
+           not a second apps menu.
+         - EMERGENCY chrome (nav/home/theme fail or unbound):
+           minimal, labeled failure (must not look like a healthy
+           product menu or full design system). Silent rich OCaml
+           default_nav / default_home / full inline CSS twin is
+           REJECTED architecture — debt to remove.
+         - Rehydrate load order: parents first, child overrides
+           last (so personal ui/menu can call system menu/link;
+           personal theme/* tokens can override system tokens).
+         - Edit shell via Functions → package ui (mobile drilldown),
+           including ui/theme and theme/* tokens.
+
+         LAYERING SUMMARY:
+           Nopales  = the computer you live in (shell + theme + apps)
+           OCaml = host + gate (eval, store, auth, health, emergency)
+
+         NAV / ENTRY (combo pack discoverability):
+           - Functions (/bindings) = primary code home
+           - Branches detail → Changes (branching.change-set)
+           - Optional chrome badge: pending impact count (light)
+           - Unbound handler pages → Create stub (dnu-stubs)
+
+         DEFERRED:
+         - Remove silent default_nav_nodes / default_home_content
+           and shrink html_response style blob to emergency_css
+           (image.product-theme make)
+         - ui/menu seed always lambda (load-order safe by default)
+         - Move softer system pages (/about copy) into Nopales packages
+         - Branch switcher in chrome (detail checkout exists)
+         - Import/require, private symbols, rename-with-rewrite
+         - Authoring new prims from the UI
+         - Dedicated /theme form UI (Functions edit is enough v1;
+           full picker in image.themes)
+
+         DATA BROWSER: full CRUD over data_rows is specified in
+         image.data-browser (OCaml system pages, not a Nopales package).
+         /types remains the type_defs index and links into /data/<type>.
+
+         TREE BROWSER: lazy zoomable tree UI over the one tree is
+         specified in image.tree-browser (a Nopales package, not OCaml
+         system pages). system-browser stays the code hub (/bindings);
+         tree-browser is the universal *content* face (notes outline,
+         data rows, eventually pkg/type subtrees).
+    |))
+   )
+  )
+  (subsection tree-browser
+   (doc "Lazy zoomable tree UI: folders ARE non-leaf nodes; htmx depth-capped expansion; library-first (no kernel prims)")
+   (status implemented)
+   (* agent note (|2026-08-02: libs/tree tree/page+partial+render-doc; live GET /tree 200.|) *)
+   (implements libs/tree/lib.pp)
+   (verify
+    (build "dune build image")
+    (smoke "GET /tree renders root to depth cap; deeper nodes as collapsed stubs")
+    (smoke "GET /partials/tree?slug=…&root=…&depth=2 fragment no chrome; expands stub in place")
+    (smoke "folders-only view omits leaf bodies; nodes with children still expandable")
+    (smoke "zoom: GET /tree?root=<node-id> re-renders with that node as root; breadcrumb back")
+    (smoke "expand returns children + one-level grandchild stubs (no N-requests-for-N-nodes)")
+    (smoke "no-JS: stub is an <a href> to the same partial URL; full GET still correct")
+    (smoke "notes is first root: /tree?slug=<doc> walks the notes outline model")
+    (smoke "kernel children-of/subtree + lens prims deferred — BORGE-1785516998 / 1785516993"))
+   (details
+    (doc (|
+         THESIS: the one tree (one-tree.tree-model) is not just a
+         storage trick — it is a browseable place. Since outline
+         storage already makes a folder and a title THE SAME THING
+         (a non-leaf node), the UI needs NO folder type: \"folder\"
+         is a VIEW decision (has-children? + collapsed), not a
+         storage one. One renderer walks docs, subtrees, and data.
+
+         PRIOR ART: Workflowy/Logseq zoom, Finder/Explorer lazy
+         expansion, Smalltalk hierarchy browser (categories and
+         classes are nodes at different depths). libs/outline/lib.pp
+         ALREADY runs the swap idiom (hx-post /partials/notes-node-op,
+         hx-target #outline, hx-swap outerHTML) — this section
+         generalizes that pattern into a reusable component.
+
+         ==========================================================
+         TWO TREES — DO NOT CONFLATE
+         ==========================================================
+           1. STORE tree (tree_nodes): /sys/pkg/…, /data/<type>/<id>,
+              branch lenses. Kernel addressing; recursive-CTE
+              override walks. NOT the v1 UI surface.
+           2. CONTENT tree (user-facing outline hierarchy): notes
+              outline nodes, docs → nodes → subnodes.
+           The v1 browser walks (2). Store-tree roots come LATER
+           (needs branch-lens-aware read prims; see DEFERRED).
+
+         ==========================================================
+         RENDER CONTRACT (pure Nopales, libs/tree)
+         ==========================================================
+           (tree/render root-id depth folders-only?) -> html string
+           - Recursive walk, depth-capped. Depth x fanout bounds
+             steps, so it fits the 100k sync budget (see
+             multi-user.budgets) — self-limiting by construction.
+           - Node row: twisty + title + child-count badge.
+           - Beyond cap: collapsed STUB, not a leaf.
+           - folders-only?: render only has-children? nodes as
+             rows; leaves appear only as counts.
+
+         STUB EXPANSION (htmx, the ONLY async here):
+           <li class=\"tb-stub\"
+               hx-get=\"/partials/tree?root=<id>&depth=2\"
+               hx-trigger=\"click\" hx-swap=\"outerHTML\">…</li>
+           Server returns the expanded SUBTREE FRAGMENT; the stub
+           replaces itself. htmx supplies the client-side async
+           illusion; each server request stays a small synchronous
+           eval. No guest-visible fibers (see
+           lisp-interpreter.language-roadmap: host owns concurrency).
+
+           ANTI-PATTERN (do not build): one request per node.
+           Each expansion MUST return children + ONE-LEVEL
+           grandchild stubs, so expansion is instant and request
+           count stays O(user clicks), not O(tree size).
+
+           PROGRESSIVE ENHANCEMENT: the stub's hx-get URL is also a
+           plain <a href>; without JS it full-page GETs the same
+           fragment URL (wants_fragment distinguishes). Same
+           discipline as notes.hypermedia-ui.
+
+         ZOOM (= \"load this title in the full window\"):
+           GET /tree?root=<node-id> — re-render with the focus node
+           as root. Zoom is ONE parameter, no new mechanism: same
+           renderer, different root. Breadcrumb of ancestors for
+           zoom-out. Zoom is what turns \"folder\" and \"title\"
+           into the same thing from the user's side too.
+
+         OOB PATCHING (when zoom/expand affects two panes):
+           hx-swap-oob updates tree panel + content pane in one
+           response. Defer multi-pane until notes dogfood shows the
+           need; v1 single-pane is fine.
+
+         ==========================================================
+         WHAT IS NOT HERE (kernel stays still)
+         ==========================================================
+           - NO new interpreter prims for v1. html/tag, request-param,
+             recursion, and the notes outline model suffice.
+           - NO change to eval budget tiers: depth-cap keeps every
+             request small; that IS the budget story.
+           - Kernel help only WHEN trees get big: children-of /
+             subtree prims over tree_nodes using the materialized
+             path index (one-tree.tree-model PINNED: indexed lookup,
+             not tree walk). Optimization, not v1.
+
+         ROOTS ROADMAP (one component, many roots):
+           v1   notes outline (slug root) — dogfood, ships first
+           v1.1 data rows: /tree?root=data:todo (typed-node leaves
+                link into /data/<type>/<id>)
+           v2   store tree: /tree?root=/sys/pkg/notes — needs
+                lens-aware read prims; this is when tree-browser
+                becomes the Smalltalk-style INSPECTOR face for the
+                whole habitat (code ASTs, types, routes as subtrees)
+
+         RELATION TO OTHER SECTIONS:
+           - image.system-browser: /bindings stays the code hub;
+             tree-browser is content-first. Shared
+             callers/callees spine untouched.
+           - notes.hypermedia-ui: notes keeps its dedicated outline
+             page; tree-browser is the GENERAL component it can
+             later delegate to. No notes rewrite in v1.
+           - structural-editing.op-protocol: when tree ops
+             (refile/move) land in the browser, they MUST go through
+             the shared tree-op protocol, not ad-hoc routes.
+
+         SUCCESS CRITERIA:
+           - A user can browse a deep notes outline without a full
+             page load per level.
+           - \"Folder\" required no schema/type — only a view bit.
+           - Zero kernel changes for the v1 notes root.
+           - Every tree interaction fits the 100k sync budget; no
+             background tier needed for browsing.
+    |))
+   )
+  )
+  (subsection data-browser
+    (doc "Generic OCaml system UI for full CRUD over the one-tree datum namespace by type")
+   (status implemented)
+   (implements image/lib/http.ml image/lib/crud.ml image/lib/store.ml)
+   (verify
+    (build "dune build image")
+     (smoke "GET /data lists types with row counts; data-scope banner present")
+    (smoke "GET /data/<type> lists rows (default limit 50) with declared columns")
+    (smoke "GET /data/<type>?offset=50 pages next slice")
+    (smoke "GET /data/<type>/new shows create form from type_defs fields")
+    (smoke "POST /data/<type> creates row from form fields; 303 to detail")
+    (smoke "GET /data/<type>/<id> shows fields + edit form + delete")
+    (smoke "POST /data/<type>/<id> updates fields; 303/reload detail")
+    (smoke "POST /data/<type>/<id>/delete deletes row; 303 to type list")
+    (smoke "GET /types links each type to /data/<type>")
+    (smoke "GET /inspect/row/<type>/<id> redirects or aliases to /data/<type>/<id>")
+    (smoke "type with no type_defs fields still allows raw JSON create/edit")
+    (smoke "extra jsonb keys not in type_defs still shown on detail"))
+   (details
+    (doc (|
+         WHY:
+         /types shows declared shapes; /inspect/row dumps one row as
+         pretty JSON. Neither is a place to live in the object store.
+         Product packages (todo, notes, bible) have purpose-built UIs,
+         but agents and humans still need a generic browser when there
+         is no package UI, the package is broken, or the type is ad-hoc.
+
+         LAYERING (locked):
+         - OCaml system pages in image/lib/http.ml (+ thin helpers in
+           crud.ml / store.ml as needed). Host/gate tier — same as
+           /types, /bindings, /inspect, /edit.
+         - NOT a Nopales package. Product shell stays Nopales; this is
+           emergency/generic substrate UI that must work with empty
+           or broken gardens.
+         - Mutations call existing Crud/Store SQL paths. Do not invent
+           a second data access layer.
+         - Data lives in the one tree, keyed by user/space/lens, not by
+           branch. UI must report the effective data scope on every
+           list/detail surface.
+
+         =========================================================
+         ROUTES (full CRUD)
+         =========================================================
+
+         Index (Read types + counts):
+           GET  /data
+             - Table: type_name | declared fields | row count | link
+             - Types = visible type_defs on current branch (Store.list_types)
+             - Also surface type_names that have data_rows but no
+               type_def (orphan data) so nothing is invisible
+             - Row counts are ONE grouped scan (Crud.counts_by_type), not a
+               per-type sequential COUNT (~40 of them each with the ltree
+               walk) — the 2026-09-08 /data 49s fix
+              - Banner: effective data scope (your rows / shared seed /
+                member spaces; /data-scope details it)
+             - Link back/forward with /types (types = schema index;
+               /data = instances)
+
+         List (Read many):
+           GET  /data/<type>
+             - Query: limit (default 50, max 200), offset (default 0)
+             - Columns: id (short) + each declared field (truncated)
+               + updated_at if cheap; link id → detail
+             - Pagination: Prev / Next when more rows exist
+             - Actions: [New row] → /data/<type>/new
+             - Empty state: no rows yet + create CTA
+             - Order: created_at ASC (match Crud.list) unless a later
+               plan picks something smarter
+
+         Create:
+           GET  /data/<type>/new
+             - Form: one input per declared field (text inputs v1)
+             - If type has ZERO declared fields OR user wants freeform:
+               textarea name=fields_json for raw JSON object
+             - POST target: /data/<type>
+           POST /data/<type>
+             - Content-Type application/x-www-form-urlencoded
+             - Build fields jsonb from declared field names present
+               in the form; if fields_json posted and non-empty, that
+               wins (power path)
+             - author = Session username
+             - On success: 303 Location: /data/<type>/<id>
+             - On failure: 400 with error card + back link
+
+         Detail / Update / Delete:
+           GET  /data/<type>/<id>
+             - Show all fields (declared first, then extra jsonb keys
+               not in type_defs — do not hide unknowns)
+             - Edit form prefilled (same field rules as create)
+             - Delete form POST /data/<type>/<id>/delete (confirm via
+               button label; no JS required)
+             - Meta: id, type, author, created_at, updated_at when
+               available
+             - Links: back to type list, /types, REPL hint
+           POST /data/<type>/<id>
+             - Update fields (full replace of fields jsonb from form,
+               same merge rules as create). Uses Crud.update path.
+             - 303 back to detail on success
+           POST /data/<type>/<id>/delete
+             - Crud.delete; 303 to /data/<type>
+             - Missing row: 404 card, not silent success
+
+         URL parsing notes:
+         - type_name may contain only safe path segments in v1
+           (letters, digits, hyphen, underscore). Reject or 400
+           weird paths; no path-param injection into SQL (always
+           parameterized — already true in Crud).
+         - id is UUID string.
+         - Prefer longest-match dispatch:
+             /data/<type>/new
+             /data/<type>/<id>/delete
+             /data/<type>/<id>
+             /data/<type>
+             /data
+           so "new" is never treated as an id.
+
+         =========================================================
+         FIELD / JSON RULES (v1)
+         =========================================================
+         - type_defs.fields is a JSON array of field-name strings
+           (no field types yet — object-model.type-system deferred).
+         - Form values are strings; store as JSON strings in the
+           fields object. Do NOT guess number/bool coercion in v1
+           unless the existing value is already that shape and a
+           later polish wants round-trip fidelity.
+         - Raw JSON textarea: must parse as a JSON object; reject
+           arrays/scalars with a clear error.
+         - Extra keys on existing rows: display on detail; include
+           in edit form as additional inputs OR preserve via hidden
+           merge so update does not drop them. REQUIRED: updates
+           must not silently strip unknown keys.
+           - Type-declaration gate (one-tree typed-nodes): the write
+             surfaces (POST /data/<type>, detail POST, and the "new"
+             form) accept only a DECLARED type_name. A type with no
+             visible type_def is rejected with a clear error naming
+             (deftype); a declared type with zero fields is the
+             free-form/raw-JSON case. Orphan rows (data_rows with no
+             type_def) stay listable/readable on the index and detail
+             views, but cannot be written until declared.
+
+         =========================================================
+         RELATIONSHIP TO EXISTING PAGES
+         =========================================================
+         - /types: keep as type_defs browser; each row links to
+           /data/<type>. Optional: add row count column on /types
+           once count helper exists (nice-to-have, not blocking).
+         - /inspect/row/<type>/<id>: redirect (302/303) to
+           /data/<type>/<id> OR thin alias rendering the same page.
+           Prefer redirect so one canonical URL.
+         - Product apps unchanged: /todos, /notes, /bible stay Nopales.
+         - Nav: emergency/system links may include Data → /data;
+           product ui/menu MAY add Data later (Nopales choice, not
+           required for make).
+
+         =========================================================
+         STORE / CRUD HELPERS (implementation discretion)
+         =========================================================
+         Add only what the UI needs if missing:
+         - count rows by type_name (for index)
+         - list type_names present in data_rows (orphans)
+         - list rows with limit+offset (Crud.list today is limit-only;
+           extend with offset or a store helper)
+         - optional: fetch author/created_at/updated_at for detail
+         Keep Nopales prim surface stable unless a prim gap blocks the
+         browser (prefer OCaml-only helpers for offset/count).
+
+         =========================================================
+         AUTH / SAFETY
+         =========================================================
+         - Same session gate as other authenticated system pages.
+         - Not admin-only in v1 (any logged-in user can browse/mutate
+           the rows their identity can see — matches Nopales CRUD prims today).
+         - No CSRF token infrastructure in v1 (status quo for other
+           POSTs); cookie session + same-site assumptions hold.
+         - Never interpolate type/id into SQL strings.
+
+         =========================================================
+         NON-GOALS (v1)
+         =========================================================
+         - Field type system / validation beyond JSON object shape
+         - Full-text search UI (find-text exists for Nopales; wire later)
+         - Inline htmx row edit without full page (optional polish)
+         - Bulk delete / CSV import-export
+         - Per-row BRANCH scoping (isolation is by user / space / lens,
+           never by branch)
+         - Nopales-redefinable browser UI
+         - SPA / client-side routing
+
+         =========================================================
+         ACCEPTANCE NARRATIVE
+         =========================================================
+         Human can: open /data → pick a type → page through rows →
+         open a row → edit a field → save → create a new row →
+         delete a row → land back on the type list. All without
+         REPL. Agent can use the same URLs or keep using CRUD prims.
+    |))
+   )
+  )
+  (subsection page-timing
+   (doc "Per-route page render timing")
+   (status implemented)
+   (implements image/lib/http.ml image/lib/http_core.ml image/lib/http_data.ml image/lib/timing.ml image/lib/prims_db.ml lisp/lib/eval.ml)
+   (verify
+    (build "dune build image")
+    (smoke "GET /timing lists each user route with count + avg db_ms/total_ms (empty/zero-safe when no samples)")
+    (smoke "GET /<route> twice then GET /timing shows count=2 for that route")
+    (smoke "each handled route response carries X-Timing-Ms header")
+    (smoke "GET /timing sorts slowest-first by max_ms; shows db_vs_total split")
+    (smoke "/timing 404-safe / zero-safe with no routes ever handled"))
+   (details
+    (doc (|
+         WHY:
+         Product pages are Nopales route handlers, and there is no
+         first-class answer to "how long does each page take to
+         load?". Hand-wrapping every handler with (now-ms) deltas is
+         repetitive and easy to forget. A single choke point already
+         exists — every handled user route flows through
+         Session.call_handler — so we can measure universally with
+         no per-package work.
+
+         WHAT WE MEASURE (server-side render time, not client
+         perceived):
+         - total_ms: wall time of the handler call (handler body
+           only, not HTTP write-back)
+         - db_ms: accumulated time inside DB-touching CRUD prims
+           during that handler
+         - db_hits: count of DB-touching prim calls during that
+           handler
+         - at: wall clock (epoch ms) the sample was taken
+         - route: the handler name/path
+         This is the cost to PRODUCE the page in the image. It is
+         NOT full end-to-end (network/TLS/browser paint). End-to-end
+         measurement is explicitly out of scope here (needs client
+         Navigation-Timing POST; deferred).
+
+         MEASUREMENT
+         1. Budget accumulation (lisp/lib/eval.ml): budget currently
+            tracks prim_calls + db_hits but not DB wall time. Add a
+            mutable db_ms : float to the budget struct (init 0.0).
+            prims_db.ml register_crud already computes elapsed_ms per
+            prim; change `ignore _elapsed_ms` to accumulate it into
+            the budget via a helper (mirroring note_db_hit, e.g.
+            note_db_ms on current_budget). This is the "future
+            function_stat.db_time_ms aggregation" the existing
+            comment already earmarks.
+         2. Choke-point capture (image/lib/http.ml): every call to
+            Session.call_handler (both dispatch sites: the
+            launch_user_route_or path and the /data-adjacent user
+            route path) is wrapped so BEFORE the call we read the
+            current eval budget's db_ms/db_hits, and AFTER we read
+            now-ms and the ending budget. One clean helper
+            Timing.measure f that runs the handler, then records a
+            sample { route; total_ms; db_ms; db_hits; at }. A handler
+            that fails still records its sample (the work happened);
+            the failure path is unchanged otherwise.
+         3. Sample store (image/lib: new timing.ml, mirroring the
+            data-browser pattern): a small in-process sample ring per
+            handler name. Keep a bounded window (e.g. last 1000
+            samples overall, or last 100 per route) to avoid
+            unbounded growth. Optionally mirror into data_rows as
+            type `page_timing` for cross-restart persistence +
+            Nopales querying — a nice-to-have, no migration required;
+            in-process ring satisfies /timing + header with none.
+            Persistence deferred unless we want history across
+            restarts.
+
+         SURFACE
+         1. /timing system page (OCaml dispatch entry mirroring
+            /branches, /data): table per route name — samples |
+            last_ms | avg_ms | max_ms | db_ms | db_hits | db_share
+            (% of avg total). Sorted by max_ms descending (slowest
+            first). Empty/zero-safe when there are no samples.
+         2. X-Timing-Ms response header: attach total_ms to every
+            handled-route response (in respond_handler_value / the
+            response path) so a browser or curl can see the number
+            per request without opening /timing.
+
+         SCOPE / NON-GOALS
+         - Server-side render time ONLY. No client Navigation-Timing
+           end-to-end measurement (deferred, not this one).
+         - No new schema in v1 (in-process ring); data_rows
+           `page_timing` persistence is optional/deferred.
+         - kernel paths (/data /admin /api/eval …) are NOT measured:
+           only user route handlers (the product pages people ask
+           "how long does this page take" about).
+         - /timing is a private system page (auth-required, like
+           /branches), not a public route.
+
+         ACCEPTANCE NARRATIVE
+         Human: open a few pages, then GET /timing → see each page
+         with count + slowest-first order + DB share; curl -i a page
+         → see X-Timing-Ms on the response. No per-package code
+         needed to be measured.
+    |))
+   )
+  )
+  (subsection budget-ledger
+   (doc "Per-route eval-step ledger: /timing gains steps + budget share; unprobed route enumeration + progressive GET probes")
+   (status implemented)
+   (* agent note (|2026-12-30: layout/css-url re-rendered the theme sheet per page (~20k steps) and pushed near-cap pages over budget; the step cost was invisible because /timing measured WALL time only while the kernel already billed STEPS on every eval. This ledger makes steps first-class at the same choke point.|) *)
+   (implements image/lib/timing.ml image/lib/http_data.ml image/lib/session.ml lisp/lib/budget.ml)
+   (verify
+    (build "dune build image")
+    (smoke "GET /timing shows steps + budget-share columns for sampled routes (steps total from the handler's own eval budget)")
+    (smoke "steps column zero for prims-free routes; ui/home-scale chains show 10k-100k scale")
+    (smoke "routes with NO samples appear in the ledger as unprobed, with handler + visibility, sorted last")
+    (smoke "each /timing page load probes a bounded batch (≤15) of unprobed GET routes and their samples appear on reload")
+    (smoke "probe of an unbound handler records a skip, not an incident storm")
+    (smoke "budget-share flag highlights routes over 25% of the eval budget"))
+
+   (details
+    (doc (|
+         =========================================================
+         WHY
+         =========================================================
+         The kernel bills EVERY eval: budget.steps (400k default;
+         ui shell refresh alone ~71k) with the handler name as the
+         stat label. Three sinks already existed: wall clock
+         (/timing), db_ms/db_hits (same ring), and steps →
+         function_stat (write-only telemetry, no read face). None
+         answered the operator question "what does each ENDPOINT
+         cost, in steps, and what is near the cap?" — e.g. the
+         layout/css-url face re-rendered the theme sheet (~20k)
+         inside a per-call LAMBDA, re-paid on every page, and the
+         ledger was blind to it because wall time stayed flat
+         (in-process eval, sub-ms).
+
+         THE FIX — make steps first-class at the same choke point:
+         Timing.measure's fiber-keyed budget slot already exposes the
+         handler's OWN eval budget race-free (i-1788670103-5). Sample
+         gains steps = b.steps at record time. Zero new plumbing.
+
+         =========================================================
+         WHAT THE LEDGER SHOWS
+         =========================================================
+         1. STEPS + BUDGET SHARE: every sampled route row gains
+            avg steps + steps-share-of-budget (flag routes over
+            25%). Steps are the handler eval's OWN budget — fresh
+            per dispatch — so they compose across nested evals
+            (a forced thunk's cost bills where the force happens).
+
+         2. ROUTE ENUMERATION: the ledger section lists EVERY
+            user route visible to the session (Session.routes —
+            route, handler, visibility), not just routes traffic
+            has hit. Unprobed routes list as "—" and sort last.
+
+         3. PROGRESSIVE PROBE: each /timing page load probes a
+            bounded batch (≤15) of unprobed routes through
+            Session.call_handler with a synthetic GET request (no
+            params, no body), wrapped in measure — so probes land
+            in the SAME ring as live traffic and accumulate across
+            page loads until the sweep covers everything. Admin
+            only (the page already is). Probe results CANNOT be
+            distinguished from real traffic in the ring — accepted
+            v1 simplification; the count column tells the story.
+
+         =========================================================
+         CONSTRAINTS / NON-GOALS
+         =========================================================
+         - GET-ROUTE PROBES MAY HAVE SIDE EFFECTS: any GET handler
+           body runs for real (counters, logs, cache warmers). This
+           is the operator's own habitat; the page carries an
+           explicit note. Handlers that error record their sample
+           (work happened) and MAY file ops incidents — that is the
+           existing error funnel, unchanged.
+         - POST-only routes are never probed (the routes table has
+           no method, but a synthetic GET only renders form-shells
+           or no-ops for all seeded handlers; op-protocol writes
+           ride POST, which the sweep never sends).
+         - NO new schema; the ring stays in-process. Persistent
+           steps history remains function_stat (already billed
+           there; a read face for it is deferred until this page
+           proves its numbers against the ring).
+         - fragile totals: steps vary with data size and stale
+           memoization across sessions; the ledger is a relative
+           ranking tool, not SLA measurement.
+    |))
+   )
+  )
+  (subsection db-panel
+   (doc "DB panel: per-endpoint DB-prim breakdown + global Postgres stats face (/db, admin)")
+   (status implemented)
+   (* agent note (|2026-12-30: user asked to pipe Postgres analytics to the front end — per endpoint: number of db calls, efficiency. The timing ring already carried db_ms/db_hits per route; the new piece is WHICH prims each route ran (note_prim_db at the register_crud choke point) and a global pg_stat face.|) *)
+   (implements lisp/lib/budget.ml image/lib/prims_db_common.ml image/lib/timing.ml image/lib/http_data.ml image/lib/http.ml image/lib/store_db.ml)
+   (verify
+    (build "dune build image")
+    (smoke "GET /timing rows show a db-prim breakdown cell (get×3, rows×1 …) with per-prim db ms")
+    (smoke "GET /db (admin) shows pg_stat_database hit ratio, xacts, deadlocks; zero-safe when counters empty")
+    (smoke "GET /db shows pg_stat_user_tables top-by-seq_scan with n_live_tup and write counts")
+    (smoke "GET /db shows running pg_stat_activity queries (idle excluded) — or a none row")
+    (smoke "GET /db shows pg_stat_statements top-by-total_exec_time when the extension exists; a no-extension note otherwise")
+    (smoke "GET /db non-admin 403/redirect; fixed SQL only (no dynamic SQL, no user input into pg_stat queries)"))
+
+   (details
+    (doc (|
+         =========================================================
+         WHY
+         =========================================================
+         budget-ledger ranks endpoints by steps; the user asked the
+         next question: WHICH DB CALLS does each endpoint make, and
+         what is it doing to Postgres? Two halves:
+
+         1. PER-ENDPOINT PRIM BREAKDOWN (lisp/lib/budget.ml):
+            the budget gains prim_db : (string, calls × db_ms)
+            Hashtbl. note_prim_db fires at the SAME choke point that
+            already bills db_hits/db_ms — prims_db_common
+            register_crud knows its prim name — so the breakdown is
+            exact, cheap (one Hashtbl update per DB prim call), and
+            flows through the existing fiber slot into the timing
+            ring. No new schema, no new sample plumbing.
+
+         2. GLOBAL POSTGRES STATS (/db system page, admin-only):
+            fixed-read-SQL panels over catalog statistics —
+              pg_stat_database: hits/read cache ratio, xacts,
+                rollbacks, deadlocks, temp bytes
+              pg_stat_user_tables: top-by-seq_scan (the missing-
+                index smell), n_live_tup, write counts
+              pg_stat_activity: non-idle queries with age + snippet
+              pg_stat_statements: top-by-total_exec_time when the
+                extension exists (to_regclass probe; a note row
+                otherwise — never a broken page)
+            All SQL is FIXED strings — no user input ever reaches
+            these queries.
+
+         EFFICIENCY LANGUAGE (read the ledger this way):
+           db_ms / db_hits = avg query wall time per endpoint;
+           steps / db_hit  = eval CPU paid per query (high values
+             mean rendering/compute, low values mean the endpoint
+             is basically a query pipe);
+           db_share (from budget-ledger) = time spent WAITING on
+             Postgres vs doing work.
+
+         NON-GOALS: no per-statement correlation to routes (would
+         need query tagging; pg_stat_statements' global view is the
+         v1 answer); no real-time graphing; /db is admin-only and
+         fixed-SQL on purpose — it is a Postgres WINDOW, not a
+         query console.
+    |))
+   )
+  )
+  (subsection product-theme
+   (doc "Product presentation as Nopales data: css/* sheet compiler, ui/theme + ui/css, emergency CSS only in OCaml")
+   (status implemented)
+   (verify
+    (build "dune build image")
+    (smoke "(css/render (css/sheet (body margin 0 background \"#d4d0c8\"))) contains body{ and margin:0")
+    (smoke "(function-source \"ui/theme\") or (function-source \"ui/css\") non-empty after seed")
+    (smoke "(export-package \"ui\") contains define ui/theme or define ui/css")
+    (smoke "GET / authenticated response <style> matches rendered (ui/css) distinctive marker, not only emergency")
+    (smoke "personal (define theme/bg …) or ui/theme pin changes next full-page CSS; checkout main restores")
+    (smoke "(define ui/css (lambda () (error \"boom\"))) still serves page with emergency CSS + labeled failure")
+    (smoke "htmx fragment / partial responses do not re-inject full stylesheet")
+    (smoke "login page stays pre-session OCaml mini stylesheet (no Nopales theme required)"))
+
+   (details
+    (doc (|
+         WHY:
+         Today almost all product CSS is a giant inline string in
+         image/lib/http.ml html_response — inaccessible from the
+         garden, unversioned as Nopales, dual to the product-shell
+         rule that already moved nav/home into libs/ui. Widget
+         packages emit class names that only work because that
+         OCaml blob knows them. That is a black box.
+
+         DECISION (Path B — honest Nopales):
+         Presentation is Nopales data, same substrate as shell and
+         apps. A small css/* compiler (sibling of html/* in std)
+         turns sheets into CSS text. ui/theme holds the sheet;
+         ui/css is a thin (lambda () (css/render ui/theme))
+         adapter for session refresh. Humans and agents edit
+         sexps / tokens via Functions — not escaped CSS inside
+         a lambda, and not a second language document as the
+         native store.
+
+         REJECTED:
+         - Path hybrid: (define ui/css (lambda () "body{…}"))
+           as the primary form (CSS-in-string wearing Nopales hat)
+         - Path A as native store: bare CSS document / data_rows
+           stylesheet type as the only theme representation
+           (allowed later as import/export sugar, not authority)
+         - Static /assets/*.css as the product theme path
+         - Silent full OCaml design-system twin beside Nopales theme
+         - Per-request uncached re-eval of ui/css without shell
+           refresh discipline (mirror ui/nav caching lessons)
+         - TIME-BASED STALENESS: a TTL on the shell cache serves
+           wrong CSS for up to a minute for no correctness reason
+           (supersedes the earlier 60s TTL; invalidation is now
+           dependency-tracked, below)
+         - GENERAL USER-FUNCTION MEMOIZATION: Nopales functions may
+           read DB or request state mid-eval, so same-args-does-not-
+           imply-same-output; no purity story in the type system yet.
+           Caching applies to the zero-arg shell bindings ONLY.
+
+         =========================================================
+         css/*  (libs/std/lib.pp — seed with std, before ui)
+         =========================================================
+         Parallel to html/*: structure in Nopales, render to string.
+
+         Core bindings (v1 — keep small):
+           (css/sheet rule…)     → sheet value (list-tagged data)
+           (css/use other)       → splice/concat another sheet
+           (css/raw "…")         → escape hatch for rare CSS
+           (css/render sheet)    → CSS string
+
+         Rule encoding (selectors as strings; declarations data):
+           - (selector prop val prop val…)
+             selector may be a symbol (body, header) or string
+             (".card", "nav a", "details.ol-node > .ol-sum")
+           - ((sel1 sel2 …) prop val …)
+             multi-selector group → "sel1, sel2 { … }"
+           - ((media "max-width:40rem") rule…)
+             nested @media block
+           - Values: number | string | symbol (symbol resolves
+             as token binding if bound, else as CSS ident)
+           - Do NOT invent a full selector AST or px-type system
+             in v1. Selectors stay strings/symbols; props are
+             alternating key/value data.
+
+         Emit rules (css/render):
+           - prop symbols/strings → CSS property names
+             (margin → margin; font-family → font-family;
+              accept underscore→hyphen if needed)
+           - numbers: print without quotes (0, 1.4)
+           - strings: as CSS values (caller includes units)
+           - stable, readable output; order preserved
+           - css/raw segments pass through unchanged
+
+         Composition:
+           (css/sheet
+             (css/use ui/theme-base)
+             (css/use todo/theme)    ; optional later
+             (body background theme/bg))
+
+         html/* analogy docstring in std:
+           "sheets → css/render; no raw rule soup in apps"
+           (css/raw remains the deliberate guest).
+
+         =========================================================
+         ui/theme + tokens + ui/css  (libs/ui/lib.pp)
+         =========================================================
+         Required product-shell bindings (with ui/menu ui/nav ui/home):
+
+           theme/* tokens (examples; exact set is implementation
+           discretion so long as the classic-Mac look ports):
+             theme/bg theme/ink theme/panel theme/chrome
+             theme/link theme/err theme/ok …
+
+           ui/theme
+             A css/sheet (or zero-arg lambda returning a sheet)
+             expressing the full product design system currently
+             hard-coded in http.ml (body, header, nav, cards,
+             tables, forms, outline, todos, calendar, bible,
+             weather class contracts, mobile breakpoints).
+             Prefer data + theme/* tokens over magic hex literals
+             so personal gardens can (define theme/bg …).
+
+           ui/css
+             (lambda () (css/render ui/theme))
+             or (lambda () (css/render (ui/theme))) if theme is
+             a thunk. Adapter only — not where humans paste CSS.
+
+         Class contract:
+           - Shared classes used by multiple packages live in
+             ui/theme (todo-box, ol-node, cal-grid, card, …).
+           - Package-local extras may keep a small (html/tag
+             "style" …) or later (todo/theme) composed via
+             css/use — weather/style today is acceptable local.
+           - Moving the monolith out of OCaml does not require
+             splitting packages on day one.
+
+         Seed: seed_stdlib still load-library std then weather
+         then ui … — css/* must exist before ui/theme renders.
+         (std before ui already holds.)
+
+         =========================================================
+         Session cache + HTTP inject
+         =========================================================
+         Mirror ui/nav:
+
+           Session.t gains mutable ui_css : string option
+             Some s → product stylesheet text
+             None   → use emergency_css
+
+           refresh_ui_shell (rename meaning: refresh shell):
+             existing (ui/nav) path unchanged
+             plus eval (ui/css) → string | raw-html-as-text →
+             cache; on miss/throw → ui_css <- None
+
+           Invalidate / refresh — DEPENDENCY-TRACKED, not guessed:
+             At each shell render, the kernel records the set of
+             bindings (ui/css) / (ui/nav) actually resolve during
+             eval (env read-set, e.g. theme/vars, ui/theme,
+             ui/theme-nav, notes/tree-css, theme/bg, ...).
+             A define busts the cache IFF the defined name is in
+             that recorded set — theme/extra busts (it's read),
+             todo/foo doesn't (it isn't). No TTL, no name-prefix
+             heuristic: the cache is fresh forever until a real
+             dependency changes.
+             checkout / branch switch still busts unconditionally
+             (no stale other-branch CSS; read-sets are per-branch).
+             load-library still refreshes at end (eval_form path)
+             since bulk redefines legitimately change the read-set.
+             Shell evals cause ZERO DB WRITES: budget-stats
+             persistence (function_stat) MUST skip shell labels
+             (ui/css ui/nav ui/home ui/theme) — the shell refresh
+             runs in the request gate and must not turn into a
+             serialized Crud.create under the pgx sequencer.
+
+           html_response gains ~css parameter (or reads session):
+             HTML.style [] "%s" css
+             Authenticated full pages pass Session.ui_css |
+             emergency_css.
+
+           fragment_response / HX partials:
+             do NOT re-inject the full stylesheet (page already
+             has it). Same spirit as chrome-skip for fragments.
+
+           login_form_page (pre-session):
+             keeps a tiny OCaml-only mini stylesheet. Must not
+             require Nopales theme. Not the product design system.
+
+         =========================================================
+         Emergency CSS (OCaml kernel — labeled, minimal)
+         =========================================================
+         emergency_css is host recovery, not a product twin:
+           - monospace / high-contrast / readable
+           - styles emergency-banner, emergency-nav, basic links
+           - MUST look broken or sparse on purpose if product
+             theme fails (parallel emergency-nav rule)
+           - After make: the 200-line classic-Mac blob MUST leave
+             html_response; only emergency_css (+ login mini)
+             remain as OCaml string stylesheets.
+
+         Optional: when falling back, surface a one-line labeled
+         banner in chrome ("product theme unbound — emergency css")
+         consistent with emergency-nav labeling.
+
+         =========================================================
+         Authoring / multi-user / sync
+         =========================================================
+         - Edit via Functions → package ui → ui/theme | theme/*
+           (same mobile drilldown as other shell bindings).
+         - Personal pin: (define theme/bg "#e8f0e8") or full
+           ui/theme override on user/personal; inherits main
+           when no pin.
+         - (export-package "ui") includes theme tokens + ui/theme
+           + ui/css; pp_sync pull/push works unchanged.
+         - Agents: pp_eval define/function-source — no new REST.
+         - v1 non-goals: /theme textarea page, CSS file import
+           pipeline, Tailwind/Sass build step, data_rows theme
+           type as authority, per-user CSS without branch pins.
+
+         =========================================================
+         MAKE ORDER
+         =========================================================
+         1. css/* in libs/std + unit/smoke sexp→CSS
+         2. Transcribe http.ml product blob → ui/theme (+ tokens)
+            in libs/ui; define ui/css adapter
+         3. Session ui_css + refresh_ui_shell extension
+         4. html_response ~css inject from session
+         5. Shrink OCaml to emergency_css (+ login mini)
+         6. Smokes: seed marker, personal override, failure
+            fallback, fragment no-reinject
+         7. borge drift / resolve HTTP robustness verification
+
+         STATUS: planned until make lands and silent full OCaml
+         product CSS twin is gone.
+    |))
+   )
+  )
+  (subsection themes
+   (doc "Installable, switchable named themes: a theme is a libs/<name> package of theme/* tokens; switch = reseed into your garden; registry is a Nopales list, no kernel tables")
+   (status implemented)
+   (implements libs/theme/lib.pp
+    libs/theme-paper/lib.pp
+    libs/theme-midnight/lib.pp
+    libs/theme-classic/lib.pp
+    libs/theme-prickly/lib.pp
+    libs/theme-prickly-night/lib.pp
+    libs/theme-as400/lib.pp
+    image/lib/session.ml
+   )
+   (verify
+    (build "dune build image")
+    (smoke "(theme/available) lists the default token package with display name + description")
+    (smoke "(theme/current) reports the active theme on the current branch; fresh garden reports the default")
+    (smoke "(theme/set \"<name>\") switches the garden: next full-page <style> shows the new theme's distinctive token values")
+    (smoke "switch replaces ALL pinned theme/* tokens on the current branch (no stale-token bleed from the previous theme)")
+    (smoke "switch leaves a personal ui/theme sheet override intact; tokens flow through it")
+    (smoke "other users' themes unchanged by my switch; checkout main shows system defaults")
+    (smoke "(theme/set \"<unregistered>\") is a labeled error; active theme unchanged")
+    (smoke "GET /settings/theme lists available themes, marks current, applies switch without manual source editing"))
+   (details
+    (doc (|
+         WHY:
+         product-theme made presentation Nopales data (css/* +
+         ui/theme + theme/* tokens) and branch pins already make
+         token override possible — but only by hand-editing twelve
+         theme/* defines through Functions. Nobody will do that.
+         The missing product surface is: named themes you can
+         install and switch between as one act, per user, without
+         touching source.
+
+         =========================================================
+         MODEL — a theme is a PACKAGE, not a row or a table
+         =========================================================
+         A theme is a Nopales package libs/<theme>/lib.pp whose
+         entire job is defining theme/* token bindings (the
+         existing libs/theme token set: theme/bg theme/ink
+         theme/panel theme/chrome theme/link theme/visited
+         theme/muted theme/err theme/ok theme/border
+         theme/row-alt theme/shadow). A theme package MAY also
+         carry a full ui/theme sheet override, but v1 themes are
+         token-only: the shared ui/theme sheet reads tokens, so
+         swapping tokens re-skins the whole product.
+
+         Nothing new in the kernel. Install = the package exists
+         in the vault (or was defined live). Switch = the theme's
+         token defines land on YOUR branch as pins (standard
+         branching.package-updates semantics: garden pins shadow
+         system/main; checkout main restores system defaults).
+         Per-user themes fall out of per-user branches — no
+         per-user preference table, no cookie, no data_rows
+         setting (all REJECTED: preference state must live in
+         the same branch/version/promote substrate as every other
+         user choice).
+
+         =========================================================
+         REGISTRY — Nopales data, not a kernel catalog
+         =========================================================
+         The registry is itself a binding in the theme package:
+
+           theme/available
+             (lambda ()) -> list of alist-ish dicts, one per
+             installed theme: name, display, description,
+             (optional) author. Source of truth for the picker.
+             Default seed ships the system token package as the
+             one entry.
+
+           theme/current
+             (lambda ()) -> name string. v1 derivation: the
+             garden's own binding theme/name if a switch pinned
+             it, else the system default name. (Honest label,
+             not a guess from token values.)
+
+           theme/set NAME
+             -> switches the CURRENT branch to theme NAME:
+             looks NAME up in theme/available, evaluates the
+             named theme package's token defines as pins on the
+             current branch (same code path as reseed-package,
+             narrowed to theme/* + theme/name), then triggers
+             the existing ui/css shell refresh so the next
+             full-page response carries the new sheet.
+             Unknown name -> labeled error, no partial switch.
+             Switch is ALL-OR-NOTHING across the token set: a
+             theme that defines only some tokens inherits the
+             ACTIVE theme's remainder at switch time (pins are
+             written for every token), never whatever random
+             pin was already on the branch — no stale-token
+             bleed between switches.
+
+         Installing a new theme = adding libs/<name>/lib.pp to
+         the vault plus one entry in theme/available (promote to
+         system/main to share; keep on personal to hoard).
+         pp-sync snapshot/pull treats themes like any package.
+         Agents: pp_eval (theme/set \"phosphor\") — no new REST.
+
+         =========================================================
+         PICKER — /settings/theme (Nopales route, libs/ui)
+         =========================================================
+         A small settings page (private route, same discipline
+         as other product routes): lists theme/available entries
+         as cards (display name, description, swatch row rendered
+         inline from each entry's token values), marks
+         theme/current, and POSTs a switch via htmx to a partial
+         that calls (theme/set name) and returns the updated
+         card list; the next FULL page load shows the new theme
+         (fragment responses never re-inject the stylesheet —
+         existing product-theme rule). No-JS fallback: plain
+         form POST + redirect to /settings/theme.
+
+         INTERACTION WITH PERSONAL ui/theme PINS:
+           A garden that pinned its own ui/theme sheet keeps it —
+           theme/set only touches theme/* + theme/name. Tokens
+           flow through whatever sheet is visible. A theme that
+           ships a sheet override installs it as a pin too, and
+           switching AWAY removes that pin (restores inherited
+           ui/theme). Sheet-carrying themes are flagged in their
+           registry entry so the picker can say so.
+
+         REJECTED:
+         - data_rows theme/preference entities as authority
+           (shadow state outside branch semantics — the exact
+           thing product-theme rejected for CSS itself)
+         - Static /assets/<theme>.css files (rejected in
+           product-theme already; stays rejected)
+         - Kernel theme catalog table / migration (catalog is
+           Nopales data on branches, versioned like code)
+         - Live preview without switch (v1: swatch row only;
+           real preview is switch-then-look, checkout restores)
+         - Theme inheritance/chaining beyond token fallback
+         - Per-page or per-app themes (one active theme per
+           branch, period)
+
+         RELATION TO product-theme:
+           This section changes NOTHING about css/*, ui/theme,
+           ui/css, session caching, or emergency CSS. It adds the
+           registry + switch + picker on top. The deferred
+           "Dedicated /theme form UI" line in the htmx-interface
+           overview resolves to THIS section's picker.
+
+         MAKE ORDER:
+         1. theme/name + theme/available + theme/current +
+            theme/set in libs/theme (switch via narrowed
+            reseed path; all-or-nothing token pins)
+         2. /settings/theme + /partials/theme-switch in libs/ui
+         3. Smokes per verify stanzas
+    |))
+   )
+  )
+  (subsection packages
+   (doc "In-branch prefix packages for organizing functions (not branch ownership)")
+   (implements image/lib/packages.ml image/lib/loader.ml pure/prims_pure.ml image/lib/primitives.ml)
+   (status verified)
+   (verify
+    (build "dune build lisp image")
+    (smoke "reader accepts symbol todo/list as Var")
+    (smoke "(define todo/list (lambda () 1)) then (todo/list) => 1")
+    (smoke "todo/list and calendar/list coexist on same branch")
+    (smoke "/bindings groups todo/list under package todo")
+    (smoke "(load-string \"(define pack/x (lambda () 7))\") then (pack/x) => 7")
+    (smoke "(load-library \"todo\") installs /todos and todo/page")
+    (smoke "libs/todo/lib.pp is source of truth; no OCaml string recipe body")
+    (smoke "(load-library \"bible\") defines bible/verse bible/chapter bible/page + /bible")
+    (smoke "after seed: (bible/verse \"John\" 3 16) returns BSB text containing God/world")
+    (smoke "GET /bible?book=John&chapter=3 lists verse text")
+    (smoke "GET /bible?ref=BSB:John:3:16 focuses that verse")
+    (smoke "seed script idempotent: second run does not duplicate refs")
+    (smoke "(function-source \"ui/nav\") returns non-empty lambda/list source")
+    (smoke "(export-package \"ui\") contains define ui/nav")
+    (smoke "(function-source \"ui/css\") or ui/theme non-empty after seed; export-package ui includes theme")
+    (smoke "scripts/pp_sync.py status ui exits 0 with env set"))
+   (details
+    (doc (|
+         PROBLEM: flat binding names collide once many tools live on
+         one branch (todo list vs calendar list).
+
+         MODEL (v1):
+         - Package is a PREFIX of a function name, separator `/`.
+         - Full binding key remains (branch_id, name) with name the
+           full string "todo/list". No packages table required.
+         - package_of_name "todo/list" = "todo"; local = "list".
+         - package_of_name "todo/ui/row" = "todo/ui"; local = "row".
+         - package_of_name "hi-page" = "" (root).
+         - Call and define use the full name: (todo/list), (define todo/list …).
+         - Pages still route to full handler names:
+           (route "/todos" "todo/list").
+
+         ORTHOGONAL TO BRANCHES:
+         - Branch = version + ownership (multi-user.namespaces).
+         - Package = organization inside one branch.
+         - UI must never call a branch a "package" or vice versa.
+
+         NOT IN V1:
+         - (require 'todo) / import aliases
+         - Private package symbols
+         - Automatic rename of call sites
+         - Cross-branch qualified names (system/main:greet) — still
+           multi-user.namespaces deferred item
+         - Privileged global package registry
+
+         AI / EDITOR:
+         - Prefer namespaced names for new tools (todo/list not list).
+         - AI propose form: optional package field + local name, or
+           single name field that may contain /.
+         - Function editor URL remains /edit/<full-name> with / in
+           the path segment (encode if needed) or query name=;
+           implementation may use /edit?name=todo/list if path
+           routing is awkward — pick one and document in agent note.
+
+         LIBRARY LOADER (implemented):
+         Same Nopales source text in git repos and in the live system.
+         OCaml provides only a pure loader (no app string blobs).
+
+         On-disk layout (shipped in release tarball as libs/):
+           libs/std/lib.pp     — list/*, html/*, css/*, menu/*, data/*
+           libs/todo/lib.pp    — deftype + todo/* + routes + partials
+           libs/hello/lib.pp   — optional hi-page recipe as Nopales
+           libs/bible/lib.pp   — bible/* API + /bible (canon is data_rows)
+           libs/ui/lib.pp      — ui/menu ui/nav ui/home ui/theme ui/css
+           libs/ai/lib.pp      — ai/ask ai/do wrappers
+           libs/chat/lib.pp    — multi-user lobby+DM (multi-user.chat)
+           libs/plan/lib.pp    — Unix .plan status (multi-user.user-plan)
+
+         Loader API:
+           (load-string SRC)     read_all forms; eval_one each (define
+                                 persists via existing intercept; route/
+                                 deftype via prims). Stop on first error.
+           (load-library NAME)   load file libs/<NAME>/lib.pp relative to
+                                 PP_LIBS_DIR or ./libs (release CWD).
+
+         Boot / recipes:
+           seed_stdlib → load-library "std" then "ui" then "ai"
+             then (when present) "chat" and "plan" for multi-user social
+           recipe_todo → load-library "todo"
+           recipe_hello → load-library "hello"
+           recipe_bible → load-library "bible"  (types+fns+route ONLY;
+                            does NOT bulk-insert verses)
+
+         Release build MUST copy libs/ into the tarball.
+
+         =========================================================
+         LIBRARY SYNC CLI
+         =========================================================
+         PROBLEM: live function_defs drift from git libs/*.pp when users
+         or AI edit in the browser. Push of kernel does NOT overwrite DB.
+         Developers need explicit sync so laptop git matches language state.
+
+         MODEL:
+         - Local truth for recipes: libs/<pkg>/lib.pp
+         - Live truth for running language: function_defs on current branch
+         - CLI (scripts/pp_sync.py) uses authenticated /api/eval (pp_eval)
+           and export prims — no direct Postgres from laptop required.
+
+         EXPORT PRIMS (image):
+           (function-source "ui/menu")
+             → VStr pretty body only (lambda/list/…) for define
+           (export-package "ui")
+             → VStr multi-form lib.pp text:
+               ;; package ui — exported from live branch
+               (define ui/menu …)
+               (define ui/nav …)
+               … sorted by name
+             Root package "" / "(root)" exports unprefixed names only.
+             Kernel prims are never exported.
+           (package-bindings "ui")
+             → VList of VStr full names in that package on this branch
+
+         CLI:
+           scripts/pp_sync.py status [pkg]
+             Compare libs/<pkg>/lib.pp define names vs live package-bindings.
+             Report only-local / only-live / both (optional body hash later).
+           scripts/pp_sync.py pull <pkg>
+             Write libs/<pkg>/lib.pp from (export-package pkg).
+             Creates directory if missing. Does not auto-commit git.
+           scripts/pp_sync.py push <pkg>
+             (load-library pkg) via pp_eval — file → live (upsert defines).
+           scripts/pp_sync.py pull-all
+             Pull every non-empty package that exists live or under libs/.
+
+         ENV: same as pp_eval (PP_URL PP_USER PP_PASS, ~/.config/pricklypear/env).
+
+         OUT OF SCOPE v1:
+           - data_rows sync (todos/bible text)
+           - automatic merge conflict resolution
+           - function revision history table
+           - Doltgres
+
+         VERIFY:
+           - (export-package "ui") contains define ui/nav
+           - pull ui rewrites libs/ui/lib.pp; status shows both
+           - push ui after edit reloads live
+
+         =========================================================
+         BIBLE LIBRARY (BSB dogfood)
+         =========================================================
+
+         GOAL: read BSB from the live image via Nopales + /bible page.
+         Canon lives in the one-tree datum namespace (shared seed corpus).
+         Functions live in package bible/ via load-library.
+
+         DECISIONS:
+         - Translation v1: BSB only (attribution in page footer / lib header).
+         - Storage: data_rows, NOT giant define / NOT .sexp corpus at runtime.
+         - Ref string (human + share + seed key):
+             BSB:<Abbrev>:<chapter>:<verse>
+             e.g. BSB:John:3:16
+                  BSB:1Cor:13:4
+                  BSB:Ps:23:1
+         - Book token in ref = stable ABBREV (no spaces).
+           Display name on bible-book rows separately.
+         - data_rows.id stays UUID PK (migration 003). Ref is NOT the PK.
+           fields.ref holds BSB:Abbrev:C:V uniquely.
+         - Optional seed optimization: deterministic UUID v5 from ref so
+           tooling can recompute id; Nopales users still call bible/* not raw
+           get-by-uuid. Either UUID-default or v5 is fine if ref unique.
+
+         TYPES (deftype from libs/bible/lib.pp):
+           bible-book:
+             name, abbrev, ordinal, testament
+             (~66 rows; menus / prev-next / name→abbrev map)
+           bible-verse:
+             translation, book, abbrev, chapter, verse, text, ref
+             chapter/verse as JSON numbers or digit strings — pick one
+             in seed and stick to it (prefer numbers in JSON).
+             ref = "BSB:John:3:16" always.
+
+         LOOKUP (needs more than blind rows scan):
+           (get 'bible-verse uuid) alone is not enough for humans.
+           Provide ONE of (make picks; prefer smallest):
+             A. Crud/store helper + prim:
+                (find-row 'bible-verse "ref" "BSB:John:3:16")
+                (find-rows 'bible-verse "abbrev" "John"
+                           ["chapter" 3])  ; chapter list
+             B. Dedicated thin prims bible-get-ref / bible-chapter
+                (worse — special-case kernel).
+           Prefer A (general field find). GIN on fields already exists;
+           add UNIQUE index for idempotent seed:
+             CREATE UNIQUE INDEX data_rows_bible_ref_uidx
+               ON data_rows ((fields->>'ref'))
+               WHERE type_name = 'bible-verse';
+           (migration 004 additive — only if make needs it).
+
+         LISP API (libs/bible/lib.pp):
+           (bible/ref book chapter verse) -> "BSB:John:3:16"
+             book may be name or abbrev; normalize via bible-book catalog
+           (bible/verse book chapter verse) -> text VStr | VNil
+           (bible/verse-row book chapter verse) -> fields JSON VStr | VNil
+           (bible/chapter book chapter) -> VList of verse fields/sexps
+           (bible/books) -> list from bible-book rows ordered by ordinal
+           (bible/search q) -> VList hits (v1: SQL ILIKE or limited scan;
+             may be prim-backed; OK if slow/limited first cut)
+           (bible/page) -> GET renders chapter; POST goto redirects
+           (route "/bible" "bible/page")
+
+         URL SURFACE (exact path /bible only — no path params in v1):
+           GET /bible
+           GET /bible?book=John&chapter=3
+           GET /bible?book=John&chapter=3&verse=16
+           GET /bible?ref=BSB:John:3:16
+           GET /bible?q=love                    (optional search)
+           POST /bible  book= & chapter= & verse=
+             -> redirect to GET with query (PRG)
+           Do NOT require colon-ids in path segments.
+           ref= query is the shareable explicit form (URL-ok in query).
+
+         ABBREV TABLE (seed must use these tokens in ref):
+           Gen Exod Lev Num Deut Josh Judg Ruth 1Sam 2Sam 1Kgs 2Kgs
+           1Chr 2Chr Ezra Neh Esth Job Ps Prov Eccl Song Isa Jer Lam
+           Ezek Dan Hos Joel Amos Obad Jonah Mic Nah Hab Zeph Hag
+           Zech Mal
+           Matt Mark Luke John Acts Rom 1Cor 2Cor Gal Eph Phil Col
+           1Thess 2Thess 1Tim 2Tim Titus Phlm Heb Jas 1Pet 2Pet
+           1John 2John 3John Jude Rev
+           (If vendor data uses different codes, map in seed script;
+            document mapping next to script. Display names full English.)
+
+         BULK SEED SCRIPT (required — not HTTP recipe):
+           Path: scripts/seed_bible_bsb.py  (or .ksh driver + py)
+           Inputs:
+             - BSB source file(s) (JSON/CSV/USFM — vendor format;
+               script owns parsing; do not commit illegal redistrib if
+               license forbids; prefer redistributable BSB dump + NOTICE)
+             - PG connect: same as dev (PP_DB_* / /tmp:5433)
+           Behavior:
+             1. Ensure type_defs exist OR document that load-library bible
+                must run first (deftype). Prefer: script can INSERT type_defs
+                rows for bible-book/bible-verse if missing (author system).
+             2. Upsert ~66 bible-book rows (stable id or fields.abbrev unique).
+             3. Upsert all bible-verse rows:
+                  fields.ref unique; ON CONFLICT DO UPDATE text
+                  (requires unique index on ref — migration or special
+                   conflict target).
+             4. Idempotent: second run = no duplicate verses.
+             5. Print counts: books N, verses M.
+           NOT in recipe_bible HTTP handler (too slow / wrong layer).
+
+         INSTALL STORY:
+           A. scripts/seed_bible_bsb.py     # once per DB
+           B. (load-library "bible")        # or POST /api/recipe/bible
+           C. (bible/verse "John" 3 16)
+           D. open /bible?book=John&chapter=3
+
+         HOME UI (optional make):
+           Card "Install bible library" -> POST /api/recipe/bible
+           Note on card: "Run seed script for BSB text if empty".
+
+         RENDER:
+           v1: simple HTML chapter list + optional verse highlight is OK.
+           Optional: ?view=sexp returns chapter as Nopales list via bare value.
+           Attribution footer: Berean Standard Bible / license line.
+
+         PERSONAL LAYER: notes/bookmarks are NOT bible/dabar — a
+           separate module owns them. Canon text stays shared.
+
+         MAKE CHECKLIST:
+           1. Abbrev map + seed script I/O against sample or full BSB
+           2. migration 004 unique index on verse ref (if upsert needs it)
+           3. find-row / find-rows (or equivalent) for ref + chapter
+           4. libs/bible/lib.pp API + route /bible
+           5. recipe_bible + optional home card
+           6. Smokes in verify stanza above
+
+         OUT OF SCOPE V1:
+           - multi-translation UI
+           - path params /bible/John/3/16 (map later from same ref)
+           - full-text search engine
+           - audio / cross-refs apparatus
+           - pure-sexp file corpus as runtime source of truth
+
+         DEFERRED (packages general): library_files table, git export,
+         multi-file manifests, load from HTTP.
+
+         Kernel prims (OCaml) stay under (kernel) browser package.
+         Majority of app code remains Nopales in .pp files.
+    |))
+   )
+  )
+  (subsection browser-repl
+   (doc "Evaluate Nopales from the browser against the live session env")
+   (status implemented)
+   (verify
+    (build "dune build image")
+    (smoke "POST /api/eval (+ 20 22) => 42; define + call persists"))
+
+   (details
+    (doc (|
+         - GET /repl — input + Eval button
+         - POST /api/eval {expr} -> {ok,value|error}
+         - Same Session.eval_one path as SSH REPL
+         - Not a second interpreter
+    |))
+   )
+  )
+  (subsection function-editor
+   (doc "Load, edit, and save a binding's AST from the UI")
+   (status implemented)
+   (* agent note (|2026-08-02: textarea editor + missing_editor_card + /api/edit/create; live GET /edit/no-such-fn-xyz shows does not exist + Create.|) *)
+   (verify
+    (build "dune build image")
+    (smoke "POST /edit/editor-greet save -> callable via /api/eval")
+    (smoke "GET /edit/missing-fn shows create affordance, not silent TODO only")
+    (smoke "GET /edit/hello after hello-recipe: offers Edit hi-page + Create hello")
+    (smoke "htmx POST create missing fn returns editor partial; save works"))
+   (details
+    (doc (|
+         URL: /edit/<function-name>  (function name, NEVER a route path
+         as the object of edit — routes are pages).
+
+         v1 SHIPPED: plain textarea editor + save on current branch
+         when the binding already exists.
+
+         REQUIRED NEXT — missing binding empty state:
+         When GET /edit/<name> and no function_defs row for name:
+
+         1. Do NOT present only a raw TODO stub as if the user is
+            already editing a real function.
+
+         2. Show an explicit card:
+              Function "<name>" does not exist.
+
+         3. Route awareness: if a page route "/<name>" (or path
+            equal to name) exists with handler H:
+              There is a page /<name> that currently runs function H.
+              Primary:  [ Edit H ]  -> /edit/H
+              Secondary:[ Create function <name> ]
+              Optional: [ Create <name> and point /<name> at it ]
+                (define + route update; power move)
+            If no such route: only Create (and link back to Functions).
+
+         4. Create-in-place via htmx (no full-page dead end):
+              POST /api/edit/create  {name}  (and optional rebind_route)
+              -> 200 HTML partial: the editor form for the new binding
+                 (same fields as GET /edit/<name> after create)
+              hx-target=#editor-root hx-swap=innerHTML
+              Default body stub:
+                (lambda ()\n  "TODO: implement <name>")
+              After create, user saves via existing POST /edit/<name>.
+
+         5. Creating a function does not silently rename routes unless
+            the user chose "point page at it".
+
+         6. Namespaced names (image.packages):
+            - Accept full names with `/` (todo/list) in name field.
+            - Create form MAY split package + local name and join with `/`.
+            - URL routing for /edit/todo/list: either path segments after
+              /edit/ joined back to todo/list, or /edit?name=todo%2Flist.
+              Prefer path join if http router is easy; document choice.
+
+         DEFERRED: optimistic concurrency / stale-body reject.
+         The structural AST tree-editor now lives in
+         structural-editing.ast-structure-view (paths first; stable
+         node storage still via branching.ast-nodes).
+    |))
+   )
+  )
+  (subsection inspector
+   (doc "Inspect values, rows, ASTs, and page→function graphs live")
+   (status implemented)
+   (* agent note (|2026-08-02: /inspect/binding, callees/callers/holes/impact-queue prims; live (callees "ui/nav") → ui/menu menu/bar; inspect page 200.|) *)
+   (implements image/lib/http_pages.ml image/lib/session.ml image/lib/agent_tools.ml image/lib/ast_html.ml image/lib/http_analyze.ml image/lib/call_graph.ml)
+   (verify
+    (build "dune build image")
+    (smoke "GET /inspect/binding/<name> shows author + AST")
+    (smoke "GET /page/hello after recipe: handler hi-page listed")
+    (smoke "page inspector lists callees of handler when body calls other fns")
+    (smoke "(callees \"ui/nav\") returns list; (callers \"ui/menu\") non-empty when nav calls menu")
+    (smoke "after redefine of a callee, impact-queue lists dependents + routes")
+    (smoke "agent install_function result text names impact routes to smoke")
+    (smoke "binding pages show recursion/tail classes and observability badges when function-observability ships"))
+   (details
+    (doc (|
+         ==========================================================
+         SHIPPED (v1 inspector)
+         ==========================================================
+         - binding AST pretty+JSON; data row JSON pretty
+         - Function observability (lisp-interpreter.function-observability):
+           recursion/tail HTML classes, step/DB stats, big-O badge,
+           on-demand (analyze 'fn) / POST /api/analyze/:name, peel.
+         - GET /page/<path>: routing panel + STATIC callee graph
+           (App heads that are Vars → visible function_defs;
+            depth cap 8; cycles skipped)
+         - /bindings "used by": DIRECT handler→route only
+           (not full transitive reverse graph — perf; deep graph
+            stays on /page inspect). Implementation note 2026-07:
+           used_by_pages_map is handler-only to avoid N*depth PG
+           lookups on every /bindings load.
+
+         ==========================================================
+         CHANGE IMPACT (planned) — reverse deps → test obligations
+         ==========================================================
+         Motivation (language + OS):
+           Live define/install is not proof the habitat still works.
+           We already pay for a static call graph on inspect. Use it
+           like Smalltalk senders + Nx "affected": when F changes,
+           flag who depends on F and which routes to re-smoke.
+
+         Industry analogues (do not overbuild):
+           IDE Find References, Bazel/Nx affected, Smalltalk senders,
+           coverage-guided test selection. We want the live-image
+           version, not a full CI product.
+
+         ----------------------------------------------------------
+         A. STATIC GRAPH API (shared kernel)
+         ----------------------------------------------------------
+         Reuse collect_var_apps / page_function_graph style analysis.
+
+         Forward (already):
+           callees(name) → user functions F statically calls
+             (direct App Var heads that resolve to function_defs;
+              optional ~depth default 1 for prims, 8 for inspect)
+
+         Reverse (NEW — function→function, not only routes):
+           Build once per request or cache short-TTL on branch:
+             for each visible binding B with body expr:
+               for each direct callee C in collect_var_apps(body):
+                 callers[C] := callers[C] ∪ {B}
+           callers(name) → list of B that directly App-call name
+           dependents(name, ~depth) → BFS reverse edges, cap depth
+             (default 8), cycle-safe; exclude name itself
+
+         Routes (extend used_by):
+           used_by_routes(name):
+             - always include routes whose handler = name
+             - PLUS routes whose handler's transitive callees
+               include name (reuse page_function_graph or reverse
+               map from cached forward graphs). Cap cost: compute
+               reverse route index when building callers map once
+               per branch snapshot, not per /bindings row naively.
+
+         Nopales prims (session-aware, read-only, any authed user):
+           (callees name [depth])     → VList of VStr names
+           (callers name)             → VList of VStr names (direct)
+           (dependents name [depth])  → VList of VStr names
+           (used-by-routes name)      → VList of route path strings
+
+         Missing name → () or empty list (not error).
+         Prims/kernel names: callers may be empty; still OK.
+         IMPORTANT (image.dnu-stubs): callers(name) MUST work when
+         name is not yet a function_def — reverse index is built
+         from all visible bodies' App-Var heads, not only defined
+         callees. holes(name) lives in dnu-stubs; shares walk.
+
+         ----------------------------------------------------------
+         B. IMPACT QUEUE (on define / install)
+         ----------------------------------------------------------
+         When a binding is successfully defined or install_function
+         succeeds for NAME on the current branch:
+
+           impact = {
+             name: NAME
+             at: timestamp
+             branch: current branch ref
+             author: whoami
+             dependents: dependents(NAME)
+             routes: used-by-routes(NAME)
+             status: pending | smoked | dismissed
+           }
+
+         Storage (v1):
+           Session-local ring buffer (last N=32 impacts) on Session.t
+           is enough for agent + UI banner. Optional later: data_rows
+           type impact-event for cross-request durability.
+
+         Surfaces:
+           1) Nopales:
+                (impact-queue) → list of impact dicts/JSON strings
+                (impact-clear [name|all])
+                (impact-mark name 'smoked|'dismissed)
+           2) define / install_function return path (agent tools):
+                append human-readable block:
+                  "impact: dependents=…; smoke routes: /a /b"
+                If routes empty: "impact: no routes; eval dependents
+                  or smoke parents manually"
+           3) UI (light):
+                /bindings or /edit/<name>: badge "N dependents" +
+                link to impact panel; optional site chrome banner
+                when queue has pending items for this branch
+                (do not block editing).
+
+         Do NOT fail define because dependents exist — only notify.
+
+         ----------------------------------------------------------
+         C. "NEEDS TESTING" LADDER
+         ----------------------------------------------------------
+         L0 (MVP — ship first): awareness only (queue + agent text)
+         L1: optional auto eval of pure dependents (if effect pure)
+         L2: recommend/auto smoke_route for each used-by-routes entry
+             (agent definition-of-done already requires smoke; impact
+              tells WHICH paths)
+         L3 (later): hard badge red until smoke or dismiss
+
+         Default ship L0+L2-hints. No blocking L3 in v1.
+
+         ----------------------------------------------------------
+         D. AGENT SEED
+         ----------------------------------------------------------
+         After install_function / eval define of a package function:
+           - Read impact (tool result or (impact-queue))
+           - smoke_route every listed route (GET, contains marker)
+           - eval_expr key pure dependents if no routes
+           - Final summary must mention impact smokes
+
+         ----------------------------------------------------------
+         E. LIMITS (honest static analysis)
+         ----------------------------------------------------------
+           - No dynamic apply / computed names
+           - Higher-order (map f xs) may miss f unless App head
+           - Macros: graph is source App Vars (post-expand ideal
+             later; v1 source walk matches today's inspector)
+           - False negatives possible — route smokes remain truth
+           - Noise control: only enqueue when NAME is a stored
+             function_def (not every let-bound local); skip if
+             dependents and routes both empty
+
+         ----------------------------------------------------------
+         F. NON-GOALS
+         ----------------------------------------------------------
+           - Runtime request traces / dynamic call sampling
+           - Full CI product / GitHub integration
+           - Coverage-guided line maps
+           - Blocking save on dirty dependents
+           - Cross-branch impact (only current branch visibility)
+
+         ----------------------------------------------------------
+         G. IMPLEMENTATION PHASES
+         ----------------------------------------------------------
+         Phase I1: shared graph helpers + (callees)/(callers)/
+                   (dependents)/(used-by-routes); unit/smoke
+                   (callers works for missing names — DNU)
+         Phase I2: impact-queue on define + install_function text;
+                   (impact-queue)/(impact-clear)/(impact-mark);
+                   same hook appends change-transcript
+                   (branching.change-set)
+         Phase I3: /bindings detail Callers/Callees/Impact badge;
+                   agent seed paragraph
+         Phase I4 (optional): short-TTL cache; L1 pure auto-eval
+
+         Combo-pack build order (whole five):
+           I1 graph → I2 define hooks (impact+changeset) →
+           browser detail panels → dnu-stubs → desktop 3-pane
+
+         ----------------------------------------------------------
+         H. SUCCESS
+         ----------------------------------------------------------
+           - Changing ui/menu shows ui/nav (or similar) in callers
+           - used-by-routes for a shared helper lists real pages
+           - Agent after install is told which routes to smoke
+           - /bindings stays fast (no per-row depth-8 walk regress)
+
+         DEFERRED (still): eval-result inspect, type-def deep
+         inspect, runtime traces, mutate-from-inspector.
+
+         ==========================================================
+         COMBO-PACK NOTE
+         ==========================================================
+         Inspector owns graph + impact + value inspect (#1, #3).
+         Browser hub: image.system-browser. Change transcript:
+         branching.change-set. Holes: image.dnu-stubs. Define hook
+         is the shared write path for impact + change-set append.
+    |))
+   )
+  )
+  (subsection dnu-stubs
+   (doc "doesNotUnderstand-style holes: unbound names → stub + callers for agents")
+   (status implemented)
+   (* agent note (|2026-08-02: holes + stub-function prims; binding page holes panel; unbound handler Create stub; session registers graph/DNU prims.|) *)
+   (implements image/lib/http_pages.ml image/lib/session.ml image/lib/http.ml)
+   (verify
+    (build "dune build image")
+    (smoke "eval unbound foo yields structured unbound_var with name=foo")
+    (smoke "(holes \"ui/nav\") lists App-Var names in body not bound as fn/prim")
+    (smoke "POST stub create missing name → callable lambda TODO stub")
+    (smoke "unbound route handler page offers Create stub + Callers")
+    (smoke "agent after unbound error can stub then see callers of stub name"))
+   (details
+    (doc (|
+         ==========================================================
+         WHY (Smalltalk doesNotUnderstand, agent-friendly)
+         ==========================================================
+         Live images fill holes instead of failing closed forever.
+         Agents hit unbound names constantly (typos, planned fns,
+         half-migrated packages). Today: bare Unbound_var / handler
+         unbound cards. Goal: a closed loop without becoming CI:
+
+           missing name
+             → structured error (kind + name)
+             → who already calls it? (static callers — may be empty)
+             → one-click / one-tool stub (lambda TODO)
+             → edit + impact/smoke via existing inspector paths
+
+         This is NOT a full condition system (see
+         lisp-interpreter.errors-and-locations for guard/catch).
+         DNU here = product UX + agent affordance on holes.
+
+         ==========================================================
+         A. STRUCTURED UNBOUND (host)
+         ==========================================================
+         Keep raising Interp_error (Unbound_var name). Surfaces must
+         expose machine fields (align with errors-and-locations C):
+           kind: unbound_var
+           name: <missing>
+           source: optional define/handler context
+         /api/eval JSON and agent tool errors include name= so agents
+         do not regex the message. REPL print may stay one-line.
+
+         ==========================================================
+         B. STATIC HOLES IN A BODY
+         ==========================================================
+         holes(name) — for stored function NAME:
+           walk body with collect_var_apps (same as graph)
+           candidate = App-Var heads
+           hole if not in: prim registry ∪ visible function_defs
+                           ∪ special forms ∪ lambda params / lets
+                           (best-effort; App heads only; accept
+                            false negatives on dynamic names)
+         Nopales: (holes name) → VList of VStr
+         UI: browser detail + editor show Holes list.
+
+         ==========================================================
+         C. STUB CREATE
+         ==========================================================
+         Default stub body (same spirit as function-editor missing):
+           (lambda ()
+             "TODO: implement <name>")
+         Zero-arg v1; agent/human edits signature. Never invent args.
+
+         Paths:
+           1) function-editor missing card [Create] — already
+              specified; dnu-stubs REUSES it (POST /api/edit/create)
+           2) Nopales (stub-function name) → define stub if missing;
+              error if already bound (use install/edit to overwrite)
+           3) Unbound handler HTTP response: card with
+                handler H unbound
+                [Create stub H] [Edit if exists] [Callers of H]
+           4) Agent tool optional stub_function name= — thin wrap
+              over same define_binding; seed text: on unbound_var,
+              stub → install real body → smoke impact routes
+
+         Creating a stub is a normal define: fires impact-queue +
+         change-set transcript hooks.
+
+         ==========================================================
+         D. CALLERS OF A HOLE
+         ==========================================================
+         Even when NAME is unbound, reverse graph still finds B
+         whose body App-calls NAME (static). (callers name) must
+         work for missing names (build from all visible bodies),
+         not only defined callees. Critical for "who wanted this?"
+
+         ==========================================================
+         E. NON-GOALS
+         ==========================================================
+           - Runtime doesNotUnderstand method dispatch / prototype OO
+           - Auto-generating real implementations via LLM on every miss
+           - Catching unbound inside every page without guard (that's
+             errors-and-locations phase 2)
+           - Stubbing kernel prim names
+
+         ==========================================================
+         F. PHASES
+         ==========================================================
+         D1: structured unbound name in /api/eval + (holes)
+         D2: callers works for missing names; UI holes on detail
+         D3: stub-function + unbound handler card + agent note
+         D4: wire browser detail Holes panel (system-browser)
+
+         SUCCESS: agent sees unbound: foo with name field, stubs
+         foo, finds callers, fills body, impact lists routes.
+    |))
+   )
+  )
+ )
+
+)

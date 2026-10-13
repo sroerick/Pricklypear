@@ -1,0 +1,368 @@
+(project pricklypear-upsets
+ (doc "Pricklypear book chapter: upsets — prediction-market informed-flow analytics. Watch public exchange odds + wallet-attributed prints (Polymarket first), detect flow that precedes public information, simulate trading rules point-in-time-honestly, paper-trade in the habitat, and only then talk about execution. v1 ships zero new kernel code.")
+ (status planned)
+ (* agent note (|2026-09 plan pass: chapter born from the detection-system discussion. Recon that shapes it (all verified live before spec'ing): (a) the image ALREADY ships the whole egress/schedule story — http-get/http-post behind gate_http (image/lib/prims_net.ml, admin/agent-only), durable jobs + cron schedules + step checkpoints (image/lib/jobs.ml, borge/jobs.borg), deftype rows in the one tree; so v1 needs NO new kernel code, only package code in libs/upsets. (b) A laptop spike (~/dev/upsets, Python) pulled 284 resolved Polymarket markets and found the premise holds in-sample: winning longshot tokens reprice to ~1.0 BEFORE the final hour (tradable window is 24-72h out), and correlated bucket-sweeps by recurring pseudonymous wallets (Clacton by-election; top-3 buy-side concentration 24-68% of volume) are visible in the public data-api trade prints. (c) poohstack switch: mirage-crypto-pk ships RSA (Kalshi signing is zero-new-deps); secp256k1 + keccak are NOT on the switch (Polymarket EIP-712 would need two small opam adds) — both live only in upsets.execution, paper-gated. The trading-strategy premise (informed flow precedes public info; follow the flow, never the upset) and the honesty constraints below were agreed in conversation before this chapter was written.|) *)
+ (convention ocaml-dune)
+ (section upsets
+
+  (doc "Prediction-market informed-flow analytics as habitat software: ingest as Nopales schedules, domain state as typed tree rows, heavy analytics as a pure OCaml bench in spikes/upsets, decisions as Nopales rules over paper money, execution as a later spec-gated kernel change.")
+  (status planned)
+
+  (subsection premise
+   (doc "The research premise + recon evidence + the honesty laws the build must obey. Nothing below ships until this section's constraints are respected everywhere.")
+   (status planned)
+   (details
+    (doc (|
+         =========================================================
+         WHY THIS CHAPTER EXISTS
+         =========================================================
+         A multi-user Lisp OS should be the kind of place where a
+         market-analysis machine accretes out of rows, schedules,
+         and routes — not a new service. This system watches public
+         prediction-market odds and wallet-attributed trade prints
+         (Polymarket first) for price/volume movement that precedes
+         public information, records the flow as habitat data, and
+         fires signals a person (later a paper ledger, much later
+         an executor) can act on.
+
+         THE PREMISE: on thin, retail-dominated markets, informed
+         flow (insiders, count-floor observers, faster semi-public
+         feeds) buys longshots BEFORE news exists. Detection is
+         therefore not prediction of events — it is recognition of
+         anomalous flow: velocity anomalies, buy-side concentration,
+         and the same wallets sweeping correlated outcome buckets.
+
+         =========================================================
+         RECON EVIDENCE (2026-09 laptop spike, ~/dev/upsets)
+         =========================================================
+         284 resolved Polymarket markets scanned end-to-end:
+           1. In every upset examined, the winning token traded at
+              ~1.0 BEFORE the final hour (odds_1h ~= 1.00). The
+              buyable window was 24-72h before resolution (e.g.
+              Clacton margin buckets at 12-37c; Shein IPO cap at
+              29c with 24h left). Betting "at the declaration" is
+              always too late; follow the drift, not the resolution.
+           2. Wallet co-occurrence: the same pseudonymous wallets
+              (Flipadelphia 4 buckets, Genuine-Lapdog-Second $40.8k
+              at 57c in "Farage 70-80%",
+              Lively-Provider/Ethical-Reception/Insecure-Mosque x2)
+              swept entire correlated margin-bucket ladders hours
+              before the public count result.
+           3. Buy-side concentration: top-3 wallets carried 24-68%
+              of buy volume on winning tokens. Thin markets make
+              informed flow LEGIBLE — that legibility is the asset.
+
+         =========================================================
+         THE HONESTY LAWS (design constraints, not disclaimers)
+         =========================================================
+           L-1 FAVORITE-LONGSHOT TAX — longshots are systematically
+              overpriced; naive "bet the upset" loses money at
+              scale. The system may only ever buy ALONGSIDE
+              anomalous flow, never the upset itself. Every rule
+              report must carry the base-rate tax: the loss rate of
+              UNTRIGGERED longshots at the same odds band. A rule
+              whose edge does not exceed the tax is not a rule.
+           L-2 NO LOOKAHEAD, EVER — every rule sees only a
+              point-in-time view (ts <= T). The simulator guards
+              this with the poison-the-future regression test
+              (upsets.simulator): corrupt all post-T data, assert
+              the t<=T signal log is byte-identical. This is the
+              invariant the entire research loop hinges on.
+           L-3 LEADS, NOT VERDICTS — the system infers "flow that
+              preceded public information"; it never diagnoses
+              insiders and never publishes claims about persons.
+              Wallets are treated as behavioral clusters, not
+              identities.
+           L-4 PAPER FIRST — no real order is placed until the
+              paper ledger (upsets.control-surface) demonstrates
+              positive expectancy across a manifest-controlled
+              holdout window (upsets.execution states the gate).
+           L-5 RULES ARE DATA — a trading rule is a parameter
+              JSON row; every run of a rule (live or sim) produces
+              a sim-manifest row (dataset-hash + rule-hash + params
+              + metrics + window kind train/validate/holdout). The
+              habitat-workflow obituary rule applies to strategies:
+              rule changes are new manifests, never silent edits.
+
+         =========================================================
+         WHAT FOLLOWS FROM DECISIONS ALREADY MADE
+         =========================================================
+           - NO NEW KERNEL PRIMS IN V1 — egress reuses
+             image.outbound-http (http-get/http-post, gate_http:
+             admin/agent-only, deny-anon precedent), scheduling
+             reuses jobs.schedules (5-field cron / every-ms, SKIP
+             LOCKED runner), storage reuses deftype rows in the one
+             tree. v1 is therefore pure habitat product track: a
+             package, not a kernel change. The only planned kernel
+             work is upsets.execution, kept behind L-4's gate.
+           - TREE IS TRUTH, READ-MODEL SHAPED — jobs.borg chose a
+             dedicated table for SKIP LOCKED; nothing here needs
+             kernel-hot claim protocols, so all domain state is
+             typed data rows (data.upsets.*): /data browsing,
+             backlinks, branch-scoping come free.
+           - AGGREGATE, DON'T HOARD — raw trade prints reduce at
+             ingest time to per-market-per-wallet wallet-flow rows
+             (like jobs' step checkpoints compressing state). The
+             tree never stores raw print streams; the OCaml bench
+             holds full dumps on disk only while analyzing.
+           - TWO-TIER COMPUTE — incremental per-tick detection is
+             Nopales-over-rows (bounded: a few hundred watched
+             markets per tick). Batch history analytics (calibration
+             over thousands of resolved markets) is the OCaml bench —
+             known interpreter floors (notes/doc/get pathology,
+             function-stat ring) bound what a schedule tick may
+             attempt. Same line the kernel itself draws: OCaml does
+             I/O and heavy math; Nopales owns decisions + surfaces.
+         |)))
+  )
+
+  (subsection data-model
+   (doc "The typed tree rows that are the whole domain store. Everything else in the chapter reads or writes these six types.")
+   (status planned)
+   (details
+    (doc (|
+         Six deftype types, all placed under data.upsets.* on the
+         operator's branch (package defaults help via system/main
+         only when promoted). All ids are uuid7-ish strings minted
+         by the package (crypto-RNG precedent: net_prims i-1787971303).
+
+         pm-market       question slug condition-id token-yes token-no
+                         vol end status (open|closed) last-odds
+                         observed-at category
+         pm-odds         market-id ts p        ;; hourly points, kept
+                                              ;; ONLY for watched markets
+         wallet-flow     market-id wallet side (buy|sell) usd n
+                         first-ts last-ts      ;; ingest-time aggregate
+         signal          market-id kind score evidence-json fired-at
+                         rule-id status (open|acted|expired|settled)
+                         kinds: VELOCITY | LADDER-SWEEP | SHARP-ENTRY
+         paper-order     market-id side (yes|no) entry-odds size-usd
+                         opened-at settled-at resolved-outcome pnl
+                         rule-id manifest-id
+         sim-manifest    dataset-hash rule-hash params-json window
+                         (from,to) window-kind (train|validate|holdout)
+                         metrics-json created-at
+                         ;; metrics-json must include the L-1 base-rate
+                         ;; tax for the odds bands touched
+
+         PLACEMENT NOTE: pm-odds points are capped to watched markets
+         (a market becomes watched when odds_24h < 0.40 OR volume
+         crosses threshold OR any wallet-flow row references it) — the
+         tree is an analytics substrate, not a market-data mirror.
+         |)))
+  )
+
+  (subsection ingest
+   (doc "Scheduled Nopales pollers over the existing http-get prim. Polymarket Gamma (market discovery), CLOB prices-history (hourly odds for watched markets), data-api trades (reduced to wallet-flow rows). No new kernel code.")
+   (status planned)
+   (verify
+    (smoke "(load-library \"upsets\") then (upsets/poll) once: pm-market rows appear in /data on the current branch")
+    (smoke "(schedule \"upsets-poll\" \"*/5 * * * *\" \"upsets/poll\") then (jobs) shows the due run; a second poll call is idempotent (no duplicate rows)")
+    (smoke "http-get failures (host down, 4xx) recorded in the job result and retried per jobs.runner backoff — no crash, no partial row state"))
+   (details
+    (doc (|
+         SURFACE (all functions on the current branch):
+
+           (upsets/poll)             ; discovery: gamma /markets
+                                     ; (closed=false, recent), upsert
+                                     ; pm-market rows; mark watched set
+           (upsets/poll-odds)        ; clob /prices-history per watched
+                                     ; market, hourly fidelity, dedupe
+           (upsets/poll-flow)        ; data-api /trades per watched
+                                     ; market -> fold into wallet-flow
+                                     ; rows (aggregate per market x
+                                     ; wallet x side)
+
+         SCHEDULES (shipped off; the operator turns them on):
+           upsets-poll     */5 min   (markets, cheap)
+           upsets-odds     hourly    (watched-set only)
+           upsets-flow     */15 min  (watched-set only)
+
+         BUDGET DISCIPLINE: each tick is a single job with step
+         checkpoints ((step "gamma" ...) etc.) so a mid-tick failure
+         resumes; per-tick market count is capped (default 500) so a
+         tick fits the interpreter floors; the identity gate on
+         http-get means polls run as the operator user, never anon —
+         routes stay private, schedules submit as the scheduled-by
+         user (jobs.prims semantics).
+         |)))
+   (* agent note (|2026-09-05 make pass: package libs/upsets/lib.pp written + loaded; lab-verified END TO END on the dev image (scripts/dev.sh): poll {markets:226} idempotent, poll-odds {points:4349} watermarked by last-odds-ts, poll-flow {flows:1093} idempotent (delta 0 on immediate re-run). REQUIRED kernel ships in the same cycle: jobs runner unbudgeted (jobs.borg runner agent note - request-path 100k budget killed the first tick mid-poll) + image.prim sort (stdlib-round-2 batch). PROD DEPLOY PENDING (operator call): the running prod image predates both kernel changes, so schedules stay OFF until deploy. Loader: scripts/load_upsets.py (one pp_eval -i session; defines bind that session env AND persist via Store.persist_function). GOTCHAS recorded: (1) begin-checkout does not switch the env for the rest of the same eval - the session default branch owns defines (admin/personal on lab); (2) dict-get returns complex sub-values as JSON STRINGS - json-parse arrays explicitly; (3) kernel let / std let* are single-body forms; (4) clob prices-history points are objects {t,p}; data-api ts parses as float - floor before quotient.|) *)
+   (implements libs/upsets/lib.pp)
+  )
+
+  (subsection analytics-bench
+   (doc "Pure OCaml analytics library in spikes/upsets: statistics (drift velocity, volume z-scores vs a market's own trailing baseline), wallet co-occurrence across correlated markets, ladder-sweep detection, concentration metrics. No I/O, JSON in/out (yojson), alcotest all the way down. This is the OCaml tier of TWO-TIER COMPUTE and the seat of the research loop.")
+   (status planned)
+   (verify
+    (build "dune build @all — spikes/upsets compiles on poohstack")
+    (test "dune runtest (spikes/upsets alcotest): baseline/z-score windows, co-occurrence window aggregation, concentration = top-k share, ladder-sweep = correlated-market clustering reproduce hand-computed fixtures incl. the Clacton co-occurrence episode (Flipadelphia-family across 4 buckets)"))
+   (details
+    (doc (|
+         WHY SPIKES/: the bench is an experiment by definition —
+         spikes/ is the book-tolerated home for exactly this
+         (precedent: spikes/jsoo_interp). IF the bench graduates into
+         something kernel-adjacent, it arrives via a later chapter;
+         it does not accrete silently.
+
+         SURFACE (library, pure functions over value types mirroring
+         the data-model rows):
+
+           Stats : trailing_baseline; z; price_delta
+           Flow  : concentration topk; wallet_window_aggregate
+           Cooc  : cooccur wallet x market window ->
+                   clusters (min-cosupport, min-markets)
+           Rules : a rule is a closed OCaml record of params —
+                   thresholds (z, min-odds, max-odds, concentration,
+                   window sizes, bankroll fraction); rule_hash is a
+                   sha256 (digestif) over the canonical JSON of the
+                   record. The Nopales rule row and the OCaml record
+                   serialise the SAME canonical JSON — that sameness
+                   is what makes upsets.parity-contract possible.
+
+         CSV/JSON snapshots are the boundary format: the habitat
+         exports rows (pp_eval eval of an exporter fn -> JSON file);
+         the bench consumes files. The bench never talks to Postgres
+         and never needs the image running.
+         |)))
+   (implements spikes/upsets/dune spikes/upsets/stats.ml spikes/upsets/flow.ml spikes/upsets/cooc.ml spikes/upsets/rules.ml spikes/upsets/types.ml)
+  )
+
+  (subsection simulator
+   (doc "Event-replay backtester over historical snapshots with enforced point-in-time discipline. Rule evaluation at time T sees only data with ts <= T; fills resolve at the next actual print (never the signal tick's price); every run emits a sim-manifest row. The guard that keeps it honest is the poison-the-future regression test (L-2).")
+   (status planned)
+   (verify
+    (test "poison-the-future: replay snapshot S with all post-T rows corrupted (flipped resolutions, moved prints) — the signal log and paper fills with ts <= T are BYTE-IDENTICAL to the clean run")
+    (test "fill discipline: no fill may price at its own signal tick; fills use the next print on that token after T, plus the slippage model's depth haircut; fills beyond window end are unrealised and reported as such")
+    (test "walk-forward: train windows optimise params; validate windows tune params; the holdout window is touched exactly once, flagged in the manifest, and a second holdout run on the same rule-hash is refused by the CLI"))
+   (details
+    (doc (|
+         MODEL:
+
+           snapshot  = ordered stream of rows (markets, odds points,
+                       wallet-flows, resolutions) as exported from the
+                       habitat or constructed from API dumps
+           replay    = sweep t through the stream; at each t, present
+                       the rule with the as-of view (all rows ts <= t)
+           fills     = signal at t -> limit price = next actual print
+                       p' on that token with ts > t, adjusted by a
+                       depth haircut param (size vs observed depth);
+                       fees param; bankroll = fixed fractional
+                       (default 2% of paper bankroll per signal)
+           settle    = at resolution, paper-order pnl = shares * (1 -
+                       entry) for winners, -size for losers
+           metrics   = hit-rate, avg entry-odds, expectancy per
+                       signal, max drawdown, PnL curve, AND the L-1
+                       base-rate tax over the same odds band with no
+                       trigger (the number every rule must beat)
+
+         THE HOLDOUT DISCIPLINE: windows are labelled train /
+         validate / holdout in the snapshot header. The CLI refuses a
+         second run that names the same rule-hash on a holdout window
+         (rule-iteration after holdout contact makes it validate);
+         the manifest trails are the audit. This encodes multiple-
+         hypotheses honesty as machine behaviour rather than intent.
+
+         CLI: spikes/upsets/sim_main.ml ->
+           upsets-sim --snapshot S.json --rule R.json \
+                      --window train|validate|holdout \
+                      --out manifest.json
+         |)))
+   (implements spikes/upsets/sim_main.ml spikes/upsets/replay.ml spikes/upsets/fills.ml spikes/upsets/poison_test.ml)
+  )
+
+  (subsection parity-contract
+   (doc "Two implementations, one contract — the borge-drift discipline applied to strategy code: the Nopales replay engine (rules as evaluated live in the habitat) must produce the same metrics as the OCaml simulator over the same snapshot, within float tolerance. The drift check between research code and live code is a test, not a hope.")
+   (status planned)
+   (verify
+    (smoke "scripts/smoke_upsets_parity.sh: export snapshot from habitat -> upsets-sim metrics A; (load-library \"upsets/sim\") (upsets/replay-snapshot ...) -> metrics B; assert |A-B| < 1e-6 per metric; REQUIRED to pass before any rule is promoted from validate to live trading"))
+   (details
+    (doc (|
+         The canonical-JSON rule record (analytics-bench) deserialises
+         identically in both tiers: the OCaml record and the Nopales
+         dict MUST hash equal (rule-hash checked on load in both).
+         Slippage haircuts and fees are named params in the rule
+         record so both engines apply identical fill arithmetic.
+         Known soft spot: Nopales float ops vs OCaml floats — the
+         tolerance (1e-6) accommodates only representation noise; a
+         mismatch beyond that is a failing test, never a clamp.
+         |)))
+   (implements libs/upsets/sim/lib.pp scripts/smoke_upsets_parity.sh)
+  )
+
+  (subsection control-surface
+   (doc "The habitat faces: signal board, market drill-down with odds sparkline, wallet co-occurrence view, and the paper-trading ledger that settles against resolutions (jobs-scheduled). Signal alerts ride the existing ntfy package (borge/notify.borg) once a rule graduates to live.")
+   (status planned)
+   (verify
+    (smoke "/upsets renders the signal board (agent FE verify tier: wget structure check, then smoke_notes-style CDP shot per docs/agent-ui-harness.md) on the operator branch, private route")
+    (smoke "paper-order lifecycle: signal -> (upsets/take signal-id size) -> order row -> market resolves -> settle job writes pnl + manifest-linked result; /upsets/positions shows PnL curve")
+    (smoke "branch hygiene: all faces + rules live on <user>/dev until promoted; promote to system/main only after parity-contract passes on the target rule"))
+   (details
+    (doc (|
+         ROUTES (private by default; anonymous stays on system/main
+         per routing defaults):
+           /upsets                signal board (htmx partial refresh,
+                                  ranked by score, evidence expander)
+           /upsets/m/<mid>        market drill: odds sparkline
+                                  (pm-odds), wallet-flow table,
+                                  related markets (co-occurrence)
+           /upsets/wallets        cluster view: wallet x market
+                                  co-occurrence matrix, cluster
+                                  coloring, win-rate per cluster
+           /upsets/rules          rule rows + manifest trail (the
+                                  obituary surface: every rule edit
+                                  is a new manifest; old manifests
+                                  read-only)
+           /upsets/positions      paper ledger: open orders, settled
+                                  history, equity curve, base-rate
+                                  tax comparison band shown beside
+                                  every metric (L-1 visible in UI,
+                                  not just in manifests)
+         ALERTS: on signal insert, (ntfy/send ...) push via the
+         notify chapter's existing package; config row on the
+         operator's branch. Phone-in-hand betting is the sanctioned
+         v1 execution mode (human is the executor until upsets.
+         execution clears its gate).
+         |)))
+   (implements libs/upsets/lib.pp libs/upsets/ui/lib.pp)
+  )
+
+  (subsection execution
+   (doc "PLANNED KERNEL CHANGE, gated: capability-gated signing prims so route/handler Nopales can place real orders through the venues' signed APIs. Deliberately deferred behind L-4's paper-proof gate; landing any of this is its own borge issue -> plan pass, not part of v1 make scope.")
+   (status planned)
+   (details
+    (doc (|
+         GATED ENTRY CONDITION (test before make scope opens): paper
+         ledger manifests show positive expectancy above the L-1
+         base-rate tax across >= 30 settled holdout signals, with
+         parity-contract green on the live rule. A verbal "looks
+         good" does not open this section.
+
+         THE SHAPE (named now so the plan pass has a target, per the
+         'deferred designs get named, not invented' norm):
+
+           (rsa-sign payload-json)          ; Kalshi: mirage-crypto-pk
+                                            ; RSA + SHA256 — ALREADY
+                                            ; on the switch, zero new
+                                            ; deps
+           (eip712-sign typed-data-json)    ; Polymarket: needs opam
+                                            ; adds secp256k1 +
+                                            ; keccak (recorded 2026-09;
+                                            ; absent today)
+
+         KEY CUSTODY LAW: private keys never enter Nopales, never
+         touch the tree, never cross the eval API. The kernel reads
+         key material at boot from a mode-600 file under
+         $PP_SECRETS_DIR (precedent: ~/.config/pricklypear/env and
+         the argon2 PHC storage); prims receive ONLY the payload.
+         Identity gate: same shape as prims_net.gate_http — anon
+         denied, admin/agent only, per-session audit row on every
+         signature (who signed what, when, for which venue).
+         Signed requests ride the EXISTING http-post engine; venues
+         reachable: Kalshi external-api (US-legal regulated venue);
+         Polymarket CLOB (jurisdiction constraint is the operator's
+         to respect, recorded here so the choice is conscious).
+         |)))
+   (implements image/lib/prims_sign.ml)
+  )
+ )
+)

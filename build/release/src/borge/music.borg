@@ -1,0 +1,137 @@
+(project pricklypear-music
+ (doc "Pricklypear book chapter: music — the little music player package")
+ (status implemented)
+ (* agent note (|2026-08-31: shipped end to end. Kernel 8684cc8 (audio whitelist + caps + Range/206) + 28e0893 (admin get-by-uuid 404 fix) + 4ec10ee (register media prims) + fb477ca (request-multipart + media-put-raw + multipart route cap). Package promoted to system/main (24 music/* bindings + /music route), vault synced via pp-sync snapshot. Verified on prod: multipart upload w/ metadata, ?play player card, pl-create/pl-add/pl-tracks, delete row+blob, htmx fragment swaps, Range/206 on the player src. Data rows are branch-shared; test data cleaned after smoke.|) *)
+ (convention nopales-package)
+ (section music
+  (doc "Tracks + playlists on data_rows; audio bytes in media_blobs; player is <audio controls> over the kernel Range/206 serve path")
+  (status implemented)
+  (implements libs/music/lib.pp)
+
+  (subsection model
+   (doc "music-track and music-playlist rows; media_id points at media_blobs")
+   (status implemented)
+   (details
+    (doc (|
+         deftype 'music-track 'title 'artist 'album 'media_id 'notes
+         deftype 'music-playlist 'title 'track_ids
+
+         - Track bytes live in media_blobs (a branch-free store,
+           author-owned); the row is a Nopales-side catalog entry.
+         - track_ids is a comma-separated list of track row ids in
+           playlist order. Deliberately NOT an outline tree: order
+           is data, not structure (tree_nodes is for documents).
+         - No per-user scoping yet: rows are branch-lens data like
+           every data_rows type. Personal libraries = personal branch.
+   |))
+   )
+  )
+
+  (subsection upload-flow
+   (doc "Browser multipart POST /music -> (request-multipart) -> (media-put-raw) -> music-track row")
+   (status implemented)
+   (details
+    (doc (|
+         FLOW 1 (upload): the /music page's form posts
+         multipart/form-data (file + title + artist + album) to the
+         Nopales route. The handler:
+
+           (define parts (request-multipart))
+           ;; file part: (name filename content-type data)
+           (media-put-raw (or ct (music/guess-type filename)) bytes filename)
+
+         Kernel support added for this flow:
+         - (request-multipart): parses multipart/form-data route
+           bodies (reuses the http_media parser behind /api/media).
+         - (media-put-raw): Media.put with the type-aware HTTP
+           ceiling (64 MiB audio) instead of media-put's 256 KiB
+           eval ceiling.
+         - http.route_body_cap: multipart route POSTs may carry up
+           to the media ceiling; urlencoded bodies keep 64 KiB.
+
+         Flow numbering: upload=1, play=2, playlist=3, delete=4.
+         Canonical path: upload -> media-put-raw -> music/create ->
+         music/table-html renders the new row.
+
+         FORM ENCODING (2026-09-01 fix): the upload form MUST carry
+         enctype=multipart/form-data AND hx-encoding=multipart/form-data
+         — a plain form urlencodes the filename only, and htmx does the
+         same unless hx-encoding is set. The first ship omitted both;
+         curl-based smokes (raw multipart) passed while the browser
+         button did nothing. handle-post answers non-multipart bodies
+         with a status string instead of letting request-multipart
+         raise. FE-verify lesson: test through the real form encoding.
+   |))
+   )
+   (verify
+    (smoke "POST /music multipart (wav + title): 201-equivalent row appears in the table; blob in media_blobs with audio/wav")
+    (smoke "title part missing -> row titled 'Untitled'; file part missing -> status line, no row")
+    (smoke ">64 MiB audio -> 413; non-audio type -> media-put-raw error string, no row"))
+  )
+
+  (subsection play
+   (doc "?play=<track-id> loads the row's media_id into the player card; Range/206 seeking comes from the kernel serve path")
+   (status implemented)
+   (details
+    (doc (|
+         FLOW 2 (play): GET /music renders the player card bound to
+         ?play=<track-id> (or the POST action=play equivalent for
+         htmx swaps): <audio controls preload="none"
+         src="/media/<media_id>">. No signed URLs — the <audio> fetch
+         uses the session cookie like any private page; the DECISION
+         NOT to sign URLs lives in music/non-goals.
+   |))
+   )
+   (verify
+    (smoke "GET /music?play=<id> renders <audio src=/media/<media_id>>")
+    (smoke "seeking in the browser sends Range and gets 206 (kernel storage.media)"))
+  )
+
+  (subsection playlists
+   (doc "music-playlist rows with a comma-separated track_ids order")
+   (status implemented)
+   (details
+    (doc (|
+         FLOW 3 (playlist): POST /music action=pl-create title=...
+         creates an empty playlist; action=pl-add pl=<id>
+         track=<id> appends. music/pl-tracks resolves the order to
+         track dicts for rendering. Comma-separated ids keep the
+         order visible in /data and editable without a tree walker.
+   |))
+   )
+   (verify
+    (smoke "pl-create + two pl-add: pl-tracks returns the two tracks in order"))
+  )
+
+  (subsection non-goals
+   (doc "Explicitly NOT in v1, with reasons")
+   (status implemented)
+   (details
+    (doc (|
+         - NO signed stream URLs: <audio> rides the session cookie;
+           the kernel serve path already confine visibility
+           (BORGE-1785695911) and supports Range. Signed tokens
+           would add key management for zero product gain at
+           personal-OS scale. Revisit only if public shareable
+           playlist links become a feature.
+         - NO audio transcoding/ffmpeg in the serve path: upload
+           what the browser can play. (edit/* already has ffmpeg
+           helpers for the film pipeline if a convert flow is ever
+           wanted; it would be a batch job, not inline.)
+         - NO folder/watched-directory ingest: Postgres is the
+           object store; bulk import goes through POST /api/media
+           (pp_media.py) + a track-row loop.
+         - NO per-user quotas (storage.media non-goal already).
+   |))
+   )
+  )
+
+  (subsection suno
+   (doc "libs/suno — AI song generation via the sunoapi.org gateway: submit a two-song task, poll record-info to SUCCESS, land finished audio into the music library")
+   (status implemented)
+   (implements libs/suno/lib.pp scripts/pp_suno.py scripts/pp_pod.py)
+   (verify
+    (smoke "suno/generate submits a task and returns its taskId; suno/record-info polls PENDING -> SUCCESS and suno/land pulls the finished audio into a music-track row"))
+  )
+ )
+)

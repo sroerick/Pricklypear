@@ -1,0 +1,300 @@
+(project pricklypear-hypermedia-harness
+ (doc "Pricklypear book chapter: a headless hypermedia client — a server-side htmx swap simulator that is the reference implementation of the fixi-five contract, for debug agents and verification harnesses. It runs in the image, fetches no HTTP, runs no browser, and calls route handlers in-process.")
+ (status implemented)
+ (* agent note (|2026-08-14 RECONCILE, with glochid.borg: the harness is now a SHARED, host-portable layer. soup/* stays DB-free and is lifted into the shared pure-prims layer so the image (Postgres corpus) and the agent (local-first lens corpus) register the same tree prims. The ONE host seam is route/dispatch + route/lookup (request-runner): Nopales signatures identical, host-local backing (Session.t Postgres routes vs Runtime.t lens routes; fat Request_context vs thin agent request context). libs/hyper runs unchanged on both. Streaming swaps (hx-multipart multipart/mixed, HX-Target/HX-Swap per part) move INTO the contract as data — soup/apply-parts! applies an ordered part list; hyper/stream wraps it immutably; transport/timing stays CDP-tier (unsupported-boundary). This is the refactor that lifts the agent's chat/agent UI from SSE+vanilla-JS to Nopales-authored htmx fragments.|) *)
+ (convention ocaml-dune)
+ (section hypermedia-harness
+  (doc "A headless htmx client living inside the image. It invokes route
+       handlers in-process, parses the returned HTML into a tree, and
+       applies htmx swaps (target + strategy + out-of-band) to that tree
+       — the exact state machine of the production browser client, restricted
+       to the fixi-five subset. Debug agents use it as a cheap, deterministic
+       verifier; the authenticated, no-browser surface is callable through
+       /api/eval with no new REST surface.")
+
+  (subsection contract
+   (doc "The executable contract is the fixi-five intersection: the semantic
+       core shared by htmx (the production client) and fixi (the minimal
+       reference) — fetch + swap, five attributes (get/post/target/swap/
+       trigger). The harness is the reference implementation for this
+       subset; within it, the harness is authority and the production
+       client (htmx 4) must conform. Outside it, htmx 4 is authority and
+       the harness declines. The contract is the shared object of which
+       fixi is the most compact correct statement; it does not move when
+       the production client changes.")
+   (status implemented)
+  )
+
+  (subsection supported-subset
+   (doc "Attributes the harness models, mirroring htmx 4 semantics under
+       the htmx-2-compat defaults PP ships.")
+   (details
+    (doc (|
+         MODELED:
+           - hx-get, hx-post, hx-target, hx-swap, hx-trigger — the fixi five
+           - Inherited hx-target / hx-swap / hx-confirm via ancestor lookup
+             (mirrors the implicit-inheritance mode restored by htmx-2-compat)
+           - hx-swap-oob: main content swaps FIRST, then OOB elements swap
+             after (htmx 4 ordering; OOB elements are hoisted from anywhere
+             in the response, including nested within the main target)
+           - hx-confirm: proceeds without the consent gate (a UI affordance,
+             not behavior)
+           - hx-vals: JSON values only
+           - Swap strategies: innerHTML, outerHTML, beforebegin, afterbegin,
+             beforeend, afterend, delete, none
+           - hx-multipart streaming swap class: a multi-part streamed
+             response (multipart/mixed, one fragment per part, each with
+             per-part HX-Target/HX-Swap headers — see kernel-prims
+             apply-parts!) is modeled by applying the captured part list
+             in order onto the page (soup/apply-parts!), not by racing
+             bytes over a socket. The stream is reduced to data before
+             the harness consumes it, so the swap semantics are the same
+             fixi-five swap machinery applied N times, deterministically.
+    |))
+   )
+   (status implemented)
+  )
+
+  (subsection unsupported-boundary
+   (doc "Features the harness returns unsupported-feature for, instead of
+       modeling. These flows graduate to the CDP/browser verification tier
+       rather than being silently under-modeled.")
+   (details
+    (doc (|
+         NOT MODELED (returns unsupported-feature):
+           - hx-on scripting — client JavaScript; opaque without a JS engine
+             (the moxi.js boundary; the harness may record that a script
+             existed but cannot execute it)
+           - hx-push-url — history; no fixi equivalent
+           - hx-ext — inert in htmx 4 (extensions activate by script inclusion)
+           - hx-vals with js: prefix — cannot eval JS
+           - Triggers with debounce / throttle / delay modifiers
+           - hx-sync — request queueing and coordination
+           - hx-boost, hx-ws — not used in PP's markup; out of scope.
+           - hx-sse transport/timing — the streaming SWAP class is now
+             MODELED (supported-subset hx-multipart: an ordered part list
+             applied via soup/apply-parts!). What stays NOT MODELED is the
+             transport/timing axis — racing bytes, reconnect, server push
+             cadence — which is not a swap semantic and graduates to CDP.
+             The absence of hx-boost/hx-ws from PP's markup is why the
+             fixi-five subset is a faithful contract for PP, and the
+             trigger to revisit this boundary is concrete: the day either
+             appears in libs/, the subset must either grow or that flow
+             must acknowledge the CDP tier.
+    |))
+   )
+   (status implemented)
+  )
+
+  (subsection kernel-prims
+   (doc "Thin lambdasoup bindings — the HTML tree layer. lambdasoup and
+       markup are already in the poohstack opam switch; no new dependency.
+       Prims are registered under the soup/ namespace (not html/) to avoid
+       colliding with the pure-html DSL prims (html/attr, html/text,
+       html/div, ...) that page rendering depends on.")
+   (implements image/lib/prims_hyper.ml pure/prims_soup.ml)
+   (details
+    (doc (|
+         PRIMS (uppercase, DB-free, part of the pure-prim layer, soup/ namespace):
+           (soup/parse str)                 -> page handle (soup node)
+           (soup/page-copy page)             -> new page handle (deep copy;
+                                                 immutability: source never mutated)
+           (soup/select page selector)       -> list of node handles
+           (soup/select-one page selector)    -> node handle | nil
+           (soup/serialize page|node)        -> HTML string
+           (soup/text page|node)             -> concatenated text content
+           (soup/attr node name)             -> string | nil
+           (soup/has-attr node name)         -> "true" | nil
+           (soup/swap! node style fragment)  -> mutate in place
+                                                 (style = one of innerHTML, outerHTML,
+                                                 beforebegin, afterbegin,
+                                                 beforeend, afterend, delete, none)
+           (soup/create tag)                 -> node handle
+           (soup/replace node fragment)      -> replace target with fragment's nodes
+           (soup/closest-attr node name)     -> ancestor walk for inherited
+                                                 hx-target/hx-swap/hx-post resolution
+                                                 (mirrors htmx compat implicit inheritance)
+           (soup/parent node)                -> node handle | nil
+           (soup/diff a b)                   -> structured what-changed report
+                                                 (added/removed ids + text changes
+                                                  within same-id elements)
+           (soup/apply-parts! page parts)   -> mutate in place; parts is a
+                                                 VList of part alists, each
+                                                 (("html" . frag) ("target" . sel)
+                                                  ("swap" . strat)); each part is
+                                                 located (soup/select target) then
+                                                 swapped (soup/swap! strat frag)
+                                                 in ORDER. target/swap absent ->
+                                                 caller's element + "innerHTML",
+                                                 matching hyper/do-swap defaults.
+                                                 Matches the multipart/mixed wire
+                                                 shape http_agent.mp_write_part
+                                                 emits (per-part HX-Target/HX-Swap);
+                                                 see supported-subset hx-multipart.
+
+         Mutations use lambdasoup's append_child / insert_before /
+         insert_after / delete / clear / set_attribute. The diff is
+         node-level (which ids changed, added, removed, or text-changed),
+         not a raw text diff — this is the agent-facing value: a compact
+         report instead of dumping DOM into model context.
+
+         SHARED KERNEL. The soup/ tree layer is DB-free. It is lifted out
+         of image/lib/prims_hyper.ml into the shared pure-prims layer
+         (pure/, alongside prims_pure.ml) so BOTH hosts register the same
+         prims: the image (Postgres corpus) and the agent (local-first
+         lens corpus). Only route/dispatch + route/lookup + the
+         request-runner remain host-specific (they touch the host's store /
+         routes / request context — see request-runner). lambdasoup +
+         markup become deps of the agent package, joined on the same seam.
+    |))
+   )
+   (status verified)
+   (verify
+    (build "dune build image")
+    (test "soup/parse + soup/select round-trips a server-rendered /notes page")
+    (test "soup/swap! applies each of the eight strategies correctly")
+    (test "soup/diff detects added, removed, and changed nodes")
+    (test "soup/apply-parts! applies an ordered part list into the page: each part's fragment lands at its target with its swap strategy, in sequence"))
+  )
+
+  (subsection request-runner
+   (doc "In-process dispatch reuses existing machinery — no new transport.
+       The harness binds a synthetic request and invokes a routed handler
+       the same way the HTTP gate does, without an Httpun socket. This is
+       THE HOST SEAM: the only prims that differ between hosts. The image
+       backs them with its Postgres corpus (Session.t routes + store +
+       Request_context manifest); the agent backs them with its local-first
+       lens corpus (Runtime route table + a thinner request context). The
+       Nopales signatures are identical, so libs/hyper runs unchanged on
+       both hosts.")
+   (implements image/lib/http.ml image/lib/session.ml image/lib/request_context.ml image/lib/prims_hyper.ml glochid/lib/runtime.ml)
+   (details
+    (doc (|
+         Request_context.make ~manifest ~env ~routes constructs the
+         per-request snapshot (the image.per-request-context pattern from
+         the http-robustness work). Session.call_handler session ~request
+         handler_name invokes the routed handler with the synthetic request
+         bound so request-prims (hx-request?, query-param, current-author)
+         resolve correctly for the duration of the call. Returns
+         Handler_ok v — the rendered value the browser would receive.
+         No HTTP round-trip, no socket, no chromium.
+
+         NOPALES BRIDGE (new prim, session-capturing — same registration
+         pattern as crud.ml: registered in session.ml via a register_*
+         call that closes over the Session.t; the late-bound thunk in
+         session.ml closes over call_handler to avoid a forward-reference):
+           (route/dispatch handler-name method path
+                          [params] [headers] [body]) -> raw-HTML VStr
+         Binds a per-call Request_context (with_current) so handler prims
+         resolve, calls Session.call_handler, and returns the rendered
+         value as a VStr (the same string the browser receives —
+         is_raw_html-tagged values unwrap per render_handler_value).
+         hyper/visit and hyper/click sit on top of route/dispatch.
+           (route/lookup path)               -> handler-name VStr | nil
+         resolves a URL path to its handler via the route table.
+
+         AGENT HOST BACKING (see glochid.borg agent-route-table). The agent
+         implements the SAME prim signatures against its runtime: routes
+         live on a Runtime-scoped route table (Runtime.t.routes), populated
+         by the agent's (route path handler) prim reading its lens-resident
+         defs; dispatch invokes the Nopales handler through
+         Runtime.apply_value under the eval rim; the request context is
+         THINNER (no Postgres manifest / branches / auth — only the
+         request-shaped prims resolve: query-param, request-method,
+         hx-request?). Request prims that need a DB/branch (e.g.
+         current-author-as-DB-row) are unbound in the agent; the agent's
+         request context provides only the request-shape values. This is
+         the intended portability seam: same prims, host-local backing.
+    |))
+   )
+   (status verified)
+   (verify
+    (build "dune build image")
+    (smoke "route/dispatch on a routed page handler with a synthetic GET context (Request_context bound) returns the same HTML the HTTP gate returns for the corresponding GET")
+    (smoke "agent: route/dispatch on an agent-registered handler runs the Nopales fn through the runtime and returns its rendered fragment (no Postgres)"))
+  )
+
+  (subsection nopales-surface
+   (doc "The client semantics, written in Nopales over the kernel prims and
+       the request runner. Lives in a new package libs/hyper. Page is an
+       immutable threaded value: each interaction returns a NEW tree
+       (deep-copied via soup/page-copy before mutation), giving free
+       time-travel history and a cheap what-changed diff.")
+   (implements libs/hyper/lib.pp)
+   (details
+    (doc (|
+         SURFACE:
+           (hyper/visit url)                 ; resolve via route/lookup, GET
+                                              ; in-process (no HX-Request header,
+                                              ; so handler returns the full page
+                                              ; like a browser's initial nav),
+                                              ; soup/parse body -> page value
+           (hyper/click page sel params)     ; resolve trigger at sel OR nearest
+                                              ; ancestor (inherited hx-post/hx-get
+                                              ; via soup/closest-attr), read
+                                              ; hx-target/hx-swap (inherited),
+                                              ; POST in-process with HX-Request,
+                                              ; soup/page-copy the page, soup/swap!,
+                                              ; return NEW page
+           (hyper/text page sel)             ; first match's text content
+           (hyper/query page sel)            ; list of node handles
+           (hyper/count page sel)            ; element count
+           (hyper/html page)                 ; serialize tree -> string
+           (hyper/attr node name)            ; attribute value
+           (hyper/diff p1 p2)                ; node-level what-changed
+           (hyper/expect page sel expected)  ; assertion (for smokes)
+           (hyper/stream page parts)          ; apply an ordered multipart
+                                              ; part list onto a page via
+                                              ; soup/page-copy + soup/apply-parts!,
+                                              ; return NEW page (immutable:
+                                              ; input page unchanged). parts
+                                              ; come from the host stream as
+                                              ; DATA (agent: loop.ml collects
+                                              ; the emitted HX-Target/HX-Swap
+                                              ; parts; image: http_agent
+                                              ; mp_write_part). Lets hyper/**
+                                              ; assert a consumed chat/agent
+                                              ; turn deterministically.
+           (hyper/sandbox branch body)       ; v1 stub — branch checkout with
+                                              ; restore needs dynamic-wind
+
+         INVARIANTS:
+           - Each interaction returns a new page value; the input page is
+             never mutated in place (enables history and diff).
+           - hyper/click on a node whose trigger falls outside the supported
+             subset (e.g. data-ol-op toolbar buttons, which are client-JS
+             driven not htmx) returns unsupported-feature rather than a
+             best-guess swap.
+           - hyper/sandbox (v1 stub) does not yet check out a branch.
+    |))
+   )
+   (status implemented)
+   (verify
+    (build "dune build image")
+    (smoke "hyper/visit on a notes fixture returns a page whose ol-node count matches the server-rendered page")
+    (smoke "hyper/click on a button with hx-get=/welcome hx-target=#out swaps #out content; the original page is unchanged (immutability)")
+    (smoke "hyper/click on a data-ol-op node (client-JS-driven, not htmx) returns unsupported-feature")
+    (smoke "hyper/expect on a selector raises on mismatch and returns true on match")
+    (smoke "hyper/diff between two pages reports the node that changed"))
+  )
+
+  (subsection fidelity-gate
+   (doc "The conformance lock between the harness and the production browser
+       client. The same flow is driven twice — once through CDP against a
+       live browser running htmx 4, once through hyper/* — and the resulting
+       DOM text is asserted byte-identical. Divergence is either a harness
+       bug (the simulator is wrong and must learn the quirk) or an htmx
+       quirk the harness must mirror. Once a flow is green twice via CDP,
+       it graduates to a hyper/ smoke that runs in milliseconds with no
+       browser. The visit step is proven byte-identical; multi-step swap
+       fidelity is deferred until a real hx-get/hx-post flow is targeted
+       (the notes outline toolbar is JS-driven data-ol-op, not htmx, so it
+       is correctly the unsupported-feature boundary, not a fidelity target).")
+   (implements scripts/smoke_hyper_fidelity.mjs)
+   (status implemented)
+   (verify
+    (build "dune build image")
+    (smoke "drive GET /notes?slug=ui-fixture via CDP and via hyper; assert byte-identical #outline DOM text at the visit step"))
+  )
+ )
+)

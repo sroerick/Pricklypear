@@ -1,0 +1,540 @@
+(project pricklypear-ai-authoring
+ (doc "Pricklypear book chapter: ai-authoring")
+ (status implemented)
+ (* agent note (|2026-08-02 status reconcile: tools/portal/ast-rewrite/growth-seed already impl; review-merge is existing branch+inspect+merge path (no separate AI privilege); provenance v1 agent:<model> on propose-function. Deferred: badge styling, audit table.|) *)
+ (convention ocaml-dune)
+ (section ai-authoring
+  (doc "AI as a first-class author of functions: propose, surgical AST rewrite/freeze, growth-from-seed, human merge gate, provenance")
+  (status implemented)
+  
+  (verify
+   (build "dune build @all")
+   (smoke "AI propose on user branch -> human inspect -> merge policy gate")
+   (smoke "future: llm-inner freeze rewrites stored AST; llm-seed grows outward on a branch"))
+  (details
+   (doc (|
+        AI is an author, not a privileged runtime. Machine-
+        written code uses the same store, branch, and merge
+        machinery as human code. Default trust model:
+        AI writes only to a user (or agent) branch; promoting
+        into system/* still requires admin merge policy.
+
+        Coding styles supported by the tool surface:
+
+        1) Blank-slate propose
+           (propose-function 'name "spec")
+           Whole new/replaced binding from a prompt.
+
+        2) Surgical freeze rewrite (CODING TOOL — preferred)
+           (llm-inner 'name "concept")
+           (llm-outer 'name "concept")
+           LLM rewrites one AST component; on accept the
+           result is FROZEN into function_defs (not left as
+           an unevaluated hole). Emacs-ish replace-region
+           with generated code, but tree-native.
+
+        3) Growth-from-seed (CODING TOOL)
+           (llm-seed "build an app that ...")
+           Recursively: create smallest clean core, then
+           llm-outer until requirements are satisfied.
+           Bottom-up / inside-out Nopales style operationalized.
+
+        4) Runtime generative eval (SECONDARY / later)
+           Eval-time expansion of AI holes without freeze.
+           Useful, but not the primary coding workflow.
+
+        Non-goals for first cut of new tools:
+        - AI does not bypass author-runs-as-author
+        - AI does not write system/* without merge policy
+        - full addressable node table not required for
+          whole-function inner/outer (paths into JSONB AST
+          suffice); node IDs are a later upgrade
+          (branching.ast-nodes)
+   |))
+  )
+  (subsection tools
+   (doc "How an AI proposes or patches functions into the store")
+   (implements image/lib/agent_tools.ml image/lib/llm_client.ml)
+   (status implemented)
+   (verify
+    (build "dune build image")
+    (smoke "POST /api/ai/propose ai-double then (ai-double 21) => 42"))
+
+   (details
+    (doc (|
+         v1 SHIPPED:
+         - propose-function Nopales prim + /api/ai/propose
+         - whole-function body from model, define on current branch
+         - author = agent:<model>
+         - never merges to system/*
+         - local or remote OpenAI-compat endpoint via env
+           LLM_API_BASE / LLM_API_KEY / LLM_MODEL
+
+         Shared client contract for ALL AI tools:
+         - chat/completions (stream optional; SSE for live UI)
+         - model returns code/AST only for author modes
+         - parse gate before any store write
+         - effect inference after parse (lisp-interpreter.effects)
+         - policy gate before freeze
+
+         Primary guest surface is agent-portal: durable sessions +
+         one tool-capable loop ((agent-say sid prompt)). Full
+         message history is resubmitted each provider call.
+         propose-function / llm-* remain specialized authoring
+         helpers outside the conversation store.
+
+         Sibling tools (exist as prims; product UX secondary):
+         - ast-rewrite: llm-inner / llm-outer / llm-rewrite
+         - growth-seed: llm-seed recursive outer growth
+    |))
+   )
+  )
+  (subsection agent-portal
+   (doc "One durable agent: sessions + messages in Postgres, one tool-capable loop, full history resubmitted each provider call")
+   (status implemented)
+   (implements image/lib/ai_store.ml image/lib/llm_client.ml image/lib/session.ml image/lib/http_agent.ml image/lib/agent_discovery.ml image/lib/agent_tools.ml migrations/005_ai_sessions.sql libs/ai/lib.pp)
+   (verify
+    (build "dune build image")
+    (test "image/test/ai_store_test.ml")
+    (smoke "migration 005 creates ai_sessions + ai_messages")
+    (smoke "ai_store create/list/append/load round-trips a multi-turn thread")
+    (smoke "(agent-say sid prompt) resumes prior messages across process restart")
+    (smoke "tool turns persist assistant tool_calls + tool results in order"))
+
+   (details
+    (doc (|
+         ==========================================================
+         PRODUCT (finished shape — small and closed)
+         ==========================================================
+
+         An agent conversation is a durable thread owned by a user:
+           - seed (system persona) fixed at create
+           - ordered messages (user / assistant / tool)
+           - optional tools allowlist on the session
+           - every model call resubmits [system seed] + history
+
+         There is ONE loop. Tools are not a second product:
+           - model may answer in text, or request allowlisted tools
+           - kernel runs tools, appends results, continues
+           - one-shot Q&A is the same loop with a short history
+
+         NOT in this product cut:
+           - separate (agent) vs (agent-task) kernels
+           - in-memory-only multi-turn that dies with the request
+           - token streaming as a requirement (progress events yes)
+           - chat UI polish (REPL/pp_eval + thin HTTP enough)
+           - propose-function / llm-* merge into sessions
+             (those stay specialized authoring helpers)
+
+         ==========================================================
+         PROVIDER CONTRACT (do not invent a second one)
+         ==========================================================
+
+         OpenAI-compatible POST /chat/completions:
+
+           { model, messages: [...full history...], tools?: [...] }
+
+         The provider does not remember prior turns. "Multi-turn"
+         means WE store messages and resubmit them every call.
+         Tool rounds are ordinary messages in that list:
+           assistant + tool_calls, then role=tool results, then
+           another completions call with the longer list.
+
+         Default transport: non-stream chat_turn (reliable on
+         Synthetic). Progress via on_event:
+           Token | Tool of {name; summary} | Done | Fail
+         HTTP may SSE those control events. Token stream:true is
+         optional later, not part of acceptance for this cut.
+
+         ==========================================================
+         SCHEMA (migration 005_ai_sessions.sql)
+         ==========================================================
+
+         Additive-only. Named to avoid clash with fleet `sessions`
+         and auth `auth_sessions`.
+
+         ai_sessions:
+           id          uuid PK default gen_random_uuid()
+           owner       text NOT NULL   -- username (whoami)
+           title       text            -- optional; first user line ok
+           seed        text NOT NULL   -- system prompt; not a message row
+           branch_ref  text            -- branch at create / last say
+           tools       boolean NOT NULL DEFAULT true
+           model       text            -- snapshot of LLM_MODEL at create
+           created_at  timestamptz NOT NULL DEFAULT now()
+           updated_at  timestamptz NOT NULL DEFAULT now()
+
+         ai_messages:
+           id            uuid PK default gen_random_uuid()
+           session_id    uuid NOT NULL REFERENCES ai_sessions(id)
+                           ON DELETE CASCADE
+           seq           int  NOT NULL  -- dense order from 0
+           role          text NOT NULL  -- user|assistant|tool
+                                         -- (system is session.seed only)
+           content       text           -- nullable for pure tool-call
+                                         -- assistant turns
+           tool_calls    jsonb          -- [{id,name,arguments}] or null
+           tool_call_id  text           -- set when role=tool
+           created_at    timestamptz NOT NULL DEFAULT now()
+           UNIQUE (session_id, seq)
+
+         Indexes:
+           ai_sessions (owner, updated_at DESC)
+           ai_messages (session_id, seq)
+
+         Invariants:
+           - seed lives ONLY on ai_sessions (no role=system rows)
+           - messages are append-only in v1 (no edit/delete mid-thread
+             except whole-session delete)
+           - owner isolation: list/get/delete scoped to whoami
+           - tools flag is session-level; per-turn override later
+
+         ==========================================================
+         STORAGE INTERFACE (image/lib/ai_store.ml)
+         ==========================================================
+
+         Pure store module over Store.t / pgx. No LLM calls here.
+         Maps rows <-> Llm_client.chat_message for the runner.
+
+         Storage interface (ai_store.ml): create / get /
+         list / delete sessions (owner-scoped); list and
+         append messages (ordered by seq; roles
+         user|assistant|tool only). Session row: id, owner,
+         title, seed, branch_ref, tools allowlist, model,
+         timestamps.
+             (chat_message list) -> unit
+             (* assigns next seq values; touches updated_at *)
+           touch_session store ~id ?title () -> unit
+           messages_for_api session history -> chat_message list
+             (* Msg System seed :: history *)
+
+         chat_message encoding:
+           Msg {User|Assistant; content} ->
+             role, content, tool_calls=null, tool_call_id=null
+           Assistant_tools {content; tool_calls} ->
+             role=assistant, content, tool_calls=jsonb
+           Tool_result {tool_call_id; content} ->
+             role=tool, content, tool_call_id
+           System messages are NEVER stored; only injected at API build.
+
+         Errors: missing session, owner mismatch, bad role on write.
+         Use Store.current_conn so with-transaction works if needed.
+
+         ==========================================================
+         ONE RUNNER (after storage; same subsection product)
+         ==========================================================
+
+         Agent.run_loop ~session ~tools ~on_event ~max_steps
+           : string Lwt.t
+
+         Algorithm:
+           1. history = list_messages(session.id)
+           2. loop step:
+                msgs = messages_for_api session history
+                turn = chat_turn ~messages:msgs
+                         ~tools:(if session.tools then allowlist else [])
+                match turn with
+                | Final text ->
+                    append [Msg Assistant text]; on_event Done; return text
+                | Need_tools {content; tool_calls} ->
+                    append Assistant_tools;
+                    for each call: run allowlisted tool; append Tool_result;
+                    on_event Tool {...}; continue (cap max_steps)
+                | Turn_error e -> on_event Fail; return error string
+
+         Guest entry (prims; wire after store):
+           (agent-session-new seed) -> sid
+           (agent-say sid prompt)   -> text
+             append user msg, run_loop, return final assistant text
+           (agent-history sid)      -> list of role/content pairs
+           (agent-sessions)         -> recent threads for whoami
+           (agent-session-delete sid) -> ok
+
+         Library (libs/ai) becomes thin:
+           ai/ask = new-or-sticky session + say (tools may stay on)
+           ai/do  = same (explicit tools session)
+         Deprecated as peer kernels (keep temporary aliases):
+           (agent seed prompt)      -> new session + one say
+           (agent-task prompt)      -> new tools session + one say
+
+         propose-function / install-function remain OUTSIDE this
+         loop as one-shot authoring helpers (they may share
+         llm_client.chat_turn but not ai_sessions).
+
+         ==========================================================
+         CAPABILITY / PROGRESS / NON-GOALS
+         ==========================================================
+
+         Capability: prims labeled Ai (existing effect lattice).
+         Progress: on_event / optional SSE control events.
+         Not required: OCaml 5 effects, WebSocket mid-turn input,
+         message edit, shared multi-user threads, token streaming.
+
+         MAKE ORDER
+           1. migration 005 + scripts/dev.sh apply list
+           2. image/lib/ai_store.ml + dune + round-trip test
+           3. run_loop on ai_store (replace in-memory agent_task msgs)
+           4. prims + libs/ai aliases
+           5. HTTP session_id on /api/agent (thin)
+    |))
+   )
+  )
+  (subsection ast-rewrite
+   (doc "Surgical coding tools: llm-inner / llm-outer / llm-rewrite with freeze-on-accept into stored AST")
+   (status implemented)
+   (verify
+    (build "dune build image")
+    (smoke "llm-inner on a binding rewrites body AST and survives reload")
+    (smoke "llm-outer wraps a pure function; effect badges update")
+    (smoke "reject unparseable model output without mutating store"))
+
+   (details
+    (doc (|
+         PURPOSE
+         Iterative code growth/refactor against live stored trees.
+         Human (or command) supplies a concept; model rewrites ONE
+         component; accept freezes into Postgres AST + live env.
+
+         PRIMS / COMMANDS
+
+         (llm-rewrite name prompt . options)
+           General form. Options may include:
+             mode: 'replace | 'wrap     ; default replace
+             path: structural path      ; default whole body
+             as: new-name               ; non-destructive rename target
+             branch: branch-ref         ; work on a branch first
+             accept: 'auto | 'preview   ; default preview in UI,
+                                        ; REPL may auto with flag
+
+         (llm-inner name prompt . options)
+           Sugar: mode=replace on function body (or selection path).
+           "Improve/replace the organ."
+
+         (llm-outer name prompt . options)
+           Sugar: mode=wrap on whole function.
+           "Put tissue around the organ." Old behavior preserved
+           via call-through or careful inline; prefer call-through
+           to name-old or nested original subtree.
+
+         FREEZE-ON-ACCEPT SEMANTICS (critical)
+         1. Load current function AST from store/env
+         2. Select target subtree (body / path / whole)
+         3. Build surgical prompt (see PROMPT CONTRACT)
+         4. Ping LLM local or remote
+         5. Parse response as s-expr or JSON AST only
+         6. Splice into tree (replace or wrap)
+         7. infer_effects on result
+         8. policy check (default allow Pure|ReadDb|Html;
+            escalate WriteDb|Branch|Publish|Ai)
+         9. Preview diff (pretty + optional AST)
+         10. On accept:
+             - persist function_defs.body JSONB
+             - rebind live env
+             - author = agent:<model>
+             - optional provenance run id
+         11. On reject: no store mutation
+
+         This is NOT leaving (llm-inner ...) in the program.
+         After accept, the program contains real Nopales AST only.
+
+         PROMPT CONTRACT (surgical AST author)
+         System:
+           You are editing a Pricklypear Nopales AST.
+           Return ONLY one replacement form: a single
+           s-expression (or JSON AST). No markdown, no essay.
+           You write ONE component of a larger program tree.
+
+         User payload includes:
+           - mode replace|wrap
+           - function name
+           - user concept / intent
+           - current function pretty
+           - current function AST json
+           - selected path + selected subtree pretty/json
+           - available prims summary
+           - allowed effect set
+           - for wrap: instruction to preserve behavior and
+             call through original unless inlining is clearer
+
+         Model output:
+           - full lambda when replacing whole binding body
+           - subtree only when replacing a selection hole
+           - wrapper lambda when mode=wrap
+
+         VALIDATION GATES
+           - reader/json parse success
+           - splice shape compatibility
+           - effect policy
+           - optional smoke eval of (name sample-args) if provided
+
+         UI SURFACE
+           - function editor command: Rewrite… / Wrap…
+           - structural selection path when structure mode exists
+           - REPL prims for power users
+           - always show diff before freeze unless accept:'auto
+
+         DEFAULTS (safety)
+           - prefer work on current branch; offer agent/* branch
+           - prefer preview over silent overwrite
+           - keep old body in diff buffer / one-level undo
+           - non-destructive 'as new-name always available
+
+         NON-GOALS (this subsection)
+           - recursive app growth (see growth-seed)
+           - runtime hole expansion without freeze
+           - multi-file repo patches
+    |))
+   )
+  )
+  (subsection growth-seed
+   (doc "llm-seed: recursive bottom-up growth via smallest core + repeated llm-outer until requirements satisfied")
+   (status implemented)
+   (verify
+    (build "dune build image")
+    (smoke "llm-seed on a tiny goal produces >=1 frozen function on a branch")
+    (smoke "growth stops at max-steps or requirement-satisfied judge")
+    (smoke "each step is inspectable as a frozen binding + diff"))
+
+   (details
+    (doc (|
+         PURPOSE
+         Operationalize inside-out Nopales development for AI:
+           seed a minimal clean function, then wrap/grow until
+           the stated requirements are satisfied.
+
+         TOP-LEVEL COMMAND
+
+         (llm-seed requirement . options)
+
+         Options (sketch):
+           name: optional root name hint
+           branch: default fork to user/ai-<stamp> or agent/*
+           max-steps: default small (e.g. 4..8)
+           budget: token/time caps
+           effects-allow: default Pure|ReadDb|Html
+           stop: 'ask | 'auto-judge
+
+         ALGORITHM (orchestrator, not one giant prompt)
+
+         Step 0 — Plan (optional short call)
+           Given requirement, emit a growth outline:
+             core behavior, successive wrappers, final page?
+           Human may edit plan later; v1 can be implicit.
+
+         Step 1 — Seed (smallest clean core)
+           Prompt specialty:
+             "Write the SMALLEST and CLEANEST pure-ish function
+              that captures the essential nucleus of: <req>.
+              One lambda only. No wrapping, no IO unless required."
+           Freeze as seed name (e.g. notes-core).
+           Run a tiny smoke if possible.
+
+         Step 2..N — Grow outward (llm-outer loop)
+           While not satisfied and steps < max-steps:
+             a. Judge prompt (or human):
+                "Does current function set satisfy <req>?
+                 If not, what SINGLE outer responsibility
+                 should be added next (validation, IO, page,
+                 composition)?"
+             b. If satisfied -> stop
+             c. Else llm-outer on current tip with that single
+                responsibility (surgical wrap prompt)
+             d. Freeze wrapper as new tip (or replace tip name
+                while keeping -vN history / old symbol)
+             e. Record step in the run's growth log
+                (in-memory; durable step history is a later
+                addition)
+
+         Step Final — Optional publish surface
+           If requirement implies a page and effects allow:
+             define page handler + (route ...)
+           Still no auto-merge to system/*.
+
+         JUDGE / STOP CONDITIONS
+           - model judge returns satisfied=true
+           - human stops
+           - max-steps reached
+           - effect escalation would exceed allowlist
+           - parse/policy failures exceed retry budget
+
+         WHY RECURSIVE OUTER NOT ONE-SHOT APP DUMP
+           - preserves a working center at every step
+           - each layer is runnable/testable in the image
+           - matches bottom-up Nopales craft
+           - forces LLMs into step-sized commits
+           - diffs remain reviewable
+
+         PROMPT SPECIALIZATIONS
+           Seed prompt: smallest nucleus, prefer Pure
+           Outer prompt: one responsibility only, preserve
+             prior behavior via call-through
+           Judge prompt: boolean satisfied + next missing
+             capability in one short structured response
+
+         FAILURE MODES / GUARDRAILS
+           - onion wraps forever -> max-steps + dedupe judge
+           - outer reimplements instead of wraps -> prompt
+             + validation heuristic (must reference prior name)
+           - effect creep -> policy gate per step
+           - nondeterminism -> provenance + branch + growth log
+
+         RELATIONSHIP TO OTHER TOOLS
+           llm-seed USES:
+             - blank-slate propose or llm-inner for seed
+             - llm-outer for each growth ring
+             - effects inference/policy each freeze
+             - review-merge for promotion to system/*
+           llm-seed is an orchestrator over ast-rewrite.
+
+         NON-GOALS
+           - fully autonomous unattended product engineering
+           - hidden multi-minute agent swarms without logs
+           - replacing human taste for when to re-inner/
+             collapse wrappers after growth
+    |))
+   )
+  )
+  (subsection review-merge
+   (doc "Human gate: inspect AI changes, then merge with existing policy")
+   (status implemented)
+   (* agent note (|2026-08-02: workflow uses /bindings inspect + /branches promote/merge + REPL — no separate AI merge. Matches "merge politics stay in branching.merge".|) *)
+   (details
+    (doc (|
+         Review loop:
+         1. AI commits one or more function_defs on a branch
+            (propose, llm-inner/outer freezes, or llm-seed steps)
+         2. Human opens system browser / functions list /
+            editor / inspect to read AST + effect badges
+         3. Human runs/tests via browser-repl or scripts/repl.sh
+         4. For growth-seed: step through growth log diffs
+         5. Human merges branch -> target via existing
+            (merge ...) policy (admin-only into system/*)
+         6. Reject path: leave branch, redefine, or undo freeze
+
+         No separate "AI merge" privilege. Merge politics
+         stay in branching.merge.
+    |))
+   )
+  )
+  (subsection provenance
+   (doc "Attribution, audit, and trust labels for machine-authored code")
+   (status implemented)
+   (* agent note (|2026-08-02: v1 as written in details — author agent:<model> on propose-function/AI writes; inspect shows author. Optional metadata/badge/audit table remain deferred non-blockers.|) *)
+   (details
+    (doc (|
+         v1 SHIPPED: author=agent:<model> on AI writes; visible in
+         /bindings and inspect.
+
+         REQUIRED for rewrite/seed tools:
+         - author agent:<model> on every freeze
+         - optional metadata: run_id, parent_function,
+           growth_step, prompt_hash, mode inner|outer|seed
+         - growth-seed writes an inspectable step log
+
+         DEFERRED: visual agent badge styling, dedicated audit table.
+         Trust rule remains branch + merge policy + effect allowlists.
+    |))
+   )
+  )
+ )
+)
