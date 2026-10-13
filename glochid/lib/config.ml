@@ -3,8 +3,11 @@
     One logical record ({api_key, base_url, model}, all optional), two
     physical locations:
 
-      - [~/.config/agent/config.json] — the agent's own config home
+      - [~/.config/glochid/config.json] — the glochid config home
         (XDG_CONFIG_HOME honored); the /settings surface writes here.
+        Legacy [~/.config/agent/config.json] keeps working as a READ
+        fallback — glochid never writes or removes it; its values
+        reach the glochid path implicitly on the first save.
 
       - [<lens>/__config.json] — written by pp-remote --sync from the
         image's sync round metadata (auth.user-llm-keys 5b). Booting
@@ -14,8 +17,10 @@
         dial, never replicated).
 
     Resolution ORDER at boot (first non-empty wins, per field):
-    --flag > env (AGENT_API_KEY/AGENT_BASE_URL/AGENT_MODEL) > lens
-    __config.json > ~/.config/agent/config.json. *)
+    --flag > env (GLOCHID_API_KEY/GLOCHID_BASE_URL/GLOCHID_MODEL,
+    legacy AGENT_* still read) > lens
+    __config.json > ~/.config/glochid/config.json (legacy
+    ~/.config/agent/config.json read until the glochid file exists). *)
 
 type t = {
   api_key : string option;
@@ -27,15 +32,38 @@ let empty = { api_key = None; base_url = None; model = None }
 
 let config_home () : string =
   match Sys.getenv_opt "XDG_CONFIG_HOME" with
+  | Some d when d <> "" -> Filename.concat d "glochid"
+  | _ ->
+      (match Sys.getenv_opt "HOME" with
+       | Some h
+         when h <> "" ->
+             Filename.concat (Filename.concat h ".config") "glochid"
+       | _ -> ".config/glochid")
+
+(* Legacy agent config home: read-only compat window (files are
+   never written or removed there). *)
+let legacy_config_home () : string =
+  match Sys.getenv_opt "XDG_CONFIG_HOME" with
   | Some d when d <> "" -> Filename.concat d "agent"
   | _ ->
       (match Sys.getenv_opt "HOME" with
        | Some h
          when h <> "" ->
-           Filename.concat (Filename.concat h ".config") "agent"
+             Filename.concat (Filename.concat h ".config") "agent"
        | _ -> ".config/agent")
 
+(** Env-var compat window (glochid rename): reads the GLOCHID_
+    spelling when set to a non-empty value, else the legacy AGENT_
+    name. [name] is the shared suffix ("MAX_TURNS",
+    "HABITAT_URL", ...). *)
+let getenv_compat (name : string) : string option =
+  match Sys.getenv_opt ("GLOCHID_" ^ name) with
+  | Some v when v <> "" -> Some v
+  | _ -> Sys.getenv_opt ("AGENT_" ^ name)
+
 let config_path () : string = Filename.concat (config_home ()) "config.json"
+let legacy_config_path () : string =
+  Filename.concat (legacy_config_home ()) "config.json"
 
 let lens_config_path (dir : string) : string =
   Filename.concat dir "__config.json"
@@ -74,8 +102,15 @@ let load_file (path : string) : t =
        of_json_string s
      with _ -> empty)
 
-(** The agent's own config home file. *)
-let load () : t = load_file (config_path ())
+  (** The glochid config file; falls back to the legacy agent config
+      while the glochid one does not exist yet. The first save
+      materializes the implicit migration (values read through the
+      fallback persist to the glochid path); the legacy file is never
+      written or removed. *)
+  let load () : t =
+    let glochid_path = config_path () in
+    if Sys.file_exists glochid_path then load_file glochid_path
+    else load_file (legacy_config_path ())
 
 (** A lens's __config.json (sync round metadata landing spot). *)
 let load_lens (dir : string) : t = load_file (lens_config_path dir)
@@ -92,8 +127,9 @@ let merge ~(primary : t) ~(fallback : t) : t =
     base_url = (match primary.base_url with Some _ -> primary.base_url | None -> fallback.base_url);
     model = (match primary.model with Some _ -> primary.model | None -> fallback.model) }
 
-(** Write config (0600 — holds a provider secret; same footprint as
-    ~/.config/pricklypear/env). Creates the config home on first save.
+  (** Write config to the glochid home (0600 — holds a provider
+      secret; same footprint as ~/.config/pricklypear/env). Creates it
+      on first save; the legacy agent file is never touched.
     Atomic via rename(2), like the lens substrate. *)
 let save ?(path : string option) (c : t) : unit =
   let path = match path with Some p -> p | None -> config_path () in
@@ -118,9 +154,10 @@ let last4 (k : string) : string =
   else "????"
 
 (** One-turn provider round-trip cap (Loop.run max_turns). Default is
-    the engine's max_turns_default; AGENT_MAX_TURNS overrides. *)
+    the engine's max_turns_default; GLOCHID_MAX_TURNS overrides
+    (legacy AGENT_MAX_TURNS still read). *)
 let max_turns () : int =
-  match Sys.getenv_opt "AGENT_MAX_TURNS" with
+  match getenv_compat "MAX_TURNS" with
   | Some s when s <> "" ->
     (try max (int_of_string (String.trim s)) 1 with _ -> Loop.max_turns_default)
   | _ -> Loop.max_turns_default

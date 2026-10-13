@@ -37,7 +37,7 @@
  *       collapse-all restores head state with ONE POST, shelve moves the
  *       row under the shelf subtree on OOB, zero inline styles.
  *
- *   AGENT_BIN=... node scripts/probe_shell_sem.mjs     (exit 0 = all OK)
+ *   GLOCHID_BIN=... node scripts/probe_shell_sem.mjs     (exit 0 = all OK)
  */
 import { spawn } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -46,14 +46,14 @@ import fs from "node:fs";
 import path from "node:path";
 
 process.on("SIGINT", () => process.exit(1));
-const AGENT =
-  process.env.AGENT_BIN ||
-  path.resolve("_build/default/agent/bin/main.exe");
+const GLOCHID =
+  process.env.GLOCHID_BIN || process.env.AGENT_BIN ||
+  path.resolve("_build/default/glochid/bin/main.exe");
 const PORTC = 9046;
 const CHROME = process.env.CHROME || "/usr/bin/chromium";
 const USER_DATA = `/tmp/chrome-semprobe-${process.pid}`;
-const AGENT_DIR = `/tmp/agent-semprobe-${process.pid}`;
-const MOCK = path.join(AGENT_DIR, "mock.json");
+const GLOCHID_DIR = `/tmp/glochid-semprobe-${process.pid}`;
+const MOCK = path.join(GLOCHID_DIR, "mock.json");
 
 let fails = 0;
 function ok(cond, name, detail = "") {
@@ -89,12 +89,12 @@ const chrome = spawn(CHROME, [
   "--headless=new", "--disable-gpu", "--no-sandbox", "--disable-dev-shm-usage",
   "--window-size=1880,1000", "--hide-scrollbars", "about:blank",
 ], { stdio: "ignore" });
-let agent;
+let glochid;
 const cleanup = () => {
-  try { agent?.kill("SIGTERM"); } catch (_) {}
+  try { glochid?.kill("SIGTERM"); } catch (_) {}
   try { chrome.kill("SIGKILL"); } catch (_) {}
   try { fs.rmSync(USER_DATA, { recursive: true, force: true }); } catch (_) {}
-  try { fs.rmSync(AGENT_DIR, { recursive: true, force: true }); } catch (_) {}
+  try { fs.rmSync(GLOCHID_DIR, { recursive: true, force: true }); } catch (_) {}
 };
 process.on("exit", cleanup);
 process.on("SIGTERM", () => { cleanup(); process.exit(1); });
@@ -107,8 +107,8 @@ for (let i = 0; i < 40; i++) {
 if (!ready) { console.error("FAIL boot: chromium CDP not ready"); process.exit(1); }
 
 // ---- scratch agent (own cwd; never touch repo .agent or live glochid) ----
-fs.mkdirSync(path.join(AGENT_DIR, ".agent"), { recursive: true });
-fs.writeFileSync(path.join(AGENT_DIR, ".agent", "workspace.json"),
+fs.mkdirSync(path.join(GLOCHID_DIR, ".agent"), { recursive: true });
+fs.writeFileSync(path.join(GLOCHID_DIR, ".agent", "workspace.json"),
   JSON.stringify({ axis: "col", desktop: 0, focus: "content:0", cascade: [], content: [
     { width: "third", route: "/chat", id: "p1", desktop: 0, state: "live" },
     { width: "half", route: "/settings", id: "p2", desktop: 0, state: "shelved" },
@@ -116,16 +116,16 @@ fs.writeFileSync(path.join(AGENT_DIR, ".agent", "workspace.json"),
 fs.writeFileSync(MOCK, JSON.stringify([{ text: "probe reply", calls: [] }]));
 
 let base = null;
-agent = spawn(AGENT, ["--serve", "--port", "0", "--mock-script", path.basename(MOCK)],
-  { stdio: ["ignore", "pipe", "pipe"], cwd: AGENT_DIR });
-agent.stderr.on("data", () => {});
+glochid = spawn(GLOCHID, ["--serve", "--port", "0", "--mock-script", path.basename(MOCK)],
+  { stdio: ["ignore", "pipe", "pipe"], cwd: GLOCHID_DIR });
+glochid.stderr.on("data", () => {});
 const url = await new Promise((resolve, reject) => {
   const to = setTimeout(() => reject(new Error("FAIL boot: agent never announced")), 8000);
-  agent.stdout.on("data", (c) => {
+  glochid.stdout.on("data", (c) => {
     const m = String(c).match(/http:\/\/127\.0\.0\.1:(\d+)\//);
     if (m) { clearTimeout(to); resolve(`http://127.0.0.1:${m[1]}`); }
   });
-  agent.on("exit", (code) => { clearTimeout(to); reject(new Error("FAIL boot: agent exited code " + code)); });
+  glochid.on("exit", (code) => { clearTimeout(to); reject(new Error("FAIL boot: agent exited code " + code)); });
 });
 base = url;
 await sleep(400);
@@ -236,7 +236,7 @@ await send("Page.navigate", { url: base + "/" });
 ok(await waitShell(), "shell appeared after load");
 await sleep(500);
 
-console.log(`# probe_shell_sem @ ${base} (agent cwd ${AGENT_DIR})`);
+console.log(`# probe_shell_sem @ ${base} (agent cwd ${GLOCHID_DIR})`);
 
 // ---- I1/I3/I5 as loaded ----
 const s0 = await ev(SNAPSHOT);
@@ -258,7 +258,7 @@ ok(clicked === "clicked", "start-menu entry dispatched (settings, shelved)");
 ok(s1.focusedRect && s1.focusedRect.q && !s1.focusedShelved, "I2 focused pane visible+live after unshelving click", JSON.stringify(s1.focusedRect));
 ok((await ev(`window.__sem==='pre'`)), "I2 same-window (no navigation)");
 ok(s1.shelvedCount === 0, "I2 shelved count zero after the unshelve click", `shelved=${s1.shelvedCount}`);
-const wsp = JSON.parse(fs.readFileSync(path.join(AGENT_DIR, ".agent", "workspace.json")));
+const wsp = JSON.parse(fs.readFileSync(path.join(GLOCHID_DIR, ".agent", "workspace.json")));
 ok(wsp.content.find((p) => p.id === "p2").state === "live", "I2 unshelve persisted to workspace row");
 
 // ---- I3: open a new route via launcher POST, windows rail refreshes ----
@@ -292,7 +292,7 @@ await sleep(300);
 let __m2b = false;
 for (let t = 0; t < 15 && !__m2b; t++) { await sleep(300); __m2b = await ev(`[...document.querySelectorAll('#fs-content .fs-pane')].some(p=>String(p.getAttribute('data-desktop'))==='1' && (p.querySelector('.fs-title')||{}).textContent.trim()==='/sessions')`); }
 ok(__m2b, "M2b the moved pane's section re-rendered with data-desktop=1");
-const wspM = JSON.parse(fs.readFileSync(path.join(AGENT_DIR, ".agent", "workspace.json")));
+const wspM = JSON.parse(fs.readFileSync(path.join(GLOCHID_DIR, ".agent", "workspace.json")));
 ok(wspM.content.find((p) => p.route === "/sessions" && p.state !== "shelved").desktop === 1, "M2 move-to persisted desktop=1 on the pane record");
 ok((await ev(`[...document.querySelectorAll('#fs-content .fs-pane')].some(p=>String(p.getAttribute('data-desktop'))==='1' && (p.querySelector('.fs-title')||{}).textContent.trim()==='/sessions')`)), "M2b the moved pane's section re-rendered with data-desktop=1");
 const sm1 = await ev(SNAPSHOT);
@@ -312,7 +312,7 @@ await sleep(700);
 ok((await ev(`document.querySelector('.fs-pane[data-pane="p1"]').classList.contains('fs-single')`)), "v5 one-up: the staged pane wears fs-single");
 ok((await ev(`[...document.querySelectorAll('#fs-content .fs-pane:not(.fs-single)')].filter(p=>(p.getAttribute('data-region')||'main')==='main'&&!p.classList.contains('shelved')&&String(p.getAttribute('data-desktop'))==='0'&&p.getClientRects().length>0).length`)) === 0, "v5 one-up: staged alone (strip siblings step aside)");
 ok((await ev(`document.querySelector('.fs-pane[data-pane="p1"] header button[data-verb="single"]')`)) !== null, "v5 one-up: the pane head carries the single glyph");
-const wsSingle = JSON.parse(fs.readFileSync(path.join(AGENT_DIR, ".agent", "workspace.json")));
+const wsSingle = JSON.parse(fs.readFileSync(path.join(GLOCHID_DIR, ".agent", "workspace.json")));
 ok(wsSingle.content.find((p) => p.id === "p1").single === true, "v5 one-up persisted to workspace row (single)");
 await ev(`htmx.ajax('POST','/filmstrip/single',{values:{id:'p1'},target:'#fs-sink',swap:'innerHTML'})`);
 await sleep(700);
@@ -330,15 +330,15 @@ ok(/id="fs-railtabs"/.test(boot.body) && !/fs-pane .fs-title.*settings.*pin/.tes
 // ---- I7: fresh pane stamps current desktop ----
 await httpPost(base + "/filmstrip/desktop", { d: "1" });
 await httpPost(base + "/filmstrip/open", { route: "/code" });
-const wsp2 = JSON.parse(fs.readFileSync(path.join(AGENT_DIR, ".agent", "workspace.json")));
+const wsp2 = JSON.parse(fs.readFileSync(path.join(GLOCHID_DIR, ".agent", "workspace.json")));
 const codePane = wsp2.content.find((p) => p.route === "/code");
 ok(codePane && String(codePane.desktop) === "1", "I7 fresh pane stamps the current desktop", codePane ? String(codePane.desktop) : "missing");
 
 // ---- I6 + I5: real click-through, the SAME outline template as the
 // rail (rail-trees-v4 amendment): dir labels fold in place (eager small
 // dirs pull NOTHING), leaf labels open-or-focus via acme Get. ----
-fs.mkdirSync(path.join(AGENT_DIR, "deep"), { recursive: true });
-fs.writeFileSync(path.join(AGENT_DIR, "deep", "leaf.txt"), "leaf\n");
+fs.mkdirSync(path.join(GLOCHID_DIR, "deep"), { recursive: true });
+fs.writeFileSync(path.join(GLOCHID_DIR, "deep", "leaf.txt"), "leaf\n");
 await send("Page.navigate", { url: base + "/" });
 ok(await waitShell(), "shell appeared after load");
 await sleep(500);
@@ -374,7 +374,7 @@ after_reload_tag: {
   ok((await ev(paneHeadVerb('p2', 'unpin'))), "I8 pane-head pin glyph re-labeled to unpin");
   await checkI8("after pin");
   ok((await ev(`Math.round(document.querySelector('.fs-pane[data-pane="p2"]').getBoundingClientRect().height)`)) > 256, "cascade cap released: the single pinned pane fills the rail band (> 16rem)");
-  const wsp3 = JSON.parse(fs.readFileSync(path.join(AGENT_DIR, ".agent", "workspace.json")));
+  const wsp3 = JSON.parse(fs.readFileSync(path.join(GLOCHID_DIR, ".agent", "workspace.json")));
   ok(wsp3.content.find((p) => p.id === "p2").region === "rail", "I8 pin persisted to workspace row (region=rail)");
 
   // unpin returns the pane to the strip
@@ -387,7 +387,7 @@ after_reload_tag: {
   await ensureNode("desk/0");
   ok((await ev(`[...document.querySelectorAll('#fs-tree-windows li.fs-tr-item .fs-tr-verb')].some(b=>b.getAttribute('data-verb')==='unpin')`)) === false, "I8 tree row re-labeled back to pin (unpin OOB rode the response)");
   ok(s5.focusedRect && s5.focusedRect.q, "I1 still visible-focused after pin/unpin churn", JSON.stringify(s5.focusedRect));
-  const wsp4 = JSON.parse(fs.readFileSync(path.join(AGENT_DIR, ".agent", "workspace.json")));
+  const wsp4 = JSON.parse(fs.readFileSync(path.join(GLOCHID_DIR, ".agent", "workspace.json")));
   ok(wsp4.content.find((p) => p.id === "p2").region === "main", "unpin persisted to workspace row (region=main)");
 
   // rail focus: click the tree row's focus verb on the RE-PINNED pane
@@ -401,7 +401,7 @@ after_reload_tag: {
   ok((await ev(`document.querySelector('.fs-pane[data-pane="p2"]').classList.contains('focused')`)), "rail focus: tree focus verb gives p2 the ring in place");
   ok(s6.focusedRegion === "main", "rail focus: the lift region is still main", JSON.stringify({region: s6.focusedRegion}));
   ok(s6.railBodies[0] && s6.railBodies[0].pane === "p2" && s6.railBodies[0].bodyVisible, "rail focus: pinned p2 body still visible in the rail", JSON.stringify(s6.railBodies));
-  const wsp5 = JSON.parse(fs.readFileSync(path.join(AGENT_DIR, ".agent", "workspace.json")));
+  const wsp5 = JSON.parse(fs.readFileSync(path.join(GLOCHID_DIR, ".agent", "workspace.json")));
   ok(wsp5.focus === "content:0", "rail focus: persisted focus stays on the lifted main pane (no rail steal)", JSON.stringify(wsp5.focus));
   ok(s6.focusedRect && s6.focusedRect.q, "I1 visible focused pane after rail focus", JSON.stringify(s6.focusedRect));
 
@@ -417,7 +417,7 @@ after_reload_tag: {
   ok((await ev(`document.querySelector('.fs-pane[data-pane="p1"]').classList.contains('focused')`)), "open-or-focus of a pinned route leaves the main lift untouched");
   ok(s7.focusedRegion === "main" && s7.focusedRect && s7.focusedRect.q, "I1 main lift still valid after pinned-route open", JSON.stringify({region: s7.focusedRegion, rect: s7.focusedRect}));
   ok(s7.railBodies[0] && s7.railBodies[0].bodyVisible, "pinned p2 body still visible after open-or-focus", JSON.stringify(s7.railBodies));
-  const wsp6 = JSON.parse(fs.readFileSync(path.join(AGENT_DIR, ".agent", "workspace.json")));
+  const wsp6 = JSON.parse(fs.readFileSync(path.join(GLOCHID_DIR, ".agent", "workspace.json")));
   ok(wsp6.focus === "content:0", "pinned-route open did not move the persisted focus", JSON.stringify(wsp6.focus));
 }
 
@@ -451,7 +451,7 @@ v3_rail_files: {
   console.log(await ev(`htmx.ajax('POST','/filmstrip/desktop',{values:{d:'1'},target:'#fs-sink',swap:'innerHTML'})`));
   await sleep(900);
   ok(await ev(`document.querySelector('#ws-desk').classList.contains('dsk-1')`), "files setup: desktop 1 active after the desktop POST");
-  const wsj = JSON.parse(fs.readFileSync(path.join(AGENT_DIR, ".agent", "workspace.json")));
+  const wsj = JSON.parse(fs.readFileSync(path.join(GLOCHID_DIR, ".agent", "workspace.json")));
   const codeRec = wsj.content.find((p) => p.route === "/code" && p.state === "live");
   ok(codeRec && codeRec.region !== "rail", "files setup: live /code pane present (still on the strip)", codeRec ? codeRec.id : "missing");
   if (codeRec) {
@@ -483,7 +483,7 @@ v3_final: {
   await send("Page.navigate", { url: base + "/" });
   ok(await waitShell(), "shell appeared after load");
   await sleep(500);
-  const wsj5 = JSON.parse(fs.readFileSync(path.join(AGENT_DIR, ".agent", "workspace.json")));
+  const wsj5 = JSON.parse(fs.readFileSync(path.join(GLOCHID_DIR, ".agent", "workspace.json")));
   const pinnedIds = wsj5.content.filter((p) => p.region === "rail").map((p) => p.id);
   ok(pinnedIds.length === 2, "final: both pinned regions survive in workspace.json across the session", JSON.stringify(pinnedIds));
   const sR = await ev(SNAPSHOT);
@@ -497,12 +497,12 @@ v3_final: {
     ok(sD.railBodies.length === 2 && sD.railBodies.every((r) => r.bodyVisible), `final: both pinned rail bodies visible on desktop ${d} (dock semantics)`, JSON.stringify(sD.railBodies));
     ok(sD.focusedRect && sD.focusedRect.q, `I1 visible focused pane on desktop ${d} with pinned panes`, JSON.stringify(sD.focusedRect));
   }
-  const wsj6 = JSON.parse(fs.readFileSync(path.join(AGENT_DIR, ".agent", "workspace.json")));
+  const wsj6 = JSON.parse(fs.readFileSync(path.join(GLOCHID_DIR, ".agent", "workspace.json")));
   const codeRec6 = wsj6.content.find((p) => p.route === "/code");
   ok(codeRec6 && codeRec6.region === "rail", "final setup: the live /code pane is currently pinned", JSON.stringify(codeRec6 && codeRec6.region));
   console.log(await treeClose("/code"));
   await sleep(900);
-  const wsj7 = JSON.parse(fs.readFileSync(path.join(AGENT_DIR, ".agent", "workspace.json")));
+  const wsj7 = JSON.parse(fs.readFileSync(path.join(GLOCHID_DIR, ".agent", "workspace.json")));
   ok(codeRec6 && wsj7.content.find((p) => p.id === codeRec6.id).state === "shelved", "final: shelve persisted to workspace row (state=shelved)");
   ok(codeRec6 && wsj7.content.find((p) => p.id === codeRec6.id).region === "rail", "final: the shelved row KEEPS region=rail (restore will re-pin)");
   const sSh = await ev(SNAPSHOT);
@@ -512,7 +512,7 @@ v3_final: {
   ok(sSh.focusedRect && sSh.focusedRect.q && !sSh.focusedShelved, "I1 after shelving a pinned pane: visible live focused pane (heal never lands on the shelved pane)", JSON.stringify({rect: sSh.focusedRect, shelved: sSh.focusedShelved}));
   console.log(await ev(treeVerbClick("/code", "restore")));
   await sleep(900);
-  const wsj8 = JSON.parse(fs.readFileSync(path.join(AGENT_DIR, ".agent", "workspace.json")));
+  const wsj8 = JSON.parse(fs.readFileSync(path.join(GLOCHID_DIR, ".agent", "workspace.json")));
   ok(codeRec6 && wsj8.content.find((p) => p.id === codeRec6.id).region === "rail", "final: restore brings /code back WITH its region (rail)");
   const sSt = await ev(SNAPSHOT);
   ok(sSt.pinnedCount === 2 && sSt.railBodies.every((r) => r.bodyVisible), "final: both pinned panes live again with visible rail bodies after restore", JSON.stringify(sSt.railBodies));
@@ -521,7 +521,7 @@ v3_final: {
   if (codeRec6) {
     await ev(`htmx.ajax('POST','/filmstrip/pin',{values:{id:'${codeRec6.id}'},target:'#fs-sink',swap:'innerHTML'})`);
     await sleep(600);
-    const wsj9 = JSON.parse(fs.readFileSync(path.join(AGENT_DIR, ".agent", "workspace.json")));
+    const wsj9 = JSON.parse(fs.readFileSync(path.join(GLOCHID_DIR, ".agent", "workspace.json")));
     ok(wsj9.content.find((p) => p.id === codeRec6.id).region === "main", "final: unpin round-trip persists region=main on /code");
     const sU = await ev(SNAPSHOT);
     ok(sU.pinnedCount === 1 && sU.railBodies.every((r) => r.bodyVisible), "final: only p2 remains pinned after the /code unpin", JSON.stringify(sU.railBodies));
@@ -544,7 +544,7 @@ cross_desk_restore: {
   await sleep(900);
   console.log(await treeClose("/code"));
   await sleep(600);
-  const wsA = JSON.parse(fs.readFileSync(path.join(AGENT_DIR, ".agent", "workspace.json")));
+  const wsA = JSON.parse(fs.readFileSync(path.join(GLOCHID_DIR, ".agent", "workspace.json")));
   const shelved = wsA.content.find((p) => p.route === "/code" && p.state === "shelved");
   ok(!!shelved, "I2b setup: /code is shelved (state=shelved)");
   // restore from the OTHER desktop than the one the pane carries (the
@@ -557,7 +557,7 @@ cross_desk_restore: {
   await ensureNode("shelf");
   console.log(await ev(treeVerbClick("/code", "restore")));
   await sleep(900);
-  const wsB = JSON.parse(fs.readFileSync(path.join(AGENT_DIR, ".agent", "workspace.json")));
+  const wsB = JSON.parse(fs.readFileSync(path.join(GLOCHID_DIR, ".agent", "workspace.json")));
   const rec = wsB.content.find((p) => p.route === "/code" && p.state === "live");
   ok(rec && String(rec.desktop) === to, `I2b restore re-stamps the pane to the CURRENT desktop (${to}, not the shelving desktop ${from})`, JSON.stringify(rec && rec.desktop));
   if (rec) {
@@ -624,7 +624,7 @@ v4_batch_c: {
   await sleep(900);
   ok((await ev(`window.__semv4==='pre'`)), "T3 tree label click stayed in the same window");
   const sT3 = await ev(SNAPSHOT);
-  const stateAfter = JSON.parse(fs.readFileSync(path.join(AGENT_DIR, ".agent", "workspace.json"))).content.find((p) => p.route === __shelvedRoute);
+  const stateAfter = JSON.parse(fs.readFileSync(path.join(GLOCHID_DIR, ".agent", "workspace.json"))).content.find((p) => p.route === __shelvedRoute);
   ok(stateAfter && stateAfter.state === "live", "T3 acme Get: the shelved row (" + __shelvedRoute + ") UNSHELVES on label click", JSON.stringify(stateAfter));
   await sleep(800);
   const sT3b = await ev(SNAPSHOT);
@@ -648,7 +648,7 @@ v4_batch_c: {
   await sleep(900);
   await ensureNode("shelf");
   ok((await ev(`[...document.querySelectorAll('#fs-tree-windows li.fs-tr-item .fs-tr-open')].some(b=>b.textContent.trim()==='/chat')`)), "T5 shelve: the row moved under the shelf subtree on OOB");
-  const wspT5 = JSON.parse(fs.readFileSync(path.join(AGENT_DIR, ".agent", "workspace.json")));
+  const wspT5 = JSON.parse(fs.readFileSync(path.join(GLOCHID_DIR, ".agent", "workspace.json")));
   ok(wspT5.content.find((p) => p.route === "/chat").state === "shelved", "T5 shelve persisted to the workspace row");
   // leave the world sane for later runs: reopen /chat
   await ev(`htmx.ajax('POST','/filmstrip/open',{values:{route:'/chat'},target:'#fs-sink',swap:'innerHTML'})`);

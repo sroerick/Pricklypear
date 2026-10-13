@@ -13,7 +13,7 @@ let pp_value_testable =
 let test_plugin_lifecycle ~rt () =
   let pd =
     Filename.concat (Filename.get_temp_dir_name ())
-      (Printf.sprintf "agent-test-%d" (Unix.getpid ()))
+      (Printf.sprintf "glochid-test-%d" (Unix.getpid ()))
   in
   (try Unix.mkdir pd 0o755 with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
   let plugins_dir = Filename.concat pd "plugins" in
@@ -110,7 +110,7 @@ let test_bash_deadline ~rt () =
        in
        Alcotest.(check int) "timeout exit is -1" (-1) exit_code)
 
-(** agent-loop: a mock provider emitting one tool call round-trips
+(** glochid-loop: a mock provider emitting one tool call round-trips
     exactly one follow-up call. *)
 let test_loop_tool_round_trip ~env ~sw ~rt () =
   let calls = ref 0 in
@@ -156,7 +156,7 @@ let test_loop_tool_round_trip ~env ~sw ~rt () =
       Alcotest.(check int) "two provider calls" 2 !calls;
       Alcotest.(check int) "history has 4 entries" 4 (List.length !history)
 
-(** agent-loop: a tool_call hook blocking reaches the model as an
+(** glochid-loop: a tool_call hook blocking reaches the model as an
     error tool result. *)
 let test_loop_tool_block ~env ~sw ~rt () =
   ignore
@@ -217,7 +217,7 @@ let test_loop_tool_block ~env ~sw ~rt () =
   | Error e -> Alcotest.fail e
   | Ok () -> ()
 
-(** agent-loop regression (turn-2 provider 400): the assistant entry
+(** glochid-loop regression (turn-2 provider 400): the assistant entry
     replayed in history must carry provider-shaped CONTENT (a string /
     part array), never the whole raw assistant message object nested under
     "content", and must replay tool_calls so the following tool-role entry
@@ -393,7 +393,7 @@ let test_sse_stream_reconstruction () =
   Alcotest.(check string) "tool input json" {|{"command":"echo hello"}|}
     (Yojson.Safe.to_string input)
 
-(** agent-route-table: (route ...) makes a path resolvable via
+(** glochid-route-table: (route ...) makes a path resolvable via
     route/lookup and renderable via route/dispatch; dispatch runs the
     Nopales handler through Runtime.apply_value under the eval rim and
     returns the rendered raw-HTML VStr. *)
@@ -1267,7 +1267,7 @@ let test_harness_context_structure () =
     Mock.complete consumes them in order (text delta per turn, empty
     end_turn reply once the script runs out). *)
 let test_mock_script_consumption ~env ~sw () =
-  let path = Filename.temp_file "pp_agent_mock" ".json" in
+  let path = Filename.temp_file "pp_glochid_mock" ".json" in
   let oc = open_out path in
   output_string oc
     {|[{"text":"hi","calls":[{"id":"c1","name":"bash","input":{"command":"ls"}}]},
@@ -1475,10 +1475,10 @@ let test_habitat_bearer ~env () =
     (Habitat.auth_header c_basic);
   (* creds: url + token alone is a complete config — no password needed *)
   let saved =
-    [ ("AGENT_HABITAT_URL", Sys.getenv_opt "AGENT_HABITAT_URL")
-    ; ("AGENT_HABITAT_TOKEN", Sys.getenv_opt "AGENT_HABITAT_TOKEN")
-    ; ("AGENT_HABITAT_USER", Sys.getenv_opt "AGENT_HABITAT_USER")
-    ; ("AGENT_HABITAT_PASS", Sys.getenv_opt "AGENT_HABITAT_PASS") ]
+    [ ("GLOCHID_HABITAT_URL", Sys.getenv_opt "GLOCHID_HABITAT_URL")
+    ; ("GLOCHID_HABITAT_TOKEN", Sys.getenv_opt "GLOCHID_HABITAT_TOKEN")
+    ; ("GLOCHID_HABITAT_USER", Sys.getenv_opt "GLOCHID_HABITAT_USER")
+    ; ("GLOCHID_HABITAT_PASS", Sys.getenv_opt "GLOCHID_HABITAT_PASS") ]
   in
   Fun.protect
     ~finally:(fun () ->
@@ -1488,10 +1488,10 @@ let test_habitat_bearer ~env () =
          saved)
     (fun () ->
        List.iter (fun (k, _) -> Unix.putenv k "") saved;
-       Unix.putenv "AGENT_HABITAT_URL" "https://pricklypear.rocks";
-       Unix.putenv "AGENT_HABITAT_TOKEN" "tok-abc";
-       Unix.putenv "AGENT_HABITAT_USER" "";
-       Unix.putenv "AGENT_HABITAT_PASS" "";
+       Unix.putenv "GLOCHID_HABITAT_URL" "https://pricklypear.rocks";
+       Unix.putenv "GLOCHID_HABITAT_TOKEN" "tok-abc";
+       Unix.putenv "GLOCHID_HABITAT_USER" "";
+       Unix.putenv "GLOCHID_HABITAT_PASS" "";
        match Habitat.creds ~env with
        | None -> Alcotest.fail "url+token should be a complete config"
        | Some c ->
@@ -1514,7 +1514,7 @@ let () =
       ( "pure-catalog",
         [ Alcotest.test_case "parity" `Quick
             (test_pure_catalog_parity ~rt) ] );
-      ( "agent-loop",
+      ( "glochid-loop",
         [
           Alcotest.test_case "tool-round-trip" `Quick
             (test_loop_tool_round_trip ~env ~sw ~rt);
@@ -1545,7 +1545,7 @@ let () =
             (fun () -> test_habitat_bearer ~env ())
         ; Alcotest.test_case "expr-builders" `Quick
             test_habitat_expr_builders ] );
-      ( "agent-route-table",
+      ( "glochid-route-table",
         [ Alcotest.test_case "register-and-render" `Quick
             (test_route_table_register_and_render ~rt)
         ; Alcotest.test_case "thin-context" `Quick
@@ -1553,7 +1553,7 @@ let () =
         ; Alcotest.test_case "pg-prim-unbound" `Quick
             (test_route_table_pg_prim_unbound ~rt)
         ] );
-      ( "libs-hyper-on-agent",
+      ( "libs-hyper-on-glochid",
         [ Alcotest.test_case "visit-click-stream" `Quick
             (test_libs_hyper_on_agent ~rt) ] );
       ( "surfaces",

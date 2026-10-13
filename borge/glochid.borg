@@ -153,7 +153,7 @@
     (test "a mock provider emitting one tool call round-trips: tool executes, result message is appended, loop makes exactly one follow-up model call")
     (test "budget: the loop stops after a configurable max turns and reports rather than spinning")
     (test "tool_call plugin hook can block a call; the model sees the block reason as the tool result")
-    (smoke "openai-compat provider streams a real reply end-to-end when AGENT_API_KEY is set"))
+    (smoke "openai-compat provider streams a real reply end-to-end when GLOCHID_API_KEY is set (legacy AGENT_API_KEY)"))
    (details
     (doc (|
          HOST SEAM. loop/provider/tools live in the shared llm/ package
@@ -242,15 +242,15 @@
    (status implemented)
    (implements glochid/lib/runtime.ml hostkit/host_seam.ml hostkit/http_kit.ml hostkit/multipart_emitter.ml)
    (verify
-    (test "agent-route-table / register-and-render: a (route \"/chat\" \"chat/render\") registered by a plugin makes /chat resolvable via route/lookup and renderable via route/dispatch (which invokes the handler through Runtime.apply_value under the eval rim and returns the rendered raw-HTML VStr)")
-    (test "agent-route-table / thin-context: route/dispatch binds a thin request context so query-param / request-method / hx-request? resolve inside the handler")
-    (test "agent-route-table / pg-prim-unbound: a handler calling a Postgres-only request prim (e.g. current-author as a DB row) errors with unbound-prim in the agent — the agent's request context carries only request-shape values"))
+    (test "glochid-route-table / register-and-render: a (route \"/chat\" \"chat/render\") registered by a plugin makes /chat resolvable via route/lookup and renderable via route/dispatch (which invokes the handler through Runtime.apply_value under the eval rim and returns the rendered raw-HTML VStr)")
+    (test "glochid-route-table / thin-context: route/dispatch binds a thin request context so query-param / request-method / hx-request? resolve inside the handler")
+    (test "glochid-route-table / pg-prim-unbound: a handler calling a Postgres-only request prim (e.g. current-author as a DB row) errors with unbound-prim in the agent — the agent's request context carries only request-shape values"))
    (details
     (doc (|
          IMPLEMENTED + VERIFIED (campaign 6.1 make, 2026-12). The whole
          route-table seam is live in
          glochid/lib/runtime.ml and covered by the agent suite's
-         agent-route-table group (3 tests, all green): (route path
+         glochid-route-table group (3 tests, all green): (route path
          handler) registers into the Runtime route Hashtbl;
          (route/lookup path) resolves path -> handler-name VStr | VNil;
          (route/dispatch handler method path [params] [headers] [body])
@@ -571,7 +571,7 @@
          surface populates a DROPDOWN from the provider's own ABI —
          GET {base}/models with the resolved key — and persists its
          OWN choice locally. /settings (Nopales-authored settings/page,
-         fed by agent/config + agent/models prims) edits key/base/model
+         fed by agent/config + glochid/models prims) edits key/base/model
          and POST /settings persists + retargets the RUNNING turn loop
          (Provider.cfg is a mutable ref, not a boot-time constant).
          The chat header carries the same dropdown (hx-post on change)
@@ -593,7 +593,7 @@
    (status implemented)
    (implements glochid/lib/sessions.ml glochid/lib/http_ui.ml glochid/lib/surface.ml glochid/bin/main.ml llm/lib/loop.ml hostkit/chat_stream.ml)
    (verify
-    (test "sessions-persist roundtrip: new/append/list/resume in an overridden AGENT_SESSIONS_DIR — message JSON (incl. tool_calls) survives write+read; appending CONTINUES the resumed file; resume refuses path escapes; session/name + session/data prims resolve through the runtime")
+    (test "sessions-persist roundtrip: new/append/list/resume in an overridden GLOCHID_SESSIONS_DIR (legacy AGENT_SESSIONS_DIR) — message JSON (incl. tool_calls) survives write+read; appending CONTINUES the resumed file; resume refuses path escapes; session/name + session/data prims resolve through the runtime")
     (test "turn-sink: Loop.run's ?on_msg fires exactly once per message the turn appends (user + assistant)")
     (smoke "scripts/smoke_glochid_surface.sh PASS (surfaces unchanged; mock runs — no .agent/sessions/ litter)"))
    (details
@@ -661,14 +661,14 @@
          POST /api/eval (HTTP Basic — the ONE Pp_http client). Type is
          the first arg (gregor's contract, habits transfer);
          mem/search + mem/forget take TYPE as a 1-arg short form
-         against the default shared store (AGENT_MEMORY_TYPE, default
+         against the default shared store (GLOCHID_MEMORY_TYPE, legacy AGENT_MEMORY_TYPE, default
          gregor-memory). The model gets a `memory` TOOL (remember /
          search / get / forget) with a prompt fact line: search before
          saving. Registration happens in EVERY mode (serve, REPL,
          pipe); the tool only when credentials resolve.
 
          IDENTITY + CONFIG. The habitat sees the caller the env
-         presents: AGENT_HABITAT_(URL|USER|PASS|TOKEN) >
+         presents: GLOCHID_HABITAT_(URL|USER|PASS|TOKEN) (legacy AGENT_HABITAT_*) >
          PP_(URL|USER|PASS|TOKEN)
          > ~/.config/pricklypear/env, which is a SHELL file and is
          sourced through /bin/sh (same semantics pp-eval uses), so

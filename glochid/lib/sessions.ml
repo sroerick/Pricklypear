@@ -1,8 +1,10 @@
 (** glochid persistent sessions (borge/glochid.borg sessions-persist).
 
     Every conversation is an APPEND-ONLY JSONL transcript under the
-    local pp store (.agent/sessions/, one file per session), written at
-    the LOOP boundary: one {"t":"msg",...} line per provider message the
+    local pp store (projects that still carry a legacy .agent tree
+    keep it readable there; fresh projects get .glochid/sessions/),
+    one file per session), written at the LOOP boundary: one
+    {"t":"msg",...} line per provider message the
     agent loop appends to the shared history (user, assistant-with-
     tool_calls, tool results). Resume = load the file back into a fresh
     history and keep appending to the same file. Local-first: the store
@@ -20,12 +22,20 @@ type handle = {
   mutable count : int;        (* provider messages persisted so far *)
 }
 
-(** Root of the local session store. AGENT_SESSIONS_DIR overrides
-    (tests / multi-checkout use). *)
+(** Root of the local session store. GLOCHID_SESSIONS_DIR overrides
+    (legacy AGENT_SESSIONS_DIR still accepted; tests / multi-checkout
+    use). Default prefers the glochid store: a .glochid tree ->
+    .glochid/sessions; a legacy .agent tree (no .glochid) keeps
+    .agent/sessions (existing history stays readable, no glochid-side
+    dirs created); neither -> fresh .glochid/sessions, created on
+    write. *)
 let root () : string =
-  match Sys.getenv_opt "AGENT_SESSIONS_DIR" with
+  match Config.getenv_compat "SESSIONS_DIR" with
   | Some d when d <> "" -> d
-  | _ -> Filename.concat ".agent" "sessions"
+  | _ ->
+      if Sys.file_exists ".glochid" then Filename.concat ".glochid" "sessions"
+      else if Sys.file_exists ".agent" then Filename.concat ".agent" "sessions"
+      else Filename.concat ".glochid" "sessions"
 
 (* ---- message <-> json (Provider.message is wire-shape JSON already:
         role + content + tool_call_id + tool_calls) ---- *)
@@ -190,7 +200,7 @@ let append_msg (h : handle) (m : Provider.message) : unit =
     first session on the first appended message — the first user
     prompt — instead of the host pre-creating one at boot. Boots,
     page opens, and harness restarts that never send a prompt leave
-    NO transcript (no header-only litter in .agent/sessions/).
+    NO transcript (no header-only litter in the session store).
     [create:false] appends only when a session already exists
     (/resume, explicit /new) and stays store-silent otherwise —
     mock/pipe runs must never write the store. *)
@@ -383,3 +393,4 @@ let register ~(rt : Runtime.t) ~(history : Provider.message list ref)
     { Loop.doc = "resume a stored session"; run = Ast.VPrim "session/resume" };
   Hashtbl.replace rt.Runtime.commands "sessions"
     { Loop.doc = "list stored sessions"; run = Ast.VPrim "session/text" }
+

@@ -1,7 +1,7 @@
 (** Agent Nopales surface (borge/glochid.borg surfaces).
 
     The chat + code browser pages are NOPALES-AUTHORED htmx fragments on
-    the agent route table, rendered by Nopales via [libs/html] — NOT
+    the glochid route table, rendered by Nopales via [libs/html] — NOT
     compiled OCaml pages and NOT vanilla-JS SSE. The surface is
     redefinable live (same env as plugins/REPL): re-evaluating a
     `(define chat/page …)` at the REPL changes the next render without a
@@ -23,8 +23,8 @@ open Pricklypear_lisp
 
 (** The surface source. Defines chat/page, chat/user-bubble,
     chat/llm-bubble-open, chat/token, code/page and registers
-    the / and /code routes via the agent route table. Uses libs/html +
-    the agent's request-shape prims (query-param). *)
+    the / and /code routes via the glochid route table. Uses libs/html +
+    the glochid request-shape prims (query-param). *)
 let surface_source = {pp|
 ;; ---- shared page chrome (borge/glochid.borg filmstrip-shell) ----
 ;; Pages are PANE-AWARE: under HX-Request (filmstrip partial mode) a
@@ -237,7 +237,7 @@ let surface_source = {pp|
           "</body></html>"))))
 
 ;; ---- llm-config helpers (borge/glochid.borg llm-config) ----
-;; The model dropdown is fed by the provider ABI (agent/models = GET
+;; The model dropdown is fed by the provider ABI (glochid/models = GET
 ;; {base}/models, cached host-side); the choice POSTs to /settings and
 ;; persists per-surface (model is NEVER replicated user data).
 (define (settings/model-options current ms)
@@ -253,11 +253,11 @@ let surface_source = {pp|
 ;; The chat page skeleton: log target + an hx-post=/chat form with the
 ;; upstream htmx-4 hx-multipart extension so a multipart/mixed reply
 ;; streams each part live into the bubble. htmx + hx-multipart are
-;; vendored assets served at /assets/*.js (baked into the agent binary).
+;; vendored assets served at /assets/*.js (baked into the glochid binary).
 ;; hx-config '{"timeout":0}' disables htmx's 60s defaultTimeout for a
-;; request whose lawful lifetime is "a whole agent turn".
+;; request whose lawful lifetime is "a whole glochid turn".
 ;; hx-config '{"'timeout'":0}' disables htmx's 60s defaultTimeout for a
-;; request whose lawful lifetime is "a whole agent turn".
+;; request whose lawful lifetime is "a whole glochid turn".
 (define (chat/head frag)
   ;; The 'glochid' root anchor is shell-level (it reloads / in place) — a
   ;; plain <a> inside a fragment is the escape bug class, so fragments
@@ -277,7 +277,7 @@ let surface_source = {pp|
     (filmstrip/app-link "/settings" "/settings")
     " · model: "
     "<select name=\"model\" class=\"fs-modelsel\" hx-post=\"/settings\" hx-trigger=\"change\" hx-swap=\"none\">"
-    (settings/model-options (agent/model) (agent/models))
+    (settings/model-options (glochid/model) (glochid/models))
     "</select></span></h1>"))
 
 (define (chat/body)
@@ -318,7 +318,7 @@ app-link/button twins (POST /filmstrip/new, open-or-focus /sessions)."
 (route "/chat" "chat/page")
 
 ;; ---- sessions surface (GET /sessions; borge/glochid.borg sessions-persist) ----
-;; Appended-only JSONL transcripts under .agent/sessions/. Resume:
+;; Appended-only JSONL transcripts under .glochid/sessions/ (legacy .agent/sessions trees keep working). Resume:
 ;; GET /resume?id=<id> re-points the live history + current session,
 ;; then lands back on the chat page with the transcript backfilled.
 (define (redirect loc)
@@ -385,7 +385,7 @@ app-link/button twins (POST /filmstrip/new, open-or-focus /sessions)."
       "<table class=\"sess\"><tr><th>time</th><th>model</th><th>msgs</th><th>first prompt</th><th></th></tr>"
       (sessions/rows (session/list))
       "</table>"
-      "<p class=\"muted\">transcripts: .agent/sessions/*.jsonl (append-only, local store)</p>")))
+      "<p class=\"muted\">transcripts: .glochid/sessions/*.jsonl (append-only, local store)</p>")))
 (route "/sessions" "sessions/page")
 
 (define (sessions/new)
@@ -411,12 +411,12 @@ app-link/button twins (POST /filmstrip/new, open-or-focus /sessions)."
           "<h1><span class=\"muted\">/settings</span></h1>"
           "<h1><a href=\"/\">glochid</a> <span class=\"muted\">— /settings</span></h1>")
       "<div class=\"card\"><form method=\"post\" action=\"/settings\">"
-      "<p><label>API key — " (agent/key-status) " · blank keeps current</label>"
+      "<p><label>API key — " (glochid/key-status) " · blank keeps current</label>"
       "<input type=\"password\" name=\"api_key\" autocomplete=\"off\"></p>"
       "<p><label>Base URL</label>"
-      "<input type=\"text\" name=\"base_url\" value=\"" (html-escape (agent/base-url)) "\"></p>"
+      "<input type=\"text\" name=\"base_url\" value=\"" (html-escape (glochid/base-url)) "\"></p>"
       "<p><label>Model</label>"
-      "<select name=\"model\">" (settings/model-options (agent/model) (agent/models)) "</select></p>"
+      "<select name=\"model\">" (settings/model-options (glochid/model) (glochid/models)) "</select></p>"
       "<button>save</button></form>"
       "<p class=\"muted\">Key + base come down invisibly via pp-remote --sync "
       "(lens __config.json). Model is chosen per surface from the provider's /models.</p>"
@@ -482,8 +482,8 @@ app-link/button twins (POST /filmstrip/new, open-or-focus /sessions)."
 
 ;; ---- code browser (GET /code) ----
 ;; Read-only file tree + file content arm, rendered by Nopales via fs/ls
-;; + fs/read + fs/dir? (agent host prims). query-param "path" selects
-;; the entry (relative to the agent's cwd); the agent's fs prims refuse
+;; + fs/read + fs/dir? (glochid host prims). query-param "path" selects
+;; the entry (relative to the glochid cwd); the glochid fs prims refuse
 ;; ".." escapes (sandbox posture).
 ;; ONE TEMPLATE, TWO FACES (rail-trees-v4 amendment): the dir arm
 ;; renders the SAME outline rows the rail code box renders --
@@ -549,7 +549,7 @@ the ONE /filmstrip/tree endpoint; neither face gets box chrome here)."
 ;; The habitat's FUNCTION GRAMMAR (the image's /bindings face) as a
 ;; glochid app: package -> function -> doc+source, read-only over the
 ;; bind/* habitat-bridge prims (glochid/lib/habitat.ml — the one
-;; POST /api/eval client; creds AGENT_HABITAT_(URL|TOKEN|USER|PASS) > PP_*,
+;; POST /api/eval client; creds GLOCHID_HABITAT_(URL|TOKEN|USER|PASS) (legacy AGENT_*) > PP_*,
 ;; token wins when set).
 ;; FAIL-SOFT at CALL time like the mem/* bridge, so every page/cascade
 ;; touch wraps its call in bind/safe (a guard) and renders a muted
@@ -575,7 +575,7 @@ habitat-unreachable at CALL time, so the surface renders instead of
   (lambda (msg)
     (string-append
       "<p class=\"muted\">habitat bridge: " (html-escape (as-str msg)) "</p>"
-      "<p class=\"muted\">set AGENT_HABITAT_URL / AGENT_HABITAT_USER / AGENT_HABITAT_PASS "
+      "<p class=\"muted\">set GLOCHID_HABITAT_URL / GLOCHID_HABITAT_USER / GLOCHID_HABITAT_PASS "
       "(or PP_URL / PP_USER / PP_PASS) so glochid can read the habitat's function grammar.</p>"))
   "The page's bridge-down block: the bridge's own error text + the
 credential pointer (same env trio the mem/* bridge uses).")
@@ -689,7 +689,7 @@ its detail pane, the trail is the only way up.")
     port — the allowed variation is recorded in borge/filmstrip.borg):
 
       1. WORKSPACE BACKING: filmstrip/ws-node / ws-save redefined over
-         fs prims into .agent/workspace.json (project-local, beside
+         fs prims into the resolved glochid/ws-file (project-local, beside
          .agent/sessions). The habitat's tree/upsert row stays the
          image's; a lens-backed row is the deferred unification.
       2. THE CASCADE IS THE AGENT'S: filmstrip/apps + filmstrip/browse
@@ -1058,8 +1058,17 @@ formals, tokens resolved through glochid/tg.")
 shell chrome. Every entry answers a <name>/examples card; the ui rail
 root + /lookbook face read this one def.")
 
-;; ---- 1. WORKSPACE BACKING: .agent/workspace.json ----
-(define glochid/ws-file ".agent/workspace.json")
+;; ---- 1. WORKSPACE BACKING: .glochid/workspace.json ----
+;; Legacy .agent trees keep their store while .agent exists (existing
+;; data stays readable and writable there); glochid trees + fresh
+;; projects use .glochid (fs/write creates the parent). Resolved once
+;; at boot: cwd is fixed for the process.
+(define glochid/ws-file
+  (if (fs/exists? ".glochid")
+      ".glochid/workspace.json"
+      (if (fs/exists? ".agent")
+          ".agent/workspace.json"
+          ".glochid/workspace.json")))
 (define filmstrip/ws-node
   (lambda ()
     (if (fs/exists? glochid/ws-file)
@@ -1070,7 +1079,7 @@ uses tree/get + node-path; glochid rides the local fs (HOST SEAM 1).")
 (define filmstrip/ws-save
   (lambda (fields)
     (seq (fs/write glochid/ws-file fields) fields))
-  "Persist workspace fields to .agent/workspace.json (HOST SEAM 1).")
+  "Persist workspace fields to the resolved glochid/ws-file (HOST SEAM 1).")
 
 ;; ---- 2a. THE SHEET IS A LAZY MEMO (lisp-interpreter.lazy-env-thunks) ---
 ;; The filmstrip sheet is static lib vocabulary, yet filmstrip/shell-html
@@ -1145,7 +1154,7 @@ must be carried HERE through every write path.")
         (list "sessions" "/sessions")
         (list "settings" "/settings"))
       (glochid/fwd-apps)))
-  "Column 0: the agent's interfaces + the habitat's app faces the
+  "Column 0: glochid's interfaces + the habitat's app faces the
 panes wear (glochid/fwd-apps), ALL route leaves
 (borge/filmstrip.borg sidebar-main-dichotomy): every entry
 open-or-focuses a main-window pane. Structure browsing is the rail
@@ -1160,14 +1169,14 @@ launcher advertised /todos on a host with no /todos route.")
 
 (define filmstrip/apps
   (lambda () (glochid/apps))
-  "glochid's shell app list (HOST SEAM 2): the agent's interfaces, all
+  "glochid's shell app list (HOST SEAM 2): glochid's interfaces, all
 leaves. Redefined so any lib read of the app list (hint-routes) sees
 host vocabulary, never habitat apps.")
 
 (define filmstrip/browse
   (lambda (path)
     (cons (list (glochid/apps)) #f))
-  "glochid's shell cascade (HOST SEAM 2): column 0 is the agent's
+  "glochid's shell cascade (HOST SEAM 2): column 0 is glochid's
 interfaces, all leaves — no deeper columns, no crumbs. The stored path
 only ever names the picked route (entry-html wears it as fs-sel).")
 
@@ -1237,7 +1246,7 @@ only ever names the picked route (entry-html wears it as fs-sel).")
         (string-append
           "<p class=\"muted\">habitat bridge: "
           (html-escape (as-str (nth e 1)))
-          " -- set AGENT_HABITAT_URL/USER/PASS (or PP_URL/PP_USER/PP_PASS)."
+          " -- set GLOCHID_HABITAT_URL/USER/PASS (or PP_URL/PP_USER/PP_PASS)."
           "</p>"))
       (glochid/fwd-wrap
         app
@@ -1753,7 +1762,7 @@ alive.")
             (html/attrs
               (list
                 (html/attr "class" "fs-btn fs-start-word")
-                (html/attr "title" "start: open one of the agent surfaces")
+                (html/attr "title" "start: open one of the glochid surfaces")
                 (html/attr "aria-label" "start menu")))
             (html/text "start"))
           (html/tag
@@ -2622,16 +2631,16 @@ every live main pane of the desktop, so the heal picks the ring only
 (** Boot-load the embedded Nopales packages + this surface into the
     shared env, registering the route-table routes. Idempotent-ish:
     re-evaluating defines redefines bindings live. *)
-(* Inert defaults for the llm-config host prims (agent/models,
-    agent/model, agent/base-url, agent/key-status) so the surface
+(* Inert defaults for the llm-config host prims (glochid/models,
+    glochid/model, glochid/base-url, glochid/key-status) so the surface
     renders in non-serve contexts (tests, -p pipe evals).
     [Http_ui.serve] RE-REGISTERS them with live cfg backing — prim
     registration is last-write-wins on the same name. *)
 let register_config_default_prims ~(rt : Runtime.t) : unit =
-  Runtime.add_prim rt "agent/models" (fun _ -> Ast.VList []);
-  Runtime.add_prim rt "agent/model" (fun _ -> Ast.VStr "");
-  Runtime.add_prim rt "agent/base-url" (fun _ -> Ast.VStr "");
-  Runtime.add_prim rt "agent/key-status" (fun _ -> Ast.VStr "not set");
+  Runtime.add_prim rt "glochid/models" (fun _ -> Ast.VList []);
+  Runtime.add_prim rt "glochid/model" (fun _ -> Ast.VStr "");
+  Runtime.add_prim rt "glochid/base-url" (fun _ -> Ast.VStr "");
+  Runtime.add_prim rt "glochid/key-status" (fun _ -> Ast.VStr "not set");
   (* inert session prims (sessions-persist) so the pages render in
      non-serve contexts; Http_ui.serve / the REPL re-register with live
      store backing — prim registration is last-write-wins. *)
@@ -2728,7 +2737,7 @@ let load ~(rt : Runtime.t) : unit =
   register_lookbook_prims ~rt;
   (* Boot order (glochid_source header): libs, then the glochid layer
      (whose ws/browse/shell redefinitions must win over the filmstrip
-     defaults via env late binding), then the agent surface. *)
+     defaults via env late binding), then the glochid surface. *)
   Runtime.load_source ~rt Libs_source.html_lib;
   Runtime.load_source ~rt Libs_source.css_lib;
   Runtime.load_source ~rt Libs_source.hyper_lib;

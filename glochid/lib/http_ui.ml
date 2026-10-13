@@ -3,13 +3,13 @@
     A local HTTP server (Httpun_eio) bound to 127.0.0.1 (default port
     18090, --port to override; a busy port falls back to random). The
     chat + code browser pages are NOPALES-AUTHORED htmx
-    fragments on the agent route table (rendered by Nopales via
+    fragments on the glochid route table (rendered by Nopales via
     libs/html), dispatched in-process through [Runtime.dispatch_route].
-    A chat/agent turn streams as multipart/mixed htmx fragments (one
+    A chat turn streams as multipart/mixed htmx fragments (one
     part per (html, HX-Target, HX-Swap)), emitted by the SHARED
     emitter (hostkit Multipart_emitter) through the SHARED turn engine
     (hostkit Chat_stream, i-1788671304-d — the surface plumbing +
-    queue-drain loop are ONE home for agent + pp-remote now); the
+    queue-drain loop are ONE home for glochid + pp-remote now); the
     fragment templates are Nopales (chat/user-bubble, chat/turn-open,
     chat/think-open, chat/think-token, chat/tool-open, chat/tool-line,
     chat/tool-done, chat/token, chat/error), so the surface is
@@ -20,7 +20,7 @@
     Bootstrap/asset plumbing stays OCaml (per the surfaces scope): the
     vendored htmx + hx-multipart assets are baked into the binary
     ([Assets]) and served at /assets/*.js. This file keeps only the
-    agent-specific glue: fixed-port bind + prim registration, the
+    glochid-specific glue: fixed-port bind + prim registration, the
     settings dial, and the turn_mutex serialization. *)
 
 open Pricklypear_lisp
@@ -51,7 +51,7 @@ type server_state = {
 (** filmstrip-shell host seam #3 (borge/glochid.borg): thread the client's
     request headers (HX-Request is the one that matters) into the route
     table's thin request context, so routes serve pane fragments in
-    partial mode — the image's route-gate discipline, agent-backed. *)
+    partial mode — the image's route-gate discipline, glochid-backed. *)
 let dispatch_headers (reqd : Httpun.Reqd.t) : (string * string) list =
   match
     Httpun.Headers.get (Httpun.Reqd.request reqd).Httpun.Request.headers
@@ -60,7 +60,7 @@ let dispatch_headers (reqd : Httpun.Reqd.t) : (string * string) list =
   | Some v -> [ ("hx-request", v) ]
   | None -> []
 
-(* ---- GET route dispatch through the agent route table ---- *)
+(* ---- GET route dispatch through the glochid route table ---- *)
 
 let dispatch_get (st : server_state) (reqd : Httpun.Reqd.t) (target : string)
     : unit =
@@ -158,7 +158,7 @@ let handle_chat (env : Eio_unix.Stdenv.base) (sw : Eio.Switch.t)
          non-space char is ( evaluates as Nopales in the shared env —
          no model call. Render interp errors like the stdin REPL does —
          the OCaml default printer shows the opaque Interp_error(_). *)
-      (* turn cap: env-overridable (AGENT_MAX_TURNS), engine default 40 *)
+      (* turn cap: env-overridable (GLOCHID_MAX_TURNS; legacy AGENT_MAX_TURNS), engine default 40 *)
       max_turns = Config.max_turns ();
       on_msg = Some st.on_msg;
       eval_repl =
@@ -180,7 +180,7 @@ let handle_chat (env : Eio_unix.Stdenv.base) (sw : Eio.Switch.t)
 (* ---- POST /settings: retarget the running turn loop (borge/glochid.borg
    llm-config). Blank fields keep their current values (the api_key
    password input round-trips blank on every render — a blank POST body
-   field is KEEP, not clear). Persists to ~/.config/agent/config.json so
+   field is KEEP, not clear). Persists to ~/.config/glochid/config.json so
    the choice survives restarts; model is a per-surface dial (never
    replicated). htmx hx-posts (chat-header dropdown, hx-swap="none") get
    a bare 200; a browser form gets a 303 back to /settings. *)
@@ -241,7 +241,7 @@ let serve ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t)
   (* sessions-persist: NO transcript at boot. The sink creates the
      session LAZILY on the first appended message (the first user
      prompt) — page opens and harness restarts that never send a
-     prompt leave nothing under .agent/sessions/ (the lazy [create]
+     prompt leave nothing in the session store (the lazy [create]
      trigger lives in Sessions.on_msg). Disabled for mock providers so
      tests/smokes never write the store. A chat turn appends
      user/assistant/tool messages via [on_msg] as the loop produces
@@ -266,10 +266,10 @@ let serve ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t)
     }
   in
   (* llm-config host prims for the Nopales settings/chat surfaces
-     (borge/glochid.borg llm-config). agent/models is CACHED — the
+     (borge/glochid.borg llm-config). glochid/models is CACHED — the
      provider ABI (/models) is hit once lazily and refetched on POST
      /settings, so a chat-page render stays local. *)
-  Runtime.add_prim st.rt "agent/models"
+  Runtime.add_prim st.rt "glochid/models"
     (fun _ ->
       (match !(st.models) with
        | [] when !(st.cfg).Provider.api_key <> "" ->
@@ -285,11 +285,11 @@ let serve ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t)
             else !(st.cfg).Provider.model :: ms
       in
       Ast.VList (List.map (fun m -> Ast.VStr m) models));
-  Runtime.add_prim st.rt "agent/model"
+  Runtime.add_prim st.rt "glochid/model"
     (fun _ -> Ast.VStr !(st.cfg).Provider.model);
-  Runtime.add_prim st.rt "agent/base-url"
+  Runtime.add_prim st.rt "glochid/base-url"
     (fun _ -> Ast.VStr !(st.cfg).Provider.base_url);
-  Runtime.add_prim st.rt "agent/key-status"
+  Runtime.add_prim st.rt "glochid/key-status"
     (fun _ ->
       match !(st.cfg).Provider.api_key with
       | "" -> Ast.VStr "not set"
