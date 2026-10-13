@@ -1,4 +1,4 @@
-(** Client-side LLM config for glochid (borge/agent.borg llm-config).
+(** Client-side LLM config for glochid (borge/glochid.borg llm-config).
 
     One logical record ({api_key, base_url, model}, all optional), two
     physical locations:

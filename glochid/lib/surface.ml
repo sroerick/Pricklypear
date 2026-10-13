@@ -1,4 +1,4 @@
-(** Agent Nopales surface (borge/agent.borg surfaces).
+(** Agent Nopales surface (borge/glochid.borg surfaces).
 
     The chat + code browser pages are NOPALES-AUTHORED htmx fragments on
     the agent route table, rendered by Nopales via [libs/html] — NOT
@@ -26,7 +26,7 @@ open Pricklypear_lisp
     the / and /code routes via the agent route table. Uses libs/html +
     the agent's request-shape prims (query-param). *)
 let surface_source = {pp|
-;; ---- shared page chrome (borge/agent.borg filmstrip-shell) ----
+;; ---- shared page chrome (borge/glochid.borg filmstrip-shell) ----
 ;; Pages are PANE-AWARE: under HX-Request (filmstrip partial mode) a
 ;; route renders the BODY fragment only; a full GET gets the doc
 ;; skeleton + htmx scripts. One css block shared by every page + the
@@ -236,7 +236,7 @@ let surface_source = {pp|
           "<script src=\"/assets/pp-cm.js\"></script>"
           "</body></html>"))))
 
-;; ---- llm-config helpers (borge/agent.borg llm-config) ----
+;; ---- llm-config helpers (borge/glochid.borg llm-config) ----
 ;; The model dropdown is fed by the provider ABI (agent/models = GET
 ;; {base}/models, cached host-side); the choice POSTs to /settings and
 ;; persists per-surface (model is NEVER replicated user data).
@@ -259,14 +259,14 @@ let surface_source = {pp|
 ;; hx-config '{"'timeout'":0}' disables htmx's 60s defaultTimeout for a
 ;; request whose lawful lifetime is "a whole agent turn".
 (define (chat/head frag)
-  ;; The 'agent' root anchor is shell-level (it reloads / in place) — a
+  ;; The 'glochid' root anchor is shell-level (it reloads / in place) — a
   ;; plain <a> inside a fragment is the escape bug class, so fragments
   ;; get a muted label instead; nav words stay app-links in both modes.
   (string-append
     "<h1>"
     (if frag
-        "<span class=\"muted\">agent</span>"
-        "<a href=\"/\">agent</a>")
+        "<span class=\"muted\">glochid</span>"
+        "<a href=\"/\">glochid</a>")
     " <span class=\"muted\">— "
     (filmstrip/app-link "/code" "/code")
     " · "
@@ -282,8 +282,8 @@ let surface_source = {pp|
 
 (define (chat/body)
   "Chat surface body — one structure for page AND pane, so the stream's
-#log target works in both (borge/agent.borg filmstrip-shell #4).
-Fragment-mode (hx-request?) differences: the h1 'agent' anchor and the
+#log target works in both (borge/glochid.borg filmstrip-shell #4).
+Fragment-mode (hx-request?) differences: the h1 'glochid' anchor and the
 resumed-line +new //sessions anchors are shell-level escapes — a plain
 <a> inside a fragment is the filmstrip bug class, so fragments get
 app-link/button twins (POST /filmstrip/new, open-or-focus /sessions)."
@@ -294,7 +294,7 @@ app-link/button twins (POST /filmstrip/new, open-or-focus /sessions)."
       (chat/head frag)
       "<div id=\"log\">"
       (if (null? sid)
-          "<div class=\"muted\">agent ready.</div>"
+          "<div class=\"muted\">glochid ready.</div>"
           (string-append
             "<div class=\"muted\">resumed session " (html-escape sid) " · "
             (if frag
@@ -314,10 +314,10 @@ app-link/button twins (POST /filmstrip/new, open-or-focus /sessions)."
       "</form></div>")))
 
 (define (chat/page)
-  (glochid/layout "glochid — agent" (chat/body)))
+  (glochid/layout "glochid — chat" (chat/body)))
 (route "/chat" "chat/page")
 
-;; ---- sessions surface (GET /sessions; borge/agent.borg sessions-persist) ----
+;; ---- sessions surface (GET /sessions; borge/glochid.borg sessions-persist) ----
 ;; Appended-only JSONL transcripts under .agent/sessions/. Resume:
 ;; GET /resume?id=<id> re-points the live history + current session,
 ;; then lands back on the chat page with the transcript backfilled.
@@ -378,7 +378,7 @@ app-link/button twins (POST /filmstrip/new, open-or-focus /sessions)."
     (string-append
       (if (hx-request?)
           "<h1><span class=\"muted\">/sessions</span></h1>"
-          "<h1><a href=\"/\">agent</a> <span class=\"muted\">— /sessions</span></h1>")
+          "<h1><a href=\"/\">glochid</a> <span class=\"muted\">— /sessions</span></h1>")
       (if (hx-request?)
           "<p><button class=\"fs-applink\" hx-post=\"/filmstrip/new\" hx-target=\"#fs-sink\" hx-swap=\"innerHTML\">+ new session</button></p>"
           "<p><a href=\"/new\">+ new session</a></p>")
@@ -398,7 +398,7 @@ app-link/button twins (POST /filmstrip/new, open-or-focus /sessions)."
     (begin
       (session/resume id)
       (redirect (string-append "/?session=" (html-escape id))))))
-(route "/resume" "sessions/resume");; ---- settings surface (GET /settings; borge/agent.borg llm-config) ----
+(route "/resume" "sessions/resume");; ---- settings surface (GET /settings; borge/glochid.borg llm-config) ----
 ;; Blank fields KEEP their values (password input round-trips blank).
 ;; Key + base normally arrive invisibly: pp-remote --sync writes them
 ;; to <lens>/__config.json from the habitat's sync round metadata
@@ -409,7 +409,7 @@ app-link/button twins (POST /filmstrip/new, open-or-focus /sessions)."
     (string-append
       (if (hx-request?)
           "<h1><span class=\"muted\">/settings</span></h1>"
-          "<h1><a href=\"/\">agent</a> <span class=\"muted\">— /settings</span></h1>")
+          "<h1><a href=\"/\">glochid</a> <span class=\"muted\">— /settings</span></h1>")
       "<div class=\"card\"><form method=\"post\" action=\"/settings\">"
       "<p><label>API key — " (agent/key-status) " · blank keeps current</label>"
       "<input type=\"password\" name=\"api_key\" autocomplete=\"off\"></p>"
@@ -497,7 +497,7 @@ app-link/button twins (POST /filmstrip/new, open-or-focus /sessions)."
 (define (code/head)
   (if (hx-request?)
       "<h1><span class=\"muted\">/code</span></h1>"
-      "<h1><a href=\"/\">agent</a> <span class=\"muted\">/</span> <a href=\"/code\">code</a></h1>"))
+      "<h1><a href=\"/\">glochid</a> <span class=\"muted\">/</span> <a href=\"/code\">code</a></h1>"))
 
 (define (code/tree rel)
   "The /code dir face, both modes: the same node rows the rail tree
@@ -545,10 +545,10 @@ the ONE /filmstrip/tree endpoint; neither face gets box chrome here)."
 
 (route "/code" "code/page")
 
-;; ---- bindings browser (GET /bindings; borge/agent.borg filmstrip-shell cascade) ----
+;; ---- bindings browser (GET /bindings; borge/glochid.borg filmstrip-shell cascade) ----
 ;; The habitat's FUNCTION GRAMMAR (the image's /bindings face) as a
 ;; glochid app: package -> function -> doc+source, read-only over the
-;; bind/* habitat-bridge prims (agent/lib/habitat.ml — the one
+;; bind/* habitat-bridge prims (glochid/lib/habitat.ml — the one
 ;; POST /api/eval client; creds AGENT_HABITAT_(URL|TOKEN|USER|PASS) > PP_*,
 ;; token wins when set).
 ;; FAIL-SOFT at CALL time like the mem/* bridge, so every page/cascade
@@ -584,7 +584,7 @@ credential pointer (same env trio the mem/* bridge uses).")
   (lambda ()
     (if (hx-request?)
         "<h1><span class=\"muted\">/bindings</span></h1>"
-        "<h1><a href=\"/\">agent</a> <span class=\"muted\">/</span> <a href=\"/bindings\">bindings</a></h1>"))
+        "<h1><a href=\"/\">glochid</a> <span class=\"muted\">/</span> <a href=\"/bindings\">bindings</a></h1>"))
   "Pane-mode head is a muted label (a plain <a> in a fragment is the
 shell-escape bug class).")
 
@@ -682,7 +682,7 @@ its detail pane, the trail is the only way up.")
 (route "/bindings" "bind/page")
 |pp}
 
-(** The glochid layer (borge/agent.borg filmstrip-shell). Load order:
+(** The glochid layer (borge/glochid.borg filmstrip-shell). Load order:
     libs/html, libs/css, libs/filmstrip, THIS, then [surface_source].
     The filmstrip lib boots as glochid's shell with two HOST seams
     swapped (the harness's request-runner seam makes this a load, not a
@@ -894,7 +894,7 @@ lookbook IS the theme the shell is wearing.")
       (list
         "name" "ui/railtab"
         "doc" "One rail mode tab (glochid shell chrome): flips the railmode sentinel."
-        "file" "agent/lib/surface.ml (glochid layer)"
+        "file" "glochid/lib/surface.ml (glochid layer)"
         "formals" (json-emit (list "label"))
         "variants" (json-emit
                      (list
@@ -910,7 +910,7 @@ lookbook IS the theme the shell is wearing.")
       (list
         "name" "ui/start-entry"
         "doc" "One start-menu entry (glochid shell chrome): opens route as a pane."
-        "file" "agent/lib/surface.ml (glochid layer)"
+        "file" "glochid/lib/surface.ml (glochid layer)"
         "formals" (json-emit (list "label" "route"))
         "variants" (json-emit
                      (list
@@ -926,7 +926,7 @@ lookbook IS the theme the shell is wearing.")
       (list
         "name" "ui/bubble"
         "doc" "One chat bubble (id pins the streamed swap target; empty id = static)."
-        "file" "agent/lib/surface.ml (glochid layer)"
+        "file" "glochid/lib/surface.ml (glochid layer)"
         "formals" (json-emit (list "kind" "text" "id"))
         "variants" (json-emit
                      (list
@@ -943,7 +943,7 @@ attrs (declaration), never markup.")
       (list
         "name" "ui/tool-line"
         "doc" "One tool trace line (label + text, both escaped)."
-        "file" "agent/lib/surface.ml (glochid layer)"
+        "file" "glochid/lib/surface.ml (glochid layer)"
         "formals" (json-emit (list "label" "text"))
         "variants" (json-emit
                      (list
@@ -958,7 +958,7 @@ attrs (declaration), never markup.")
       (list
         "name" "ui/turn-open"
         "doc" "Per-turn skeleton: thinking+tools fold + the streamed LLM bubble target."
-        "file" "agent/lib/surface.ml (glochid layer)"
+        "file" "glochid/lib/surface.ml (glochid layer)"
         "formals" (json-emit (list "id"))
         "variants" (json-emit
                      (list
@@ -974,7 +974,7 @@ plain calls, the nesting visible in BOTH projections.")
       (list
         "name" "ui/think-open"
         "doc" "One reasoning-run fold (starts closed; deltas stream into #id)."
-        "file" "agent/lib/surface.ml (glochid layer)"
+        "file" "glochid/lib/surface.ml (glochid layer)"
         "formals" (json-emit (list "id"))
         "variants" (json-emit
                      (list
@@ -989,7 +989,7 @@ plain calls, the nesting visible in BOTH projections.")
       (list
         "name" "ui/tool-open"
         "doc" "One tool-call fold (summary #id-sum; trace lines stream into #id)."
-        "file" "agent/lib/surface.ml (glochid layer)"
+        "file" "glochid/lib/surface.ml (glochid layer)"
         "formals" (json-emit (list "id" "name"))
         "variants" (json-emit
                      (list
@@ -1004,7 +1004,7 @@ plain calls, the nesting visible in BOTH projections.")
       (list
         "name" "ui/turn-error"
         "doc" "One turn error line (trace-styled, bracketed, escaped)."
-        "file" "agent/lib/surface.ml (glochid layer)"
+        "file" "glochid/lib/surface.ml (glochid layer)"
         "formals" (json-emit (list "text"))
         "variants" (json-emit
                      (list
@@ -1019,7 +1019,7 @@ plain calls, the nesting visible in BOTH projections.")
       (list
         "name" "ui/swatch"
         "doc" "One palette swatch chip (dot + token name) -- the theme's lookbook row."
-        "file" "agent/lib/surface.ml (glochid layer)"
+        "file" "glochid/lib/surface.ml (glochid layer)"
         "formals" (json-emit (list "label" "color"))
         "variants" (json-emit
                      (list
@@ -1036,7 +1036,7 @@ plain calls, the nesting visible in BOTH projections.")
         "name" "ui/palette"
         "doc"
         "The active omarchy theme as UI prims: one ui/swatch per palette token (resolved at load; HUP re-resolves after omarchy theme set)."
-        "file" "agent/lib/surface.ml (glochid layer)"
+        "file" "glochid/lib/surface.ml (glochid layer)"
         "formals" (json-emit (list))
         "variants" (json-emit (list))
         "source"
@@ -1171,7 +1171,7 @@ host vocabulary, never habitat apps.")
 interfaces, all leaves — no deeper columns, no crumbs. The stored path
 only ever names the picked route (entry-html wears it as fs-sel).")
 
-;; ---- 2c. HABITAT PANES (agent.borg habitat-panes, 2026-09-20) ----
+;; ---- 2c. HABITAT PANES (glochid.borg habitat-panes, 2026-09-20) ----
 ;; The habitat's app faces are ordinary htmx fragment routes already;
 ;; glochid panes WEAR them: the gate forwards these prefixes to the
 ;; habitat with the operator's session (habitat/fwd-prefix at boot;
@@ -1791,7 +1791,7 @@ filmstrip.borg sidebar-main-dichotomy -- the axis toggle word was
 retired, BORGE-1789879934: sidebar-only shell) + the keyboard-hint
 glyph (the shortcut map is the glyph's title tooltip).")
 
-;; ---- 2e. KEYBOARD SHORTCUTS (borge/agent.borg keyboard-shortcuts:
+;; ---- 2e. KEYBOARD SHORTCUTS (borge/glochid.borg keyboard-shortcuts:
 ;; the filmstrip zero-JS hotkeys mechanism, glochid's chord set) ----
 ;; THE KEYBOARD MAP IS ONE TABLE restated as body sentinels: rows 1-4
 ;; restate the lib's alt+arrows (focus / row move) verbatim -- a capture
@@ -2365,7 +2365,7 @@ every live main pane of the desktop, so the heal picks the ring only
 (define (lookbook/head)
   (if (hx-request?)
       "<h1><span class=\"muted\">/lookbook</span></h1>"
-      "<h1><a href=\"/\">agent</a> <span class=\"muted\">/</span> <a href=\"/lookbook\">lookbook</a></h1>"))
+      "<h1><a href=\"/\">glochid</a> <span class=\"muted\">/</span> <a href=\"/lookbook\">lookbook</a></h1>"))
 
 ;; The <name>/examples card through the lookbook/eval seam (guarded),
 ;; validated by the lib's lookbook/card: (card-text) or ().

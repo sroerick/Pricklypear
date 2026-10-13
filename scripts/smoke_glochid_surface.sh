@@ -4,7 +4,7 @@
 # streaming without transfer-encoding => response never completes on the
 # wire, htmx fetch never resolves).
 #
-# Boots `_build/default/agent/bin/main.exe --serve --mock-script`, then:
+# Boots `_build/default/glochid/bin/main.exe --serve --mock-script`, then:
 #   1. GET /            => chat page has the htmx form + asset script tags
 #   2. GET /assets/hx-multipart.js => 200 + upstream marker
 #   3. POST /chat (keep-alive default) => multipart/mixed, chunked TE,
@@ -15,16 +15,16 @@
 #                          <select> (borge/agent.borg llm-config)
 #
 # Usage:  scripts/smoke_agent_surface.sh
-# Prereq: dune build agent/bin/main.exe
+# Prereq: dune build glochid/bin/main.exe
 set -u
 cd "$(dirname "$0")/.."
 
-BIN=_build/default/agent/bin/main.exe
-[ -x "$BIN" ] || { echo "FAIL: $BIN missing (run: dune build agent/bin/main.exe)"; exit 1; }
+BIN=_build/default/glochid/bin/main.exe
+[ -x "$BIN" ] || { echo "FAIL: $BIN missing (run: dune build glochid/bin/main.exe)"; exit 1; }
 
-MOCK=$(mktemp /tmp/agent-smoke-XXXX.json)
+MOCK=$(mktemp /tmp/glochid-smoke-XXXX.json)
 printf '[{"text": "three parts make a turn", "calls": []}]\n' > "$MOCK"
-LOG=$(mktemp /tmp/agent-smoke-XXXX.log)
+LOG=$(mktemp /tmp/glochid-smoke-XXXX.log)
 
 "$BIN" --serve --mock-script "$MOCK" > "$LOG" 2>&1 &
 PID=$!
@@ -33,13 +33,13 @@ trap cleanup EXIT
 
 URL=""
 for _ in $(seq 1 40); do
-  URL=$(sed -n 's/^agent serving //p' "$LOG" | tr -d '[:space:]')
+  URL=$(sed -n 's/^glochid serving //p' "$LOG" | tr -d '[:space:]')
   [ -n "$URL" ] && break
   sleep 0.25
 done
-[ -n "$URL" ] || { echo "FAIL: agent never printed its URL"; cat "$LOG"; exit 1; }
+[ -n "$URL" ] || { echo "FAIL: glochid never printed its URL"; cat "$LOG"; exit 1; }
 URL=${URL%/}
-echo "-- agent at $URL"
+echo "-- glochid at $URL"
 
 fails=0
 check() { # name, condition(0/1)
@@ -58,7 +58,7 @@ echo "${DOC}" | grep -q 'id="fs-railtabs"'                    ; check "shell has
 ! echo "${DOC}" | grep -q 'id="fs-launch"'                   ; check "no launcher in the shell" $?
 ! echo "${DOC}" | grep -q 'fs-deskbox'                        ; check "no desktop controlbox in the shell" $?
 echo "${DOC}" | grep -q '/assets/htmx.min.js'                 ; check "shell loads htmx" $?
-echo "${DOC}" | grep -q 'fs-start-entry'                      ; check "start menu lists the agent surfaces" $?
+echo "${DOC}" | grep -q 'fs-start-entry'                      ; check "start menu lists the glochid surfaces" $?
 PAGE=$(curl -sS -m 30 "$URL/chat")
 echo "$PAGE" | grep -q 'hx-post="/chat"'                      ; check "chat page has hx-post /chat form" $?
 echo "$PAGE" | grep -q '/assets/hx-multipart.js'              ; check "chat page loads hx-multipart asset" $?
@@ -71,7 +71,7 @@ curl -sS -m 30 "$URL/assets/hx-multipart.js" | grep -q 'Response.prototype.parts
                                                               ; check "asset is upstream artifact (fetch-multipart prollyfill)" $?
 
 # 3. /chat round trip on keep-alive — must terminate promptly
-H=$(mktemp /tmp/agent-smoke-hdr-XXXX); B=$(mktemp /tmp/agent-smoke-body-XXXX)
+H=$(mktemp /tmp/glochid-smoke-hdr-XXXX); B=$(mktemp /tmp/glochid-smoke-body-XXXX)
 START=$(date +%s)
 RC=0
 curl -sS -m 10 -X POST "$URL/chat" -d 'msg=hello' -D "$H" -o "$B" || RC=$?
@@ -171,5 +171,5 @@ echo "$ORIENT" | grep -q 'fs-sh-axis\|fs-axis-btn\|route/dispatch: col' ; [ $? -
 grep -q '"axis":"col"' "$WS"                                  ; check "axis persisted col to the workspace row" $?
 rm -f "$WS"
 
-if [ "$fails" = 0 ]; then echo "PASS agent surface smoke"; exit 0
+if [ "$fails" = 0 ]; then echo "PASS glochid surface smoke"; exit 0
 else echo "FAIL ($fails checks)"; exit 1; fi

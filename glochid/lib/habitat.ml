@@ -3,7 +3,7 @@
 
     mem/* LOCAL prims delegating to the habitat's libs/memory package
     over POST /api/eval (HTTP Basic, the ONE Pp_http client). The
-    remote contract is gregor's (borge/agent.borg memory-bridge):
+    remote contract is gregor's (borge/glochid.borg memory-bridge):
     (mem/remember TYPE MID TITLE CONTENT TAGS) etc., rows keyed by a
     caller-chosen stable string id (mid), fields
     mid/ver/cat/uat/scope/ws/title/content/tags/src, author = the
@@ -228,7 +228,7 @@ let list_expr ~(typ : string) ~(n : int) : string =
   remote "json-emit" [ remote "mem/list" [ q typ; string_of_int n ] ]
 
 (* ---- bindings browser verbs (the AST browser over the habitat's
-   function grammar; borge/agent.borg filmstrip-shell cascade) ---- *)
+   function grammar; borge/glochid.borg filmstrip-shell cascade) ---- *)
 
 (* (bind/packages) <= (json-emit (list-packages)) -> JSON array of
    package name strings (top-level prefixes on the bridge identity's
@@ -431,7 +431,7 @@ let memory_tool ~(env : Eio_unix.Stdenv.base) (args : Yojson.Safe.t) : string
       ^ "}"
   | Error e -> "{\"error\":" ^ q e ^ "}"
 
-(* ---- habitat/fwd: the habitat-pane forwarder (agent.borg
+(* ---- habitat/fwd: the habitat-pane forwarder (glochid.borg
    habitat-panes stanza, 2026-09-20). Habitat app faces are ordinary
    htmx fragment routes already — glochid panes WEAR them: the gate
    forwards allowlisted prefixes (glochid/fwd-apps registers

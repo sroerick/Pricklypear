@@ -26,7 +26,7 @@
     into per-stream pipelines — pure list-columns data per the
     pipeline-model resolution order, only the triage placement rule is new.
     Spec review basis: local-first.borg/lens/replication review 2026-09-26
-    — glochid has NO lens write path today (agent/lib surface.ml: the
+    — glochid has NO lens write path today (glochid/lib surface.ml: the
     lens-backed row is the deferred unification), so glochid posts card
     comments THROUGH THE BRIDGE (/api/eval); transcripts stay local
     (.agent/sessions/), never tree rows (2026-09-08 write-cost incident).|) *)
@@ -254,7 +254,7 @@
 
  (section session-is-the-run
   (doc "The RUN RECORD IS THE GLOCHID SESSION — no run datum type. A glochid
-   session (agent.borg sessions-persist: append-only JSONL, header
+   session (glochid.borg sessions-persist: append-only JSONL, header
    {t:session, id, ts, model}, one msg line per provider message, resumable,
    /sessions surface) already carries identity, timestamp, model, full
    history, and resumability — everything a run record was supposed to buy
@@ -279,7 +279,7 @@
    progress NARRATIVE, todo-events are column transitions, the session is
    the machine-readable RUN — and 'session' means the same thing on the
    laptop and in the image.")
-  (implements "agent/lib/sessions.ml (session header card key + terminal marker, planned)"
+  (implements "glochid/lib/sessions.ml (session header card key + terminal marker, planned)"
               "scripts/pp-flow.sh (lease references session id, planned)")
   (status planned)
   (verify
@@ -481,7 +481,7 @@
  (section glochid-runner
   (doc "The TARGET executor residence: runs move from fire-and-forget
    subprocesses (PP_FLOW_PI: `pi -p`, the autolith adapter) into RESIDENT
-   GLOCHID (agent.borg — the local-first harness with sessions-persist, the
+   GLOCHID (glochid.borg — the local-first harness with sessions-persist, the
    filmstrip shell, and the habitat bridge). What this buys: the session IS
    the run record (session-is-the-run — observable, resumable, a session
    JSONL per run instead of a scraped log file), progress comments fall out
@@ -493,12 +493,12 @@
    or drop-dir, the glochid-served pattern) -> poll the SESSION's terminal
    marker -> write-back from terminal status. Glochid never writes tree
    rows locally (it has no lens write path today and must not grow one for
-   runs — agent/lib surface.ml: 'a lens-backed row is the deferred
+   runs — glochid/lib surface.ml: 'a lens-backed row is the deferred
    unification'); everything habitat-side lands via bridge comments.
    Later, the dispatch loop (poll TODO across workstreams, claim,
    submit, concurrency cap, park-on-failure) moves INSIDE resident glochid
    as a plugin — the orchestrator becomes a glochid face, not a ksh service.
-   HONEST STATUS (agent.borg): agent-loop is partial (OpenAI-compat provider
+   HONEST STATUS (glochid.borg): agent-loop is partial (OpenAI-compat provider
    only, tool registry v0, long unattended turns unproven) — pi runs today
    because it is mature. SEQUENCING: (1) session header card key + terminal
    marker + bridge progress comments, (2)
@@ -507,7 +507,7 @@
    runs (resume-from-JSONL, budget caps, abort), (5) flip the default and
    move dispatch inside. Do NOT flip the default until the loop has
    survived real overnight cards.")
-  (implements "agent/lib (run submission via the session seam, planned)"
+  (implements "glochid/lib (run submission via the session seam, planned)"
               "scripts/pp-flow.sh (--runner glochid, planned)")
   (status planned)
   (verify

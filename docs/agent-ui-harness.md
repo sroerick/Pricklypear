@@ -269,8 +269,8 @@ iterates `response.parts()` over the live ReadableStream, swapping per part;
 (`agent/lib/http_ui.ml`, `image/lib/http_agent.ml` SSE + multipart branches);
 (c) `hx-config='{"timeout":0}'` on streaming forms (agent chat, repl-v2) so a
 whole agent turn isn't bounded by `defaultTimeout`. Regression nets:
-`scripts/smoke_agent_surface.sh` (wire framing + termination),
-`scripts/smoke_agent_cdp.mjs` (real headless chromium: parts land in DOM and
+`scripts/smoke_glochid_surface.sh` (wire framing + termination),
+`scripts/smoke_glochid_cdp.mjs` (real headless chromium: parts land in DOM and
 the htmx request completes). Server contract for any future streaming route:
 chunked-framed or connection-closing — never unframed on keep-alive.
 

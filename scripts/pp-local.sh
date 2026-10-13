@@ -15,7 +15,7 @@
 #   scripts/pp-local.sh sync                   # one data sync round
 #   scripts/pp-local.sh sync-loop              # background rounds every 30s
 #   scripts/pp-local.sh serve                  # local HTML surface (chat+eval)
-#   scripts/pp-local.sh agent-context          # board digest from the lens (borge/agent.borg boot verb)
+#   scripts/pp-local.sh agent-context          # board digest from the lens (borge/glochid.borg boot verb)
 #   scripts/pp-local.sh memory-put TITLE --memory-content-file F [--tags a,b] [--id MID]  # stage-1 memory write (sync pushes it)
 #   scripts/pp-local.sh memory-delete agent-memory <node-address>                          # remove + tombstone (drain deletes wire-side)
 #

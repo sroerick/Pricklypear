@@ -1,4 +1,4 @@
-(** Tests for borge/agent.borg: plugin load, rim, events, loop. No
+(** Tests for borge/glochid.borg: plugin load, rim, events, loop. No
     network — provider is a canned script. *)
 
 open Pricklypear_lisp
@@ -455,7 +455,7 @@ let test_route_table_pg_prim_unbound ~rt () =
     exercise hyper/visit + hyper/click (immutability) + hyper/stream
     (multipart replay). The portability proof: same lib.pp, agent host. *)
 let test_libs_hyper_on_agent ~rt () =
-  (* dune runs the test with cwd = agent/test/, so walk up to find the
+  (* dune runs the test with cwd = glochid/test/, so walk up to find the
      repo root (where libs/hyper/lib.pp lives). *)
   let rec find_libs_dir dir =
     let cand = Filename.concat dir "libs/hyper/lib.pp" in
@@ -907,7 +907,7 @@ let test_turn_replay_hyper_stream ~rt () =
     (Ast.VStr "<div id=\"log\"><div>ready</div></div>")
     (Runtime.eval_string ~rt {|(soup/serialize (soup/select-one pg "#log"))|})
 
-(** keyboard shortcuts (borge/agent.borg keyboard-shortcuts): the body
+(** keyboard shortcuts (borge/glochid.borg keyboard-shortcuts): the body
     sentinels render from the ONE chord table (lib restated + glochid
     rows, guard spliced into the condition), the /filmstrip/keys/*
     routes act on the FOCUSED pane -- the ws row's focus index resolved
@@ -1085,7 +1085,7 @@ let test_turn_replay_nested_blocks ~rt () =
     (Runtime.eval_string ~rt
        {|(soup/serialize (soup/select-one (hyper/stream npg nparts) "#t1"))|})
 
-(** habitat-panes (agent.borg habitat-panes): glochid panes WEAR the
+(** habitat-panes (glochid.borg habitat-panes): glochid panes WEAR the
     habitat's fragment faces — the fwd faces over the habitat/fwd prim
     (boot shell + boost wrapper + in-process dispatch), the fwd-prefix
     registry (kernel paths refused), the cascade app entries. The gate
@@ -1300,7 +1300,7 @@ let test_mock_script_consumption ~env ~sw () =
    | Error e -> Alcotest.fail e);
   Sys.remove path
 
-(* sessions-persist (agent/lib/sessions.ml): append-only JSONL
+(* sessions-persist (glochid/lib/sessions.ml): append-only JSONL
    transcripts under the local store; list + resume round-trip; the
    message JSON (incl. tool_calls) survives a write+read; prims are
    registered on the runtime. *)
@@ -1415,7 +1415,7 @@ let test_loop_on_msg ~env ~sw ~rt () =
        Alcotest.(check (list string)) "on_msg saw user+assistant" [ "user"; "assistant" ]
          (List.rev !got))
 
-(* memory-bridge (agent/lib/habitat.ml): the remote expr builders are
+(* memory-bridge (glochid/lib/habitat.ml): the remote expr builders are
    pure — gregor's libs/memory contract (TYPE first, tags default [])
    with Nopales-safe quoting. *)
 let test_habitat_expr_builders () =
@@ -1504,7 +1504,7 @@ let () =
   let rt = Runtime.make () in
   Tools.install ~env ~resolve_path:Runtime.resolve_path ~register:(fun name run -> Runtime.register_builtin_tool rt name ~run);
   Eio.Switch.run @@ fun sw ->
-  Alcotest.run "agent"
+  Alcotest.run "glochid"
     [
       ( "plugin-model",
         [ Alcotest.test_case "lifecycle" `Quick (test_plugin_lifecycle ~rt) ] );

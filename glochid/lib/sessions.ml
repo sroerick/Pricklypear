@@ -1,4 +1,4 @@
-(** glochid persistent sessions (borge/agent.borg sessions-persist).
+(** glochid persistent sessions (borge/glochid.borg sessions-persist).
 
     Every conversation is an APPEND-ONLY JSONL transcript under the
     local pp store (.agent/sessions/, one file per session), written at
@@ -9,7 +9,7 @@
     is plain files in the working tree (no habitat round trip); the
     sync-up story is local-first.sync, out of scope here.
 
-    Prims exposed to Nopales (borge/agent.borg host-prim-namespace,
+    Prims exposed to Nopales (borge/glochid.borg host-prim-namespace,
     session family): session/name session/list session/data session/new
     session/resume session/text — plus REPL commands /new /resume
     /sessions registered on the same seam. *)

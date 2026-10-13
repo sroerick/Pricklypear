@@ -1,0 +1,4 @@
+(test
+ (name glochid_test)
+ (modules glochid_test)
+ (libraries pricklypear-glochid.lib pricklypear-lisp pricklypear-pure-prims alcotest eio eio_main yojson str unix))
