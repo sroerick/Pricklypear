@@ -144,6 +144,25 @@ let launch (env : route_env) (page_fn : Session.t -> unit) : unit =
                  t1
                end
              in
+               (* auth.branch-faces: a face whose branch does not exist renders
+                  a STUB page — a real answer (200), never a Host_unknown 404. *)
+               let face_stub_page () : unit =
+                 let ref =
+                   match classify_host headers with
+                   | Host_userbranch (u, f) -> u ^ "/" ^ f
+                   | _ -> "unknown" in
+                 text_response reqd ~status:`OK ~content_type:"text/html"
+                   (Printf.sprintf
+                      "<!doctype html><html><head><meta charset=\"utf-8\">\
+                       <title>%s — pricklypear</title></head>\
+                       <body style=\"font-family:sans-serif;max-width:42rem;margin:3rem auto\">\
+                       <h1>%s is not on the image yet</h1>\
+                       <p>This face has no branch to serve. The owner can create it \
+                       with <code>(fork \"system/main\" \"%s\")</code>, or the agent \
+                       can land work with <code>(branch/push \"%s\")</code>.</p>\
+                       <p><a href=\"/\">apex</a></p></body></html>"
+                      ref ref ref ref)
+               in
              let attach_and_select () =
                let t0 = Unix.gettimeofday () in
                let c0 = Atomic.get Store_db.trace_count in
@@ -155,7 +174,33 @@ let launch (env : route_env) (page_fn : Session.t -> unit) : unit =
                let user_opt = Option.map fst identity_opt in
                let actor = Option.bind identity_opt snd in
                let t1 = phase "resolve_identity" t0 c0 m0 in
-               let session = Session_registry.select registry ~user:user_opt ~actor in
+                 (* auth.branch-faces: a {face}.{user}.{base} host parks the
+                    request's session on <user>/<face> — the registry key
+                    generalizes to (identity, served branch) so the identity's
+                    own session is never re-parked under its feet. The branch
+                    lookup rides the boot session's store; a missing branch
+                    falls through to the stub-page path below. *)
+                 let face_park =
+                   match classify_host headers with
+                   | Host_userbranch (fu, face) -> (
+                       match
+                         Store.lookup_branch_id_by_name
+                           (Session.store session)
+                           ~owner:fu ~name:face
+                       with
+                       | Some bid -> Some (bid, fu ^ "/" ^ face)
+                       | None -> None)
+                   | _ -> None
+                 in
+                 let face_missing =
+                   match classify_host headers with
+                   | Host_userbranch _ -> face_park = None
+                   | _ -> false
+                 in
+                 let session =
+                   Session_registry.select registry ~user:user_opt ~actor
+                     ~park:face_park
+                 in
                let () =
                  match user_opt with
                  | Some user ->
@@ -174,50 +219,58 @@ let launch (env : route_env) (page_fn : Session.t -> unit) : unit =
                let m2 = Atomic.get Store_db.trace_ms in
                Session.ensure_fresh session;
                let _ = phase "ensure_fresh" t2 c2 m2 in
-               (session, user_opt)
+                 if face_missing then begin
+                   face_stub_page ();
+                   None
+                 end
+                 else Some (session, user_opt)
              in
              let proceed_ctx =
                Eio.Mutex.use_ro request_mutex (fun () ->
                    if auth_disabled () then begin
                      (* Dev escape: still try attach so whoami is real if cookie. *)
-                     let session, _ = attach_and_select () in
-                     Some (session, snapshot_ctx session)
+                       (match attach_and_select () with
+                        | None -> None
+                        | Some (session, _) ->
+                            Some (session, snapshot_ctx session))
                    end
-                   else begin
-                     (* Attach identity BEFORE classify: route table is
-                        branch-scoped (inheritance CTE). Anonymous uses
-                        system/main so package public routes resolve. *)
-                     let session, user_opt = attach_and_select () in
-                     let classif = classify_path session path in
-                     let needs_auth =
-                       match classif with
-                       | `Hard_public -> false
-                       | `Hard_private | `Unknown -> true
-                       | `User (_, vis) -> vis <> "public"
-                     in
-                     match (user_opt, needs_auth) with
-                     | Some _, _ -> Some (session, snapshot_ctx session)
-                     | None, false -> Some (session, snapshot_ctx session)
-                     | None, true ->
-                         let apiish =
-                           String.length path >= 4
-                           && String.sub path 0 4 = "/api"
-                         in
-                         (* product-experience §activity-ledger: an
-                            unauthenticated denial on an auth-required
-                            path is a first-class ledger event (auth.deny),
-                            target = path. Mutex + queue only. *)
-                         let () =
-                           ignore
-                             (Activity_ledger.push ~actor:"anonymous"
-                                ~cls:"auth.deny"
-                                ~target:(Activity_ledger.path_target path)
-                                ~outcome:"denied" ~source_ip ())
-                         in
-                         if apiish then unauthorized_api reqd
-                         else require_login_redirect reqd ~path ~target;
-                         None
-                   end)
+                    else begin
+                      (* Attach identity BEFORE classify: route table is
+                         branch-scoped (inheritance CTE). Anonymous uses
+                         system/main so package public routes resolve. *)
+                      match attach_and_select () with
+                      | None -> None
+                      | Some (session, user_opt) ->
+                      let classif = classify_path session path in
+                      let needs_auth =
+                        match classif with
+                        | `Hard_public -> false
+                        | `Hard_private | `Unknown -> true
+                        | `User (_, vis) -> vis <> "public"
+                      in
+                      match (user_opt, needs_auth) with
+                      | Some _, _ -> Some (session, snapshot_ctx session)
+                      | None, false -> Some (session, snapshot_ctx session)
+                      | None, true ->
+                          let apiish =
+                            String.length path >= 4
+                            && String.sub path 0 4 = "/api"
+                          in
+                          (* product-experience §activity-ledger: an
+                             unauthenticated denial on an auth-required
+                             path is a first-class ledger event (auth.deny),
+                             target = path. Mutex + queue only. *)
+                          let () =
+                            ignore
+                              (Activity_ledger.push ~actor:"anonymous"
+                                 ~cls:"auth.deny"
+                                 ~target:(Activity_ledger.path_target path)
+                                 ~outcome:"denied" ~source_ip ())
+                          in
+                          if apiish then unauthorized_api reqd
+                          else require_login_redirect reqd ~path ~target;
+                          None
+                    end)
              in
              (match proceed_ctx with
               | None -> ()
@@ -242,18 +295,22 @@ let launch (env : route_env) (page_fn : Session.t -> unit) : unit =
                     | `User (_, vis) -> vis <> "public"
                     | `Hard_private | `Unknown -> true
                   in
-                  let mismatch =
-                    match (host_mode, base_domain ()) with
-                    | Host_garden g, _
-                      when path_private && uname_now <> "anonymous"
-                           && uname_now <> g
-                      -> true
-                    | Host_unknown, Some _ -> true
-                    | _ -> false
-                  in
+                    let mismatch =
+                      match (host_mode, base_domain ()) with
+                      | Host_garden g, _
+                        when path_private && uname_now <> "anonymous"
+                             && uname_now <> g
+                        -> true
+                      | Host_userbranch (fu, _), _
+                        when path_private && uname_now <> "anonymous"
+                             && uname_now <> fu
+                        -> true
+                      | Host_unknown, Some _ -> true
+                      | _ -> false
+                    in
                   if mismatch then begin
                     (match (host_mode, base_domain ()) with
-                     | Host_garden _, Some _ when uname_now <> "anonymous" ->
+                       | (Host_garden _ | Host_userbranch _), Some _ when uname_now <> "anonymous" ->
                          (* https only: a plain-http bounce drops the Secure
                             session cookie and loops the user through login
                             (same rule as the post-login garden redirect,

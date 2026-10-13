@@ -25,7 +25,7 @@ cd "$(dirname "$0")/.."
 
 fail=0
 facade=image/lib/store.ml
-families="image/lib/store_common.ml image/lib/store_defs.ml image/lib/store_branch.ml image/lib/store_packages.ml image/lib/store_history.ml image/lib/store_retention.ml"
+  families="image/lib/store_common.ml image/lib/store_defs.ml image/lib/store_branch.ml image/lib/store_packages.ml image/lib/store_history.ml image/lib/store_checkpoints.ml image/lib/store_retention.ml"
 
 for f in $facade $families; do
   [ -f "$f" ] || { echo "FAIL: $f not found"; exit 1; }
@@ -65,7 +65,7 @@ done
 
 # 3. Facade composes every domain family exactly once; the substrate
 #    helper module is referenced explicitly (visible_stamp), not included.
-for fam in Store_defs Store_branch Store_packages Store_history Store_retention; do
+for fam in Store_defs Store_branch Store_packages Store_history Store_checkpoints Store_retention; do
   n=$(code "$facade" | grep -c "include $fam" || true)
   if [ "$n" != "1" ]; then
     echo "FAIL: facade includes $fam $n x (want 1)"
@@ -87,6 +87,6 @@ if [ "$n" != "1" ]; then
 fi
 
 if [ "$fail" = 0 ]; then
-  echo "OK: store split invariants hold (facade w/ explicit accessors, opaque jsonb bodies, 6-family composition)"
+  echo "OK: store split invariants hold (facade w/ explicit accessors, opaque jsonb bodies, 7-family composition)"
 fi
 exit $fail

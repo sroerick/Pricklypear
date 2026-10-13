@@ -64,4 +64,5 @@ include Store_defs
 include Store_branch
 include Store_packages
 include Store_history
+include Store_checkpoints
 include Store_retention

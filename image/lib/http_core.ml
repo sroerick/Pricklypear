@@ -400,6 +400,7 @@ type host_mode =
   | Host_legacy
   | Host_apex
   | Host_garden of string
+  | Host_userbranch of string * string  (* face.{user}.{base}: user + reserved face *)
   | Host_unknown
 
 let username_dns_ok (name : string) : bool =
@@ -417,6 +418,11 @@ let username_dns_ok (name : string) : bool =
   in
   loop 0
 
+(* auth.branch-faces (2026-10-12): reserved face labels for second-level
+   hosts — a CLOSED set fixed in code (adding a label is a kernel change,
+   not data). *)
+let reserved_faces = [ "agent"; "dev" ]
+
 let classify_host (headers : (string * string) list) : host_mode =
   match base_domain (), host_header headers with
   | None, _ -> Host_legacy
@@ -429,9 +435,18 @@ let classify_host (headers : (string * string) list) : host_mode =
         and sl = String.length suffix in
         if hl > sl && String.sub host (hl - sl) sl = suffix then
           let name = String.sub host 0 (hl - sl) in
-          if username_dns_ok name && not (String.contains name '.') then
-            Host_garden name
-          else Host_unknown
+          if not (String.contains name '.') then begin
+            if username_dns_ok name then Host_garden name else Host_unknown
+          end
+          else
+            (* {face}.{user}.{base}: first label in the reserved set, second a
+               DNS-ok username; anything else is Host_unknown exactly as before
+               (single-label gardens unchanged). *)
+            (match String.split_on_char '.' name with
+             | [ face; user ] when List.mem face reserved_faces ->
+                 if username_dns_ok user then Host_userbranch (user, face)
+                 else Host_unknown
+             | _ -> Host_unknown)
         else Host_unknown
 
 let garden_url ~(username : string) ~(path : string) : string =

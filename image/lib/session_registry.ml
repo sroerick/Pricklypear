@@ -146,25 +146,41 @@ let get_or_create (t : t) (key : string) (make : unit -> Session.t)
   in
   loop ()
 
-(** Select the session for this request's identity. Pure selection:
-    no branch movement, no cross-identity mutation. [anon] picks the
-    parked anonymous session; a resolved user picks their own — keyed
-    by "<owner>@by:<actor>" when the identity was carried by a delegated
-    token (auth.delegation-tokens) so the delegated data-only session
-    NEVER collides with the owner's own full-privilege session. The
-    caller still runs attach_from_user / attach_anonymous on the
-    returned session (cheap no-op when the identity matches) and
-    [Session.ensure_fresh] for the staleness stamp. *)
+(** Select the session for this request's identity. Pure selection except the
+    [park] contract (auth.branch-faces): a face request parks its session on
+    the face branch — the key generalizes from identity to (identity, served
+    branch), one session per pair with its own store connection, so the
+    identity's own session is never re-parked under its feet. [anon] picks
+    the parked anonymous session (keyed "anonymous@park:<ref>" on a face); a
+    resolved user picks their own — keyed "<owner>@by:<actor>" when the
+    identity was carried by a delegated token (auth.delegation-tokens) so the
+    delegated data-only session NEVER collides with the owner's own
+    full-privilege session. The caller still runs attach_from_user /
+    attach_anonymous on the returned session (cheap no-op when the identity
+    matches) and [Session.ensure_fresh] for the staleness stamp. *)
 let select (t : t) ~(user : Auth_store.user option)
-    ~(actor : string option) : Session.t =
-  let key =
+    ~(actor : string option) ~(park : (string * string) option) : Session.t =
+  let base_key =
     match user, actor with
     | None, _ -> "anonymous"
     | Some u, None -> u.Auth_store.username
     | Some u, Some a -> Printf.sprintf "%s@by:%s" u.Auth_store.username a
   in
+  (* auth.branch-faces: (identity, served branch) keying + first-touch park. *)
+  let key =
+    match park with
+    | None -> base_key
+    | Some (_, ref) -> Printf.sprintf "%s@park:%s" base_key ref
+  in
   get_or_create t key
     (fun () ->
-       match user with
-       | None -> make_anonymous_session t
-       | Some u -> make_user_session t ~actor u)
+       let s =
+         match user with
+         | None -> make_anonymous_session t
+         | Some u -> make_user_session t ~actor u
+       in
+       match park with
+       | None -> s
+       | Some (branch_id, ref) ->
+           Session.checkout_to s ~branch_id ~branch_ref:ref;
+           s)
