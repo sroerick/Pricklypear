@@ -439,6 +439,23 @@ let is_space_member (conn : Store_db.conn) ~(space : string)
   | [ [ c ] ] -> Pgx.Value.to_bool c |> Option.value ~default:false
   | _ -> false
 
+(** Resolve a datum's tree path by its tree_nodes PRIMARY KEY (id
+    column). Complements [space_of_datum], which decodes the UUID from the
+    LAST path label under tree_datum_id. Rows written under row-level
+    routing (migration 034) can carry a caller-supplied uuid as the leaf,
+    so the leaf-decode can [None] while the row is perfectly alive - and
+    an update-by-id through [node_path] then silently no-ops (a1ce59db)
+    by constructing a user-space path that points at nothing. PK lookup
+    is the honest fallback: the datum is at whatever path it is at. *)
+let path_by_node_pk (conn : Store_db.conn) ~(id : string) : string option =
+  match
+    Store_db.exec conn ~params:[ Pgx.Value.of_string id ]
+      "SELECT path::text FROM tree_nodes \
+       WHERE kind = 'datum' AND id = $1::uuid"
+  with
+  | [ [ p ] ] -> Pgx.Value.to_string p
+  | _ -> None
+
 (** Space of the space row bearing datum [id] (the row may live in a space
     whose type has since been un-admitted — the PATH, not current
     admission, is what the row owes membership checks to). *)
@@ -1477,7 +1494,10 @@ let node_path (store : Store.t) ~(type_name : string) ~(id : string) : value =
              with
              | Some sp ->
                  VStr (Tree_store.datum_path ~space:(Some sp) ~type_name ~id ())
-             | None -> VStr (Tree_store.datum_path ~user ~type_name ~id ())))
+             | None ->
+                 (match (if uuid_label_id id then path_by_node_pk conn ~id else None) with
+                  | Some p -> VStr p
+                  | None -> VStr (Tree_store.datum_path ~user ~type_name ~id ()))))
    | None -> VStr (Tree_store.datum_path ~user ~type_name ~id ()))
 
 (** (type-fields 'type) -> VList of VStr field names | VNil if undeclared. *)
