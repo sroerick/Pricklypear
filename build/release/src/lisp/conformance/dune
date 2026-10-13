@@ -1,5 +1,0 @@
-(library
- (name pricklypear_conformance)
- (public_name pricklypear-conformance)
- (modules conformance)
- (libraries pricklypear-lisp))

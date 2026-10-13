@@ -1,6 +1,0 @@
-(executable
- (name main)
- (public_name pricklypear-image)
- (package pricklypear-image)
- (modules main)
- (libraries pricklypear-image))

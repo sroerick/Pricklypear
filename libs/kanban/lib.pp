@@ -127,21 +127,13 @@
 ;; card helpers (all tree actions)
 ;; ------------------------------------------------------------------
 
-(define kanban/cards-in-once
-  (lambda (list-id state all)
-    "Return (id . fields) pairs of items in list-id with the given state,
-     SLICED from a caller-supplied board scan (one-scan faces, PERF:
-     the board loop scans ONCE and slices per column so a board page
-     costs one tree/list, not N)."
+(define kanban/cards-in
+  (lambda (list-id state)
+    "Return (id . fields) pairs of items in list-id with the given state."
     (list/filter
       (lambda (row)
         (string-eq (as-str (dict-get (cdr row) "state")) state))
-      all)))
-
-(define kanban/cards-in
-  (lambda (list-id state)
-    "Single-caller shape: own scan, unchanged semantics."
-    (kanban/cards-in-once list-id state (todo/items-for-list list-id))))
+      (todo/items-for-list list-id))))
 
 (define kanban/cascade-rename-state
   (lambda (list-id old-name new-name)
@@ -177,16 +169,9 @@
      or state not a column) are excluded here so an own-pipeline card never
      renders in a board column; the other bucket shows it (other-bucket uses
      the same stray? predicate — nothing is hidden or duplicated)."
-    (kanban/column-html-bag list-id state columns (todo/items-for-list list-id))))
-
-(define kanban/column-html-bag
-  (lambda (list-id state columns all)
-    "One-scan face: same column render, sliced from a caller-supplied
-     board scan (PERF, card 42f13855: the board loop must not re-pay the
-     tree/list per column)."
     (let ((cards (list/filter
                    (lambda (row) (not (kanban/stray? columns row)))
-                   (kanban/cards-in-once list-id state all))))
+                   (kanban/cards-in list-id state))))
       (let ((count (as-str (length cards))))
         (html/form "POST" "/kanban"
           (html/attrs
@@ -261,20 +246,12 @@
      every kanban/column-html so its kanban/stray? test compares each card's
      own pipeline against the whole board — NOT the shrinking cdr-suffix that
      the recursion otherwise hands a later column (a card whose own pipeline
-     matches the full board must stay in its column, never be bucketed).
-     ONE-SCAN (PERF 42f13855): the board scan runs ONCE here and the bag is
-     sliced per column, so the whole board costs one tree/list."
-    (let ((all (todo/items-for-list list-id)))
-      (kanban/columns-html-bag list-id cols full all))))
-
-(define kanban/columns-html-bag
-  (lambda (list-id cols full all)
-    "Recursion over the pre-fetched board scan."
+     matches the full board must stay in its column, never be bucketed)."
     (if (null? cols)
       ""
       (string-append
-        (kanban/column-html-bag list-id (as-str (car cols)) full all)
-        (kanban/columns-html-bag list-id (cdr cols) full all)))))
+        (kanban/column-html list-id (as-str (car cols)) full)
+        (kanban/columns-html-at list-id (cdr cols) full)))))
 
 (define kanban/columns-set
   (lambda (list-id cols)
