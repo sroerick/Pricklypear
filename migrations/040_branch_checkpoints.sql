@@ -1,4 +1,4 @@
--- Pricklypear migration 039: branch checkpoints — named points on the gen stream.
+-- Pricklypear migration 040: branch checkpoints — named points on the gen stream.
 --
 -- Spec [branching.checkpoints] (plan phase 2026-10-12, roerick-ratified:
 -- "checkpoints yes"). The substrate already records every write (tree_versions
@@ -44,5 +44,5 @@ CREATE INDEX IF NOT EXISTS branch_checkpoints_branch_idx
   ON branch_checkpoints (branch_id, id DESC);
 
 INSERT INTO schema_migrations (version, description)
-SELECT 39, 'branch checkpoints: named points on the gen stream (branching.checkpoints)'
-WHERE NOT EXISTS (SELECT 1 FROM schema_migrations WHERE version = 39);
+SELECT 40, 'branch checkpoints: named points on the gen stream (branching.checkpoints)'
+WHERE NOT EXISTS (SELECT 1 FROM schema_migrations WHERE version = 40);
