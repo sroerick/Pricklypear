@@ -13,7 +13,7 @@ import http from "node:http";
 import fs from "node:fs";
 
 const REPO = process.env.PP_REPO || "/home/roerick/dev/wyo.tech/pricklypear";
-const AGENT = process.env.AGENT_BIN || `${REPO}/_build/default/glochid/bin/main.exe`;
+const GLOCHID = process.env.GLOCHID_BIN || process.env.AGENT_BIN || `${REPO}/_build/default/glochid/bin/main.exe`;
 const MOCK = `/tmp/glochid-shelf-probe-${process.pid}.json`;
 const CHROME = process.env.CHROME || "/usr/bin/chromium";
 const USER_DATA = `/tmp/chrome-glochid-shelf-${process.pid}`;
@@ -25,19 +25,19 @@ function httpGet(url) {
 }
 const wsData = (ev) => { const d = ev?.data ?? ev; return Buffer.isBuffer?.(d) ? d.toString() : String(d); };
 
-let agent, chrome;
-function cleanup() { try { agent?.kill(); } catch (_) {} try { chrome?.kill(); } catch (_) {} fs.rmSync(USER_DATA, { recursive: true, force: true }); fs.rmSync(MOCK, { force: true }); try { fs.rmSync(TMP, { recursive: true, force: true }); } catch (_) {} }
+let glochid, chrome;
+function cleanup() { try { glochid?.kill(); } catch (_) {} try { chrome?.kill(); } catch (_) {} fs.rmSync(USER_DATA, { recursive: true, force: true }); fs.rmSync(MOCK, { force: true }); try { fs.rmSync(TMP, { recursive: true, force: true }); } catch (_) {} }
 process.on("exit", cleanup);
 
 fs.writeFileSync(MOCK, JSON.stringify([{ text: "shelf-probe reply", calls: [] }]) + "\n");
 const TMP = fs.mkdtempSync("/tmp/glochid-shelf-cwd-");
-agent = spawn(AGENT, ["--serve", "--port", "0", "--mock-script", MOCK], { stdio: ["ignore", "pipe", "pipe"], cwd: TMP });
-let agentUrl = "", buf = "";
-agent.stdout.on("data", (c) => { buf += c; const m = buf.match(/glochid serving (http:\/\/\S+)/); if (m) agentUrl = m[1].replace(/\/$/, ""); });
-agent.stderr.on("data", (c) => { buf += c; });
-for (let i = 0; i < 60 && !agentUrl; i++) await sleep(250);
-if (!agentUrl) { console.error("glochid never printed URL; out:\n" + buf.slice(-2000)); process.exit(1); }
-console.log("glochid at", agentUrl);
+glochid = spawn(GLOCHID, ["--serve", "--port", "0", "--mock-script", MOCK], { stdio: ["ignore", "pipe", "pipe"], cwd: TMP });
+let glochidUrl = "", buf = "";
+glochid.stdout.on("data", (c) => { buf += c; const m = buf.match(/glochid serving (http:\/\/\S+)/); if (m) glochidUrl = m[1].replace(/\/$/, ""); });
+glochid.stderr.on("data", (c) => { buf += c; });
+for (let i = 0; i < 60 && !glochidUrl; i++) await sleep(250);
+if (!glochidUrl) { console.error("glochid never printed URL; out:\n" + buf.slice(-2000)); process.exit(1); }
+console.log("glochid at", glochidUrl);
 
 chrome = spawn(CHROME, [`--remote-debugging-port=9047`, `--user-data-dir=${USER_DATA}`, "--headless=new", "--disable-gpu", "--no-sandbox", "--disable-dev-shm-usage", "--window-size=1880,1000", "about:blank"], { stdio: "ignore" });
 let ready = false;
@@ -66,7 +66,7 @@ function wrapHandler(prev) { return (ev) => { try { const m = JSON.parse(wsData(
   if (m.method === "Network.requestWillBeSent") netLog.push({ req: m.params.request.url, method: m.params.request.method, postData: m.params.request.postData });
   if (m.method === "Network.responseReceived") { const l = netLog[netLog.length-1]; if (l) l.status = m.params.response.status; }
   if (m.method === "Runtime.consoleAPICalled") console.log("[console]", m.params.type, m.params.args?.map(a => a.value ?? a.description ?? "").join(" ")); } catch (_) {} prev(ev); }; }
-await send("Page.navigate", { url: agentUrl });
+await send("Page.navigate", { url: glochidUrl });
 await sleep(1800);
 
 // collect htmx client events (AFTER navigation; re-arm whenever we nav)
