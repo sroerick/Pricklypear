@@ -205,11 +205,14 @@ call's return value, not an error.")
         ((y (substring today 0 4)))
         (let
           ((ev-years (calendar/browse-event-years)))
-          (calendar/browse-numsort
-            (if
-              (calendar/browse-contains ev-years y)
-              ev-years
-              (calendar/browse-insert-sorted y ev-years)))))))
+          (let
+            ((ys
+               (calendar/browse-numsort
+                 (if
+                   (calendar/browse-contains ev-years y)
+                   ev-years
+                   (calendar/browse-insert-sorted y ev-years)))))
+            (list/map (lambda (row) (cons row row)) ys)))))
   "Years with events, plus the current year; sorted ascending.")
 
 (define calendar/month-name
