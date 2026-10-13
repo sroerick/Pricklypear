@@ -18,6 +18,41 @@
     filmstrip/launcher-hint
 ))
 
+;; filmstrip-ws workspace row type: declared up top because the kernel's
+;; typed-boundary rule rejects writes to an undeclared datum type
+;; (crud.check_type_fields) and returns that rejection as a plain string
+;; VALUE which ws-save silently discards -- an undeclared type made every
+;; pane open fail to persist across reload (prod 10-12, UI gate da8e0223:
+;; GET /filmstrip rendered fs-content empty after every open).
+;; Guarded like todo/comments-init!. Zero fields = the declared
+;; schemaless case (crud.ml: [Some []] vs [None] are distinct): the row
+;; body is lib-managed JSON that gains keys across versions and is also
+;; written by the habitat shell's deskt wrapper, so the type stays
+;; free-form. The toplevel call seeds the declaration at boot/reseed
+;; (boot-admin context); delegated sessions no-op by design (the
+;; denial lands as the value, not an error).
+
+(define filmstrip/ws-init!
+  (lambda
+      ()
+      (if
+        (null? (type-fields (quote filmstrip-ws)))
+        (deftype (quote filmstrip-ws))
+        "filmstrip-ws ok"))
+  "Declare the filmstrip-ws workspace row type (guarded, idempotent). A
+zero-field type reports (type-fields) as null, so the guard re-fires on
+every load/reseed and the re-declare lands as an ON CONFLICT upsert. A
+delegated session no-ops by design: the deftype denial lands as this
+call's return value, not an error.")
+
+;; Load/reseed-time declaration: the boot seed/reseed evals toplevel
+;; forms once (todo/comments-init! seam). Deliberately NOT called from
+;; the render/write path (workstreams/projects-init! lesson: a delegated
+;; render would abort on the deftype denial) -- the declaration is what
+;; the typed-boundary kernel needs before any filmstrip-ws tree/upsert
+;; can persist.
+(filmstrip/ws-init!)
+
 (define calendar/browse
   (lambda
     (path)
