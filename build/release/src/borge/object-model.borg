@@ -1,0 +1,108 @@
+(project pricklypear-object-model
+ (doc "Pricklypear book chapter: object-model")
+ (status partial)
+ (* agent note (|2026-08-02 status reconcile: CRUD+deftype+dict+render-html shipped (crud.ml/prims); type-system still partial for full :ref lattice. Parents stay partial.|) *)
+ (convention ocaml-dune)
+ (section object-model
+  
+  (doc "Typed records in Postgres, schema declared in Nopales, SQL-via-primitives, no ORM")
+  (status partial)
+  (verify
+   (build "dune build @all")
+   (test "image/test/primitives_test.ml 48 alcotest cases incl. CRUD + deftype + dict + render-html")
+   (smoke "CRUD + deftype + dict + render-html exercised end to end"))
+  (details
+   (doc (|
+        An "object" is a typed record with an id, a set of
+        named typed fields, stored in Postgres. There are
+        NO methods on objects. Methods are functions in the
+        store that take an object id as argument. This is
+        functions + data, not OOP, matching the poohstack
+        shape.
+
+        Types are DECLARED IN LISP, not in SQL migrations:
+
+        (deftype event
+          (fields
+            (title :string)
+            (start :timestamptz)
+            (end :timestamptz)
+            (owner :ref user)
+            (attendees :array (ref user))))
+
+        The declaration lives in a code-store table
+        (type_defs, branched like code). It registers the
+        type — it does NOT emit DDL. All data rows of all
+        types live in the shared data_rows table keyed by
+        (type_name, id), fields packed as jsonb.
+
+        The type is itself inspectable data: the htmx UI
+        can render "list all types, show fields, browse
+        instances" nearly free. This is the Smalltalk-image
+        browser feeling, achieved via a metamodel rather
+        than via live mutable objects.
+
+        CRUD primitives (real OCaml, typed at boundary):
+          (create 'event {...})      -> row insert
+          (get 'event id)            -> row fetch
+          (update 'event id {...})   -> row update
+          (delete 'event id)         -> row delete
+          (rows 'event)              -> all rows of a type
+          (find-row / find-rows / find-text ...) -> lookup
+          (select-for-update ...)    -> explicit row lock
+
+        References are first-class values: a :ref user
+        field holds an id + type tag. Dereferencing is
+        explicit: (get 'user (event-owner ev)).
+
+        The Nopales still has plain values (int, string, bool,
+        lambda, list, ref) for logic that doesn't touch the
+        DB. Pure functions for "does this event conflict?"
+        take event values, return bool, no DB. The DB and
+        Nopales have a clean seam.
+
+        NO ORM. The primitive layer reads and writes the
+        shared data_rows table with plain SQL and parses
+        results into typed Nopales values.
+   |))
+  )
+  (subsection type-system
+   (doc "Field types and reference semantics")
+   (status partial)
+   (* agent note (|one-tree P6: boundary validation + type-fields/node-path/backlinks prims land the declared-field half; :ref as path + full field-type lattice still open.|) *)
+   (* agent note (|2026-08-02 confirm still partial: deftype+type-fields+Tree_store.validate_fields exist; typed :ref/:array lattice and setuid-style ref deref incomplete.|) *)
+   (details
+    (doc (|
+         Field types (initial cut, grow as needed):
+           :string         text
+           :int            int8
+           :bool           bool
+           :timestamptz    timestamptz
+           :ref <type>     id of a data_rows row of <type>
+           :array <type>   <type>[] (homogeneous)
+           :json           jsonb (schemaless escape hatch)
+
+         Field values are stored in the data_rows.fields
+         jsonb — there are no per-type tables (see
+         storage.schema).
+
+         A (ref user) value is a tagged id: the value
+         carries its target type so the interpreter can
+         verify derefs at call time. Dereferencing returns
+         the full record or a stub-ref that lazy-loads on
+         field access (decision deferred; start eager).
+
+         Cycles in the type graph are allowed (user has
+         :ref calendar; calendar has :ref user) because
+         refs hold ids, not nested values.
+
+         No inheritance, no subtyping. Composition via
+         references, not via type hierarchies. This matches
+         the poohstack (relational, no ORM, no inheritance)
+         and avoids the Postgres INHERITS trap (see
+         storage.no-inheritance).
+    |))
+   )
+  )
+ )
+)

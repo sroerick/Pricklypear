@@ -1,0 +1,1882 @@
+(project pricklypear-notes
+ (doc "Pricklypear book chapter: notes — outline-first personal knowledge (org-roam / org-mode / Obsidian-shaped) as Nopales on the one-tree substrate")
+ (status partial)
+ (* agent note (|2026-08-02 status reconcile: core notes surface is live (doc/get, /notes, search, wiki, roam). Remaining partial: outline-actions (op-protocol refile + full structed set), garden-import (pass-2 uuid edges), tree-cutover finish slices.|) *)
+ (convention ocaml-dune)
+ (section notes
+  (doc "Outline-first notes OS: tree documents, wiki links, dailies, capture, hypermedia structure edit, garden import")
+  (status partial)
+  
+  (verify
+   (build "dune build image")
+   (smoke "(load-library \"outline\") then pure tree ops on a sample node tree")
+   (smoke "(load-library \"notes\") installs /notes and notes/*")
+   (smoke "create note with nested outline; GET /notes?slug=… shows foldable tree")
+   (smoke "[[slug]] in node body becomes link; backlinks partial lists inbound")
+   (smoke "(bible Gen 2 3) in body renders dabar href; unknown book degrades")
+   (smoke "(notes/daily) get-or-creates today's daily outline")
+   (smoke "pp_eval '(notes/get \"…\")' returns outline value for agents")
+   (smoke "tree: folder + note + heading children round-trip via notes/doc/*")
+   (smoke "import dry-run of vault md reports counts without writing"))
+  (details
+   (doc (|
+        =========================================================
+        PRODUCT INTENT
+        =========================================================
+        Build a personal knowledge environment on the live image
+        inspired by:
+          - org-mode: hierarchical OUTLINES as the document model
+          - org-roam: stable ids/slugs, backlinks, dailies, capture
+          - Obsidian: fast browse, wiki links, folder garden
+
+        NOT a port of Electron Obsidian or Emacs.
+        NOT continuous file-backed markdown under libs/ or disk.
+        Notes are durable TREE NODES in Postgres, edited live.
+        One-shot vault import (Obsidian md) is in-scope; sync is not.
+
+        WHY THIS OS:
+          Every note/outline is a Nopales value. Agents and humans use
+          the same functions via REPL / pp_eval / htmx. No notes REST
+          API to invent — the image is the API.
+
+        =========================================================
+        PRIORITY ORDER (locked)
+        =========================================================
+        1. One-tree note substrate (folders, notes, heading children)
+        2. Outline algebra on heading nodes (structed/outline ops)
+        3. UUID wiki links + backlinks; bible sexp refs → dabar
+        4. Personal garden isolation (not system/main content)
+        5. Daily notes + capture / inbox
+        6. Migrate existing PP notes; import Obsidian vault md
+        7. Tags / search polish — RESOLVED by subsection search-modal
+        8. Graph visualization (optional, late)
+
+        =========================================================
+        PACKAGES — dependency layering (HARD RULE)
+        =========================================================
+        The packages form a STRICT LAYERING. A lower layer may not
+        import a higher one. Drift here is a bug, not a style choice.
+
+          outline/   — pure tree ADT + structure ops. NO storage,
+                       NO notes/, NO roam/. Leaf. Reusable by todo/,
+                       plan/, kanban/, tests.
+          structed/  — generic structural-edit algebra. Leaf.
+          bible/ +
+          dabar/    — reader + study; bible sexp render target.
+                       May be read by outline render dispatch via a
+                       hook passed in, never by import.
+          roam/      — link parse / reindex / render. LEAF over
+                       outline + prims only. Does NOT call notes/doc/*
+                       or notes/*; callers pass titles/slugs in.
+          notes/     — persistence façade + routes + capture +
+                       dailies + structure-op dispatch + UI. The ONLY
+                       package that touches the note store (tree_* /
+                       data_rows migrate). Calls outline/, structed/,
+                       roam/, bible/ downward. Owns roam/reindex on
+                       content writes (notes → roam, one-way).
+
+        ALLOWED EDGES:  outline ← structed ← notes → {roam, bible}
+                        roam ← outline (read-only ADT)
+        FORBIDDEN:     outline → notes, outline → roam,
+                       roam → notes (cycle), notes → notes (two
+                       façades — see storage FAÇADE rule).
+
+        =========================================================
+        WHERE IT GOES (routing table — one home per concern)
+        =========================================================
+          node ADT (id/title/body/todo/kids), encode/decode,
+          find/update/insert/delete/promote/demote/move,
+          archive/cycle-todo, valid?, todos scrape ........ outline/
+          generic tree surgery (slurp/barf/wrap/splice/raise) structed/
+          note read/write/list/search/folder, daily, capture,
+          set-folder, op dispatch (apply-op, node-op, eval),
+          routes + partials + page HTML, backlinks panel host .. notes/
+          [[slug]] parse, note-link reindex, backlinks query,
+          wiki/media render, render-body ........................ roam/
+          (bible …) sexp → /dabar href, abbrev parse .......... bible/+dabar/
+          legacy data_rows note → tree migration (one-shot) .... notes/migrate/
+
+        =========================================================
+        PACKAGE FILE LAYOUT (one source of truth)
+        =========================================================
+          Each package is ONE file: libs/<pkg>/lib.pp.
+          The image seeds libs/<pkg>/lib.pp only (session.ml
+          discover_seed_packages scans top-level dirs). Subdirectory
+          lib.pp files under libs/notes/{outline,capture,doc,refile,
+          tree,ui,migrate}/ are NOT loaded; they are stale pp_sync
+          snapshots and MUST NOT be maintained as a second source.
+          pp_sync pull <pkg> regenerates the single libs/<pkg>/lib.pp
+          from the live branch; that file is canonical in git.
+          Do not re-split notes/ into subdirs without first teaching
+          the loader to stitch them — until then, one file.
+
+        =========================================================
+        OUT OF SCOPE (v1)
+        =========================================================
+        - Full org-mode syntax (drawers, babel, agenda, clock)
+        - Full CommonMark / markdown WYSIWYG
+        - Force-directed graph as launch requirement
+        - Continuous Obsidian/FS vault sync (one-shot import only)
+        - TeX/PDF/video/EXPORT pipeline ingest from vault
+        - Doltgres / DB engine swap for note history
+        - Per-note function_defs (notes are data, not code)
+        - Real-time multiplayer CRDT on one outline
+        - Full per-lens versioned /data (one-tree placement B);
+          garden isolation is path+author scoped (see personal-garden)
+   |))
+  )
+  (* agent note (|2026-09-09 vault-shape fix (i-1788671331-d): the 21
+     nested lib.pp stale snapshots named by the PACKAGE FILE LAYOUT rule
+     above are DELETED from the vault — notes/{capture,doc,issues,legacy,
+     light,migrate,outline,refile,tree,ui}, todo/{db,item,list,state,
+     tree,ui}, structed/list, bi/{dashboard,metric}, ops/code,
+     workout/log — content preserved under gitignored
+     backups/vault-debris-20260909/. pp-sync discovery now collapses to
+     first-segment families and refuses sub-prefix pull/push/reseed/
+     status/land, so pull-all cannot re-create the dumps;
+     scripts/verify_libs_layout.sh guards the one-file-per-family
+     shape. implements lists in this chapter (storage, links-and-roam,
+     outline-actions, index-read-path, tree-cutover) drop the deleted
+     paths — the monolith libs/notes/lib.pp is the implemented surface.|) *)
+
+  (subsection outline-model
+   (doc "Sexp outline ADT: node tree with stable ids — org structure as data")
+   (status verified)
+   (implements libs/outline/lib.pp)
+   (verify
+    (smoke "outline/node constructors and outline/html produce nested details")
+    (smoke "outline/promote demote move-up move-down preserve ids")
+    (smoke "round-trip: print tree text then parse back (or JSON props path)"))
+
+   (details
+    (doc (|
+         CANONICAL SHAPE (implementation may use lists/dicts):
+
+           A node is a record with:
+             id     — stable string (uuid or short id), required
+             title  — string, required
+             body   — string, optional prose (may contain [[slug]])
+             todo   — "" | "TODO" | "DONE" | future keywords
+             kids   — list of child nodes (order matters)
+
+         Suggested Nopales construction helpers:
+
+           (outline/node title) 
+           (outline/node title body)
+           (outline/node* props kids)   ; props = alist or dict JSON
+
+         Tree = root node. In-memory ADT unchanged. Persistence is
+         heading children under the note path (notes.storage); the
+         legacy fields.outline JSON blob is retired after cutover.
+
+         WHY SEXPS:
+           Nested lists ARE outlines. No heading-level parser.
+           pp_expr / pretty printers already exist for readability.
+           Structure edit = pure functions on values.
+
+         PATHS:
+           Prefer id-based addressing over index paths so reorder
+           does not break ops:
+             (outline/find tree id) -> node | nil
+             (outline/update tree id f) -> tree
+             (outline/insert-child tree parent-id new-node) -> tree
+             (outline/delete tree id) -> tree
+             (outline/promote tree id) / demote / move-up / move-down
+
+         FOLD STATE:
+           v1: browser <details> open attribute only (ephemeral).
+           Optional later: collapsed-ids set in note props or session.
+
+         PRINT/PARSE:
+           In-memory: list/ADT via outline/* constructors.
+           On disk after cutover: one heading tree_node per outline
+           node (notes.storage). encode/decode helpers still exist
+           for import, tests, and whole-subtree replace serialization.
+
+         PURE PACKAGE (enforced by PACKAGES layering):
+           libs/outline/lib.pp must not touch storage and must not
+           import notes/ or roam/. It is a leaf reusable by other
+           apps (todo/, plan/, kanban/, tests). Two current leaks to
+           close:
+             - outline/render-body dispatches roam/render-body +
+               bible/render-body. Move that dispatch UP to the notes/
+               UI renderer (the call site outline/html-node is already
+               UI-flavored). outline/ stays pure; the renderer in
+               notes/ picks roam vs bible by inspecting the body.
+             - outline/extra-actions calls notes/refile/extract-form.
+               Move the refile-action injection up to the notes/ caller
+               that assembles the node action menu; outline/ emits a
+               neutral action slot or takes the extra-actions as an
+               argument.
+    |))
+   )
+  )
+
+  (subsection storage
+   (doc "Notes as one-tree nodes: folders, note leaves, heading children; notes/* façade")
+   (status implemented)
+   (* agent note (|2026-08-02: notes/doc/* façade on tree (libs/notes/doc + lib.pp); live (notes/doc/get "agents") returns uuid/slug/title/outline; tree/garden-root path grammar in tree_store.ml.|) *)
+   (implements libs/notes/lib.pp image/lib/tree_store.ml image/lib/crud.ml)
+   (verify
+    (smoke "notes/upsert then notes/get by slug returns outline")
+    (smoke "second upsert same slug updates in place (idempotent)")
+    (smoke "folder path nesting depth > 1 via tree list")
+    (smoke "outline headings persist as heading children under note path")
+    (smoke "SAVE ORDER: with headings a,b,c present and an accepted save of a,b — a and b survive with new content and c is swept; save order is write-then-sweep, so a failure mid-write leaves the OLD headings in place, never an empty note")
+    (smoke "malformed outline is REFUSED before any write: an outline whose CHILD is not a 5-element [id title body todo kids] node at any depth leaves the note's existing headings untouched (outline/valid? is recursive; notes/doc/upsert-in RAISES a bad-outline User_error — never a silently-ignorable 'refused' string)")
+    (smoke "rename/move note keeps uuid; links still resolve")
+    (build "dune build image"))
+
+   (details
+    (doc (|
+         =========================================================
+         ONE-TREE NOTES (replaces flat data_rows note blob)
+         =========================================================
+         Flat CRUD (get/create/update/rows on type note) remains for
+         other product types. Notes leave that path. See also the
+         index-read-path subsection for how every read (index +
+         detail) resolves to the one tree store and how the legacy
+         rows fallback is retired.
+
+         PATH GRAMMAR (hierarchical; not data.<type>.<uuid>):
+         TARGET (data.u.<user>.note.* — see notes-path-migration; the
+         migration is PLANNED, so the legacy form below is what the
+         store still emits today):
+            data.u.<user>.note…                 — user garden root
+            data.u.<user>.note.<folder>…         — folder (kind=folder)
+            data.u.<user>.note….<slug>          — note leaf (kind=note)
+            data.u.<user>.note….<slug>.h.<nid>  — outline heading
+                                                   (kind=heading)
+         LEGACY (CURRENT — tree_store.ml note_path_root; prod rows are
+         still here, e.g. data.note.u.admin.garden.…):
+            data.note.u.<user>.…                 — user garden root
+            data.note.u.<user>.<folder>…         — folder (kind=folder)
+            data.note.u.<user>.….<slug>          — note leaf (kind=note)
+            data.note.u.<user>.….<slug>.h.<nid>  — outline heading
+                                                   (kind=heading)
+
+         Readable slug labels: [a-z0-9-]+ only (ltree-safe). Type
+         name segment stays literal "note" (not enc_label base64).
+
+         KINDS (tree_nodes.kind; reverse-mirror ignores these — they
+         must NEVER be written as kind=datum or path segment-3 will
+         be misread as a uuid by tree_from_nodes):
+           folder   payload body: {uuid, title}
+           note     payload body: {uuid, slug, title, tags, kind, day,
+                                   source_id?, source_path?}
+                    NO outline blob — children are truth
+           heading  payload body: {id, title, body, todo}
+                    kids = real child heading nodes under path
+
+         IDENTITY:
+           uuid  — stable; wiki links and refile target this
+           slug  — last path label of the note; globally unique
+                   per user garden (enforce on upsert)
+           title — display only; independent of slug
+
+         OUTLINE LOAD/SAVE:
+           In-memory ADT stays outline/* + structed/* (id title body
+           todo kids). Load rebuilds ADT from heading subtree.
+           Save v1 may whole-replace heading children under note.h
+           in one transaction; fine-grained op→tree/move is a
+           tighten pass, not a blocker.
+
+           SAVE ORDERING CONTRACT (2026-09-27; a live incident made
+           this a rule, not an implementation choice):
+             notes/tree/save-outline is WRITE-THEN-SWEEP. It writes
+             the new root body and upserts the new headings FIRST,
+             then removes only the headings absent from the new
+             outline (clear-stale-headings keyed by the new outline's
+             path set). It must NOT clear-headings first: clearing
+             runs a recursive tree/delete over every heading, and any
+             failure in the write half then leaves the note EMPTY —
+             the previous content was already deleted and nothing put
+             it back. This is what happened: the body-boundary
+             rejection above raised inside write-root-body after
+             clear-headings had committed, and a shared note lost
+             every heading on a save.
+             Consequence of the order: a mid-write failure DEGRADES
+             (old outline plus whatever was written), never empties.
+             An empty outline still clears the note: the keep-set is
+             empty, so the sweep removes every heading.
+
+           VALIDATE BEFORE DESTROYING: notes/doc/upsert-in refuses a
+           malformed outline BEFORE any write and RAISES a bad-outline
+           User_error ('notes/doc/upsert-in: refused: outline is
+           malformed …; note not changed') — a caller that persists a
+           shape it cannot write gets a hard failure, never a
+           half-applied save and never a silently-ignorable return
+           string (i-1790546235 item 3: a returned 'refused: …' string
+           can be walked right past in a (seq …) body). outline/valid?
+           checks the node AND its kids RECURSIVELY (a well-formed root
+           with a malformed child passed the old shallow (count n) = 5
+           test and only blew up inside write-heading, after the
+           damage). Both layers are required: the guard stops bad
+           input, the order contains whatever the guard misses.
+
+           OUTLINE ARG IS TREE-OR-ENCODED (2026-10-02): the façade
+           notes/doc/upsert accepts the outline EITHER as a decoded
+           ADT or as its encoded JSON string (notes/doc/coerce-
+           outline parses+validates a string, else passes it through
+           so upsert-in still refuses). This exists because the
+           natural read-modify-write idiom — read the note, take the
+           outline, hand (outline/encode …) straight back to
+           notes/doc/upsert — used to be REFUSED: valid? ran on the
+           string, got (), and the caller saw 'malformed' for a
+           perfectly good tree. A live agent hit this while editing
+           the agents note and left a scratch rehearsal doc behind
+           (the agents-naming-scratch incident). The encode→upsert
+           round-trip is now an identity for the caller.
+
+           ATOMICITY (honest gap, 2026-09-27): the save sequence is
+           NOT atomic — /api/eval does NOT roll back a raising eval
+           (verified live: a write followed by an unbound symbol
+           persists and still reports ok:false), so each tree write
+           autocommits. Write-then-sweep makes partial failure
+           non-destructive; wrapping save-outline in
+           (with-transaction (lambda () …)) would make it atomic
+           (with_dynamic_transaction joins an outer tx, so it is safe
+           beneath an existing one) and is the intended tighten.
+
+         FAÇADE — ONE, not two (HARD RULE):
+           notes/doc/* is the SOLE note persistence façade. Every
+           read/write/list/search/folder op goes through it; internals
+           call tree prims, not (create 'note …). Agent and UI ABI
+           is notes/doc/get|upsert|list|set-folder|….
+           The legacy flat notes/* façade over data_rows (notes/get,
+           notes/upsert, notes/row, notes/make-fields, notes/apply-op,
+           notes/capture, notes/refile 3-arg, notes/get-outline,
+           notes/get-title, notes/do-save, notes/ensure-inbox,
+           notes/daily, notes/cycle-node-todo, notes/node-op) is
+           RETIRED. It is not reachable from any route and must be
+           deleted from libs/notes/lib.pp; nothing may call it. New
+           work adds to notes/doc/* (or notes/<feature>/* under the
+           notes/ package), never revives notes/<flat> names.
+           notes/doc/* accessors (notes/doc/title, /outline, /tags,
+           /kind, /day, /folder) replace the legacy notes/get-* ones.
+
+         KERNEL PRIMS (tree_store + thin register; additive):
+           (tree/get path)
+           (tree/list prefix [depth])
+           (tree/upsert path kind type body-json)
+           (tree/delete path [recursive?])
+           (tree/move old-path new-path)   — subtree path rewrite
+           (tree/find-by type field value)
+           (tree/get-uuid uuid)
+         Flat get/create/update/rows ABI unchanged for todos/etc.
+
+         NOTE-LINK: see links-and-roam (UUID edges).
+
+         NOT IN function_defs / system/main seed:
+           Note *content* is never package defaults. pp_sync does
+           not pull garden notes. notes/* outline/* roam/* CODE may
+           promote to main; content stays in the user garden path.
+
+         LEGACY:
+           Existing data_rows type=note rows migrate once (M0) into
+           tree nodes; after cutover notes/* does not write them.
+           folder string field and JSON outline field are retired.
+           M0 must EXPLODE each outline blob into real heading child
+           nodes under the note path (no inline outline blob), and
+           normalize path labels to the kebab slug. After every uuid
+           verifies in the tree, the legacy data_rows type=note rows
+           are DELETED (no permanent inert archive).
+
+         HISTORY: v1 overwrite on save (updated_at). No Doltgres.
+    |))
+   )
+  )
+
+  (subsection links-and-roam
+   (doc "Wiki links [[slug]] as UUID edges; bible sexps → dabar; media embeds")
+   (status implemented)
+   (* agent note (|2026-08-02: libs/roam (parse-links via extract-links prim, reindex note-link from_uuid/to_uuid, backlinks, render-body/media); live roam/backlinks on agents. Refile still ad-hoc package not op-protocol — tracked under outline-actions.|) *)
+   (verify
+    (smoke "body with [[other]] creates note-link UUID edge on save")
+    (smoke "(roam/backlinks slug) lists inbound links after resolve")
+    (smoke "render turns [[other]] into anchor using current slug/title")
+    (smoke "move/rename note does not require reindex; links still resolve")
+    (smoke "refile/extract of a node does not require roam/reindex (uuid stable)")
+    (smoke "[[media:uuid|alt]] renders img; not indexed as note-link")
+    (smoke "(bible Gen 2 3) renders /dabar href; (bible …) not a note-link")
+    (smoke "Obsidian [[bible:Genesis2:3|…]] import normalizes to bible sexp")
+    (smoke "(extract-links body) matches roam/parse-links edge cases")
+    (test "image primitives_test extract-links cases"))
+   (implements
+    libs/roam/lib.pp
+    libs/notes/lib.pp
+    libs/bible/lib.pp
+    libs/dabar/lib.pp
+    pure/prims_pure.ml)
+   (details
+    (doc (|
+         =========================================================
+         NOTE-LINK = UUID EDGE (not slug pair as source of truth)
+         =========================================================
+         TYPE note-link (data row or tree datum — implementation
+         choice; shape is what matters):
+           from_uuid  — source note uuid (stable)
+           from_id    — source heading id ("" = whole-note)
+           to_uuid    — target note uuid (stable)
+           to_id      — target heading id optional
+           label      — optional display label
+           kind       — "wikilink" | future
+         Optional cached from_slug/to_slug for debug only — never
+         authoritative. Index by (from_uuid, to_uuid).
+         Live package: libs/roam (parse-links, reindex, backlinks,
+         render-body, backlinks-html).
+
+         ROAM IS A LEAF (enforced by PACKAGES layering):
+           roam/ imports outline/ (read-only ADT) and prims only. It
+           MUST NOT call notes/doc/* or notes/*. The two current
+           roam→notes calls are removed by pushing the lookup up to
+           the notes/ caller:
+             - roam/backlinks needs source titles for display → the
+               notes/ui backlinks panel resolves titles/slugs from the
+               rows roam returns (uuid + from_id + label), or roam
+               returns uuid/id/label only and notes/ui decorates.
+             - roam/render-link resolves the target note row → pass
+               the resolved (slug,title) IN from notes/ui; roam renders
+               the anchor from args, or notes/ui renders and roam just
+               supplies the parse.
+           roam/reindex is called BY notes/doc on content writes
+           (notes → roam, the one allowed direction); roam never
+           calls back up into notes/doc to resolve a uuid.
+
+         AUTHORING SYNTAX (bodies, still human-friendly):
+           [[slug]]              — wiki by slug at write time
+           [[slug|label]]        — labeled wiki
+           [[media:uuid|alt]]    — media embed (not note-link)
+           (bible BOOK ch [verse]) — sexp bible ref (not note-link)
+           (bible BOOK ch verse-from verse-to) — optional range
+         BOOK accepts full name or bible abbrev (Gen, John, …);
+         normalized via bible/abbrev-of + bible/parse-ref helpers.
+         No #node-id deep links v1.
+
+         SAVE-TIME RESOLUTION:
+           [[slug]] -> lookup note uuid (tree/find-by / notes/doc);
+           store edge uuid→uuid. Missing target: stub-link without
+           edge until target exists (prefer). Bible sexps are NOT
+           note-link rows.
+
+         REINDEX:
+           (roam/reindex note-uuid outline-tree) replaces edges for
+           from_uuid. Called on content-touching saves only
+           (set-body, upsert with body change, op=eval target=body).
+           Move/rename/refile/extract does NOT reindex — note and
+           heading uuids/ids stay stable; edges remain valid. Cached
+           from_slug/to_slug may go stale; resolve via uuid at read.
+
+         =========================================================
+         REFILE / EXTRACT vs LINKS (align tree-browser + op-protocol)
+         =========================================================
+         Refile and extract are STRUCTURAL moves of outline subtrees
+         across note documents — they are NOT link-graph operations.
+         Today: libs/notes/refile (ad-hoc dual upsert). Target:
+           structural-editing.op-protocol owns the wire
+             POST {op, target, args} → fragment + OOB selection
+           named ops e.g. refile / extract-note with args
+             (dst-slug) or (new-slug?) — server applies pure tree
+             surgery then whole-doc write via notes/doc/*.
+         image.tree-browser deliberately defers refile/move UI
+         until those ops exist on the shared protocol (no parallel
+         /tree/refile routes). notes.outline-actions already lists
+         this gap. When protocol lands:
+           - notes/refile and notes/refile/extract become thin
+             adapters or disappear into op dispatch
+           - roam edges need no rewrite (uuid stable)
+           - tree-browser may offer move only via the same ops
+
+         RENDER:
+           Wiki: resolve to_uuid → current slug/title/path; anchor
+           /notes?slug=<current>. Broken uuid → muted missing.
+           Media: unchanged img path.
+           Bible sexp: template via bible/dabar —
+             (bible/link-html book ch verse [label])
+               -> <a href="/dabar?book=…&chapter=…&verse=…">…</a>
+             optional hx-get into #dabar-panel when chrome present.
+           Kernel extract-links / render-links gain bible-sexp
+           recognition (budget-safe OCaml), or Nopales pre-pass
+           normalizes sexps before render-links — prefer OCaml once
+           syntax is frozen.
+
+         IMPORT NORMALIZE (garden-import):
+           Obsidian [[bible:Genesis2:3|Label]] and bare
+           [[bible:Hosea4:6]] become (bible Hosea 4 6) text in
+           heading bodies (Label dropped or becomes visible prose
+           adjacent — keep label as link text via
+           (bible Hosea 4 6 "Hosea 4:6") if three-or-four arg form
+           includes optional label string).
+
+         QUERY:
+           (roam/backlinks slug-or-uuid) -> inbound with current
+           titles/slugs for display. UI partial: notes-backlinks.
+
+         NOT v1:
+           - graph view renderer
+           - unlinked-mentions auto-discovery
+           - block-ref transclusion
+           - path-qualified wiki links for duplicate slugs
+           - tree-browser-initiated refile (waits on op-protocol)
+    |))
+   )
+  )
+
+  (subsection budget-scale
+   (doc "Per-call eval budget: stress contracts for notes/roam/outline so large trees and bodies never Budget_exceeded on ordinary UI/agent paths")
+   (status implemented)
+   (implements
+    lisp/lib/eval.ml
+    pure/prims_pure.ml
+    libs/notes/lib.pp
+    libs/outline/lib.pp
+    libs/std/lib.pp
+    scripts/verify_budget_stress.py
+    scripts/verify_notes_execute_all.py)
+   (verify
+    (build "dune build")
+    (test "dune runtest — lisp list-hof + image extract-links")
+    (smoke "scripts/verify_budget_stress.py (monitor-rerunnable)")
+    (smoke "parse: 500+ wiki links in one body completes; count matches")
+    (smoke "reindex/upsert: 10 nodes x ~8k body with links indexes all links")
+    (smoke "render: outline/html on large tree/body returns HTML, no budget error")
+    (smoke "lazy: a many-node note opens with eager-depth nodes only; expanding a collapsed node fetches its subtree partial; no budget error")
+    (smoke "many-node ops: N structure ops each in own eval (HTTP-shaped)")
+    (smoke "(budget-remaining) positive mid-call; floor asserted after stress cases"))
+   (details
+    (doc (|
+         WHY:
+           The 100k step default_limit is a safety net, not a perf
+           governor. Char-scanners and recursive list walks in Nopales
+           burned the budget on ordinary notes (upsert reindex,
+           large inbox render) while the write sometimes committed
+           first — silent stale links. Hot paths move to OCaml or
+           kernel special forms; stress tests guard regressions.
+
+         BUDGET MODEL (lisp-interpreter.eval):
+           - One budget per eval/call_handler invocation
+           - tick on each eval step; Budget_exceeded aborts that call
+           - OCaml prims cost one tick at the call site (body free)
+           - (budget-remaining) -> steps left (dynamic current budget)
+           - (bench expr-string [n]) -> avg us/iter for calibration
+           Do NOT "fix" scale bugs by raising default_limit.
+
+         KERNEL / HOT PATHS (required):
+           - list/map, list/filter, list/foldl: special forms
+             (OCaml loop + apply); not O(n) Nopales recursion frames
+           - extract-links: OCaml; roam/parse-links uses it
+           - select-for-update: error outside with-transaction
+             (reliability adjacent to long evals)
+           Planned if stress fails render/tree:
+             OCaml render-links (or roam/render-body prim)
+             cheaper outline encode/decode/find if tree ops dominate
+
+         STRESS SUITE (scripts/verify_budget_stress.py):
+           Monitor-rerunnable against a running image (dev or
+           habitat) via pp_eval. Synthetic fixtures only — do not
+           mutate user garden notes without a dedicated test slug
+           prefix (e.g. budget-stress-*) cleaned up after.
+
+           Suites:
+           1. PARSE / EXTRACT
+              - correctness edges (3 links, 0, unclosed, [[]], media)
+              - scale: single body with >=500 links completes
+              - optional: 10k-char link-free body still cheap
+           2. REINDEX / UPSERT
+              - tree: >=10 nodes, each body >=8k with >=1 link
+              - notes/doc/upsert returns ok (not budget exceeded)
+              - note-link count for slug == expected wiki links
+              - budget-remaining floor after call (implementation
+                picks a conservative floor; document in script)
+           3. RENDER
+              - outline/html (or show-body without request deps) on
+                large tree: many nodes and/or one ~32k+ body
+              - must return non-empty HTML string; no budget error
+              - wiki + media syntax appear as anchors/img when hook
+                is roam/render-body
+           4. MANY-NODE ACTIONS
+              - create synthetic note with >=50 child nodes
+              - each op in its own eval (mirrors HTTP call_handler):
+                cycle-todo, move-up/down, archive, set-title
+              - extract one node to its own note; refile one node
+              - every op ok; final tree consistent; cleanup slugs
+           5. THRESHOLD PIN (optional / nightly)
+              - binary-search max body size for parse vs render
+              - log or store result; not a hard CI flake gate unless
+                threshold collapses below known-good baseline
+
+         ACCEPTANCE:
+           verify_budget_stress.py exits 0 on local dev.sh image
+           and on habitat after deploy. verify_notes_execute_all.py
+           remains the broader feature smoke; budget script owns
+           scale. Failures file as product bugs (reindex/render),
+           not "raise the limit".
+
+         OUT OF SCOPE HERE:
+           - Jane Street Incremental / BI pipelines
+           - raising default_limit as the primary fix
+           - preemptive multi-request chunking of a single note view
+    |))
+   )
+  )
+
+  (subsection outline-actions
+   (doc "Per-node outline action menu; the eval op turns nodes into a live Nopales surface")
+   (status partial)
+   (* agent note (|2026-08-02 confirm still partial: notes/outline/apply-op + eval + POST /partials/notes-node-op shipped; notes/refile* exist but not on structural-editing.op-protocol; full structed wrap/splice/raise not all on outline menu.|) *)
+   (implements
+    libs/outline/lib.pp
+    libs/structed/lib.pp
+    libs/notes/lib.pp
+    image/lib/http.ml)
+   (verify
+    (smoke "structure ops: add-child/sibling delete move promote/demote archive cycle-todo set-title/body")
+    (smoke "slurp-forward / barf-forward via structed/* on outline accessors")
+    (smoke "op=eval target=child splices returned string as a new child node")
+    (smoke "op=eval target=sibling splices; target=body replaces this node body")
+    (smoke "eval expr binds self/doc/slug to current context")
+    (smoke "eval reindexes roam links when a body changes")
+    (smoke "refile: node moves to another note root kids")
+    (smoke "refile destination is a lazy typeahead modal — the note page never enumerates the garden (BORGE-1785603757)")
+    (smoke "extract: node becomes its own note; removed from source")
+    (smoke "POST /partials/notes-node-op returns outline partial + selection")
+    (smoke "scripts/verify_budget_stress.py many-node actions suite"))
+   (details
+    (doc (|
+         SHIPPED SURFACE (libs/notes/outline + outline + structed):
+           notes/outline/apply-op dispatches structure ops on the
+           outline tree value. Ops present today:
+             add-child add-sibling delete move-up move-down
+             promote demote set-title set-body set-todo
+             cycle-todo archive unarchive
+             slurp-forward barf-forward  (via structed/* +
+               outline/kids outline/set-kids — op-protocol preview)
+           Selection companion: notes/outline/apply-op-sel →
+           (list tree' sel) for OOB restore.
+
+         WIRE (reconcile — code wins over older spec path):
+           POST /partials/notes-node-op
+             params: slug, op, node-id [, title|body|todo|expr|target]
+           NOT /partials/notes-op (stale name). Fragment path → no
+           chrome (wants_fragment). Client hx-target #outline
+           hx-swap outerHTML; selection via hidden OOB when present.
+
+         op = eval
+           Form: notes/outline/eval-form → same partial endpoint.
+           notes/outline/eval-result loads
+             (lambda (self doc slug) <expr>)
+           and applies it. target in {child, sibling, body} via
+           notes/outline/eval-target (default child).
+           result handling by target:
+             body     as-str → outline/set-body on node
+             child    string → new node title; valid outline node
+                      sexp → splice subtree under id
+             sibling  same as child, insert after id
+
+         REFILE / EXTRACT (libs/notes/refile — NOT yet op-protocol):
+           notes/refile src-slug nid dst-slug — detach node from
+           src outline, add-child under dst root, dual upsert.
+           notes/refile/extract — detach → new note slug from title,
+           remove from source. These are whole-doc outline writes
+           via notes/doc or legacy notes/upsert. When
+           structural-editing.op-protocol lands for cross-doc moves,
+           refile/extract MUST become named tree-ops on that
+           protocol (same POST shape, server-authoritative tree),
+           not parallel ad-hoc routes. image.tree-browser defers
+           refile/move UI until then.
+
+         REFILE DESTINATION UI (lazy modal, BORGE-1785603757):
+           No note page renders an eager <select> of all notes — that
+           O(n) notes/refile/options over (notes/doc/list) blew the
+           100k step budget at garden scale. Refile target picking is
+           a lazy htmx modal: the toolbar 'refile' <details> and GET
+           /partials/notes-refile?src=SLUG both render
+           notes/ui/refile-modal-body — a typeahead over
+           /partials/notes-search?mode=refile (filtered in Postgres,
+           no garden enumeration) plus a raw slug input for agents /
+           keyboard-only users. The legacy eager builders
+           (notes/refile-form, notes/refile/form and the O(n)
+           notes/refile-options / notes/refile/options) are REMOVED.
+           notes/refile/move performs the detach+attach write.
+
+         PERSISTENCE:
+           Structure ops upsert through notes/doc/* (tree store).
+           Body-touching ops should roam/reindex (verify smoke).
+
+         WHY:
+           Notes view = live Nopales surface. wiki-llm-loop is the
+           first major consumer of op=eval splices.
+
+         SECURITY:
+           eval runs full session prim set incl DB — treat as REPL.
+           Auth gate only boundary v1; v2 may confirm destructive
+           prims.
+
+         GAPS (keep status partial until closed):
+           - full structed op set (wrap/splice/raise/…) not all
+             wired into apply-op / keymap
+           - refile/extract not on op-protocol wire yet
+           - budget stress suite must stay green on garden-scale
+    |))
+   )
+  )
+
+  (subsection wiki-llm-loop
+   (doc "LLM-maintained wiki over the notes corpus — ingest, query, lint as Nopales ops")
+   (status implemented)
+   (* agent note (|2026-08-02: libs/wiki/lib.pp — wiki/ingest-from-source, wiki/query, wiki/lint, wiki/events, wiki/schema, wiki-event rows; live wiki/schema ok.|) *)
+   (implements libs/wiki/lib.pp libs/notes/lib.pp)
+   (verify
+    (smoke "(wiki/ingest-from-source TEXT) creates/updates a source note + entity/concept notes + note-link rows")
+    (smoke "(wiki/query QUESTION) synthesizes with [[slug]] citations; may file-back a kind=query note")
+    (smoke "(wiki/lint) returns orphans/contradictions/missing-pages/suggested-sources")
+    (smoke "each top-level wiki op writes one wiki-event row; (wiki/events) lists them")
+    (smoke "agents drive ingest/query/lint via eval (pp_eval); no /wiki/* routes require registration"))
+   (details
+    (doc (|
+         PATTERN:
+           A persistent, compounding wiki over curated sources: the
+           LLM does not retrieve raw chunks per query; it reads the
+           existing corpus, integrates each new source into the
+           notes (page updates, cross-links, contradiction flags),
+           and keeps synthesis current. The corpus IS the knowledge
+           base.
+
+         SHAPE:
+           Notes ARE wiki pages; kind discriminates role. The agent
+           drives operations through ordinary Nopales functions exposed
+           to the REPL; the user reaches the same operations through
+           the outline-actions eval op on a source node. No /wiki/*
+           routes for v1 — the existing /notes surface plus the live
+           eval surface cover the user-facing flow.
+
+         BUILD ORDER (dependencies):
+           1. image.per-request-context — so notes routes survive the
+              cotenant race: anonymous attach flips the shared
+              Session.t routes/env mid-request and any
+              personal-branch route 404s under traffic until
+              per-request-context lands. Deployable on system/main
+              as a documented workaround in the meantime.
+           2. notes.links-and-roam (note-link rows + roam/parse-links
+              + roam/reindex + roam/backlinks).
+           3. notes.outline-actions (the eval op for LLM splices).
+
+         NOTE KINDS (convention over the existing note row schema;
+         widening the note.kind vocabulary — no new storage):
+           note       existing default (behavior preserved)
+           daily      existing dailies
+           source     source-summary page (per ingested raw source)
+           entity     a named thing (person, place, work)
+           concept    an abstract topic
+           query      a filed-back synthesis with citations
+           synthesis  cross-source integration/comparison
+           schema     the corpus preamble note (see below)
+           log        reserve; not used v1 (audit is wiki-event rows)
+
+         DOC-LEVEL FRONTMATTER (extends the note row, NOT per-node
+         metadata — avoids a node-schema migration):
+           updated_at   timestamp of last ingest/query touch
+           updated_by   "llm" | username | "agent"
+           source_count for source/entity/concept: number of distinct
+                        sources contributing; incremented on ingest
+
+         SCHEMA-NOTE CONVENTION:
+           A note with kind=schema holds prose describing this
+           corpus's conventions, page disciplines, and ingest
+           emphasis; co-evolved by the human and the LLM.
+           (wiki/schema) returns its body string, seeded with a
+           sensible default at first call. ingest/query/lint read it
+           as the LLM preamble. There is no separate schema-agent
+           path — it is just another note the loop reads.
+
+         OPS (each is one top-level Nopales call; each writes one
+         wiki-event row on success):
+           (wiki/ingest-from-source source-text [slug-hint])
+             1. create/update a source note (kind=source) carrying
+                the source text + extracted summary outline.
+             2. read (wiki/schema) + (roam/backlinks)/index over the
+                current corpus; build the prompt.
+             3. (ai/ask prompt) -> a JSON plan:
+                  { summary_node, entities[], concepts[],
+                    links[{from,to,kind}], followups[] }
+             4. notes/upsert each entity/concept page (kind=entity |
+                concept), composed with the source's contribution;
+                bump source_count; stamp updated_at / updated_by.
+             5. (roam/reindex) the affected slugs.
+             6. write one wiki-event row (kind=ingest, op-slug, ts,
+                summary).
+             Return the new source-summary slug + the list of pages
+             touched.
+
+           (wiki/query question)
+             read (wiki/schema) + the most relevant pages (roam /
+             find-text over the corpus index); synthesize with
+             [[slug]] citations. Optionally file-back as a kind=query
+             note that child-references its cited pages. One
+             wiki-event row (kind=query).
+
+           (wiki/lint)
+             one (ai/ask) pass over schema + index + note-link edges;
+             report orphans, contradictions, stale claims, missing
+             pages (concepts mentioned but lacking their own page),
+             suggested new sources. Optionally draft stubs for
+             missing entities (opt-in create-stubs? arg). One
+             wiki-event row (kind=lint).
+
+         AUDIT:
+           TYPE wiki-event (rows; fields: kind op slug ts summary):
+             append-only, branch-shared, one row per top-level wiki
+             op (ingest/query/lint). NOT autonomic — only these
+             three top-level ops write events. Helper calls
+             (roam/backlinks, outline/eval, etc.) do not write
+             events. Retention is opt-in:
+               (wiki/events [since])    -> list recent events
+               (wiki/prune-events days) -> drop events older than N
+                                           days (explicit, manual)
+             Corpus content evolution is recorded in the notes
+             themselves (updated_at/by frontmatter); the wiki-event
+             stream is operational audit, not content of record.
+
+         LIVE TELEMETRY (separate stream, unchanged infra):
+           ingest/query/lint emit Info/Error into the existing
+           Ops_log ring (component "wiki") so a long op is visible
+           via (log-tail). Bounded 5000 + rotates; not a permanent
+           audit. Two streams, two purposes: Ops_log = live
+           observability of this request; wiki-event rows = audit
+           trail of what the wiki has done to itself.
+
+         NOT v1 (deferred):
+           - URL fetch / clipper (user pastes text first)
+           - markdown (outlines ARE the substrate; no marked.js)
+           - graph view renderer (note-link rows hold the structure)
+           - unlinked-mentions auto-discovery
+           - block-ref transclusion
+           - images / attachments
+           - batch / unsupervised ingest sweep
+    |))
+   )
+  )
+
+  (subsection dailies-and-capture
+   (doc "Daily outlines and quick capture (org-roam-dailies / org-capture shaped)")
+   (status implemented)
+   (verify
+    (smoke "(notes/daily) returns same slug for same day on second call")
+    (smoke "(notes/capture title body) creates inbox-tagged note or appends")
+    (smoke "GET /notes/daily opens today"))
+
+   (details
+    (doc (|
+         DAILY:
+           slug convention: daily-YYYY-MM-DD
+           kind = "daily", day = YYYY-MM-DD
+           (notes/daily) / (notes/daily "2026-07-11")
+             get-or-create root outline with title "Daily YYYY-MM-DD"
+           UI: /notes/daily , menu link under apps or notes
+
+         CAPTURE:
+           (notes/capture title body) ->
+             new slug (slugify title + short id), tags include inbox,
+             kind note, outline = single node with body
+           Optional: (notes/capture-to slug title body) appends a
+             child node under root (inbox into a project outline)
+
+         INBOX REVIEW:
+           /notes?tag=inbox list partial — phase 2.
+    |))
+   )
+  )
+
+  (subsection hypermedia-ui
+   (doc "Routes, partials, structure-edit via htmx; menu entry")
+   (status implemented)
+   (implements libs/notes/lib.pp image/lib/http.ml)
+   (verify
+    (smoke "GET /notes lists recent notes")
+    (smoke "GET /notes?slug=… full page with chrome + outline")
+    (smoke "GET /partials/notes-outline?slug=… fragment no chrome")
+    (smoke "structure op POST returns updated outline partial")
+    (smoke "ui/menu can link Notes without breaking other apps")
+    (smoke "note page does not enumerate all notes (refile target is a lazy typeahead, not an eager <select>)"))
+
+   (details
+    (doc (|
+         ROUTES (full page = chrome; /partials/ and HX-Request = fragment):
+
+           GET  /notes
+           GET  /notes?slug=NAME
+           GET  /notes/daily
+           GET  /notes/edit?slug=NAME     ; optional dedicated editor
+           POST /notes                   ; create / save / capture
+           GET  /partials/notes-list
+           GET  /partials/notes-outline?slug=
+           GET  /partials/notes-backlinks?slug=
+           GET  /partials/notes-node?slug=&id=  ; lazy subtree
+                returns one node's <details> subtree HTML
+           POST /partials/notes-op       ; structure edit
+                params: slug, op, id, … 
+
+         STRUCTURE OPS (POST notes-op):
+           op = insert-child | delete | promote | demote |
+                move-up | move-down | set-title | set-body | set-todo
+           Always reindex links if body changes.
+           Response: outline partial HTML (hx-swap target #outline)
+
+         RENDER:
+           Prefer <details class="ol-node"> fold (no heavy JS tree).
+           Ops as small buttons on each row (htmx).
+
+         LEAN NODE RENDERER (outline/html-node):
+           Each node is emitted with the fewest html/* calls feasible —
+           constant attribute fragments are precomputed at library
+           load and assembled with direct string-append, not via the
+           fine-grained html/attr / html/attrs / html/span DSL on the
+           hot recursive path. The DSL stays available for page chrome
+           and one-off fragments; the recursive outline renderer is the
+           budget-critical path and must not compose dozens of function
+           applications per node.
+
+         LAZY SUBTREE LOADING:
+           Eager rendering is capped at a shallow depth (root + its
+           direct children). Deeper nodes render as a collapsed
+           <details> whose body is fetched on first expand via
+           hx-get=/partials/notes-node?slug=&id=, swapped in place.
+           This bounds per-render html-skeleton cost by the eager
+           depth, not by total node count, so a large note never
+           Budget_exceeded on ordinary open. The partial returns the
+           same html-node markup the eager path would have produced
+           for that subtree, so eager and lazy nodes are visually
+           identical. Structure ops still re-render and swap #outline.
+
+         MENU:
+           Add (menu/link "notes" "/notes") under apps in default
+           ui/menu when notes is dogfood-stable; or document
+           manual ui/menu edit + pp_sync pull.
+
+         COMPOSITION:
+           notes/page embeds partials like todo/page embeds
+           todo/list-html — same hypermedia discipline.
+    |))
+   )
+  )
+
+  (subsection note-path-resolution
+   (doc "Addressing an existing note resolves its live tree path; note-path is a constructor for new notes, never a slug lookup; writes refuse absent note parents")
+    (status implemented)
+   (implements libs/notes/lib.pp)
+   (verify
+    (smoke "the agents note (folder wiki) resolves to its stored path: notes/doc/path returns data.note.u.admin.wiki.agents and (notes/tree/folder-of-path path) = \"wiki\"")
+    (smoke "(notes/tree/note-path \"\" \"agents\") is NOT a lookup: it returns data.note.u.admin.agents, a different subtree, and no caller addresses the foldered note through it")
+    (smoke "a heading write under a path whose note node is absent RAISES and materializes no parallel note subtree; the /notes face is unchanged")
+    (smoke "new-note creation with empty folder still lands at <garden-root>.<slug> and round-trips through notes/tree/folder-of-path")
+    (smoke "set-folder moves an existing note to the requested folder (old path from the row, new path from the argument) and a no-op move writes nothing")
+    (build "dune build image"))
+   (details
+    (doc (|
+         PROBLEM (BUG, live 2026-10-03):
+           notes/tree/note-path(folder, slug) is a PURE constructor. It
+           builds <garden-root> + (split-folder folder)… + <slug>. With
+           folder "" it returns <garden-root>.<slug>. That is the RIGHT
+           path only for a genuinely folderless / NEW note. For a slug
+           whose note actually lives in a folder it names a DIFFERENT,
+           usually non-existent subtree.
+
+           REPRO: the agents note lives at
+             data.note.u.admin.wiki.agents        (folder "wiki")
+           but
+             (notes/tree/note-path "" "agents")
+             -> data.note.u.admin.agents           (does not exist)
+           An agent that addressed the note by slug alone (the documented
+           read-modify-write idiom, and any caller that reconstructed a
+           path instead of reading the row) then called
+             (notes/tree/write-heading <wrong-path> …)
+           The heading upsert auto-materialized the parallel subtree; a
+           note-shaped node at <garden-root>.<slug> appeared that the
+           /notes face NEVER reads. Five sections written there were
+           invisible until spotted, and the subtree had to be deleted by
+           hand. Same misaddressed-write family as the 2026-09-27
+           save-outline incident (storage SAVE ORDERING CONTRACT).
+
+         ROOT CAUSE:
+           A single binding conflates two operations that must stay
+           separate:
+             CONSTRUCT — "path for a note that does not exist yet"
+                         (new note; explicit move target)
+             ADDRESS   — "where does THIS existing note live?"
+           note-path only constructs. Nothing resolves a note's live
+           path, so slug-addressing callers guess the folder — and "" is
+           the silent guess that lands in the wrong subtree.
+
+         CONTRACT:
+           1. CONSTRUCT is not ADDRESS. notes/tree/note-path(folder,
+              slug) is a constructor for a NEW note (or for a path whose
+              folder the caller explicitly owns, e.g. the set-folder
+              move target). It must never be used to look UP an existing
+              note by slug. Callers must not infer "folderless" from a
+              missing folder argument.
+           2. RESOLVE BY SLUG. Address an existing note through its row.
+              notes/tree/find-slug / notes/doc/row return the live node,
+              and the resolver notes/doc/path(slug) returns that row's
+              _path (notes/doc/row-path). When no note row exists it
+              returns () / raises — it never guesses a path.
+              (notes/doc/get already returns folder as its 8th element;
+              the documented agent idiom must use the row, not a literal
+              "".)
+           3. NO IMPLICIT NOTE SUBTREES. A write addressing a note must
+              target a path whose node already exists with kind note.
+              notes/tree/write-root-body must RAISE when tree/get of the
+              target is empty instead of silently returning (its current
+              no-op) and leaving the following write-heading to run.
+              notes/tree/write-heading must REFUSE to upsert when its
+              parent path is not an existing note node. Upserting a
+              heading must never create a note-shaped parent chain; an
+              absent note is an error surfaced to the caller, not a
+              parallel subtree.
+           4. EVERY EXISTING-NOTE WRITE RESOLVES. save-outline,
+              write-root-body, write-heading, undo and any tree/move
+              caller take the note path from the row (row-path /
+              notes/doc/path). note-path(folder, slug) remains
+              legitimate ONLY for upsert-in when no row exists yet, and
+              for the explicit new path computed by notes/doc/set-folder
+              (a deliberate move, where the requested folder IS the
+              target).
+           5. set-folder is an ADDRESS→CONSTRUCT move: it reads the old
+              path from the row (row-path) and the new path from the
+              explicitly requested folder; a no-op move (old = new)
+              writes nothing.
+
+         WHY note-path itself does NOT resolve:
+           Making note-path redirect to a slug's existing row would
+           break the two legitimate CONSTRUCT callers: a NEW note would
+           never be created at the requested folder, and set-folder
+           could never move a note to the root (the constructed
+           <root>.<slug> would snap back to the old foldered path).
+           Resolution is a separate, explicit binding.
+
+         ABI:
+           notes/tree/note-path(folder, slug) -> new path   (constructor)
+           notes/doc/path(slug)               -> live path | () | raise
+           notes/doc/row-path(row)            -> live path
+           notes/tree/folder-of-path(path)    -> folder (round-trip)
+    |))
+   )
+  )
+  (subsection index-read-path
+   (doc "Notes index reads resolve to the tree store exactly once; legacy data_rows fallback retired; interim read-layers removed")
+   (status implemented)
+   (implements
+    libs/notes/lib.pp
+    image/lib/tree_store.ml)
+   (verify
+    (smoke "GET /notes lists garden folders incl. tree-only notes")
+    (smoke "GET /notes?folder=garden/bible/scripture_concepts lists its notes")
+    (smoke "(notes/list-light) equals notes/doc/index-list (both tree)")
+    (smoke "(notes/doc/get slug) and /notes?slug=… agree for tree-only slug")
+    (smoke "no binding under notes/light/* remains on the image")
+    (smoke "no call site of (rows 'note) outside notes/migrate/legacy-*"))
+   (details
+    (doc (|
+         PROBLEM (drift this closes):
+           The index accumulated overlapping read layers while the
+           one-tree cutover was landing:
+             notes/doc/*       — dual-read façade (tree first, legacy
+                                 data_rows fallback)
+             notes/ui/* flat   — budget-safe flat index over
+                                 notes/doc/index-list (tree via OCaml
+                                 tree/note-index)
+             notes/tree/render — original nested folder tree; walks
+                                 folders with Lisp list ops; exceeds
+                                 the eval budget at garden scale
+             notes/light/*     — live-only nested index reading legacy
+                                 data_rows ONLY; became the routed
+                                 /notes handler, so tree-only (garden)
+                                 notes vanished from the UI while
+                                 agents (façade) still saw them
+           One /notes route pointed at whichever layer happened to be
+           loaded last. Result: index and detail disagreed; garden
+           invisible in UI; budget-safe code unreachable.
+
+         TARGET — ONE READ PATH:
+           Every notes read (index and detail) resolves through
+           notes/doc/* to the ONE tree store exactly once:
+             index  /notes           → notes/page →
+                                       notes/ui/folders-html (flat,
+                                       budget-safe via OCaml
+                                       tree/note-index)
+             detail /notes?slug=…    → notes/ui/show → notes/doc/get
+             agent  notes/doc/get|list|search — unchanged (façade)
+           notes/list-light is re-pointed at notes/doc/index-list so
+           agent and UI see the same rows.
+
+         FULL VARIANT (tree/note-index-full, 2026-09-08 perf batch):
+           The plain (tree/note-index [prefix [, limit]]) rows carry
+           outline "[]" — the /notes UI folds those rows on the
+           request path and outlines are the fat field. The full
+           variant (same signature, OCaml kernel prim
+           image/tree_store.ml) reconstructs the REAL outline from
+           the note's heading nodes (kind='heading' under
+           <note>.h.<id>; ONE ordered query over the whole subtree,
+           bottom-up parent-path linking — the OCaml twin of
+           notes/tree/heading-kids-snap), so index rows carry
+           outline JSON in exactly outline/encode's format and
+           outline/decode + outline/todos consume it unchanged. The
+           From-notes todo scrape folds the full variant
+           (notes/outline/all-todos + notes/all-todos →
+           notes/tree/full-notes): the plain index's empty outlines
+           silently killed it — every note decoded to an empty tree,
+           zero todos. Scrapes/aggregation use the full variant; the
+           /notes UI request path stays on the light rows.
+
+         SLICES:
+           I1  Route /notes to notes/page (git-managed, flat index).
+               Delete the live-only notes/light/* bindings; nothing
+               in libs/ references them.
+           I2  Retire notes/tree/render + render-folder (budget-
+               unsafe at garden scale). Keep only as an explicitly
+               renamed non-routed legacy binding, or delete.
+           I3  notes/list-light → notes/doc/index-list (same rows,
+               same order); drop its private legacy-rows read.
+           I4  Retire the legacy data_rows fallback in notes/doc/*
+               (list / row / find-slug). Tree is the only store.
+               Precondition: M0 (migrate legacy → tree) verified for
+               every legacy uuid; legacy rows kept as an inert
+               archive, not read. Audit gate: no call site of
+               (rows 'note) / (find-rows 'note) outside
+               notes/migrate/legacy-*.
+
+         AUDIT (I4 gate):
+           Full-tree scan of libs/ + image/ confirms every note read
+           outside the façade's own fallback already goes through
+           notes/doc/* — no package (todo/roam/wiki/flashcards/bible/
+           dabar/ai/calendar/capture/ui) reads rows 'note directly.
+           Only notes/migrate/legacy-* touches legacy, by design.
+           I4 is therefore a façade-internal deletion, not a
+           cross-package change.
+
+         NON-GOALS:
+           - Re-raising the eval budget to save notes/tree/render
+             (budget is a safety net; the nested Lisp walk is the
+             bug, per budget-scale)
+           - Changing the slug-page outline editor or structure ops
+           - Merging/renaming garden folders for display (kebab vs
+             underscore is cosmetic; path-based folders tolerate both).
+             Folder GROUPING is path-derived (not the legacy folder
+             string), and the garden/ import prefix strips to top
+             level in the index per garden-import DISPLAY.
+
+         CUTOVER COMPLETION (the finish line this subsection gates):
+           The legacy nested index (notes/light/*) must actually be
+           deleted from the image (I1) so /notes serves the flat
+           budget-safe index over tree/note-index, and that index
+           groups by PATH-derived folders with the garden/ prefix
+           stripped to top level. Until then the UI shows only the
+           legacy-folder rows and hides garden/tree-only notes.
+           Legacy data_rows type=note rows are DELETED after M0
+           re-migration verifies every uuid (no permanent archive).
+
+         F6  DEAD SUBPACKAGE DIRS (libs/notes/<sub>/lib.pp):
+           The subdirectory files libs/notes/{outline,capture,doc,
+           refile,tree,ui,migrate}/lib.pp are NOT loaded by the image
+           (loader scans top-level libs/<pkg>/lib.pp only) and have
+           drifted from the canonical libs/notes/lib.pp (e.g. stale
+           notes/outline/apply-op missing op-seq 409; notes/capture/
+           title truncation differs). They are a readability hazard —
+           a maintainer opens the subpackage file thinking it is
+           authoritative. DELETE the subdirectory lib.pp files; the
+           single libs/notes/lib.pp is canonical (see PACKAGES file
+           layout). Backups/ may retain old copies. This slice is
+           pure deletion; no route or binding changes.
+    |))
+   )
+  )
+
+  (subsection outline-read-path
+   (doc "Single-doc outline reads fold ONE subtree snapshot in Nopales as the LIVE path (never the per-node recursive walk); the /issues register renders inline from live data and the notes-cache HTML apparatus is deleted")
+   (status implemented)
+   (* agent note (|2026-12 make record: notes/tree/heading-kids IS the one-snapshot fold now (recursive walk deleted, obituary in its docstring); heading-kids-snap folded into it; notes/issues-fast-tree rides the same binding. /issues: notes/issues/register-html (extracted from the refresh job) + cards-section render INLINE from live data; notes/cache-fresh?/get/put/request/row + notes/issues-cache-refresh DELETED; handle-post just redirects (next GET renders live). notes-cache type rows on the habitat are inert leftovers for a habitat-side cleanup. MEASURED on the dev image (seeded 156-heading note, then deleted): notes/doc/get = 105ms wall / 223k ticks (budget.ml default is 400k — the spec's '100k' was stale; the old walk was 155 queries + ~380k ticks job-only), /issues = 7ms avg / 6 db hits per /timing, zero cache rows, zero job submissions. The '155-query walk per render' docstring trail is gone from list-html too. todo/notes-cache-* untouched — the surviving SWR consumer per the spec.|) *)
+   (implements libs/notes/lib.pp image/lib/tree_store.ml)
+   (verify
+    (smoke "GET /issues renders with zero notes-cache rows read or written; the notes/cache-* and notes/issues-cache-refresh bindings are deleted from the image")
+    (smoke "(notes/doc/get \"log/issues\") completes inline within the 400k route budget (budget.ml default_limit; measured 223k ticks / 105ms on a 156-heading note)")
+    (smoke "notes/tree/load-outline issues exactly ONE subtree read per doc load (query count via /timing), never one per heading")
+    (smoke "budget-scale stress suite still green; a 150+-heading note opens inline")
+    (smoke "the todo notes-block cross-tree scrape is the ONLY surviving consumer of the job-refresh pattern"))
+   (details
+    (doc (|
+         PROBLEM (the incident chain this closes):
+           Reading one document paid N+1: notes/tree/heading-kids
+           recursed one tree/list query PER HEADING NODE — 155
+           queries for the 156-node issues register (minutes on a
+           degraded DB; the 2026-09-14 promote-gate floor, where even
+           the 'cheap' notes/doc/row probe cost 40s live). The
+           one-snapshot fix (heading-kids-snap: ONE tree/list + flat
+           fold) existed but was quarantined in the jobs runner
+           because the fold burned ~380k ticks — dominated by the
+           VStr-JSON boundary tax, not the walk. With the live path
+           unaffordable, /issues served TTL-keyed CACHED HTML built
+           by notes/issues-cache-refresh on the unbudgeted jobs
+           runner: stale by design, one data_rows write per expiry,
+           presentation changes masked by the cached blob.
+
+         TARGET:
+           1. notes/tree/load-outline folds ONE tree/list subtree
+              snapshot (the heading-kids-snap shape) as the LIVE read
+              path. Dependency: lisp-interpreter.json-values-alist
+              brings the fold under the route budget; the recursive
+              heading-kids is DELETED, not kept as a fallback.
+           2. /issues renders the register + cards inline from live
+              data on every request. DELETE notes/cache-fresh?,
+              notes/cache-get, notes/cache-put, notes/cache-request,
+              notes/cache-row, notes/issues-cache-refresh, and the
+              notes-cache type rows they maintained. The deletion IS
+              the acceptance test: if the register cannot render
+              inline, the read path is not fixed.
+           3. The jobs-runner stale-while-revalidate pattern SURVIVES
+              only for genuinely external/slow aggregation (the todo
+              cross-tree scrape), keyed on data change (gen-now
+              stamp; the image branch_status stamp-cache precedent),
+              never TTL alone.
+
+         NON-GOALS:
+           - Raising default_limit to fit the fold (budget-scale: the
+             budget is a safety net; the boundary tax was the bug)
+           - Moving the single-doc outline fold into OCaml
+             (tree/note-index-full stays for the index/scrape path;
+             the Nopales walk must be viable on its own — walkable
+             data is the point of json-values-alist)
+           - Gen-keyed fragment caching for /issues (unnecessary once
+             the read is one query + one fold)
+    |))
+   )
+  )
+
+  (subsection agent-access
+   (doc "Agents use notes via eval — no separate notes HTTP API")
+   (status implemented)
+   (verify
+    (smoke "pp_eval notes/list and notes/get")
+    (smoke "agent-task tool list may include notes_search later"))
+
+   (details
+    (doc (|
+         LAPTOP / PI:
+           scripts/pp_eval.py '(notes/daily)'
+           scripts/pp_eval.py '(notes/search "sync")'
+           scripts/pp_eval.py '(notes/get "pp-design")'
+
+         IN-IMAGE AGENT:
+           Optional phase 2 tools on agent-task:
+             notes_search, notes_get, notes_capture
+           Do not grant blind outline/delete without policy.
+
+         PRINCIPLE:
+           Adding a notes feature = adding Nopales functions.
+           Remote agents gain them automatically through eval.
+    |))
+   )
+  )
+
+
+  (subsection personal-garden
+   (doc "Garden notes are personal content — not system/main; path+author isolation")
+   (status implemented)
+   (* agent note (|2026-08-02: tree_store garden root data.note.u.<user>; notes/garden-root → tree/garden-root; notes/* list scoped via tree index not system/main seed.|) *)
+   (verify
+    (smoke "notes created while on <user>/personal land under data.note.u.<user>")
+    (smoke "notes/* list default scope is current user garden only")
+    (smoke "pp-sync snapshot/pull never writes garden note bodies into libs/")
+    (smoke "system/main checkout does not seed or clobber garden notes"))
+   (details
+    (doc (|
+         CODE vs CONTENT:
+           notes/* roam/* outline/* packages may live on and promote
+           to system/main (shared product code).
+           Note *bodies*, folders, heading trees, note-link edges for
+           the garden MUST NOT be treated as package defaults and MUST
+           NOT be seeded from libs/*.
+
+         WHY NOT "data branch" literally (v1):
+         branching.data and one-tree placement A keep live /data single-head
+         (data.u.<user>/data.shared; no branch_id). Versioned data lenses are
+         placement B
+           and deferred. Garden isolation v1 is:
+             1. path prefix data.note.u.<username>.…
+             2. author = session user on write
+             3. notes/* list/get/search default to that prefix
+             4. never promote note rows via package seed/reseed
+         That meets "none of these notes live in main" as product
+         content without breaking shared bible/todo data.
+            (* agent note (|2026-08-23 MAKE: data lens namespace (data.l.<lens>.<user>.<type>.<id>) is implemented v0 — see one-tree.borg branching-interaction. The garden isolation rules (author = session user, user-scoped list/get, never seed) are unchanged. Notes' legacy path grammar (data.note.u.<user>.…, type-before-user, confirmed live on prod 2026-08-23) migrates to data.u.<user>.note.… as a separate make task — one migration to the final shape.|) *)
+
+         MULTI-USER:
+           Alice does not list Bob's data.note.u.bob subtree via the
+           default notes UI/API. Admin escape hatches are explicit.
+
+         WORK BRANCH:
+           Humans edit garden while checked out on <user>/personal
+           (or dev for code spikes). Content path is user-keyed, not
+           branch-keyed, so checkout does not hide your notes.
+    |))
+   )
+  )
+
+  (subsection garden-import
+   (doc "One-shot Obsidian/markdown vault import into the personal garden tree")
+   (status partial)
+   (* agent note (|2026-08-02: scripts/import_obsidian_notes.py dry-run+apply, bible:[[…]]→sexp, garden/ folder prefix, collision slugify. Still missing pass-2 uuid note-link reindex after upsert (verify smoke).|) *)
+   (verify
+    (smoke "dry-run on vault root reports md/folder/link counts; zero writes")
+    (smoke "apply imports md under data.note.u.<user>.garden.…")
+    (smoke "headings become heading nodes; frontmatter title/org_id kept")
+    (smoke "[[wiki]] resolved to uuid edges in pass 2")
+    (smoke "[[bible:…]] normalized to (bible …) sexps")
+    (smoke "skip EXPORT, .obsidian, tex/pdf/video/aux")
+    (smoke "re-import same source_path/org_id updates in place"))
+   (details
+    (doc (|
+         SOURCE (example): /home/roerick/obsidian_vault
+         ~227 md files; also tex/pdf/EXPORT/video — not imported.
+
+         SKIP:
+           .obsidian/**, EXPORT/**, templates/** (optional later),
+           *.{tex,aux,log,pdf,mp4,webm,mov,pyc,png,base}
+
+         ROOT PREFIX:
+           data.note.u.<user>.garden.<vault-relative folders…>.<slug>
+           Keeps import namespace clear of native PP wiki paths;
+           refile later is tree/move.
+
+         DISPLAY:
+           The garden/ prefix is an import namespace, not a user-
+           facing folder. The /notes index STRIPS a leading garden/
+           so imported contents appear at top level as siblings of
+           native folders (roam, reading, history as top-level
+           folders; no garden bucket in the UI).
+
+         FILE MAP:
+           directory          -> folder nodes (title = dir name)
+           file.md            -> note leaf
+           slug               <- filename stem sanitized [a-z0-9-]+
+           title              <- yaml title | first H1 | stem
+           source_id          <- yaml org_id if present
+           source_path        <- vault-relative path (re-import key)
+           tags               <- yaml tags
+           kind/day           <- Diary/YYYY-MM-DD.md => daily + day
+           # / ## / …         -> heading spine; preamble = root body
+           body markdown      -> heading body text (light normalize)
+
+         LINKS (two-pass):
+           Pass 1: create folders + notes + headings (no edges).
+           Pass 2: scan bodies for [[…]] and bible forms; write
+           uuid edges; normalize bible: Obsidian links to sexps.
+
+         SLUG COLLISIONS:
+           Global per-user uniqueness. On clash, prefix with parent
+           folder label or numeric suffix; report in import log.
+
+         TOOLING:
+           Offline importer (OCaml CLI or pp-eval batch driver).
+           --dry-run required before apply. Not an image hot path.
+           Idempotent on source_id/source_path.
+
+         NON-GOALS:
+           Continuous sync, tex pipeline, quartz theme fidelity,
+           dataview, round-trip export to the vault.
+    |))
+   )
+  )
+
+  (subsection tree-cutover
+   (doc "Phased delivery: kernel tree prims → façade → UUID links → M0 PP migrate → M1 vault")
+   (status partial)
+   (* agent note (|2026-08-02 confirm: K0–N1/M0/I* largely done (index-read-path implemented). Open: M1 pass-2 links, F finish-cutover slices (legacy light/* residue, heading explode polish, legacy row delete).|) *)
+   (implements libs/notes/lib.pp image/lib/tree_store.ml libs/tree/lib.pp)
+   (verify
+    (smoke "K0: tree/get list upsert delete move on folder/note/heading")
+    (smoke "K1: tree/get-uuid + slug uniqueness reject")
+    (smoke "N0: notes/doc/* round-trip on tree with heading children")
+    (smoke "N1: folders via path; no folder string field on write")
+    (smoke "R0: uuid note-link + bible sexp render")
+    (smoke "M0: existing PP notes migrated; spot-check agents + inbox")
+    (smoke "I4: notes/doc/list|row tree-only; no (rows 'note) outside migrate")
+    (smoke "GET /notes flat index lists garden/tree-only notes")
+    (smoke "tree-browser (tree/render-doc slug root depth fo) walks notes outline")
+    (smoke "M1: vault dry-run + apply on personal garden"))
+   (details
+    (doc (|
+         SLICES (one initiative, shippable checkpoints):
+           K0  tree prims + readable note path labels
+           K1  get-uuid + slug unique constraint/index
+           N0  notes façade on tree; outline↔heading (whole-replace ok)
+           N1  folders via path; retire folder field writes
+           R0  UUID links + bible sexp render via bible/dabar
+           M0  migrate data_rows note → tree (same uuids)
+           I*  index-read-path (I1–I4): one UI/agent read path through
+               notes/doc/* → tree; flat /notes; light/* deleted
+           M1  Obsidian md import (garden-import) — still open
+           D0  docs: one-tree flag defaults truth; design note appendix
+
+         DEPENDENCY:
+           Does NOT wait on global PP_TREE_READS=1 for all CRUD.
+           Notes use tree_* prims directly. Flat types keep CRUD.
+
+         STATUS NOTE (post index-read-path I1–I4):
+           K0/K1/N0/N1/M0 + I1–I4 are realized. notes/doc/list and
+           notes/doc/row are tree-only (no data_rows fallback).
+           Legacy type=note rows remain as inert archive; only
+           notes/migrate/legacy-* may (rows 'note). /notes routes to
+           notes/page → notes/ui/folders-html (flat, budget-safe via
+           tree/note-index). notes/list-light aliases index-list.
+           Nested notes/tree/render retired (legacy tombstones).
+           Remaining for full "implemented": M1 garden-import apply,
+           R0 completeness if any bible/roam gaps, D0 docs polish.
+
+         FINISH-CUTOVER (the close-out slices):
+           F1  Delete the legacy nested index (notes/light/*) from
+               the image so /notes serves ONLY the flat budget-safe
+               index over tree/note-index (I1 completion).
+           F2  Index groups by PATH-derived folders; a leading
+               garden/ strips to top level (garden-import DISPLAY).
+           F3  M0 completion: explode every migrated note's inline
+               outline blob into real heading child nodes (the Roman
+               notes currently render as one blob with a single
+               heading); normalize path labels to kebab slug.
+           F4  Delete the legacy data_rows type=note rows after F3
+               verifies every uuid in the tree (no archive).
+           F5  Vault drift: pp-sync the live notes bindings back to
+               libs/ so git matches the image before further edits.
+
+         TREE-BROWSER BACKEND SWAPS (content tree contract):
+           image.tree-browser v1 walks the CONTENT tree — the notes
+           outline model (outline/id title kids) rooted at a note
+           slug — NOT tree_nodes paths. Contract that must stay
+           stable when storage backends move:
+             (tree/render-doc slug root-id depth folders-only?)
+               -> html string
+             node accessors used by the walker:
+               outline/id, outline/title, outline/kids, outline/find
+               + notes/doc/get → outline (today notes/doc/outline)
+           Swapping outline JSON-in-note for heading nodes under
+           data.note.… MUST keep those accessors (or a thin adapter
+           with the same names). tree/render itself does not call
+           tree/get or rows. Store-tree roots (v2) are a different
+           root kind and need lens-aware prims (filed separately).
+
+         RISK:
+           Never write hierarchical notes as kind=datum.
+           Reverse mirror only handles fn/type/route/datum.
+    |))
+   )
+  )
+
+(subsection notes-path-migration
+  (doc "Migrate the notes path grammar from legacy data.note.u.<user>.* to
+   the unified data.u.<user>.note.*")
+  (status planned)
+  (implements "image/lib/tree_store.ml note_path_root (still emits the legacy form)")
+  (details
+   (doc (|
+        WHY: notes are the ONE hierarchy still keyed data.note.u.<user>.*,
+        a grammar of their own predating the unified datum placement
+        (data.u.<user>.<type>.<id>). Every other user-owned type already
+        rides data.u, so the notes root is the last path family with a
+        bespoke shape — and it costs a special case in every prefix walk
+        (tree/garden-root, the /data lens list, http_tree's excluded
+        segments, replication units). Moving notes under
+        data.u.<user>.note.* makes ONE user-garden prefix cover code-free
+        content: `data.u.<user>.` alone would then be the complete garden.
+
+        CURRENT STATE (verified 2026-09-28): NOT migrated. tree_store.ml
+        still builds the root with Printf.sprintf "data.note.u.%s", and
+        prod's live tree still holds every note under that prefix (e.g.
+        data.note.u.admin.garden.…). This stanza is the contract for the
+        make task; the one-tree NOTES HIERARCHY block carries BOTH
+        grammars with the legacy one marked current.
+
+        SCOPE (one migration, no behavior change):
+          - tree_store.ml: note_path_root emits data.u.<user>.note;
+          - a SQL migration re-roots existing rows (path text replace
+            data.note.u.<user>. -> data.u.<user>.note.) across the ltree
+            subtree, INCLUDING the .h.<nid> heading descendants, in ONE
+            transaction, additively version-gated like every other
+            migration (never applied by the image);
+          - legacy-grammar reads keep working for one release so an
+            in-flight row is not orphaned, then the compatibility shim is
+            deleted (obituary in spec/notes DECISIONS);
+          - the prefix-specific special cases in tree/garden-root,
+            http_tree's excluded-segment list and the lens/replication
+            walks are collapsed to the single data.u.<user>. prefix.
+
+        RISK: path is the note IDENTITY (heading paths embed the parent
+        slug chain; note-link edges and outline children are ltree
+        descendants). A partial rewrite orphans headings — the migration
+        must assert subtree counts before/after and be all-or-nothing.
+        This is the notes.storage SAVE ORDERING lesson applied to bulk
+        storage: validate, then write once, never leave a half-moved tree.
+        |))))
+  (subsection unified-todos
+   (doc "Basecamp lists + org node todos; unified /todos with smart views")
+   (status implemented)
+   (implements libs/todo/lib.pp libs/outline/lib.pp libs/notes/lib.pp)
+   (details
+    (doc (|
+         Real lists: todo-list + todo-item (list_id, title, notes,
+         state, due, position). state in todo/state/list (Nopales).
+         Note todos: outline node.todo; scrape + write-back.
+         Smart views: everything, from-notes, default Inbox.
+         /todos nav + body; cycle state; create list; add item.
+         No dual-copy of note todos until promote (later).
+
+         DEFAULT-LIST RESOLUTION; EMPTY list-id NEVER REACHES
+         node-path (2026-09-26). todo/list/get with an empty
+         list-id (a missing or blank ?list= reaching the
+         handler, or a caller passing "") must resolve the
+         DEFAULT INBOX, not crash: uuid_label "" yields an
+         empty ltree label (data.u.<user>.todo-list.) and
+         Postgres answers 42601 (reproduced live pre-fix).
+         Contract: todo/list/get short-circuits the empty id to
+         todo/list/find-default (read-only — NO ensure-inbox
+         create side-effect; the default list exists on any
+         rendered page because todo/page ensure-inbox's) and
+         returns that list's fields; when no default list
+         exists it returns () rather than minting one. A
+         non-empty id goes through todo/tree/get unchanged, so
+         the resolved body is identical either way. The generic
+         datum accessor todo/tree/get guards the empty id to
+         () for EVERY type, so no other datum kind can hit the
+         same ltree crash via todo/get-item / todo/get-list or
+         future callers. Other list accessors keep their
+         meaning: todo/get-list stays a plain (possibly-empty)
+         tree read; only todo/list/get performs default
+         resolution.
+    |))
+   )
+   (verify
+    (smoke "/todos everything + from-notes + inbox")
+    (smoke "cycle note TODO write-back")
+    (smoke "create list and add item")
+    (smoke "todo/list/get with empty id returns the is_default list's fields, identical body to todo/list/get <that id>; no 42601")
+    (smoke "todo/list/get with empty id when no default list exists returns () and does NOT create an Inbox")
+    (smoke "todo/tree/get with empty id returns () for any type (no Postgres ltree error)"))
+
+  )
+  (subsection kanban
+   (doc "Board view over todos: one todo-list as a board with its own columns (per-list state set), cards draggable via tree actions")
+   (status implemented)
+   (details
+    (doc (|2026-12 campaign 9.0: flipped to implemented. BORGE-1786336755
+        closed - the per-list state-cycle threading is live: todo/item/cycle
+        + todo/cycle read the item's list's OWN columns (single source of
+        truth todo/state/columns-for-list, which falls back to
+        todo/state/list) and the detail <select> uses list-aware
+        todo/state/options-for-list, so a custom-columns list cycles exactly
+        its columns in /todos, the todo detail, and /kanban alike. There are
+        no duplicates - /todos detail and /kanban read the same function.|)))
+   (implements libs/kanban/lib.pp libs/todo/lib.pp)
+   (details
+    (doc (|
+         A kanban is a VIEW over the existing todo model, not a
+         new data type. A board IS one todo-list; its columns ARE
+         that list's OWN state set (a `columns` field on the
+         todo-list datum); its cards ARE that list's todo-items.
+         No kanban-card type, no kanban-board type. This is the
+         first product consumer of the tree prim family as a
+         DATA API (one-tree.tree-datum-prims): every mutation is
+         a tree action over a datum node (the list for column
+         config, the cards for moves), not a create/update call.
+
+         PER-LIST COLUMNS, NOT A GLOBAL STATE LIST. The todo
+         package ships a default state list (todo/state/list: "",
+         TODO, DONE, WAITING, CANCELLED). A list that does not
+         set its own `columns` falls back to that default — so
+         existing /todos and existing lists are unchanged. A
+         list that sets `columns` overrides the default for
+         itself: the board renders exactly those columns, in
+         that order, and a card's `state` is one of them. This
+         makes the todo state model per-list configurable instead
+         of a single fixed global — the same mechanism answers
+         "set your own columns" and "set your own todo state":
+         edit the list's `columns` field. (The default list stays
+         as the fallback and the seed for new lists; it is not
+         deleted.)
+
+         BOARD = ONE TODO-LIST. The /kanban route takes a list_id
+         (defaults to the Inbox). A list-picker switches boards.
+         Adding a card adds a todo-item to the list (create, the
+         id-generating convenience); the board re-reads.
+
+         CARDS = todo-items of the list, grouped by state. Read
+         via tree/list over data.u.<user>.todo-item.* plus a
+         list_id filter, OR via the todo package's existing
+         todo/items-for-list helper composed with tree/list.
+         Each card shows title + due; click opens the existing
+         todo detail. Cards whose `state` is not in the board's
+         current columns render in a trailing "other" bucket so a
+         removed/renamed column never silently hides cards.
+
+         MUTATIONS ARE TREE ACTIONS (the point of this
+         subsection + the prerequisite one-tree fix). The list
+         datum and each card datum are tree_nodes; every mutation
+         is tree/get + dict-set* + tree/upsert at the same path:
+           - MOVE CARD BETWEEN COLUMNS (drop on a state column):
+             tree/get the card's datum node, dict-get its body,
+             dict-set* the `state` field to the target column
+             name and `position` to the drop index, tree/upsert
+             the new body at the SAME path. Goes through the
+             reverse mirror so (get 'todo-item id) and
+             (rows 'todo-item) see the new state, exactly as if
+             update had written it.
+           - REORDER WITHIN A COLUMN (drop between two cards):
+             same tree/get + dict-set* `position` per moved
+             card; wrap the N affected cards in with-transaction
+             so the reorder is atomic and no two cards share a
+             position mid-drop.
+           - ADD / REMOVE A COLUMN: tree/get the LIST datum,
+             dict-set* its `columns` field to the new array,
+             tree/upsert the list at the same path. Removing a
+             column does NOT delete its cards (they land in the
+             "other" bucket until re-assigned).
+           - RENAME A COLUMN: tree/get the list, dict-set* the
+             new name into `columns`, AND cascade — in one
+             with-transaction, tree/upsert every card of that
+             list whose `state` is the old name with the new
+             name. Rename is all-or-nothing across list + cards.
+           - No re-parenting / tree/move in v1: a card's list is
+             a field (list_id), not a path segment, so moving a
+             card to another board is a field update, not a path
+             change. tree/move is available per one-tree.tree-
+             datum-prims but unused here.
+
+         UI / HTMX SHAPE:
+           - GET /kanban?list=<id> renders html/page with a flex
+             row of columns. Each column is a <section> with an
+             hx-post drop target; each card is a draggable
+             article with a tiny dragstart/drop JS shim that
+             encodes the dragged card id + drop position into
+             hidden form fields, then submits the column's
+             hx-post. Same POST-to-one-route + hx-request?
+             partial-vs-redirect pattern as /todos.
+           - A column header has inline add/rename/remove
+             controls (small forms, same hx-post pattern); the
+             board footer has an "add column" form.
+           - POST /kanban dispatches on action: move (card to
+             column + position), add-column, rename-column,
+             remove-column. Each performs the tree action(s)
+             above and returns the refreshed board partial via
+             render-html when hx-request?, else redirects.
+           - No JS framework, no new asset pipeline — the shim is
+             a small <script> in the page, same style as the
+             outline keyboard-nav script (must pass scripts-
+             check per notes-ui-contract).
+           - Accessibility: each card reachable by keyboard; move
+             via a per-card up/down/left/right control as a
+             no-DnD fallback (the DnD shim is progressive
+             enhancement, not the only path).
+
+         RELATION TO /todos: the /todos page keeps its list/detail
+         smart-view UX; /kanban is a sibling route over the same
+         rows. Both read/write the same todo-item datum nodes; no
+         duplication, no sync. Cycling state from /todos updates
+         the kanban and vice versa because they share the store.
+         A list with custom columns shows those same states as
+         the /todos state cycle options for that list (the state
+         machine reads the list's `columns` when present, else
+         the global default).
+
+         NON-GOALS (v1):
+           - No WIP limits, no swimlanes, no per-user assignment
+             columns, no card cover images.
+           - No multi-list board (board = exactly one list).
+           - No tree/move re-parenting of cards across types.
+           - No per-USER state set (columns live on the LIST, not
+             the user; a user's different lists may differ).
+   |))
+   )
+   (verify
+    (build "dune build @all")
+    (smoke "GET /kanban?list=<inbox> renders the inbox's items grouped into columns by the list's columns (or the default state list when the list has none), empty columns included")
+    (smoke "a list with its own columns field renders exactly those columns; /todos for that list cycles only those states")
+    (smoke "drag a card to another column (POST action=move) → the todo-item's state field changes via tree/upsert; /todos and /kanban both reflect it")
+    (smoke "add / remove / rename a column → the list's columns field updates via tree/upsert; rename cascades to cards in one with-transaction")
+    (smoke "reorder within a column → positions renumber atomically (with-transaction); no two cards share a position")
+    (smoke "keyboard no-DnD fallback moves a card left/right between columns")))
+  (subsection search-modal
+   (doc "Typeahead find modal: one server search feeds open-note and refile; flat grouped results down to header level")
+   (status implemented)
+   (* agent note (|2026-08-02: notes/search + notes/ui/search-partial; route /partials/notes-search; live GET ?q=agents → 200 grouped hits.|) *)
+   (implements libs/notes/lib.pp)
+   (verify
+    (smoke "GET /partials/notes-search?q=… returns grouped result HTML (docs + header rows with › breadcrumbs)")
+    (smoke "results arrive without enumerating the garden in Nopales (filter happens in Postgres)")
+    (smoke "modal opens via keyboard shortcut; arrows navigate; Enter opens chosen row")
+    (smoke "empty query and no-match queries render stable non-error markup")
+    (smoke "refile entry point uses the same typeahead; choosing a row refiles the selected node")
+    (smoke "node-targeted rows refile under that heading; doc rows refile at root"))
+   (details
+    (doc (|
+         PRODUCT:
+           One find-box is the "open note" interface AND the
+           "refile destination" interface. Cmd/Ctrl-K opens a modal
+           with a single input; typing shows results immediately.
+           This subsection resolves priority-7 "search polish".
+
+         INTERACTION MODEL (locked: flat, grouped):
+           Every keystroke re-queries the server; the result list is
+           ONE flat stream grouped under doc headings, header-level
+           matches indented beneath their doc with a breadcrumb path:
+             JOURNAL
+               2026 › July 12 session
+             TODO
+               Projects › pricklypear
+           Arrow keys move, Enter activates. NOT a two-tier
+           drill-down (→/← to enter docs): slower when you already
+           know the header word, and refile wants doc+node targets
+           in one list anyway.
+
+         RESULT ROW:
+           (doc-slug doc-title node-id|() header-path matched-field)
+           node-id () = doc-level hit (title/tags match).
+           header-path = "Gran › Parent › Header" for tree cutover
+           storage; pre-cutover (fields.outline JSON blob) only
+           doc-level rows are emitted — header granularity ARRIVES
+           WITH the tree cutover, it is not retrofitted onto the
+           blob. matched-field lets the UI badge title vs body vs
+           header hits.
+
+         SEARCH STRATEGY (v1 — tree-backed):
+           Notes are tree-backed (notes/tree/enabled? #t), so the
+           search runs over tree_nodes, NOT data_rows. It uses the
+           tree/search-text prim (BORGE-1785605474): one Postgres
+           ILIKE query over tree_nodes scoped to the garden root
+           (path <@ $prefix::ltree) for note rows (title/tags/slug)
+           plus a second query for heading rows (title/body with a
+           ›-joined header_path breadcrumb), merged + deduped by
+           slug in OCaml, capped (≤20 rows). Empty/no-match queries
+           return (); garden-wide Nopales enumeration is FORBIDDEN
+           on this path (BORGE-1785603757: ~3k notes × eager
+           enumeration blew the 100k step budget) — filtering
+           happens in Postgres. Prim signature:
+             (tree/search-text needle [limit])         — garden root
+             (tree/search-text prefix needle [limit])  — explicit path
+           Note: data_rows find-text (fields->>f ILIKE, crud.ml) is
+           NOT used — it would miss the tree garden. Doc-level rows
+           carry empty node_id; header rows include header_path +
+           node_id (refile to a header parents under that node).
+           Ranking v1 in OCaml: exact-slug first, title hits, then
+           header, then body. Fuzzy/typo tolerance (pg_trgm) and
+           ranked FTS (tsvector, cf. dabar.search-fts) are later
+           upgrades that swap the query behind the SAME partial —
+           the modal does not change (the prim signature is the
+           seam). Track under .borge-bugs when demanded by use; not
+           spec'd here.
+
+         NON-GOALS (v1):
+           - No load-the-whole-tree-into-JS client search
+           - No tsvector/trgm migration (see above)
+           - No cross-type global search (notes only; a global
+             launcher is a product-experience question, later)
+           - No search inside archived/hidden docs unless the
+             current notes/doc/list filter already shows them
+
+         UI / HTMX SHAPE:
+           Follows the details-popover precedent of
+           notes/ui/refile-modal (BORGE-1785603757) — no JS
+           framework, no new asset pipeline. Modal is a <details>
+           (or <dialog> if focus trapping proves needed) opened by
+           clicking "find" or Cmd/Ctrl-K (tiny script, same style
+           as the existing outline keyboard-nav script). Input has
+             hx-get="/partials/notes-search"
+             hx-trigger="input changed delay:200ms"
+             hx-target on the results container.
+           Arrow/Enter handling extends that script; htmx
+           `htmx:afterSwap` re-focuses the first result.
+
+         ROUTES (all private, current branch):
+           GET /partials/notes-search?q=…         → grouped result HTML
+           GET /partials/notes-search?q=…&mode=refile
+             → same list, rows refile the selected outline node
+               (POST action=refile with dst_slug + optional
+                dst_node_id) instead of navigating.
+           Open-note activation navigates to /notes?slug=…
+           (&node=… for header rows when the tree cutover lands).
+
+         REFILE CONVERGENCE:
+           notes/ui/refile-modal's raw dst_slug text input gains a
+           mode=refile typeahead against the same partial (exact
+           slug entry keeps working — no regression for agents /
+           keyboard-only users who know the slug). Refile to a
+           header target parents the subtree under that node;
+           refile to a doc row parents at root (current behavior).
+           The existing POST /notes action=refile handler accepts
+           an optional dst_node_id.
+
+         BUDGET INVARIANT:
+           /notes?slug=… page render must stay O(1) in garden size:
+           the modal ships collapsed markup only; all searching is
+           on-demand partials. Any future caching (e.g. a per-branch
+           doc-index value) is optional and must be invalidated
+           conservatively; premature caching is a non-goal.
+     |))
+   )
+  )
+
+ (section note-visibility
+  (doc "Per-note vis (private | users | public, absent reads private) plus the read-only cross-garden route /notes/<user>/<slug>; the kernel prims enforce the floor, the lib stamps and renders")
+  (status partial)
+  (verify
+   (build "dune build image")
+   (smoke "owner reads own notes in own garden with vis absent (no migration)")
+   (smoke "other signed-in user and anonymous: find-by in the owner's garden returns nil for vis private; tree/get into the garden denies")
+   (smoke "vis users: other signed-in user reads via /notes/<owner>/<slug>; anonymous still denied")
+   (smoke "vis public: anonymous visitor renders the read-only page with the owner breadcrumb")
+   (smoke "upsert stamps vis private on create, preserves it on update; set-vis persists; POST action=set-vis")
+   (smoke "/notes?slug=… and POST /notes unchanged; /notes/<user> and deeper shapes 400")
+   (smoke "scripts/smoke_note_vis.sh end-to-end (two identities + anonymous)")
+   )
+  (details
+   (doc (|
+        MODEL (spec_note_visibility, 2026-09-18):
+          Every note body carries vis: private | users | public.
+          Absent reads private, so existing notes need no migration.
+          vis only ever WIDENS: garden and space membership stay the
+          floor. Writes are unchanged (vis never grants write access).
+
+        KERNEL ENFORCEMENT (the lib never decides visibility):
+          - tree/find-by: every Lisp call carries the caller as viewer.
+            The SQL gains one clause: a row OUTSIDE the caller's garden
+            floor (data.note.u.<caller>) must carry vis public, or
+            users with a signed-in caller. prefix remains a plain
+            scope filter; the cross-garden page passes the target
+            garden as prefix and the kernel does the rest.
+          - tree/get, tree/get-uuid, tree/get-many: a read landing in
+            another user's note garden raises "tree read: denied:
+            ... (vis ...)" unless the body vis allows the caller;
+            anonymous callers only ever match public. Kernel-internal
+            callers (slug uniqueness, sync internals) pass viewer=None
+            and stay ungated.
+          - NOT yet gated (pre-existing surfaces, next): tree/list,
+            tree/children-of, tree/subtree, tree/list-kind,
+            tree/note-index, tree/search-text. The global doc index
+            still lists across gardens; P2 tags each entry with owner
+            + vis before it links anywhere.
+
+        LIB (libs/notes/lib.pp):
+          - notes/doc/upsert-in stamps vis: create gets private,
+            update keeps the row's vis; the legacy data_rows path
+            stamps the same via dict-set*.
+          - notes/doc/set-vis rebuilds the note body with vis
+            (move-safe); the note page gets a small selector next to
+            delete; POST action=set-vis persists it.
+          - notes/page branches on cross-user / cross-slug params:
+            the kernel router decodes the /notes/<user>/<slug>
+            segments (Packages.name_decode, /edit/ convention) and
+            injects them, so one page body serves /notes and the
+            cross-garden shape. show-cross renders read-only (outline
+            without actions, no toolbar, no scripts) with the owner
+            breadcrumb; absent and not-visible both render the plain
+            Missing page, so the route never leaks existence.
+      |))
+  )
+
+ )
+)

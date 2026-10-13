@@ -1,0 +1,526 @@
+(project pricklypear-storage
+ (doc "Pricklypear book chapter: storage")
+ (status implemented)
+ (* agent note (|2026-08-02 status reconcile: all section children implemented/verified (schema, no-inheritance, transactions, with-transaction, media); lift project.|) *)
+ (convention ocaml-dune)
+ (section storage
+  (doc "Postgres schema: branches, function_defs, type_defs, data_rows. SERIALIZABLE defaults. NO inheritance.")
+  (status implemented)
+  
+  (subsection schema
+   (doc "Core tables (in migrations/001_branches.sql)")
+   (implements image/lib/store.ml image/lib/store_db.ml)
+   (status implemented)
+   (details
+    (doc (|
+         -- The shared code store
+         CREATE TABLE branches (
+           id          uuid PRIMARY KEY,
+           parent_id   uuid REFERENCES branches(id),
+           owner       text NOT NULL,
+           name        text NOT NULL,
+           created_at  timestamptz NOT NULL DEFAULT now(),
+           last_synced timestamptz,  -- for merge diffing
+           UNIQUE (owner, name)
+         );
+
+         CREATE TABLE function_defs (
+           branch_id   uuid NOT NULL REFERENCES branches(id)
+                          ON DELETE CASCADE,
+           name        text NOT NULL,
+           body        jsonb NOT NULL,  -- serialized Nopales AST
+           doc         text,
+           author      text NOT NULL,
+           updated_at  timestamptz NOT NULL DEFAULT now(),
+           PRIMARY KEY (branch_id, name)
+         );
+
+         CREATE TABLE type_defs (
+           branch_id   uuid NOT NULL REFERENCES branches(id)
+                          ON DELETE CASCADE,
+           name        text NOT NULL,
+           fields      jsonb NOT NULL,  -- field declarations
+           migrated    bool NOT NULL DEFAULT false,
+           schema_vers  int NOT NULL DEFAULT 1,
+           author      text NOT NULL,
+           updated_at  timestamptz NOT NULL DEFAULT now(),
+           PRIMARY KEY (branch_id, name)
+         );
+
+         CREATE TABLE view_bindings (
+           branch_id   uuid NOT NULL REFERENCES branches(id)
+                          ON DELETE CASCADE,
+           route       text NOT NULL,  -- e.g. "/inspect/:id"
+           handler     text NOT NULL,  -- function name
+           PRIMARY KEY (branch_id, route)
+         );
+
+         CREATE TABLE sessions (
+           id          uuid PRIMARY KEY,
+           user_id     text NOT NULL,
+           branch_id   uuid NOT NULL REFERENCES branches(id),
+           pid         int,           -- image instance pid
+           boot_mode   text NOT NULL,  -- 'on-connect'|'always'
+           health      text NOT NULL DEFAULT 'unknown',
+           started_at  timestamptz NOT NULL DEFAULT now(),
+           last_seen   timestamptz
+         );
+         -- LEGACY/INERT: process bookkeeping from the
+         -- retired fleet design. The image never reads or
+         -- writes it. Kept because migrations are
+         -- additive-only.
+
+         -- All Nopales-declared types share ONE table,
+         -- data_rows (migration 003), keyed by
+         -- (type_name, id) with fields packed as jsonb.
+         -- There are no per-type tables; deftype emits no
+         -- DDL. data_rows is NOT branched.
+
+         CREATE TABLE schema_migrations (
+           version     int PRIMARY KEY,
+           applied_at timestamptz NOT NULL DEFAULT now(),
+           description text
+         );
+
+         The shared data_rows table lives alongside these
+         system tables (migration 003; see object-model).
+
+         SERIALIZABLE is the transaction isolation default
+         for ALL Nopales-driven mutations. Weaker isolation is
+         opt-in per query.
+   |))
+   )
+   (verify
+    (build "dune build @all")
+    (build "psql -f migrations/00{1,2,3}*.sql applies clean on a fresh database")
+    (smoke "image applies migrations on boot (see image/lib/session.ml boot sequence)"))
+
+  )
+  (subsection no-inheritance
+   (doc "Why we do NOT use Postgres INHERITS")
+   (status implemented)
+   (details
+    (doc (|
+         Postgres table inheritance (INHERITS) is the
+         deprecated feature from the early-90s Postgres
+         implementation. We deliberately do NOT use it.
+
+         THE CORE REASON: branches are an OVERRIDE
+         primitive, not a UNION primitive. When Alice
+         forks and overrides 'greet', her branch's view
+         should see ONLY her greet, not main's greet
+         merged in. Postgres inheritance does union
+         (both rows visible), not override.
+
+         Modeling override on top of inheritance forces
+         us to write override resolution ourselves anyway
+         (pick the child's row when it exists), so
+         inheritance buys nothing but its quirks.
+
+         Other reasons:
+         - Foreign keys / unique constraints don't span
+           inheritance trees properly
+         - PRIMARY KEY doesn't propagate
+         - The planner handles inherited queries with edge
+           cases and unpredictability
+         - Inheritance handles schema evolution (add/remove
+           columns) inconsistently; migrations would be a
+           horror show
+         - pg_dump, psql, admin tools render inheritance
+           weirdly
+         - We'd pin ourselves to non-standard semantics
+
+         Plain tables with branch_id FK and override
+         resolution in queries (recursive CTE up the
+         parent chain, or materialized effective-definition)
+         gives us:
+         - Clean indexed SELECTs
+         - Predictable planner behavior
+         - Standard migrations
+         - Full inspectability (the goal)
+         - A clean path to content-addressing later if we
+           want "actually git" semantics
+
+         Future options stay open. Inheritance forecloses
+         them.
+   |))
+   )
+   (verify
+    (build "dune build @all")
+    (smoke "override-walk + branch isolation (closest-ancestor wins, parent unchanged)"))
+
+  )
+  (subsection transactions
+   (doc "Transaction isolation: SERIALIZABLE by default")
+   (status implemented)
+   (details
+    (doc (|
+         All Nopales-driven mutations run in SERIALIZABLE
+         transactions by default. Postgres detects
+         conflicts at commit and aborts one, forcing
+         retry. For a multi-user personal OS, throughput
+         is not the concern; correctness is.
+
+         Opt-in weaker isolation:
+           (query ... isolation: 'read-committed)
+         Available but discouraged. Most user code never
+         touches this; the system does the safe thing by
+         default. (v1.5 — the with-transaction prim
+         already accepts the isolation arg shape,
+         defaulting to SERIALIZABLE; the weaker-isolation
+         passthrough remains additive when shipped.)
+
+         Explicit row locks:
+           (select-for-update 'type id)
+         Exposed as a primitive for finer control.
+         Persists across subsequent prims in the same
+         with-transaction body.
+
+         Cache coherence (initial): NO caching of stored
+         function defs in image memory. Each call reads
+         the AST fresh from Postgres. For a personal OS
+         where most calls are query+render, the function
+         read alongside the query is acceptable overhead.
+
+         Cache coherence (later): LISTEN/NOTIFY-based
+         invalidation. When a function is updated, the
+         updating image notifies; others drop from cache.
+         Mechanism well-trodden, deferred until measured.
+   |))
+   )
+   (verify
+    (test "image/test/primitives_test.ml — 48 alcotest cases")
+    (build "dune build @all")
+    (smoke "duplicate-fork UNIQUE violation triggers pgx auto-rollback")
+    (smoke "fork_branch returns new branch id (str round-trip)")
+    (smoke "merge_branch returns merged-rows count")
+    (smoke "(select-for-update 'type id) takes a row lock visible to concurrent transactions"))
+
+  )
+  (subsection with-transaction
+   (doc "Dynamic transaction scoping: (with-transaction (lambda () body))")
+   (status verified)
+   (details
+    (doc (|
+         Dynamic transaction scope: all DB prims called inside the
+         body run against the SAME pgx transactional connection.
+         Defaults to SERIALIZABLE isolation.
+
+           (with-transaction (lambda ()
+             (seq (select-for-update 'type id)
+                  (update-field 'type id "field" "value"))))
+
+         The select-for-update row lock PERSISTS across the
+         subsequent update-field in the same body — this is the
+         v1 concurrency-protection story for compound mutations.
+
+         Nested transactions raise a clean Interp_error. The body
+         value is returned verbatim (no wrapper tags/boxing).
+
+         The Lambda body is evaluated lazily; the dynamic binding
+         is set on `Store.t.current_tx` before the body runs and
+         cleared via `Lwt.finalize` after (whether BODY succeeds or
+         raises — pgx still sees the propagated exception and rolls
+         back).
+   |))
+   )
+   (verify
+    (test "image/test/primitives_test.ml — 48 alcotest cases")
+    (build "dune build @all")
+    (smoke "with-transaction body runs its prims on one transactional connection; row locks persist across prims"))
+
+  )
+  (subsection media
+   (doc "Binary media blobs in Postgres: agent upload + authenticated serve")
+   (status implemented)
+   (implements image/lib/media.ml image/lib/http_media.ml
+               migrations/007_media.sql scripts/pp_media.py)
+   (details
+    (doc (|
+         WHY A SEPARATE TABLE (not data_rows jsonb)
+         -----------------------------------------
+         data_rows packs field documents as jsonb. Binary
+         payloads do not belong there: base64-in-jsonb wastes
+         ~33% space, blows GIN indexes, and fights the 64 KiB
+         /api/eval body cap that protects the Nopales path.
+         Media is first-class storage — same "Postgres is the
+         object store" thesis, different physical shape.
+
+         SCHEMA (migration 007_media.sql)
+         --------------------------------
+         CREATE TABLE media_blobs (
+           id            uuid PRIMARY KEY
+                           DEFAULT gen_random_uuid(),
+           author        text NOT NULL,
+           content_type  text NOT NULL,
+           filename      text,              -- optional original name
+           byte_size     int  NOT NULL,
+           sha256        text NOT NULL,     -- hex digest of bytes
+           data          bytea NOT NULL,
+           meta          jsonb NOT NULL DEFAULT '{}',
+           created_at    timestamptz NOT NULL DEFAULT now(),
+           updated_at    timestamptz NOT NULL DEFAULT now()
+         );
+         CREATE INDEX media_blobs_author_idx
+           ON media_blobs (author);
+         CREATE INDEX media_blobs_created_idx
+           ON media_blobs (created_at DESC);
+         CREATE INDEX media_blobs_sha256_idx
+           ON media_blobs (sha256);
+
+         Shared across branches (same rule as data_rows):
+         fork/merge copies code, not media. Ownership is the
+         author column + session identity, not branch_id.
+
+         AGENT PUSH (primary write path)
+         -------------------------------
+         Agents MUST NOT push multi-KiB binaries through
+         POST /api/eval (max_user_body_bytes = 64 KiB).
+         Dedicated authenticated endpoints:
+
+           POST /api/media
+             Auth: HTTP Basic or session cookie (same as eval).
+             Body modes (Content-Type decides):
+               1. Raw binary — request Content-Type is the
+                  media type (image/png, image/jpeg, …).
+                  Optional header X-Filename: original name.
+               2. JSON — application/json
+                    { "content_type": "image/png"
+                    , "data_b64": "…"
+                    , "filename": "shot.png"   // optional
+                    , "meta": {…} }            // optional
+             Body limit for this route: TYPE-AWARE (not the 64
+             KiB eval cap) — 5 MiB for images/pdf, 64 MiB for
+             audio/* (music files for the player package).
+             Multipart gets the audio ceiling (parts may be
+             audio); JSON data_b64 gets a 4/3 inflation slack;
+             the per-stored-type cap is enforced again inside
+             media.put. Reject oversize with 413.
+             MIME whitelist (v1):
+               image/png image/jpeg image/gif image/webp
+               image/svg+xml application/pdf
+               audio/mpeg audio/ogg audio/flac audio/wav
+               audio/mp4 audio/aac audio/webm
+             Aliases normalize on put: audio/mp3|audio/x-mp3 →
+             audio/mpeg; audio/m4a|audio/x-m4a → audio/mp4;
+             audio/x-wav|audio/wave → audio/wav;
+             audio/x-flac → audio/flac.
+             On success 201:
+               { "ok": true
+               , "id": "<uuid>"
+               , "content_type": "…"
+               , "byte_size": N
+               , "sha256": "…"
+               , "url": "/media/<uuid>"
+               , "filename": "…" | null }
+             Errors: 400 bad args / bad b64 / disallowed type,
+                     401 unauth, 413 too large, 500 store fail.
+
+           GET /media/<uuid>
+             Auth required (private by default — same gate as
+             /data). Serves raw bytes with Content-Type from
+             the row, Content-Length, Cache-Control: private,
+             optional Content-Disposition inline; filename=
+             when filename is set. 404 if missing.
+
+             HTTP Range (audio seek; RFC 9110): every 200
+             carries Accept-Ranges: bytes. A single-range
+             `Range: bytes=…` header is honored with 206
+             Partial Content + Content-Range: bytes start-
+             end/total; suffix form (bytes=-N) and clamped
+             end (end > size-1) supported. Unsatisfiable
+             start (start >= size) → 416 with Content-Range:
+             bytes */total and empty body. Malformed ranges
+             and multi-range requests are IGNORED (full 200).
+             Browsers use this to seek in <audio> elements;
+             the /media gallery renders inline <audio
+             controls> cards for audio/* blobs.
+
+           DELETE /api/media/<uuid>
+             Auth required. Author-or-admin may delete.
+             200 {ok,id} or 404/403.
+
+           GET /api/media  (optional list)
+             Auth required. JSON array of meta rows for the
+             caller (id, content_type, byte_size, sha256,
+             filename, author, created_at) — NO data bytes.
+             Query: ?limit=N (default 50, max 200).
+
+         Client helper: scripts/pp_media.py
+           python3 scripts/pp_media.py put ./shot.png
+           python3 scripts/pp_media.py get <id> -o out.png
+           python3 scripts/pp_media.py list
+           python3 scripts/pp_media.py delete <id>
+         Same env as pp_eval (PP_URL / PP_USER / PP_PASS).
+
+         LISP PRIMITIVES (meta + small ops; not bulk upload)
+         --------------------------------------------------
+         Registered next to CRUD. Anonymous denied on writes.
+
+           (media-meta id) -> VStr json | VNil
+             id, author, content_type, filename, byte_size,
+             sha256, meta, created_at, url — never the bytes.
+
+           (media-list [limit]) -> VList of meta json strings
+
+           (media-delete id) -> VStr id | VNil
+             Author-or-admin; others get a denial string.
+
+           (media-put content-type data-b64 [filename])
+             -> VStr new-id | error string
+             Convenience for TINY payloads that already fit
+             eval (icons, test fixtures). Same whitelist +
+             256 KiB ceiling on decoded size so eval cannot
+             be abused as a bulk pipe. Real agent pushes use
+             POST /api/media.
+
+           (media-url id) -> VStr "/media/<id>"
+
+         No (media-get-bytes) over eval in v1 — serve via HTTP.
+
+         IMPLEMENTATION NOTES
+         --------------------
+         - image/lib/media.ml: store helpers (put/get/meta/
+           list/delete) over pgx; Pgx.Value.of_binary /
+           to_binary for bytea; Digestif SHA256 hex.
+         - image/lib/http_media.ml: route handlers; own body
+           reader with max_media_body_bytes = 5 MiB.
+         - Wire in http.ml dispatch; keep /api/media behind
+           the normal auth middleware (NOT hard-public).
+         - session.ml register_media_prims alongside CRUD.
+         - agent_discovery.ml: document POST /api/media and
+           pp_media.py in agent.json / agent.txt rules.
+         - scripts/dev.sh migration loop: add 007_media.
+         - migrations.borg applied-by-image list: 007.
+
+         NON-GOALS (v1)
+         --------------
+         - Public unauthenticated media URLs (later: flag or
+           signed token if product needs it)
+         - Per-user byte quotas (multi-user.budgets memory
+           track stays deferred; soft 5 MiB/request is enough)
+         - Image transforms / thumbnails / EXIF strip
+         - S3 or filesystem offload (bytea in PG is the v1
+           habitat; hoist later if measured hot)
+         - Dedup-by-sha256 on put (index exists; policy later)
+   |))
+   )
+   (verify
+    (build "dune build @all")
+    (test "image/test/media_test.ml — put/meta/list/delete + mime reject")
+    (smoke "scripts/dev.sh applies 007; POST /api/media with basic auth stores png; GET /media/<id> returns image/png bytes")
+    (smoke "python3 scripts/pp_media.py put <fixture.png> prints id; get round-trips bytes")
+    (smoke "POST /api/eval still capped at 64 KiB; media route accepts images/pdf up to 5 MiB, audio/* up to 64 MiB")
+    (smoke "POST /api/media audio/mpeg accepted; images still rejected past 5 MiB; audio past 64 MiB rejected with 413")
+    (smoke "GET /media/<id> with Range: bytes=0-99 returns 206 + Content-Range; bytes=10- over a 10-byte blob returns 416")
+    (smoke "<audio controls> card in /media gallery plays an uploaded mp3 and seeks (browser)"))
+  )
+
+  (subsection file-lens
+   (doc "Personal file sync: path-addressed envelopes OVER the blob store (dropbox-shaped, habitat-shaped)")
+   (status implemented)
+   (implements image/lib/media.ml image/lib/http_media.ml image/lib/http.ml
+               scripts/pp_files.py)
+   (details
+    (doc (|
+         THE QUESTION: "what if I want to sync all my files a la
+         dropbox?" The habitat already ships the two halves —
+         media_blobs (bytes, sha256, author-owned, range-serving) and
+         the local-first lens (path-addressed nodes, three-way sync on
+         (branch, generation)). DIFFBOX (files) is the composition:
+         a blob holds the bytes; a DATUM ROW holds the path. No new
+         storage engine, no new table — the row IS the path index the
+         sync manifests key on.
+
+         DATA MODEL (two layers, one closure)
+         ------------------------------------
+         - BYTES stay in media_blobs (storage.media, unchanged
+           shape). The files flavor adds exactly one allowed type:
+           application/octet-stream — the "anything" carrier. text/html
+           stays DENIED (stored-XSS on inline serving); octet-stream is
+           served as application/octet-stream and cannot execute. The
+           files ceiling matches audio: 64 MiB per request (TOAST
+           compresses; chunked/resumable upload stays PLANNED — GB
+           files wait for the chunk endpoint, never the eval path).
+         - PATHS are datum rows of type FILE. A row body envelope:
+             { "path"           : "docs/book/src/ch1.md"
+             , "blob-id"        : "<media_blobs uuid>"
+             , "sha256"         : "<hex>"
+             , "size"           : "12345"
+             , "mtime"          : "<unix secs>"
+             , "content-type"   : "application/octet-stream"
+             }
+           Row paths are author-relative (no leading /, no .., root is
+           the sync root). The author column + RLS datum confinement
+           IS the per-user filespace: data.u.<user>.file/<uuid> rides
+           the standard replication unit — every lens gets file rows
+           with no new sync machinery.
+
+         The type is declared lazily by the FIRST client on the branch
+         ((deftype 'file 'path 'blob-id 'sha256 'size 'mtime
+         'content-type)); rows are free-form when undeclared, but the
+         client declares so create/update fail loudly on missing
+         fields rather than half-write envelopes.
+
+         DEDUP: GET /api/media/by-sha256/<hex> (auth; confined to the
+         caller's own blobs via the same visible_sql predicate —
+         another user's blob is neither visible nor reusable, the
+         author column is the filespace wall). 200 = { ok, id, ... }
+         (client reuses the blob); 404 = push it. The client hashes
+         BEFORE uploading — no change, no bytes on the wire — and
+         records blob-id in the local state sidecar.
+
+         CLIENT: scripts/pp_files.py (same env as pp_media.py:
+         PP_URL / PP_USER / PP_PASS / PP_PASS_FILE)
+
+           python3 scripts/pp_files.py init <root>            # declare 'file type + write state sidecar
+           python3 scripts/pp_files.py push  <root>           # hash -> dedup-get -> blob-put -> upsert rows
+           python3 scripts/pp_files.py pull  <root>           # rows -> fetch missing/stale blobs -> materialize
+           python3 scripts/pp_files.py status <root>          # dry: push/pull/conflict counts and names
+
+         State sidecar is <root>/.ppfiles.json: {"path-blob-id",
+         "path-sha256", "path-size", "path-mtime"} — the CLIENT's
+         last-synced map. It is client bookkeeping, never authority.
+
+         CONFLICT POLICY (v0 — per-PATH, keep-both-coward, boring on
+         purpose — local-first.sync-conflicts generalized per file)
+           - push with local mtime newer than server row: last-writer
+             wins, row updated (the envelope is the version coordinate
+             — mtime + sha256, not a fresh vector clock).
+           - push with server row NEWER than local: --force overwrites,
+             otherwise SKIP and report (status/push name the path).
+           - pull onto a locally-changed file (local sha != state AND
+             != server sha): the file STAYS, server bytes land beside
+             it as <path>.ppconflict-<timestamp>. Never silent loss.
+           - deletes: removing a local file pushes a TOMBLESS delete —
+             the row is deleted (author-owned delete prim); the blob is
+             RETAINED (dedup + accident recovery). Blob GC is a
+             non-goal until measured.
+
+         NON-GOALS (v0 — deliberately)
+         -----------------------------
+         - Chunked / resumable upload: >64 MiB files are out of scope
+           until the chunk endpoint exists. Never /api/eval (64 KiB).
+         - Blob GC / quotas (media non-goals inherit).
+         - Live watching (inotify) — push/pull/status are commands;
+           a watcher is a cron/systemd unit around the same verbs.
+         - Symlinks, exec bits, hardlinks: regular files only. Git
+           tracks content, not mode metadata — same contract here.
+         - End-to-end encryption, public sharing links, folders-as-
+           rows. The path field IS the folder structure.
+         - Multi-machine REAL-TIME (dropbox instant sync). The habitat
+           is sync-on-demand; sync-loop wrappers can tighten it.
+   |))
+   )
+   (verify
+    (build "dune build @all")
+    (test "image/test/media_test.ml — octet-stream allowed (files flavor), text/html still denied, files ceiling = audio = 64 MiB")
+    (smoke "scripts/dev.sh up; POST /api/media content-type application/octet-stream stores arbitrary bytes; GET /media/<id> round-trips sha256")
+    (smoke "GET /api/media/by-sha256/<hex> returns 200 + id on a known blob, 404 on unknown, 401 unauth, and never answers another user's blob")
+    (smoke "pp_files.py init; push a mixed dir (text + binary); pull into an EMPTY dir — byte-identical trees (cmp)")
+    (smoke "change two files on both sides, pull: changed one updates, conflicted one keeps both sides (<path>.ppconflict-<stamp>)")
+    (smoke "delete a local file + push: the server row is gone (apply), the blob id remains listable (retention non-goal documented)"))
+
+  )
+ )
+)

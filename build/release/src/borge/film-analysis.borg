@@ -1,0 +1,274 @@
+(project pricklypear-film-analysis
+ (doc "Pricklypear book chapter: film analysis — shot/scene structure, chiastic (ring) analysis, cut comparison as branches")
+ (status planned)
+ (convention ocaml-dune)
+ (section film-analysis
+
+  (doc "Films as queryable structure: scenes with frame-exact timecodes,
+        motifs and beats, chiastic analysis over scene rings, and
+        alternate cuts as branches. Analysis is data on the image;
+        media files never are.")
+  (status planned)
+  (verify
+   (build "dune build image")
+   (smoke "(load-library \"film\") installs film/… bindings and routes")
+   (smoke "create a film, ingest scenes, run film/report over a branch")
+   (smoke "GET /film lists films; /film/<slug> shows ring report")
+   (smoke "pp_eval film/… entry points work for agents"))
+
+  (details
+   (doc (|
+        =========================================================
+        PRODUCT INTENT
+        =========================================================
+        A first-class film-analysis workbench on the live image.
+
+        The motivating observation: long-form narratives carry
+        structural meaning in temporal placement — chiastic (ring)
+        composition where scene k mirrors scene n-k+1, a "mirror
+        moment" at the temporal center, timed plant/payoff pairs.
+        This structure is *checkable*, not just interpretable — but
+        no NLE or spreadsheet treats a cut as queryable, branchable
+        data. Pricklypear does.
+
+        Three workloads, one substrate:
+          1. ANALYSIS  — structure of published films (the Shining
+             European-vs-US cut comparison is the first corpus).
+             Machine-detected scene boundaries as ground truth on
+             one branch; human curation as a fork.
+          2. LINTING   — report unpaired mirrors, orphan plants,
+             per-pair duration deltas, a whole-cut tightness score.
+             The chiastic claim becomes a number.
+          3. AUTHORING — later, the same machinery pointed at one's
+             own footage: dailies auto-split, motifs tracked, the
+             cut linted before render.
+
+        Domain tension (the whole design):
+          - The interesting claims are EXACT (frame-exact pairing,
+            center-scene identity, tightness scores).
+          - The interesting readings are FLUID (this scene mirrors
+            that one; this beat pays off that plant).
+
+        Resolution: scenes/motifs/beats as boring typed rows;
+        chiastic truth DERIVED from position, never stored; human
+        declarations kept as separate fields so the linter can
+        report where declaration and derivation disagree — that
+        disagreement is the analysis.
+
+        Inspired by:
+          - ring composition scholarship (Mary Douglas et al.)
+          - craft literature (mirror-moment midpoint, timed beats)
+          - quantitative film studies (Cinemetrics-style shot data)
+          - the corkboard: cards, colored by thread, moved by hand
+
+        NOT a video editor. NOT a media store (no frames, no clips —
+        media stays on the laptop; the image holds only structure
+        and metadata). NOT a generation pipeline (AI video gen is a
+        separate future chapter gated on an http prim). NOT a
+        platform for redistributing copyrighted media — the
+        PUBLISHABLE artifact is analysis (numbers, reports, essays),
+        never footage.
+
+        Killer property: a cut is a branch. The US cut and the
+        European cut of the same film are sibling branches over
+        shared film rows; "the recut tightened the ring" is a diff
+        of two generated reports.
+
+        =========================================================
+        LAYERING
+        =========================================================
+        - libs/film/lib.pp      — package film/… (seed on system/main)
+        - data_rows types       — film, scene, motif, beat
+        - Routes via (route …)  — /film and report paths
+        - scripts/film_ingest   — laptop-side extraction → Nopales
+                                  source → pp_eval (see ingestion)
+        - OCaml                 — existing CRUD/list/dict prims only;
+                                  NO new kernel prims required for v1
+
+        Analysis functions are PURE Nopales over (rows …) results:
+        chiasm/pairs walks a sorted scene list two-pointer style;
+        chiasm/center is the same recursion returning the singleton
+        remainder (odd-length ring) or empty (even-length ring has a
+        center SEAM, not a center scene — both shapes reported).
+
+        =========================================================
+        DATA MODEL (v1)
+        =========================================================
+        Types (deftype on load). Timecodes are INTEGER FRAME COUNTS;
+        fps lives on the film row; seconds are a rendering concern.
+
+        film
+          slug            string  ; "the-shining"
+          title           string
+          year            string
+          fps             string number  ; "23.976" | "24" | "25"
+          notes           string
+
+        scene   ; ONE detected/curated scene in ONE cut
+          film            string  ; film slug
+          cut             string  ; cut label, e.g. "eu" | "us" | "auto-t12"
+          ord             string int  ; position in THIS cut
+          slug            string  ; "room237" ("" until curated)
+          summary         string
+          tc_in           string int  ; frames
+          dur             string int  ; frames
+          mirror          string  ; DECLARED mirror scene slug or ""
+                                  ; derivation from ord is the truth;
+                                  ; this field is a claim to check
+
+        motif   ; a tracked recurrence
+          film            string
+          name            string  ; "mirror" | "red-key" | …
+          kind            string  ; prop | line | color | sound | image
+
+        beat    ; a motif occurrence inside a scene
+          scene           string  ; scene id
+          motif           string  ; motif name
+          role            string  ; plant | payoff | echo
+          tc              string int  ; frames, absolute
+
+        Why frames-as-strings: data_rows fields are strings; integer
+        frames avoid float rounding across fps conversions. "To the
+        second" claims are rendered, not stored.
+
+        NO shot-level table in v1 (shots matter for production, not
+        for ring analysis; a shot type is a later subsection if the
+        authoring workload arrives).
+         NO extra per-type user ACL — the RLS floor already scopes rows to
+         their author (data.u.<user>.*); isolation is not per-branch.
+        NO media blobs, thumbnails, or waveforms. Ever. Paths/hashes
+        in notes fields at most.
+
+        =========================================================
+        CHIASM AS DERIVATION (the core idea)
+        =========================================================
+        The pairing is positional: in a ring of n scenes, scene k
+        mirrors scene n-k+1. Therefore:
+
+          (chiasm/pairs scenes)   ; two-pointer recursion: pair ends,
+                                  ; recurse inward → list of pairs
+          (chiasm/center scenes)  ; same recursion; odd ring leaves
+                                  ; the CENTER SCENE as a singleton;
+                                  ; even ring returns '() (center is
+                                  ; the seam between the middle pair)
+
+        The mirror scene falls out of the structure. Nobody
+        annotates it; the report NAMES it.
+
+        Report shape (film/report scenes) — a dict/assoc tree:
+          center     center scene or center seam
+          shape      odd | even
+          pairs      per-pair: slugs, dur delta (frames), shared motifs
+          declared   declared-mirror mismatches (claim vs position)
+          orphans    plant beats with no downstream payoff beat
+          tightness  sum of per-pair dur deltas (lower = tighter ring)
+
+        The linter's most interesting output is DISAGREEMENT:
+          - declared mirror ≠ derived mirror → either the annotation
+            is wrong or the film breaks its own ring deliberately
+            (broken symmetry is itself a finding)
+          - derived pair with strong shared motifs but no declared
+            mirror → an unnoticed mirror, proposed by the machine
+
+        =========================================================
+        INGESTION (laptop-side, no new kernel prims)
+        =========================================================
+        Scene boundaries come from the media file ON THE LAPTOP,
+        never from the image:
+
+          ffmpeg -i cut.mp4 -an -vf "scdet=threshold=N,showinfo" \
+            -f null -   → cut log with pts_time per detected cut
+
+        scripts/film_ingest (ksh) parses the log and EMITS Nopales
+        source — (film/scene-create …) forms — piped to pp_eval
+        over the existing /api/eval endpoint. The image receives
+        already-structured data through the normal eval path.
+
+        Known detector limits (documented, accepted):
+          - scdet finds CUTS, not narrative scenes: dissolves, long
+            fades, and match cuts slip or merge; threshold is
+            per-film tuning. Adjacent detections are merged by hand
+            during curation — this is expected work, not failure.
+          - Detection lands on a MACHINE branch (e.g. cut label
+            "auto-t12"); curation happens on a fork so ground truth
+            stays pure and detector re-runs are diffable.
+
+        Optional later sources through the SAME emitter path:
+          - whisper.cpp transcripts → dialogue beats with timestamps
+          - PySceneDetect XML/EDL export instead of raw ffmpeg logs
+          - frame-similarity pass (pHash / ffmpeg signature) →
+            PROPOSED mirror pairs (machine seeds, human accepts)
+
+        =========================================================
+        CUTS AS BRANCHES
+        =========================================================
+        Branch convention (per habitat-workflow session ritual):
+          analysis/<film>/<cut>-auto      machine ground truth
+          analysis/<film>/<cut>-curated   fork; slugs, mirrors, beats
+
+        Cut comparison = run film/report per branch, diff the trees.
+        "The recut tightened the ring" becomes: tightness(eu) <
+        tightness(us), with the per-pair table behind it.
+
+        =========================================================
+        PUBLISHING BOUNDARY
+        =========================================================
+        Personal analysis of owned media for criticism is the
+        intended use. What MAY be published from the habitat:
+        reports, numbers, essays, generated diagrams. What MUST NOT
+        be: footage, frames, audio, or anything that reconstructs
+        the work. No public routes serve derived media; report
+        routes are private by default.
+    |)))
+
+  (subsection model
+   (doc "film/scene/motif/beat types; integer-frame timecodes; declared-vs-derived mirror split")
+   (status planned)
+   (verify
+    (smoke "load-library defines film, scene, motif, beat types")
+    (smoke "scene-create stores cut/ord/tc_in/dur as frame integers")
+    (smoke "mirror field is a declaration; derivation comes from ord")
+    (smoke "fps lives on film; seconds are render-only")))
+
+  (subsection ingestion
+   (doc "laptop-side scdet/ffmpeg → Nopales emitter → pp_eval; machine branch stays pure, curation is a fork")
+   (status planned)
+   (verify
+    (smoke "scripts/film_ingest parses an scdet log into scene-create forms")
+    (smoke "ingesting a short clip creates ordered scenes on an -auto branch")
+    (smoke "re-ingest at a new threshold lands on a new cut label, old branch untouched")))
+
+  (subsection chiastic-analysis
+   (doc "chiasm/pairs + chiasm/center two-pointer derivation; film/report with pairs, declared mismatches, orphan plants, tightness")
+   (status planned)
+   (verify
+    (smoke "chiasm/pairs on a known list returns end-paired list")
+    (smoke "chiasm/center returns singleton on odd ring, empty on even")
+    (smoke "film/report names the center scene from structure alone")
+    (smoke "declared mirror mismatch appears in report.declared")
+    (smoke "orphan plant (no downstream payoff) appears in report.orphans")
+    (smoke "tightness is the sum of per-pair dur deltas")))
+
+  (subsection cut-comparison
+   (doc "cuts as branches; report-per-branch diff answers 'did the recut tighten the ring'")
+   (status planned)
+   (verify
+    (smoke "two cut labels over one film produce independent reports")
+    (smoke "tightness diff between cuts is computable via pp_eval")))
+
+  (subsection ui
+   (doc "routes /film, /film/<slug>; ring report page with per-pair table and rainbow-style arc diagram via render-html")
+   (status planned)
+   (verify
+    (smoke "GET /film 200 after load-library")
+    (smoke "GET /film/<slug> renders center, pairs table, tightness")
+    (smoke "diagram renders arcs between derived mirror pairs")))
+
+  (subsection agent-access
+   (doc "pp_eval film/… as the API; reports are data trees an agent can diff")
+   (status planned)
+   (verify
+    (smoke "pp_eval film/report returns the full report tree")
+    (smoke "pp_eval scene/beats queries work per film and cut")))
+ )
+)

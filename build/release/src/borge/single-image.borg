@@ -1,0 +1,410 @@
+(project pricklypear-single-image
+ (doc "Book chapter: the single-image process model. One unix
+       binary, one Postgres, one deployment. Multi-user at the
+       session/branch layer, not process isolation. This chapter
+       is the authority for process topology; an earlier
+       multi-process design (supervisor + authd + per-user
+       unikernels) was retired.")
+ (status implemented)
+ (convention ocaml-dune)
+ (section single-image
+  (doc "One unix image process: model, topology, auth placement, deployment")
+  (status implemented)
+
+  (subsection thesis
+   (doc "What the system IS")
+   (status implemented)
+   (details
+    (doc (|
+      Pricklypear is ONE OCaml unix binary — the image — that:
+
+        1. Serves htmx HTTP directly on a port (Httpun_eio
+           + pure-html). This is the only user-facing surface.
+        2. Talks to Postgres via pure pgx over Eio.Net (Io_eio).
+           Postgres is the durable object store; the image is
+           ephemeral and rebuildable from the store plus the
+           package seed (libs/*.pp -> system/main).
+        3. Reads its identity (branch, author) from process env
+           at boot — no boot manifest, no external injection.
+        4. Optionally exposes a line-protocol REPL on a second
+           port for operator access. The browser REPL (/repl)
+           and HTTP eval (/api/eval) are the primary
+           interactive surfaces.
+
+      Scope — what the system is NOT:
+
+        - Not a MirageOS unikernel. No Solo5 target in v1.
+          `dune build` + restart is how the image changes.
+          (Solo5 remains an optional later hardening spike —
+          spikes/mirage_solo5/ — not the product path.)
+        - Not multi-process. No supervisor, no authd sidecar,
+          no fleet. The image is the only Pricklypear process.
+        - Isolation between humans lives at the session and
+          branch layer, not the process layer. There is no
+          per-user image instance.
+
+      Rationale: one process cannot fail the ways a
+      coordinated multi-process topology can — no port races
+      on respawn, no stale route tables, no orphaned children,
+      no cross-process identity handoff.
+    |)))
+  )
+
+  (subsection topology
+   (doc "The physical layout")
+   (status implemented)
+   (details
+    (doc (|
+      OpenBSD host (build + runtime habitat):
+
+        +-- Postgres (shared object store, SERIALIZABLE
+        |              defaults)
+        |
+        +-- pricklypear image (ONE unix binary)
+        |   +-- Httpun_eio on PP_HTTP_PORT (htmx UI,
+        |   |   /api/eval, /repl, user routes)
+        |   +-- optional line-protocol REPL on
+        |   |   PP_REPL_PORT (operator only; direct Eio.Net)
+        |   +-- Io_eio.Pg to Postgres (function_defs,
+        |       data_rows, branches, auth tables)
+        |
+        +-- nginx (edge)
+            +-- TLS -> proxy_pass http://127.0.0.1:PP_HTTP_PORT
+
+      Flow for "user adds a function":
+        1. Open the browser (nginx front door).
+        2. /repl or the function editor: the define persists
+           to function_defs and is registered live.
+        3. Routes serve it immediately.
+    |)))
+  )
+
+  (subsection auth
+   (doc "Where verify runs")
+   (status implemented)
+   (details
+    (doc (|
+      Verify runs IN the image. Password and session verify
+      happen in-process against the users, credentials, and
+      auth_sessions tables; the /login cookie middleware
+      guards the HTTP surface. No separate authd exists.
+
+      nginx basic-auth/htpasswd is an emergency edge gate
+      only — it is NOT the user database.
+
+      Multi-user (many humans, sessions, personal garden
+      branches) is a product layer above this process model;
+      see auth.multi-user-product for the user stories.
+    |)))
+  )
+
+  (subsection runtime
+   (doc "Runtime effects: direct-style core, algebraic-effect rim, Eio floor")
+   (status implemented)
+   (implements
+     lisp/lib/control.ml
+     image/lib/control_rim.ml
+     image/lib/primitives.ml
+     image/lib/store_db.ml
+     image/lib/io.mli
+     image/lib/io_db.ml
+     image/lib/io_eio.ml
+     image/lib/crud.ml
+     image/lib/tree_store.ml
+     image/lib/session.ml
+     image/lib/http.ml
+     image/lib/boot.ml
+     migrations/037_db_safety_net.sql)
+   (verify
+     (build "dune build && dune runtest")
+     (test "image/test/io_eio_test.ml")
+     (smoke "image serves /health and a CRUD roundtrip (Eio floor: no Lwt anywhere)")
+     (smoke "(with-transaction (lambda () (create ...))) commits; select-for-update inside body sees the lock, on the default backend"))
+   (details
+    (doc (|
+      Three layers — never collapse them (the two \"effects\"):
+
+        A. GUEST CAPABILITIES — what a Nopales expression may
+           touch (pure / read-db / write-db / branch / publish
+           / ai / html / txn). Static AST inference in
+           lisp/lib/effect.ml; drives badges and gates.
+           Spec: lisp-interpreter.effects. NOT this section.
+        B. HOST CONTROL EFFECTS — how eval does I/O without
+           monads. OCaml 5 Effect.perform of one effect:
+             Prim_call : string * value list -> value Effect.t
+           declared in lisp/lib/control.ml. Guest Nopales can
+           never perform it; eval's prim dispatch is the only
+           performer.
+        C. I/O RUNTIME — who schedules sockets/DB/fibers.
+           Eio, period (eio-floor Phase 5: the Lwt rim and its
+           PP_IO rollback are deleted). The power company;
+           chosen, replaceable if a better one shows up.
+
+      This subsection is the book authority for layers B and C.
+      The phase plan and runbook live in
+      archive/plans/runtime-effects-transition.md (H0 audit -> H1
+      direct-style core -> H2 Io port -> H3 backend swap);
+      that doc is the runbook, this is the law.
+
+      LAYER B — HOST CONTROL EFFECTS (H1, SHIPPED):
+
+        - lisp/ is direct-style: Eval.eval returns value, no
+          monadic types, no Lwt dependency.
+        - Eval's prim dispatch performs Prim_call(name, args);
+          prim bodies do NOT recurse into eval (guest lambdas
+          needing DB access go through with-transaction's
+          dynamic scope instead).
+        - Pure tests install Control.run_sync with a sync prim
+          table: service-free, no rim.
+        - The image runs every eval under Control_rim.run
+          (Effect.Deep.match_with): Prim_call looks up the
+          registered prim fn, runs it, continues (or
+          discontinues on raise). Pure lisp/ tests stay green
+          with no services.
+
+      LAYER C — IO PORT + EIO FLOOR (SHIPPED):
+
+        - Process entry is always Eio_main + Httpun_eio accept
+          loop. Domain SQL goes through Io.DB (io.mli) →
+          store_db.ml → Io_eio.Pg (pure pgx over Eio.Net).
+          scripts/check_io_rim.sh enforces the rim.
+        - Store/crud/auth/session/agent_tools are direct-style:
+          plain 'a returns, prim_fn = value list -> value,
+          register_sync everywhere. DB calls block the calling
+          fiber; a reentrant per-connection mutex serializes
+          whole transactions across concurrent fibers.
+        - HTTP page work is Fiber.fork'd off the connection
+          read fiber so body reads (schedule_read) cannot
+          deadlock against Promise.await.
+        - Prim registration peeled into prims_request /
+          prims_net / prims_media / prims_graph / prims_db;
+          session.ml keeps t, rehydrate, checkout, eval,
+          seed_stdlib, and register_session_control_prims.
+        - No Lwt anywhere: the TCP REPL serves on Eio.Net
+           (direct-style), and llm/http-get/sleep prims run
+           subprocesses through Eio.Process (Io_eio.sh_capture),
+           all without touching domain code.
+
+      DYNAMIC TRANSACTION SCOPE (preserved):
+
+        - Store_db.with_dynamic_transaction binds current_tx
+          around a thunk; crud execute paths prefer current_tx
+          over the pool conn, so all prims in a
+          (with-transaction (lambda () ...)) body share one
+          SERIALIZABLE tx and select-for-update locks persist
+          across prims in the body. Nested with-transaction
+          fails (no silent flattening). Binding is per-fiber
+          under the conn mutex, never ambient-global.
+
+      RIM LINT:
+
+        - scripts/check_io_rim.sh stays green: only store_db /
+          io_db (the domain port) and io_eio call pgx execute.
+
+      HARD INVARIANTS (every horizon, restated):
+
+        1. Composition: (define u (get ...)) then (str u)
+           yields a plain value, never a promise.
+        2. (with-transaction ...) dynamic scope as above.
+        3. Budget/cancel: one bad eval cannot wedge the image
+           (budget ticks at each eval step AND at each rim
+           prim dispatch).
+        4. Pure lisp/ tests stay service-free; image smokes
+           stay green on the default backend.
+        5. Capability inference (layer A) unchanged; guest
+           Nopales never gains Effect.perform.
+        6. RUNTIME SAFETY NET (BORGE-1790987430): role-level
+           session defaults on the image role —
+           idle_in_transaction_session_timeout = 3 min,
+           statement_timeout = 5 min, lock_timeout = 30 s
+           (migrations/037_db_safety_net.sql). Invariant: a
+           transaction is never left idle-in-transaction on a
+           reused connection — Postgres reaps one after 3 min
+           and releases its locks; a blocked writer errors at
+           30 s instead of queueing forever; a runaway
+           statement is bounded at 5 min. Deployment sessions
+           (dev.sh / promote apply_migrations) opt out via
+           PGOPTIONS so a backfill migration is never killed by
+           the net it installs.
+        7. TRANSACTION REUSE (BORGE-1790987435): a transaction
+           is never released to reuse while the server-side tx
+           is open. A tx opened by with_transaction /
+           with_dynamic_transaction runs its body inside
+           Eio.Cancel.protect (with_eio_conn_lock), so an Eio
+           cancellation (client disconnect / request teardown)
+           is DEFERRED: the body runs to completion and pgx's
+           catch-arm rolls back before the cancellation can
+           land — a cancelled request can never skip ROLLBACK
+           and hand the connection back with BEGIN still open.
+           Defense in depth: before opening a NEW transaction
+           on a reused connection, Store_db.rollback_stale
+           issues ROLLBACK if pgx still reports in_transaction
+           (a stale server-side tx is rolled back, releasing
+           its locks, rather than inherited by the next
+           request). Pair with invariant 6 (the 3-min
+           idle-in-transaction reap) as the server-side
+           backstop.
+
+      RUNTIME SAFETY NET (BORGE-1790987430, SHIPPED):
+
+        - migrations/037_db_safety_net.sql sets role-level
+          session defaults on the image role, expressed as
+          CURRENT_USER (the role that applies the migration —
+          the image role in both dev and prod):
+          idle_in_transaction_session_timeout 3 min,
+          statement_timeout 5 min, lock_timeout 30 s.
+        - Why: 2026-10-02 prod — a backend went idle in
+          transaction for 30+ min holding a transactionid lock,
+          blocking the tree-write chain (pg_blocking_pids) while
+          /health stayed green (see image.http-robustness). With
+          the net, Postgres reaps the idle-in-tx session at
+          3 min, releasing its locks; a blocked writer errors at
+          lock_timeout 30 s instead of hanging; a runaway
+          statement is bounded at 5 min.
+        - Sizes: 3 min idle-in-tx is 10x tighter than the
+          observed 30-min leak and 2.25x above the worst legit
+          single-op floor (notes/doc/get ~80s on big docs);
+          5 min statement is 3.75x above that floor and would
+          have killed the 22-26 min runaway writers; 30 s lock
+          wait is far above normal single-row upsert holds.
+        - idle_session_timeout is deliberately NOT set: the
+          per-identity pool idles BETWEEN transactions and must
+          not be reaped.
+        - Deployment sessions (scripts/dev.sh apply_migrations
+          and the promote hook) set PGOPTIONS
+          "-c statement_timeout=0 -c lock_timeout=0
+          -c idle_in_transaction_session_timeout=0" so a future
+          backfill migration is never constrained by the net it
+          is installing.
+
+      TRANSACTION REUSE (BORGE-1790987435, SHIPPED):
+
+        - The 2026-10-02 leaked tx was suspected to come from
+          Store_db.with_transaction: a pgx BEGIN/COMMIT/ROLLBACK
+          whose body an Eio cancellation interrupted, skipping
+          pgx's rollback and releasing the conn with the server
+          tx still open. PROVEN NOT LEAKED (not assumed):
+          image/test/store_tx_cancel_test.ml
+          test_cancel_mid_tx_leaves_store_clean cancels a fiber
+          mid-with_transaction-body and asserts the store is
+          clean afterward (current_tx cleared, backend state
+          'idle' observed from a second connection, fresh
+          with_transaction opens/runs/commits). The mechanism:
+          with_eio_conn_lock wraps the WHOLE pgx with_transaction
+          in Eio.Cancel.protect, which defers parent cancellation
+          (protected child context) so the body runs to
+          completion and pgx's catch-arm rolls back first.
+        - Defense in depth (Store_db.rollback_stale): before
+          opening a NEW transaction on a reused connection, if
+          pgx still reports in_transaction, issue ROLLBACK to
+          restore the conn to idle and release any locks the
+          stale tx held. pgx's rollback raises Invalid_argument
+          when no tx is open — the clean case, swallowed
+          client-side (no wire round-trip). Proven by
+          test_reuse_guard_rolls_back_stale_tx: it forces the
+          leak shape (direct pgx begin_work leaving the flag set)
+          and asserts the next with_transaction ROLLS IT BACK and
+          commits; the same test FAILS with "begin_work: cannot
+          transact while in another transaction" if the guard is
+          removed.
+        - Invariant 6's idle-in-transaction reap is the
+          server-side backstop for any residual path that leaves
+          a tx open without pgx noticing.
+    |)))
+  )
+
+  (subsection net-prims
+   (doc "Network primitives: tcp-connect + stream read/write/close over Eio.Net (egress v1)")
+   (implements image/lib/net_prims.ml image/lib/primitives.ml image/lib/session.ml)
+   (status implemented)
+   (* agent note (|2026-08-05: implemented v1 egress net prims (tcp-connect, stream-write, stream-read, stream-close, stream-list) in image/lib/net_prims.ml using OCaml Unix blocking sockets (not Eio.Net — Eio switches are run-scoped with no standalone make, so persistent handles need a service-manager switch; filed BORGE-1785968883). Session stores a net_streams table of Unix.file_descr. Tested on local dev: full HTTP round-trip to example.com works (connect -> write -> read -> close). 160 dune tests green. Ingress/tcp-listen/TLS deferred to v2 (BORGE-1785967056).|) *)
+   (verify
+    (build "dune build")
+    (test "dune runtest — net prims (mock/local)")
+    (test "(tcp-connect host port) returns a stream handle")
+    (test "(stream-write handle bytes) writes; (stream-read handle n) reads up to n bytes")
+    (test "(stream-close handle) closes the socket"))
+   (details
+    (doc (|
+         v1 SCOPE: EGRESS ONLY. Lisp code can open outbound
+         TCP connections and read/write byte streams. This makes
+         MQTT/IRC/SMTP/WebSocket client libraries possible as
+         pure Nopales, without a kernel sidecar. Ingress
+         (tcp-listen, spawn-service, long-lived accept-loop
+         fibers) is deferred to v2 — it needs a service-manager
+         switch outside the per-request scope and lifecycle
+         introspection (BORGE-1785967056).
+
+         PRIMS (v1):
+           (tcp-connect host port) -> stream-handle | error
+             Opens an outbound TCP connection to host:port using
+             Eio.Net.connect on a switch scoped to the handle's
+             lifetime. Returns an opaque VStr handle id (a UUID)
+             registered in a session-local stream table.
+           (stream-write handle bytes) -> n-written | error
+             Writes the byte string to the stream (Eio.Flow.write).
+           (stream-read handle max-bytes) -> bytes-string | error
+             Reads up to max-bytes bytes (Eio.Flow.single_read into
+             a Cstruct, returns as VStr). One budget tick per read.
+           (stream-close handle) -> ok
+             Closes the socket and removes the handle from the
+             session stream table.
+           (stream-list) -> list of open handle ids
+             Introspection for debugging.
+
+         CAPABILITY GATING:
+           tcp-connect requires the Net capability (new badge;
+           see effect.ml). Public routes may not call net prims.
+           Per-user/branch quota on open streams (default 16) to
+           prevent resource exhaustion. Anonymous sessions denied.
+
+         LIFECYCLE:
+           Stream handles live in a session-local table. The switch
+           is scoped to the eval call (so an abandoned stream closes
+           when the eval returns) OR to the session (for multi-call
+           stream use). v1: per-eval-call switch (simplest, safest).
+           The handle id is a UUID string; the table maps id -> socket.
+
+         STEP-BUDGET INTERACTION:
+           Each stream-read is one budget tick (like extract-links).
+           stream-write is one tick. A blocked read on a silent peer
+           could hang an eval call; mitigate with a per-read timeout
+           (default 30s) returning an error string, not a hang.
+
+         NON-GOALS (v1):
+           - tcp-listen / ingress (v2, needs service-manager).
+           - spawn-service / long-lived fibers (v2).
+           - TLS wrap (v2; eio-tls not in poohstack yet).
+           - UDP.
+           - DNS resolution beyond getaddrinfo (Eio.Net handles it).
+    |))
+   )
+  )
+
+  (subsection deployment
+   (doc "One binary, one rc.d service, one restart")
+   (status implemented)
+   (details
+    (doc (|
+      rc.d service `pricklypear' (scripts/rc.d/pricklypear):
+        start   -> /usr/local/libexec/pricklypear/current/bin/image
+                   with env from /etc/pricklypear/pricklypear.env
+        stop    -> kill the single PID
+        restart -> stop + start (one process, one port,
+                   clean shutdown)
+
+      Release promotion (git push to prod):
+        1. build the release (lisp + common + image)
+        2. extract to /usr/local/libexec/pricklypear/releases/<id>
+        3. swap the `current' symlink
+        4. rcctl restart pricklypear
+
+      (Full hook/runbook detail: archive/deploy/openbsd-prod-branch-deploy.md.)
+
+      Changing a primitive: edit image/lib, push, the promote
+      step rebuilds and restarts. Changing an app: define or
+      route on a branch in the live image — no deploy at all.
+    |)))
+  )
+ )
+)

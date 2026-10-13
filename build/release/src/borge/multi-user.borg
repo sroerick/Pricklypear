@@ -1,0 +1,478 @@
+(project pricklypear-multi-user
+ (doc "Pricklypear book chapter: multi-user — MANY HUMANS.
+        Cotenant isolation (this chapter) is the shipping model:
+        one process, many sessions, isolation by session + branch.
+        Process-per-user isolation (multi-user.isolation) is a
+        future hardening axis. single-image.borg is about shipping
+        ONE binary, not one human. Do not read single-image as
+        cancelling multi-user.
+        Access surfaces that ship on cotenant first: user subdomains,
+        per-user LLM keys, SSH→REPL (auth.user-subdomains /
+        user-llm-keys / user-ssh-repl).")
+ (status partial)
+ (* agent note (|2026-08-02 status reconcile: namespaces/budgets/chat/user-plan → implemented; permissions stays partial (setuid author). isolation deprecated; cotenant-isolation already implemented.|) *)
+ (convention ocaml-dune)
+ (section multi-user
+  (doc "Cotenant isolation (one process, session + branch scoped), namespaces via branch ownership, budgets, author-runs-as-author")
+  (status partial)
+  
+  (subsection cotenant-isolation
+   (doc "Session-level isolation in one process — THE v1 model")
+   (status implemented)
+   (details
+    (doc (|
+         One image process serves many authenticated sessions.
+         Isolation is session + branch scoped, not process
+         scoped:
+
+         - Each session carries its own identity (user_id,
+           username, is_admin) resolved at login and attached
+           per request.
+         - Each session has its own default branch
+           (<username>/personal); defines, routes, and type
+           declarations land on the session's current branch.
+         - No session writes to another user's personal
+           branch; overrides on a personal branch shadow
+           system/main only for that branch's readers.
+         - Session state is not shared; a wedged call aborts
+           its own session's work, not another user's.
+
+         What cotenant does NOT provide (honest limits):
+         - No per-user process boundary: a hard process
+           crash takes all sessions down together (the
+           watchdog restarts the one image for everyone).
+         - Resource contention is shared: one user's
+           expensive eval competes with everyone else's
+           (mitigated by per-session step budgets — see
+           budgets).
+         Per-user image processes (multi-user.isolation)
+         remain the future hardening axis for a stronger
+         blast radius.
+    |))
+   )
+  )
+  (subsection isolation
+   (doc "Future hardening axis: process-level isolation, one image per user")
+   (status deprecated)
+   (details
+    (doc (|
+         DESIGN SKETCH (not the shipping topology).
+
+         The retired fleet design gave each user their OWN
+         image process rather than namespacing within one
+         shared image — the Unix/POSIX model: each user has
+         a home (their branch bindings); logging in boots
+         or attaches their image; each image is a separate
+         process.
+
+         Wins it would buy: a user's infinite loop or bad
+         define wedges only their image; per-user A/B
+         rollback; no reliance on cooperative scheduling
+         for cross-user safety.
+
+         Why it is not v1: it needs a supervisor/fleet
+         layer (boot-on-connect, attach, per-user RAM),
+         which the single-image pivot retired. Cotenant
+         isolation (above) is the shipping model; this
+         remains the future hardening axis if a stronger
+         blast radius is ever needed.
+    |))
+   )
+  )
+  (subsection namespaces
+   (doc "Branch ownership namespaces; packages are a separate in-branch axis")
+   (status implemented)
+   (* agent note (|2026-08-02: branch ownership model live (system/main + user/*); package / prefix separate. Cross-branch qualified calls still deferred as documented.|) *)
+   (details
+    (doc (|
+         TWO AXES (do not conflate):
+
+         1. BRANCH namespace (this subsection):
+            There is no privileged 'common' namespace. There
+            is 'main' (system baseline) and per-user branches.
+            Versioning/ownership IS branch ownership.
+            A binding's key is (branch_id, name). When Alice
+            forks main to alice/main, she gets her own
+            'greet' independent of main's greet (until she
+            merges).
+
+         2. PACKAGE prefix (image.packages):
+            Within ONE branch, organize functions with `/`
+            in the name (todo/list). That is organization,
+            not ownership. See image.packages.
+
+         Cross-branch calls (still deferred): a function can
+         explicitly reference another branch's binding via a
+         qualified name (e.g. system/main:greet — note colon
+         or other separator TBD, must not collide with package `/`).
+         Normally a function calls bindings in its own branch.
+
+         The 'common namespace problem' is thus reframed
+         as the 'merge to main politics problem':
+         - Default: admin-only merges to main
+         - All users can fork freely
+         - Users can merge into their own branches freely
+         - Politics expand later (PR/review workflow)
+
+         This sidesteps the up-or-down political decision
+         the original 'publish to common' model forced.
+   |))
+   )
+  )
+  (subsection budgets
+   (doc "Per-call step budgets to bound runaway user code")
+   (status implemented)
+   (* agent note (|2026-08-02: Eval.make_budget + last_budget; session eval wraps budget; conformance tests. Memory budget deferred.|) *)
+   (verify
+    (build "dune build @all")
+    (smoke "a Nopales call that exceeds its step budget aborts cleanly; the session survives"))
+   (details
+    (doc (|
+         Each Nopales primitive invocation runs with a step
+         counter. When exceeded, that ONE call aborts;
+         the session continues. This prevents "one user's
+         bad function wedges the whole image" at the
+         interpreter level (defense in depth alongside
+         process-level isolation).
+
+         Default budget: configurable per session, sensible
+         initial value (e.g. 100k eval steps). User can
+         request more for legitimate long-running operations
+         via a primitive that explicitly raises the budget
+         for a sub-call (and logs it).
+
+         The interpreter checks the counter at every Prim
+         invocation and every recursive eval depth. Cheap:
+         one integer increment per step.
+
+         Memory: also tracked. A session exceeding memory
+         budget aborts the offending call. (Deferred; step
+         budget is the v1 mechanism.)
+
+         This is per-CALL, not per-session: a session can
+         make many calls, each independently bounded.
+   |))
+   )
+  )
+  (subsection permissions
+   (doc "Author-runs-as-author: functions execute with their author's data perms")
+   (status partial)
+   (* agent note (|2026-08-02 confirm partial: current-author still aliases whoami; full setuid author-on-execute not shipped.|) *)
+   (details
+    (doc (|
+         A function executes with ITS AUTHOR's data
+         permissions, not the caller's. This is the Unix
+         setuid model: if alice authors a function that
+         reads her calendar, and bob calls it, the function
+         reads alice's calendar (not bob's), and bob sees
+         only what alice's function returns.
+
+         Implications:
+         - The interpreter's eval carries a (current-author)
+           field, read from the EXECUTED binding's author,
+           not the session user.
+         - Data primitives (query, get, create, etc.)
+           consult current-author for permission filtering.
+         - A careless privileged function is a security
+           hole, same as Unix setuid. Honest and familiar.
+         - Functions can expose capabilities to other
+           users by name without exposing raw rows.
+
+         Authoring permissions (separate concern):
+         - A binding in alice/main is callable by anyone
+           in the same image (read access implicit).
+         - Only alice can edit bindings in alice/* branches.
+         - main is owned by admin; merges require admin
+           approval (default).
+
+         This model is the Unix model, by choice. It maps
+         cleanly to "SSH-first, multi-user OS" framing. If
+         we wanted a Lisp-machine feel (shared trusted
+         environment), we'd pick differently, but
+         SSH-first implies Unix-style multi-user.
+
+         SOCIAL LAYER (chat + plan): RECONCILED 2026-09-04.
+         The original mechanism — 'SHARED data_rows + handler-
+         enforced filters by (whoami)' — died with migration 013
+         (user-scoped datum paths + RLS floor): handler filters
+         can NARROW, never WIDEN past the prim-layer confinement
+         (crud.ml: (author = whoami OR tree_is_seed_type)), and
+         chat-message / chat-room / user-plan are not seed types.
+         A lobby built on (rows 'chat-message) therefore shows
+         each user only their OWN posts today (prod is single-
+         user in practice, so the break is latent). The social
+         layer's shared-multi-writer DATA need is real and now
+         has a named home: data.s.<space>.* member spaces
+         (branching.shared-data-spaces, planned) — or a per-type
+         shared admit for the world-readable lobby case. Chat
+         and plan stanzas below are reconciled to partial until
+         their shared-row mechanism lands.
+   |))
+   )
+  )
+  (subsection chat
+   (doc "Multi-user chat: site lobby + DMs so humans on the box can talk")
+   (status implemented)
+   (* agent note (|2026-09-06 REPAIR LANDED (branch chat-lobby-repair; flip partial->implemented): the named repair ran as branching.shared-data-spaces' FIRST CONSUMER. Mechanism: OPEN SPACES (migration 030, data_spaces.open — every authenticated identity is implicitly a member; 'anonymous' explicitly excluded on both mirrors): libs/chat gains chat/ensure-space (idempotent, guard-caught race: space-create chat-lobby 'open + space-admit chat-room + space-admit chat-message) called at the top of every say path. Live two-user dev smoke (the verify stanza's own scenario): admin + bob post via (chat/say ...) -> round-2 messages land at data.s.chat-lobby.chat-message.<id> (node-path proof); BOTH users' (rows 'chat-message) return both messages; admin reads bob's message history (data-history: author bob, body intact). Round-1 messages posted DURING a function-clobber window stayed stranded per-user — exactly the spec'd admission behavior (existing rows do not migrate; the v2 migrator owns them). TWO MAKE HAZARDS recorded at branching.shared-data-spaces (same date): the pgx bool-wire bug and the 023-replay function clobber. DM CAVEAT (accepted, recorded): DM messages ride the lobby admission — routes keep the pre-013 handler-level member filters, but prim-level (rows 'chat-message) is readable by any authenticated identity for DM content too. That restores EXACTLY the pre-013 'shared data_rows + handler filters' model the stanza below was written for; honest pair-space DMs need row-level space routing (v2, one-tree data-space-routing follow-up). user-plan stays partial (paired repair: admit user-plan to a broadcast space — one line post-space-make; not in this branch).|) *)
+   (* agent note (|2026-08-02: libs/chat ~552 lines lobby+DM; live GET /chat 200.|) *)
+   (implements libs/chat/lib.pp image/lib/http.ml)
+   (verify
+    (build "dune build image")
+    (smoke "alice and bob post to /chat lobby; each sees both messages")
+    (smoke "alice DM to bob visible to both; not to carol")
+    (smoke "unauth /chat redirects login; public face does not leak messages")
+    (smoke "(chat/say \"hi\") and (chat/inbox) work via /api/eval"))
+   (details
+    (doc (|
+         ==========================================================
+         0. WHY
+         ==========================================================
+
+         Multi-user is not only isolation — people on the same
+         habitat need a way to talk. Chat is a first-class
+         product surface (like notes/todo), not an external app.
+         Agents authenticated as users may post too (same
+         identity rules).
+
+         ==========================================================
+         1. SHAPE (v1)
+         ==========================================================
+
+         Two conversation kinds:
+
+           A. LOBBY (site-wide room)
+              room_id = "lobby" (singleton)
+              All authenticated users can read/write.
+              Default /chat UI.
+
+           B. DM (direct message thread)
+              room_id = canonical pair key:
+                dm:alice:bob  where alice < bob lexicographically
+              Participants = the two usernames only.
+              List/create from /chat/dm or (chat/dm "bob").
+
+         Out of scope v1:
+           - Arbitrary named rooms / channels (phase 2)
+           - WebSockets / SSE push (htmx poll is enough)
+           - File attachments, reactions, threads, edit history
+           - End-to-end encryption
+           - Cross-deployment federation
+
+         ==========================================================
+         2. DATA (shared data_rows)
+         ==========================================================
+
+         Package libs/chat seeds:
+
+           (deftype 'chat-room
+             'kind          ; "lobby" | "dm"
+             'room_id       ; "lobby" | "dm:a:b"
+             'title         ; display
+             'members       ; JSON array of usernames; lobby = []
+             'created_by
+             'created_at)   ; ISO string from Nopales or server
+
+           (deftype 'chat-message
+             'room_id
+             'from          ; username (whoami at post)
+             'body          ; plain text (escape on render)
+             'created_at)
+
+         data_rows are SHARED across branches (storage rule)
+         BUT USER-SCOPED since migration 013 — 'access control
+         is in chat/* handlers' is no longer sufficient: the
+         handler filter runs INSIDE a visibility set that
+         already excludes other users' rows (see the 2026-09-04
+         agent note). TARGET shape post-repair: chat types
+         admitted into a space (lobby space / per-DM pair
+         space), keeping the same handler-level rules below:
+           - post: from MUST equal (whoami); reject spoof
+           - list lobby: any authenticated user (lobby-space member)
+           - list dm: whoami is member (pair-space membership IS the check)
+           - create dm room: both users must exist
+
+         Retention v1: keep all messages (personal OS scale).
+         Optional later: max list limit + archive.
+
+         Seed: ensure lobby room row exists on load-library
+         (idempotent create-if-missing).
+
+         ==========================================================
+         3. LISP API (libs/chat)
+         ==========================================================
+
+           (chat/say body)              ; post to lobby as whoami
+           (chat/say-in room_id body)   ; post to room if allowed
+           (chat/lobby [limit])         ; recent lobby messages
+           (chat/history room_id [limit])
+           (chat/dm peer)               ; ensure dm room; return room_id
+           (chat/dms)                   ; rooms where whoami is member
+           (chat/users)                 ; list usernames (for DM picker)
+                                        ; needs thin OCaml prim
+                                        ; (list-usernames) for any authed
+
+         New OCaml prim if missing (image):
+           (list-usernames) → VList of VStr
+             authenticated only; usernames are public identifiers
+             on the box (no email/admin leak).
+
+         ==========================================================
+         4. HTTP / HTMX UI
+         ==========================================================
+
+         Routes (private by default — auth required):
+
+           GET  /chat              lobby page
+           GET  /chat/partial      message list fragment (poll)
+           POST /chat/say          body=text → append + refresh
+           GET  /chat/dm           list DM threads
+           GET  /chat/dm/:peer     DM thread with peer
+           POST /chat/dm/:peer     send DM
+
+         Polling: hx-get /chat/partial hx-trigger every 3s-5s.
+         No WebSocket in v1.
+
+         Chrome: ui/nav link Chat when package loaded.
+         Render: escape body text; show from + time + body.
+         Empty state: Say hi to the box.
+
+         ==========================================================
+         5. SECURITY / POLICY
+         ==========================================================
+
+         - No anonymous chat (kernel private routes)
+         - Body max length (e.g. 4k chars) enforced in chat/say
+         - Rate: soft — eval budget enough for v1
+         - XSS: escape user body on render; never raw untrusted HTML
+         - Spoof: ignore client-supplied from; always whoami
+
+         ==========================================================
+         6. PHASES
+         ==========================================================
+
+         Phase 1: deftype + lobby say/history + /chat UI poll
+         Phase 2: DMs + list-usernames + /chat/dm
+         Phase 3: nav seed, optional presence / unread
+
+         Success: two browser sessions (alice, bob) talk in
+         lobby without leaving the habitat; agent as alice can
+         (chat/say "deployed") visible to bob.
+    |))
+   )
+  )
+  (subsection user-plan
+   (doc "Unix-style .plan: short per-user status of what they intend to work on")
+   (status partial)
+   (* agent note (|2026-09-04 reconcile: implemented->partial — (plan-of user) / (plan-list) are cross-user reads by design and are broken by migration 013's per-author data confinement (see DATA section text below + chat's reconcile note, same date). The single-user path ((plan) / (plan body) on own whoami) still works. Repair = space admission; stanza returns to implemented with the space make.|) *)
+   (* agent note (|2026-08-02: libs/plan user-plan + plan/set!/of; live GET /plan 200.|) *)
+   (implements libs/plan/lib.pp)
+   (verify
+    (build "dune build image")
+    (smoke "(plan \"macros + chat\") sets alice plan; (plan-of \"alice\") returns it")
+    (smoke "GET /u/alice shows plan text; bob can read alice plan")
+    (smoke "only owner can set own plan; bob cannot set alice")
+    (smoke "empty plan shows friendly placeholder"))
+   (details
+    (doc (|
+         ==========================================================
+         0. WHY (finger / .plan)
+         ==========================================================
+
+         Classic Unix: each user has a ~/.plan file; finger(1)
+         shows it. On a multi-user Lisp OS this is the lightest
+         coordination tool — not a task tracker (todo exists),
+         not chat, just what I'm working on / intend next.
+
+         Complements chat: plan is sticky status; chat is
+         conversation.
+
+         ==========================================================
+         1. DATA
+         ==========================================================
+
+         (deftype 'user-plan
+           'username      ; owner; unique logical key
+           'body          ; free text (plain)
+           'updated_at)   ; ISO string
+
+         One logical plan per username. Implementation:
+           find existing row where username matches whoami;
+           update body + updated_at, or create if missing.
+         RECONCILED 2026-09-04: 'Shared data_rows; filter by
+         username field' is dead text — migration 013 scopes
+         rows per author, so (plan-of user) / (plan-list) can
+         only ever see the CALLER's own plan row today. Plan
+         is a broadcast-by-design surface; its repair is the
+         same one chat takes (space admission or world-readable
+         shared admit; branching.shared-data-spaces). Stanza
+         flips to partial until then.
+
+         Optional later: project / until date — not v1.
+
+         ==========================================================
+         2. LISP API (libs/plan)
+         ==========================================================
+
+           (plan body)           ; set MY plan (whoami); return body
+           (plan)                ; get MY plan body or empty string
+           (plan-of user)        ; get that user's plan body or empty
+           (plan-clear)          ; set my body to empty
+           (plan-list)           ; list of (username . body) for
+                                 ; users with non-empty plans
+
+         Spoof: (plan) always writes username=(whoami).
+         There is no (plan-as other body).
+
+         ==========================================================
+         3. HTTP UI
+         ==========================================================
+
+         Private (auth required) unless noted:
+
+           GET  /plan              edit-or-view MY plan form
+           POST /plan              save body
+           GET  /plans             directory: who has a plan set
+           GET  /u/:username       profile stub: username +
+                                   plan body + updated_at +
+                                   link to garden subdomain if
+                                   auth.user-subdomains on
+                                   (finger alice)
+
+         Public option (phase 2, with route-visibility):
+           public /u/:user so plans can be world-readable like
+           classic finger. v1: authenticated users on the box only.
+
+         Chrome: show MY plan one-liner under whoami in header
+         or on home (ui/home snippet) — optional phase 2.
+         Nav: Plan → /plan; People → /plans.
+
+         ==========================================================
+         4. UX COPY
+         ==========================================================
+
+         Placeholder when empty:
+           No plan yet. What are you working on?
+
+         Form label:
+           Your plan (like a Unix .plan file)
+
+         Help text:
+           Short note other users on this box can read.
+           Examples: shipping macros, out until Thursday.
+
+         ==========================================================
+         5. PHASES
+         ==========================================================
+
+         Phase 1: deftype + plan/plan-of/plan-list + /plan + /u/:user
+         Phase 2: /plans directory + home/chrome snippet
+         Phase 3: optional public /u/:user; subdomain profile page
+
+         Success: alice sets plan macros + multi-user chat;
+         bob opens /u/alice and knows what she's doing; chat
+         stays for the actual conversation.
+    |))
+   )
+  )
+ )
+)

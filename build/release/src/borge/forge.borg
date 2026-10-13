@@ -1,0 +1,403 @@
+(project pricklypear-forge
+ (doc "Pricklypear book chapter: forge — executable spec graphs; borge's
+       workflow as habitat data. LLMs draft and review; mechanical checks
+       flag anomalies; the human gates each level of the descent.")
+ (status planned)
+ (convention ocaml-dune)
+
+ (* agent note (|Design rationale, from the 2026-08 conversation that
+   produced this chapter:
+   - "Procedural borge": the spec stops being a document you consult and
+     becomes a program you run. Phase transitions are driven by code, not
+     by a human typing plan/make/review.
+   - Victory conditions are the artifact; code is a cache. If codegen
+     trends free, the expensive scarce thing is the VERIFIED SPEC GRAPH —
+     every node carrying its win condition, provably green. Code is
+     re-derivable output of the graph.
+   - The frontier is computed, not judged: free-vars over drafted bodies
+     derives what is missing; build order is a topological walk, not an
+     LLM guess.
+   - Mechanical flags first, judgment as residue: capability escalation,
+     missing victory condition, dangling refs, cycles, orphans — all
+     computable. The human reviews a list of anomalies, not a wall of
+     nodes. Review fatigue is the quiet killer of every human-in-the-
+     loop system; the defense is surfacing LESS over time, not more.
+   - Human gates each level of the tree descent. Mistakes get cheaper
+     as you go down; attention is allocated top-heavy because blast
+     radius is top-heavy. Progressive disclosure of commitment: you are
+     never asked to review more than one delta of abstraction at a time.
+   - The loop lives IN the habitat (a Nopales package), not in the
+     laptop harness. Separation of powers: drafter and driver must not
+     be the same mind. The harness agent is demoted to drafter; the
+     human answers the loop via the flag queue, does not drive it.
+   - Reroll is INFORMED: reroll-with-note attaches a constraint to the
+     node; accumulated constraints are a durable style guide the drafter
+     cannot drift from. Otherwise reroll is a slot machine.
+   - UI LAST, on evidence: you cannot design the approval UI until you
+     know which flags actually fire in practice. The boring anomaly
+     queue beats the gorgeous graph explorer. Build the loop headless;
+     the queue teaches you what to draw.|) *)
+
+ (section forge
+  (doc "Executable spec: the borge discipline as a living graph of typed
+        nodes in the habitat. A spec is a tree; each node carries a
+        machine-checkable victory condition; LLM drafters fill leaves
+        bottom-up along a computed frontier; mechanical checkers flag
+        anomalies; the human approves each level before the descent
+        continues.")
+  (status planned)
+  (implements libs/forge/lib.pp scripts/smoke_forge.sh)
+
+  (details
+   (doc (|
+        =========================================================
+        WHAT THIS CHAPTER IS
+        =========================================================
+        Borge today is a CLI over .borg FILES. This chapter is the
+        same discipline re-expressed as HABITAT DATA: the spec is a
+        tree of typed nodes, the workflow is a Nopales interpreter
+        loop running inside the image, LLM calls are drafting and
+        review passes over nodes, and the human's plan/make/review
+        commands become gates the loop waits on. Nothing about the
+        trust model changes: the human promotes, the human gates,
+        mechanical checks run before any judgment is asked for.
+
+        The package is libs/forge — pure Nopales, product-shaped,
+        living on branches like every other product lib. It gains
+        ONE new kernel prim (forge-effects, below) and reuses
+        everything else: tree nodes, data rows, branching prims,
+        the ai-authoring LLM surface, the jobs runner, and the
+        notes/log/docs conventions of habitat-workflow.
+
+        =========================================================
+        THE GRAPH (node shapes, one-tree placement)
+        =========================================================
+        A spec graph is a set of typed data nodes. Per one-tree,
+        code-side nodes live under the branch lens; graph STATE
+        (status, review verdicts) is shared data, keyed by owning
+        user, under data.shared.forge.* — same placement argument
+        as jobs: the loop (host identity) must mutate node rows
+        regardless of who is drafting.
+
+          forge-node    data.shared.forge-node.<graph>.<path>
+          forge-flag    data.shared.forge-flag.<node-path>
+          forge-graph   data.shared.forge-graph.<name>
+
+        forge-node fields:
+          graph        string   owning graph name
+          path         string   "root/auth/login" — position in tree
+          kind         enum     requirement | module | function | test
+          title        string   one-line purpose (human-readable)
+          body         string   Nopales source when kind=function; else ""
+          verify       string   Nopales source of the victory check
+          effects      string   declared badge (pure|read-db|write-db|…)
+          status       enum     planned | drafted | verified | flagged
+                              | approved | implemented
+          constraints  json     accumulated reroll-with-note strings
+          parent       string   path of parent node ("" for root)
+          children     json     list of child paths (denormalized index)
+          branch       string   code lens this node was drafted on
+          author       string   whoami at last mutation
+          target       string   existing binding this node modifies (""
+                              for greenfield; when set, the drafter is
+                              given the binding's current source as
+                              context and verify may run a regression)
+          test-fn      string   existing test binding to run as a
+                              regression after install ("" disables;
+                              when set with target, verify-node
+                              installs the drafted body as the target
+                              binding, calls test-fn, restores)
+
+        forge-flag fields:
+          node_path, check (enum: capability|victory|dangling|cycle|
+          orphan|size|judgment), detail string, resolved bool,
+          resolution string ("" until a human or the loop closes it)
+
+        forge-graph fields:
+          name, root_path, status (planning|descending|verifying|done|
+          stalled), created_by, created_at
+
+        The DENORMALIZED children index exists because backlinks over
+        body strings is the wrong query; children must be enumerable
+        without parsing. parent is the canonical link; children is
+        maintained by the same mutation fns (one transaction).
+
+        =========================================================
+        THE FRONTIER (planning is a computation, not a judgment)
+        =========================================================
+        The single strongest idea in this design: build order is
+        DERIVED FROM CODE, not guessed by an LLM.
+
+          free-vars:    walk a parsed body; collect symbols that are
+                        not bound by any enclosing lambda/let/define
+                        and are not kernel prims or existing bindings.
+          unresolved:   free-vars filtered against bound names.
+          frontier:     all planned nodes whose unresolved set is
+                        empty — leaves whose dependencies all exist.
+          stub-children: when a draft's free-vars reference names
+                        that exist NOWHERE (not prim, not binding,
+                        not a sibling node), those names become NEW
+                        planned child nodes. The drafter invented a
+                        helper; the graph records the debt.
+
+        Bottom-up falls out: a node can only be DRAFTED when its
+        dependencies are all at least drafted. The frontier is
+        recomputed after every mutation. There is no planner prompt;
+        there is a graph query.
+
+        Cycles: if drafting A produces a stub B whose drafting
+        references A, the cycle check flags it. Recursion is fine
+        in Nopales but breaks the topological frontier — a cycle
+        means the level needs restructuring (mutual-recursion
+        node, or a declared base-case split), and that is a
+        HUMAN decision, so the flag goes to judgment.
+
+        =========================================================
+        MECHANICAL FLAGS (checks that run before the human wakes)
+        =========================================================
+        Each flagger is a small pure-ish function over the graph.
+        They run after every draft and after every level-descent
+        proposal. The approval surface shows FLAGS, not nodes.
+
+          capability   child's inferred effects (via forge-effects
+                       prim) exceed the parent's declared badge.
+                       "read-only view" containing (create ...) is
+                       caught here, not by eyeballing.
+          victory      node has empty verify source. Unapprovable
+                       by definition; flagged before human sees it.
+          dangling     free-vars reference nothing: not prim, not
+                       binding, not a sibling/parent node. Either a
+                       missing stub or a typo'd name; both worth a
+                       flag.
+          cycle        frontier math found a dependency loop.
+          orphan       node traces to no requirement ancestor.
+                       Gold-plating detector: completeness means
+                       every requirement has a node AND every node
+                       traces to a requirement; no orphans either
+                       direction.
+          size         drafted body exceeds a review-in-one-glance
+                       threshold (default ~20 forms). Suggests a
+                       split; not a hard error.
+          judgment     the drafter itself asked for clarification.
+                       The "flag for review/clarification" of the
+                       tri-state review. This is the log/issues
+                       escape hatch, node-scoped.
+
+        The one new kernel surface:
+
+          (forge-effects "name-or-src")  → badge string
+              Runs lisp/lib/effect.ml infer over the named binding
+              (or parsed source) and returns EffSet.badge. This is
+              the SAME analysis install-function already gates on;
+              this prim merely EXPOSES it. Read-only, Pure effect.
+
+        =========================================================
+        THE LOOP (the interpreter that replaces plan/make/review)
+        =========================================================
+        One function, forge/step, is the whole state machine. It is
+        deliberately boring:
+
+          (forge/step graph-name)
+            1. If unresolved judgment flags exist → do nothing;
+               the loop is BLOCKED on the human. Return the flag
+               list. (The human's queue IS the control flow.)
+            2. Else if the current level has unapproved nodes →
+               run mechanical flaggers, present the level for
+               approval, stop. HUMAN GATE.
+            3. Else if the frontier is non-empty → pick one node,
+               assemble a draft prompt (context: title, parent
+               declaration, constraints, sibling summaries, the
+               platform-ref note), call the drafter (agent-session
+               + agent-say, or llm-seed for leaf functions), parse
+               the result into body+verify, run mechanical flaggers,
+               write the node. Return what changed.
+            4. Else → the level is complete; propose the descent
+               (stub children of approved nodes) and stop. HUMAN
+               GATE on the new level.
+
+        forge/run is forge/step in a job, so the loop persists
+        across HTTP requests and survives the laptop disconnecting.
+        The jobs chapter supplies the fiber; forge supplies the
+        step function. One job per graph, re-submitted after each
+        step while status is not done/stalled.
+
+        TRI-STATE REVIEW: when a node's draft passes mechanical
+        checks it goes to LLM review (a SECOND agent session, not
+        the drafter's) which returns approve | deny | flag. Deny
+        → redraft with the review note appended to constraints.
+        Flag → judgment flag, human queue. Approve → status
+        verified (verify source passes) or stays drafted (verify
+        needs a human run). Separation of powers is structural:
+        drafter, reviewer, and driver are three different sessions.
+
+        REROLL-WITH-NOTE: the human's reject carries a reason.
+        The reason appends to the node's constraints, and every
+        subsequent draft prompt includes all constraints. The
+        graph accumulates taste; the drafter cannot drift from a
+        constraint it has been given twice.
+
+        =========================================================
+        THE HUMAN SURFACE (triage, not review)
+        =========================================================
+        v1 is deliberately minimal — the UI is deferred on
+        PRINCIPLE (you cannot design the approval surface until
+        you know which flags fire). Phase one surfaces:
+
+          /forge              list graphs + status + open flag count
+          /forge/<name>       one graph: current level's nodes with
+                              flags, grouped by flag type; approve /
+                              reroll(with note) / veto per node;
+                              approve-all-clean button
+          log/issues          judgment flags land here too, one line
+                              each, per habitat-workflow
+
+        The approval page shows ANOMALIES. A node with zero flags
+        and a passing verify renders as one line: title, badge,
+        approve button. A flagged node renders its flag detail
+        first. The human reads flags, not code, unless they choose
+        to expand. This is the review-fatigue defense: the loop
+        surfaces LESS over time, not more.
+
+        LEVEL GATE SEMANTICS: approving a level means every node
+        at depth N is status>=approved and every flag at depth N
+        is resolved. The loop will not draft depth N+1 until the
+        depth-N gate passes. This is progressive disclosure of
+        commitment: no one, human or LLM, evaluates more than one
+        delta of abstraction at a time.
+
+        =========================================================
+        RELATIONSHIP TO EXISTING CHAPTERS
+        =========================================================
+        - habitat-workflow: forge is the same discipline with the
+          phases driven by code. Session ritual, obituary rule,
+          file-don't-fix, and handoff notes are UNCHANGED — forge
+          graphs write spec/<pkg> docs on promote, exactly as a
+          human session would. The notes docs remain the living
+          spec; the forge graph is the WORK-IN-PROGRESS view.
+        - ai-authoring: drafters use propose-function / llm-seed /
+          agent-session per that chapter's provenance and badge
+          rules. forge adds NO new privilege path; machine-authored
+          code lands on a branch and promotes through the same
+          human gate. The ai badge applies to every forge-drafted
+          binding.
+        - jobs: forge/run is a job. The runner fiber is the only
+          place the loop executes; no new concurrency is added.
+        - one-tree: node shapes and placement are specified above
+          per one-tree.branching-interaction. Graph state never
+          participates in branch lenses (same argument as jobs).
+        - lisp-interpreter.effects: forge-effects exposes the
+          existing infer; nothing about inference changes.
+
+        =========================================================
+        HARD EDGES (non-goals for v1)
+        =========================================================
+        - NO graph-visualization UI. A tree list with flags is
+          enough; the force-directed graph explorer is a later
+          nicety, built on evidence of what the queue needs.
+        - NO autonomous promote. The loop never calls promote;
+          it prepares a branch and a spec doc. The human runs
+          pp-sync / promote exactly as today.
+        - NO drafter-is-reviewer. The same agent session never
+          both writes and judges a node.
+        - NO unbounded descent. A graph declares max-depth at
+          creation; the loop stalls (status=stalled, judgment
+          flag) rather than drafting past it.
+        - NO rewriting of borge-the-CLI. .borg files remain the
+          git-tracked source of truth for the KERNEL. forge is
+          for PRODUCT code (libs/*) where the habitat IS the
+          source of truth. The two coexist; forge does not eat
+          borge.
+   |))
+  )
+
+  (subsection graph-model
+   (doc "forge-node / forge-flag / forge-graph typed nodes: data.shared placement, denormalized children index, status enum, constraints accumulation; target + test-fn fields anchor modify-existing nodes")
+   (status implemented)
+   (verify
+    (build "dune build @all")
+    (test "image/test: forge node create/update; children index stays consistent with parent links across edits")
+    (smoke "pp_eval '(forge/new-graph \"x\")' → row at /data/forge-graph; (forge/add-child …) maintains both directions")))
+
+  (subsection frontier
+   (doc "free-vars over parsed bodies; unresolved filter; frontier query; stub-children on unknown refs; cycle detection flags loops")
+   (status implemented)
+   (verify
+    (build "dune build @all")
+    (test "image/test: free-vars of (lambda (x) (+ x y)) is {y}; frontier excludes nodes with unresolved deps")
+    (test "image/test: drafting a body referencing undefined name 'helper' creates a planned child node named helper")
+    (smoke "cycle A→B→A surfaces a cycle flag, not an infinite stub loop")))
+
+  (subsection mechanical-flags
+   (doc "capability escalation via forge-effects prim, missing victory, dangling refs, cycles, orphans, size heuristic — each a small fn over the graph; judgment is the human escape hatch")
+   (status implemented)
+   (verify
+    (build "dune build @all")
+    (test "image/test: forge-effects prim returns badge for a named binding (pure for +, write-db for create)")
+    (test "image/test: child with write-db body under parent declared read-db raises capability flag")
+    (smoke "node with empty verify source is victory-flagged before appearing on the approval page")))
+
+  (subsection loop-and-gates
+   (doc "forge/step state machine (blocked→flagged→draft→descend); forge/run as a job; tri-state LLM review with separate reviewer session; reroll-with-note constraint accumulation; level-gate semantics; verify-node evaluates the victory expression on the current branch session")
+   (status implemented)
+   (details
+    (doc (|
+         VERIFY EXECUTION SEMANTICS
+         verify-node evaluates (let ((fn body)) verify) via eval-string
+         on the current branch session. The drafter seed already
+         instructs verifies to create and clean their own test data, so
+         a verify may touch the DB on the current branch; this is
+         accepted for v1.
+
+         REGRESSION MODE (modify-existing nodes): when a node has both
+         target and test-fn set, verify-node runs a regression after
+         the primary verify passes. It saves the target binding's
+         current source (function-source), installs the drafted body
+         as the target binding (eval-string define), calls test-fn,
+         and restores the original source. Because Nopales closures
+         capture the session env by reference, the test function's
+         calls to the target name exercise the NEW body. If test-fn
+         returns truthy the regression passes; otherwise a judgment
+         flag is raised. Restoration is best-effort: if the target
+         had no source (a prim), verify-node skips regression and
+         falls back to the primary verify only, with a judgment flag
+         noting the skip.
+
+         Scratch-branch checkout (evaluating verify on an isolated dev
+         branch) is a FUTURE hardening, not v1. The current design
+         trusts the drafter seed's create-and-clean discipline and the
+         separation-of-powers review to catch misbehaving verifies.
+    |)))
+   (verify
+    (build "dune build @all")
+    (test "image/test: step with open judgment flags is a no-op returning the flag list")
+    (test "image/test: reroll appends the note to constraints; next draft prompt contains it")
+    (smoke "full descent on a toy graph: root → level 1 approved → stubs → leaf drafted → verified, all via forge/run job")
+    (smoke "loop refuses to draft depth N+1 while any depth-N node is unapproved")))
+
+  (subsection existing-app-bridge
+   (doc "Bootstrapping and modifying existing code: forge/import-function reads a binding's source (function-source) and creates a node status=implemented body=source verify=(begin #t); the target field names an existing binding a node modifies, and forge/draft-prompt branches to include the current source as context; test-fn enables regression verify per loop-and-gates")
+   (status planned)
+   (verify
+    (build "dune build @all")
+    (test "image/test: forge/import-function on a live binding creates a node status=implemented with the binding's source as body")
+    (test "image/test: a node with target set produces a draft prompt that includes the target's current source")
+    (smoke "import a small package's functions into a graph; frontier sees them as implemented; a modify-existing draft references the current body")))
+
+  (subsection human-surface
+   (doc "/forge list + /forge/<name> anomaly-first approval page (approve/reroll-with-note/veto per node, approve-all-clean); judgment flags also land in log/issues; NO graph-viz, NO autonomous promote")
+   (status planned)
+   (verify
+    (build "dune build @all")
+    (test "image/test: approval page groups nodes by flag type; clean nodes render one-line")
+    (smoke "browser: /forge shows a seeded graph; approving a node advances the level gate; reroll dialog accepts a note")
+    (smoke "a judgment flag appears in both /forge/<name> and the notes log/issues doc")))
+
+  (subsection non-goals
+   (doc "no graph-viz UI v1; no autonomous promote; no drafter-is-reviewer; max-depth hard stop; borge CLI untouched — forge is for product code, .borg stays kernel truth")
+   (status planned)
+   (verify
+    (test "conformance: no forge binding calls promote or merge (surface lint over the package)")
+    (test "conformance: reviewer session id ≠ drafter session id on every tri-state review")))
+
+ )
+)

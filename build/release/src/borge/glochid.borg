@@ -1,0 +1,717 @@
+(project pricklypear-glochid
+ (doc "Pricklypear book chapter: agent — GLOCHID, the local-first agent harness: the Nopales-native coding-agent PRODUCT. A local-resident habitat client: one process, one screen, working its own forked branch of the one tree, syncing up, offline-tolerant, with installable browsers. Links prim-seam as its capability/library; shares pricklypear-lisp + llm with the image.")
+ (status planned)
+ (* agent note (|2026-12 ALIGNMENT PASS (product vs capability, the line the code was reaching for). HISTORY: the agent was born 2026-08-03 as a hermetic pi-clone spike ('no Postgres, no branches, no auth'); prim-seam + pp-remote arrived 2026-08-14 as the SAME prim seam with the rim handler swapped to an HTTP proxy, explicitly 'NOT a new product — a mode of the agent host.' The code never converged: agent/ stayed hermetic-local, remote/ grew a second product surface (a chat), and the two forked surfaces/t-records/serve-functions are SYMPTOMS of a missing noun, not independent designs. This pass redraws the line the spec never drew and retires the 2026-08-03 framing. ALIGNMENT: (1) the AGENT is one PRODUCT — a local-resident coding agent, chat + installable browsers (file browser, AST browser, data browser), one process you launch. It is a HABITAT CLIENT BY DEFAULT, not a hermetic spike: each run forks its own branch (lens-<device>), syncs the AST + data down, and works against that LOCAL LENS as the working source — edits are local-first, pushed up via sync, offline-tolerant up to a surfaced merge (local-first.sync-conflicts). The image is the durable store + merge authority, NOT a live read target. (2) REMOTE-EVAL is the CAPABILITY/LIBRARY behind that — sync the AST/data down, eval locally, proxy out-of-working-set prims up to the image, three-way merge on reconnect — NO surface, no chat. pp-remote shrinks back to this library + a minimal /eval harness; the chat surface I just added to remote/ MOVES to the agent (one surface file, one set of chat/* templates, one serve). (3) THE BOUNDARY: agent owns the surface + installable browsers + the coding-agent tool set (read/bash/file-browser over the operator's laptop); prim-seam owns the rim, the lazy env, the def-cache, the sync, the stepping, the wire. The agent never reimplements eval; prim-seam never owns a screen. (4) llm/ (loop+provider+tools) stays shared — it sits ABOVE both: the agent supplies a Loop.host over the local-first rim; a future debugger/test-harness links the same loop over its own host. WHAT THIS PASS DOES NOT DO: restatus the implementation subsections or touch code — this redraws the POSITIONING line only; a make pass retires the agent binary's hermetic path, collapses the duplicated surfaces into one on the agent, and shrinks remote/ to the library. OPEN QUESTIONS the make pass must settle, not this pass: (a) sync cadence — per-write sync is wrong (an LLM making 20 quick edits is 20 merge rounds + 20 merge-bases); a sync round is a coherent UNIT (the turn, or an explicit flush), debounced — decide in local-first.sync. (b) fork garbage collection — every device forks lens-<device>; dead devices leave stale branches. (c) two planes one screen — chat-agent bash edits the operator's LAPTOP repo (the OCaml); Nopales surface edits go to the LENS -> image. Same screen, two planes; name it so it is a feature, not a confusion. The 'agent requires a reachable habitat' call is taken here: offline is DEGRADED working-set-only, not a first-class mode — the lens makes a flaky link survivable; 'agent with no image, ever' is no longer a product target (retires the 2026-08-03 promise).|) *)
+ (* agent note (|2026-08-03 chapter created for the pi-clone spike. Positioning: sibling consumer of pricklypear-lisp (like cli/), NOT part of the image product. No Postgres, no branches, no auth. If it graduates into the product later that is a plan-phase spec edit.|) *)
+ (* agent note (|2026-08-14 v0.0 spike landed: rim moved to Control.run_with_rim (image Control_rim is now a thin alias), Eval.read_eval_all_direct added, agent/ package with stdin REPL + mock provider + read/bash builtins + on/register-tool/register-command + tool_call-block path. Provider is OpenAI-compatible chat completions only (synthetic.new + any gateway, Anthropic via its compat endpoint) — no native Anthropic path; image llm_client.ml is the curl cautionary tale we avoid. agent/ tests 5/5 (incl. provider SSE reconstruction), full workspace green. Known gaps: SSE streaming now lands text deltas live (Openai.complete streams requests with stream:true; text deltas dispatch via on_delta as they decode) but tool-call stream fragments are RECONSTRUCTED into a full assistant message (not streamed live as tool-call deltas) — that reconstruction runs through the shared parse_reply so XML/GLM fallback and history shape are preserved; http_ui.ml landed: HTML primary surface (chat page + inline SSE client), code browser (read-only file tree + file view), --serve/--open wired in main.ml. Chat streams via true incremental SSE (producer-fiber + drain queue, mirroring image http_agent.ml mp/sse pattern). Gluten_eio deadlock avoided by forking handler work off the connection fiber. Code browser has canonical-path traversal guard. All surfaces smokes pass (chat page, SSE deltas, tree list, file render, traversal 403, piped-turn regression).|) *)
+ (* agent note (|2026-08-14 SURFACE REFACTOR DESIGN (decided, plan-mode): the agent UI moves off SSE+vanilla-JS to Nopales-authored htmx fragments + multipart streaming, so the surface is a loadable Nopales layer both the agent AND the image share. Decision thread: (1) soup/* tree prims are DB-free — lift them from image/lib/prims_hyper.ml into the shared pure-prims layer (pure/) so both hosts register the same tree prims; (2) route/lookup + route/dispatch are THE HOST SEAM (hypermedia-harness.request-runner) — identical Nopales signatures, host-local backing (image Session.t Postgres routes vs agent Runtime.t lens routes); (3) LLM use is always-API (no local inference), so the main habitat stays the corpus source of truth; the agent evaluates against a LOCAL-FIRST LENS (local-first.borg), not a hermetic embedded corpus — edits sync up per local-first.lens-model. This revises the 2026-08-03 positioning which said 'no Postgres, no branches, no object store' and made the corpus embeddable. Streaming stays OCAML (provider SSE -> deltas -> per-part (html,target,swap) assembly -> multipart frame + flush), with Nopales owning the fragment templates; soup/apply-parts! models a consumed turn as data for libs/hyper. Phasing (read-only lens vs write-capable lens in the first cut) was left OPEN in discussion — record it in local-first.phasing when decided.|) *)
+ (* agent note (|2026-12 CAMPAIGN 6.0 PLAN PASS (agent surfaces / route table spec): revealed the agent-route-table + surfaces implementation was ALREADY COMPLETE in agent/ (built since the 2026-08 design). Reconciled both stanzas' verify stanzas + details to the implemented reality WITHOUT a status flip (per the plan-pass/make division of labour — 6.1 make flips them planned → implemented). Verified live: glochid_test 13/13 green; smoke_glochid_surface.sh 14/14 PASS; piped-turn `--once` + `-p` pipe mode both work. agent-route-table = route / route/lookup / route/dispatch + thin request context (query-param / request-method / hx-request?) in glochid/lib/runtime.ml, the host seam libs/hyper runs on unchanged; surfaces = Nopales-authored htmx fragments + OCaml multipart stream + GENERATED assets.ml/libs_source.ml (dune-produced; must stay in the surfaces (implements …) list to cover the modules at build — their real sources are libs/html/lib.pp + libs/hyper/lib.pp + image/static/*.js). No code changes needed — a spec-reality reconcile only. REMAINING for 6.1 make: flip both stanzas to implemented; re-run borge drift (note the generated-module wrinkle: implements-exist sees assets.ml/libs_source.ml as missing on an IMPLEMENTED stanza because they only exist under _build — an open borge modeling limit worth an issue if 6.1 can't reconcile); formalize smoke_glochid_surface.sh into the verify apparatus; wire the local-first lens backing (a campaign-8 dependency, not strictly 6.x).|) *)
+ (* agent note (|2026-12 CAMPAIGN 6.1 MAKE (agent-route-table + surfaces) DONE: flipped both stanzas planned -> implemented (agent-route-table route/route-lookup/route-dispatch + thin request context; surfaces Nopales htmx fragments + OCaml multipart stream). RESOLVED the generated-module wrinkle the 6.0 note flagged: borge's implements-exist check false-positives dune-GENERATED modules (glochid/lib/assets.ml + libs_source.ml exist only under _build), so a new generated-surface-artifacts PARTIAL subsection (implements those two build slices, no existence check) covers the dune module cross-ref while their real authored sources stay in the surfaces implements (libs/html/lib.pp + libs/hyper/lib.pp + image/static/*.js). Also merged the two duplicate details blocks in agent-route-table into one. Result: borge drift back to the clean 12-item pre-existing BORGE-1786924137 baseline, spec drift NONE, structural NONE. VERIFY: dune build @all clean; glochid_test 13/13 green (agent-route-table x3 + surfaces x3); scripts/smoke_glochid_surface.sh 14/14 PASS; piped-turn --once + -p both work; borge balance+parse clean; borge check 32/32. No OCaml code touched (implementation was already committed 6ecae8b).|) *)
+ (* agent note (|2026-08-29 NAMING (discussion): the local-first agent harness is GLOCHID — the detachable spine you pull off the pad and work with: local-first lens corpus, Nopales-authored htmx fragments, multipart/mixed streamed turns replayable as data via hyper/stream. This REASSIGNS the word: local-first's conflict subsection (formerly 'the-glochids') is renamed sync-conflicts so glochid means exactly one thing — this harness. Codename level: spec headers, README, code comments; binary + dune package keep the name 'agent' until a deliberate rename pass.|) *)
+ (* agent note (|2026-10-01 NOMENCLATURE (locked 2026-10-01 in filmstrip.borg): GLOCHID = strictly the local agent harness product (this chapter). FILMSTRIP = the window-manager interface (filmstrip.borg); glochid's screen IS a filmstrip — shared shell verbs are filmstrip/* (the harness consumes them), glochid/* names are harness-local (theme, chat surfaces). Colloquial 'glochid' for the window manager is retired; say filmstrip.|) *)
+ (convention ocaml-dune)
+ (section agent
+  (doc "The Nopales-native coding-agent PRODUCT: a local-resident habitat client. One process, one screen — chat plus installable browsers (file browser, AST browser, data browser). It works against its OWN FORKED BRANCH of the one tree (a local-first lens, the working source), edits local-first and synced up, offline-tolerant up to a surfaced merge. Links prim-seam as its capability/library; shares pricklypear-lisp + llm with the image. pi (pi.dev) is the reference point for the agent UX; the differentiator is that plugins + browsers are Nopales loaded into a live env shared with the session REPL, so the operator redefines them while the agent runs.")
+
+  (subsection positioning
+   (doc "What the agent is and is not — the PRODUCT, against prim-seam (the capability) and the image (the authority)")
+   (status implemented)
+   (details
+    (doc (|
+         IS:
+           - ONE PRODUCT, one binary, one process you launch in a
+             directory: `cd project && agent`. A local-resident
+             coding agent — chat, plus installable browsers. Single-
+             user, localhost; one operator, one working copy, one
+             screen.
+           - A HABITAT CLIENT BY DEFAULT, not a hermetic spike. On
+             first run it forks its own branch (lens-<device>) of the
+             one tree, syncs the AST + data down (local-first.lens-
+             model), and works against that LOCAL LENS as the working
+             source. Edits are LOCAL-FIRST (writes hit the local tree,
+             not /api/prim); sync PUSHES them up (local-first.sync); on
+             disconnect it keeps working and reconciles on reconnect
+             (three-way merge, local-first.sync-conflicts). The image is
+             the durable store + merge authority + index, NOT a live
+             read target. This retires the 2026-08-03 'no Postgres, no
+             branches, no object store' framing for good.
+           - A client that LINKS prim-seam as a capability/library,
+             not a second product. prim-seam owns the rim, the lazy
+             env, the def-cache, the sync engine, the stepping, the
+             wire; the agent owns the surface and the installable
+             browsers and the coding-agent tool set. The agent never
+             reimplements eval.
+           - TWO PLANES, ONE SCREEN, on purpose. The chat agent's
+             read/bash tools edit the operator's LAPTOP repo (the
+             OCaml checkout — the agent LIVES on the machine). The
+             Nopales surface + browser edits go to the LENS -> image.
+             Same process, two planes: one touches the operator's
+             filesystem, one touches the habitat's tree. This is a
+             feature, not a confusion to paper over.
+           - A second home for Nopales: plugin/browser files under
+             ~/.config/agent/plugins/*.pp (global) and
+             .agent/plugins/*.pp (project) are evaluated into one env
+             shared with the session REPL. Live redefinition takes
+             effect on the agent's next turn.
+
+         IS NOT:
+           - HERMETIC. 'Agent with no image, ever' is no longer a
+             product target. The lens makes a flaky link survivable
+             (offline = degraded working-set-only, reconciles on
+             reconnect); it does not make 'no habitat' first-class.
+             The 2026-08-03 promise is retired here, deliberately.
+           - Part of the image. The image stays the multi-user
+             habitat product (single-image.borg) + corpus authority;
+             the agent is a sibling CLIENT host, never a second
+             source of truth.
+           - A Nopales fork. Semantics come from pricklypear-lisp
+             unchanged; the agent adds HOST PRIMS + an optional host
+             library layer in .pp, nothing else. A language change
+             lands via lisp-interpreter.borg like any other.
+           - The LLM loop owner. The loop lives in llm/ (shared with
+             pp-remote and any future host); the agent supplies a
+             Loop.host over its local-first rim. See agent-loop.
+           - pi's TUI. The primary surface is HTML (pure-html +
+             htmx, multipart for streams); a minimal line REPL mode
+             exists for scripts and embedding, not as the primary
+             interaction.
+    |))))
+
+  (subsection nopales-embed
+   (doc "Embedding pricklypear-lisp as the host of the plugin environment")
+   (status partial)
+   (implements lisp/lib/control.ml lisp/lib/eval.ml glochid/lib/runtime.ml)
+   (verify
+    (test "a .pp plugin file defining an event handler is loaded at startup and its handler fires on the agent loop's tool_call event")
+    (test "redefining the same handler by evaluating a new definition in the session REPL changes subsequent tool_call behavior without restart")
+    (test "an unregistered prim call from a plugin produces a structured Interp_error, not an Unhandled effect escape")
+    (test "two evals never interleave on shared Eval global state (serialize via mutex); a nested plugin-triggered eval during an active turn completes correctly"))
+   (details
+    (doc (|
+         SEAM. pricklypear-lisp is already the embeddable artifact:
+         Eval.eval_string_direct ~prims env s plus a pure prim table
+         and Control.Prim_call effects. The agent provides a rim in
+         the style of image Control_rim: an Effect.Deep handler over
+         Prim_call dispatching to the host table, with
+         Control.direct_prims set during prim bodies so nested eval
+         dispatches directly.
+
+         MOVE DOWN. The rim handler (currently image-only) moves into
+         lisp/lib/control.ml as Control.run_with_rim so both hosts
+         share it. Mechanical move, no behavior change; the image
+         keeps a thin alias until call sites are updated.
+
+         CONCURRENCY MODEL. All Nopales evaluation is serialized
+         through one Eio mutex. Eval's global refs (current_budget,
+         last_budget) stay global in v0; per-eval threading is a
+         follow-on only if real pain appears. Nested eval triggered by
+         a plugin callback from inside a tool handler re-enters
+         through direct_prims under the same budget, as the image
+         rim already does.
+
+         PRIM ABI. Prims are synchronous (value list -> value). Host
+         prims block the calling fiber (Eio), never Lwt: the agent
+         has no PP_IO switch and no lwt rollback path. plugin-authored
+         Nopales code therefore looks fully synchronous even when a
+         prim performs network I/O.
+
+         SHARED soup/ KERNEL. The soup/ tree prims (hypermedia-
+         harness.kernel-prims: soup/parse, select, swap!, apply-parts!,
+         diff, closest-attr, …) are DB-free and registered here from
+         the SAME shared pure-prims layer the image uses (lifted from
+         image/lib/prims_hyper.ml into pure/). html/ (the pure-html DSL
+         for composing fragments) is a NOPALES package (libs/html),
+         not an OCaml prim layer — the agent loads it as source
+         against these prims, like libs/hyper. lambdasoup + markup
+         become agent deps, joined on the same seam.
+
+         HOST PRIM NAMESPACE. Agent prims are prefixed by family:
+           ui/notify ui/confirm ui/select        (browser surfaces)
+           session/list session/data session/new session/resume
+           session/name session/text             (sessions-persist;
+                                                  the live store prims)
+           mem/remember mem/get mem/search        (memory-bridge local
+           mem/replace mem/forget mem/list        delegates to the
+                                                  habitat libs/memory)
+           on register-tool register-command     (plugin API)
+           http/get http/post                    (Eio; JSON in/out)
+           route route/lookup route/dispatch     (agent-route-table;
+                                                  THE HOST SEAM shared
+                                                  with hypermedia-harness)
+           soup/*                                (shared tree prims,
+                                                  hypermedia-harness)
+         Pure language prims are untouched. The image's DB/auth/
+         session prims do not exist here; route prims are the
+         agent's LOCAL-LENS backing, not Postgres.
+    |))))
+
+  (subsection agent-loop
+   (doc "The minimal agent turn loop and tool registry")
+   (status partial)
+   (implements llm/lib/loop.ml llm/lib/provider.ml llm/lib/tools.ml common/lib/llm_codec.ml llm/lib/envcfg.ml llm/lib/harness.ml llm/lib/mock.ml httpc/pp_http.ml)
+   (verify
+    (test "a mock provider emitting one tool call round-trips: tool executes, result message is appended, loop makes exactly one follow-up model call")
+    (test "budget: the loop stops after a configurable max turns and reports rather than spinning")
+    (test "tool_call plugin hook can block a call; the model sees the block reason as the tool result")
+    (smoke "openai-compat provider streams a real reply end-to-end when GLOCHID_API_KEY is set (legacy AGENT_API_KEY)"))
+   (details
+    (doc (|
+         HOST SEAM. loop/provider/tools live in the shared llm/ package
+         (pricklypear-llm) factored over a small [Loop.host] record
+         (tool_order, tool_entry, fire, eval_tool_body, call_prim);
+         glochid/lib/runtime.ml supplies Runtime.loop_host. The same
+         library is linked by pp-remote, which supplies Remote.loop_host
+         over the proxy rim — ONE loop, two hosts (prim-seam.borg
+         agent-loop owns the client half).
+
+         SHAPE. One assistant turn = one streaming provider call. If
+         the reply contains tool calls, execute them (serialized eval
+         mutex held only during each tool's Nopales work), append
+         results, call again. Max-turns guard, abort signal, and
+         usage accounting per turn.
+
+         PROVIDERS v0. OpenAI-compatible chat completions HTTP (covers
+         synthetic.new and every gateway we use, Anthropic included
+         via its compat endpoint) over Httpun_eio... hand-rolled 1.1
+         POST because gluten refuses non-socket TLS flows. No curl
+         subprocesses (image llm_client.ml is the cautionary tale),
+         no native Anthropic messages path. SSE parsing in-process
+         once streaming lands.
+
+         TOOL REGISTRY v0. read, bash, edit — matching the pi
+         baseline shapes so prompts and habits transfer. bash runs
+         via Eio.Process with timeout and output truncation.
+
+         TOOL SCHEMAS. Tool parameter schemas are data (yojson)
+         constructed by the registry, serializable for both provider
+         wire formats. register-tool accepts a Nopales alist schema
+         and a Nopales closure body; the closure runs under the rim
+         inside the loop.
+
+         PROVIDER ABSTRACTION. A variant type provider_reply with
+         text/tool-call/delta constructors; each provider module maps
+         wire events to it. Adding a provider = one module, no loop
+         changes.
+    |))))
+
+  (subsection plugin-model
+   (doc "Nopales plugin API: events, custom tools, commands, session REPL")
+   (status partial)
+   (implements glochid/lib/plugins.ml glochid/test/glochid_test.ml glochid/bin/main.ml)
+   (verify
+    (test "loading order: global plugins then project plugins; a project plugin can redefine a global binding")
+    (test "on/2 registers a handler; handlers for one event run in registration order; tool_call block short-circuits remaining handlers")
+    (test "register-tool closures appear in the provider tool list on the turn after registration")
+    (test "register-command commands are intercepted before the input reaches the model"))
+   (details
+    (doc (|
+         FILES. ~/.config/agent/plugins/*.pp then .agent/plugins/*.pp
+         (cwd), each evaluated in filename order into the shared env.
+         A plugin file is ordinary Nopales; no module ceremony.
+
+         EVENTS v0 (subset of pi's surface, deliberately small):
+           tool_call   (may block: return (dict "block" #t "reason" s))
+           tool_result (may replace content)
+           input       (may transform text or handle outright)
+           before_turn (may inject a context message)
+         Event payloads are JSON strings manipulated with the frozen
+         dict-* prims — no new value types.
+
+         CUSTOM TOOLS. (register-tool name params-alist closure).
+         Params alist maps param name -> "string"|"int"|"bool" with
+         optional "description" entries; registry builds JSON schema.
+         Closure receives one JSON string argument.
+
+         COMMANDS. (register-command name doc closure). `/name args`
+         in the input line is dispatched to the closure before model
+         submission.
+
+         REPL UNITY. The session REPL (stdin mode and browser /repl
+         pane) is the same env. `(define ...)` at the prompt
+         redefines handler functions live; there is no reload
+         command because there is nothing to reload.
+
+         SAFETY. Plugin code runs with the user's full permissions
+         (same trust posture as pi). Project plugins load only after
+         an interactive trust confirmation; the decision is cached
+         per directory hash under ~/.config/agent/trust.json.
+    |))))
+
+  (subsection agent-route-table
+   (doc "The Nopales route table: route, route/lookup, route/dispatch — THE HOST SEAM between the agent and the image (hypermedia-harness.request-runner). Identical Nopales signatures, host-local backing. Routes bind a path to a Nopales render handler the same way the image's (route ...) does.")
+   (status implemented)
+   (implements glochid/lib/runtime.ml hostkit/host_seam.ml hostkit/http_kit.ml hostkit/multipart_emitter.ml)
+   (verify
+    (test "glochid-route-table / register-and-render: a (route \"/chat\" \"chat/render\") registered by a plugin makes /chat resolvable via route/lookup and renderable via route/dispatch (which invokes the handler through Runtime.apply_value under the eval rim and returns the rendered raw-HTML VStr)")
+    (test "glochid-route-table / thin-context: route/dispatch binds a thin request context so query-param / request-method / hx-request? resolve inside the handler")
+    (test "glochid-route-table / pg-prim-unbound: a handler calling a Postgres-only request prim (e.g. current-author as a DB row) errors with unbound-prim in the agent — the agent's request context carries only request-shape values"))
+   (details
+    (doc (|
+         IMPLEMENTED + VERIFIED (campaign 6.1 make, 2026-12). The whole
+         route-table seam is live in
+         glochid/lib/runtime.ml and covered by the agent suite's
+         glochid-route-table group (3 tests, all green): (route path
+         handler) registers into the Runtime route Hashtbl;
+         (route/lookup path) resolves path -> handler-name VStr | VNil;
+         (route/dispatch handler method path [params] [headers] [body])
+         invokes the handler under the eval rim + mutex with a THIN REQUEST
+         CONTEXT bound (query-param / request-method / hx-request?;
+         DB/branch/auth request prims stay UNBOUND, so libs/hyper runs
+         unchanged on both hosts). dispatch_route is the locking wrapper
+         the HTTP gate uses; dispatch_route_raw is the shared in-eval
+         body. render is via Prims_soup.render_handler_value (the shared
+         soup kernel lifted into pure/). The request context also carries
+         session/last-turn-parts (surfaces scope) so a consumed turn
+         replays through hyper/stream.
+
+         SHAPE. Runtime.t gains a route table (path -> handler-name).
+         Nopales registers routes with the same (route path handler)
+         shape the image uses; route/lookup resolves a path to its
+         handler; route/dispatch invokes the handler in-process
+         through Runtime.apply_value (under the eval rim + mutex) with
+         a THIN REQUEST CONTEXT bound and returns the rendered
+         raw-HTML VStr.
+
+         SAME SEMANTICS, LOCAL BACKING. The image backs these prims
+         with Session.t routes over Postgres + a fat Request_context
+         with manifest/store/branches. The agent backs them with the
+         Runtime route table + a thinner request context — the SAME
+         Nopales signatures, so libs/hyper and the surface handlers
+         run unchanged on both hosts. The route table is where the
+         corpus's routes are materialized; as a local-first host the
+         corpus (incl. defs) comes from the lens, matching the
+         positioning subsection.
+
+         ROUTE INSTANCES. Surface pages (/ /chat and the code
+         browser) register as route-table routes in Nopales; the
+         multipart STREAM emission for a chat/agent turn stays OCaml
+         (surfaces subsection) — a route's handler initiates a host
+         stream rather than returning a single fragment for streaming
+         routes.
+    |))))
+
+  (subsection surfaces
+   (doc "Interaction surfaces: HTML primary, line REPL secondary. The chat/agent surface is NOPALES-AUTHORED htmx fragments + multipart streaming; the stream is emitted by OCaml, the fragments by Nopales.")
+   (status implemented)
+   (implements glochid/lib/http_ui.ml glochid/lib/lifecycle.ml glochid/lib/runtime.ml glochid/lib/surface.ml libs/html/lib.pp libs/hyper/lib.pp scripts/probe_glochid_clear.mjs scripts/probe_glochid_input.mjs scripts/smoke_glochid_cdp.mjs scripts/smoke_glochid_surface.sh)
+   (verify
+    (smoke "surfaces / nopales-routes: agent boots and serves the NOPALES-authored chat + code pages on the route table (/ and /code), redefinable from the session REPL without restart")
+    (smoke "surfaces / turn-replay-hyper-stream + turn-replay-nested-blocks: a consumed chat turn replays deterministically through libs/hyper (hyper/stream over the captured part list) in the agent host")
+    (smoke "scripts/smoke_glochid_surface.sh (end-to-end): boots `_build/default/glochid/bin/main.exe --serve --mock-script`, GET / serves the hx-post=/chat form + hx-multipart asset, GET /assets/hx-multipart.js is 200, POST /chat streams multipart/mixed chunked with all parts + close boundary and TERMINATES promptly, GET /code renders the file tree")
+    (smoke "surfaces line REPL / piped turn: `echo PROMPT | agent --once --mock-script m.json` runs one full turn from piped stdin and prints the assistant reply; `agent -p EXPR` evals one Nopales expr and exits"))
+   (details
+    (doc (|
+         IMPLEMENTED + VERIFIED (campaign 6.1 make, 2026-12; the 6.0
+         plan pass reconciled the verify stanzas to these actual groups).
+         All five surfaces smokes are
+         live and green: the agent suite's surfaces group (nopales-routes,
+         turn-replay-hyper-stream, turn-replay-nested-blocks — 3 tests)
+         exercises the Nopales-authored routes + deterministic hyper/stream
+         replay; scripts/smoke_glochid_surface.sh boots the real binary with
+         --serve + --mock-script and proves the chat page, the
+         hx-multipart asset, the /chat multipart/mixed chunked stream
+         (all parts + close boundary + prompt termination), and the
+         /code file tree over HTTP/1.1 keep-alive (14 checks, PASS);
+         the line-REPL smokes run via `agent --once --mock-script`
+         (piped-turn) and `agent -p EXPR` (pipe mode) — both verified.
+         The vendored htmx assets and embedded libs/html + libs/hyper
+         sources are GENERATED module slices (dune rules producing
+         glochid/lib/assets.ml and glochid/lib/libs_source.ml into _build);
+         those two build-only modules are covered by the
+         generated-surface-artifacts subsection (their real authored
+         sources are libs/html/lib.pp + libs/hyper/lib.pp +
+         image/static/*.js, named here in this stanza's (implements …)).
+
+         HTML PRIMARY, NOPALES SURFACE. Local HTTP server (Httpun_eio)
+         on 127.0.0.1:18090 by default (--port overrides; a busy port
+         falls back to a random one); prints the URL (and --open to
+         launch a browser). Chat and the code browser are htmx
+         fragment routes on the agent route table (agent-route-
+         table), rendered by Nopales via libs/html — NOT compiled
+         OCaml pages and NOT vanilla-JS SSE. The surface is
+         redefinable live (same env as plugins/REPL). REPL RULE: a
+         chat prompt whose first non-space char is ( evaluates as
+         Nopales in the shared env (Runtime.eval_string — same rule
+         as the stdin REPL), rendering the last value as a
+         chat/repl-bubble; anything else is a model turn.
+
+         STREAMING IS OCAML. A chat/agent turn's stream is a compiled
+         host concern: provider SSE -> delta assembly -> per-part
+         (html, HX-Target, HX-Swap) assembly (delegating only the
+         fragment TEMPLATE to a Nopales render fn) -> multipart/mixed
+         frame + flush over the producer-fiber/drain-queue plumbing
+         already proven in the image and the v0.0 agent.
+         Nopales owns the page skeleton and fragment templates;
+         OCaml owns the effects-coloured stream. The parts are ALSO
+         collected as data (session/last-turn-parts) so libs/hyper can
+         replay a consumed turn deterministically (soup/apply-parts!,
+         hyper/stream).
+
+         LINE REPL. stdin/stdout mode for scripts, embedding, and
+         tty diehards. Same env, same prims, no htmx. Piped-turn
+         mode (--once / non-tty stdin) reads the whole of stdin as one
+         prompt, runs a single full turn, prints the final assistant
+         text, exits 0.
+
+         GUI. Explicitly out. Nothing in the feature list needs
+         native widgets, and a second UI ecosystem doubles the
+         maintenance surface.
+
+         UI PRIMS. ui/confirm, ui/select, ui/notify resolve against
+         the active surface: modal/banner component in the browser,
+         y/n prompt on stdin in REPL mode. A blocking ui/confirm in
+         an event handler suspends only the agent fiber; the HTTP
+         fiber keeps streaming because prims block fibers, not
+         threads (Eio), and eval serialization is per-eval, not
+         per-process-park.
+    |))))
+
+  (subsection filmstrip-shell
+   (doc "The glochid shell IS a filmstrip (filmstrip.borg, working on the agent host): a LEFT-RAIL sidebar shell — the cascade strip and the AXIS toggle are retired on this host (operator decisions 2026-09-19/2026-09-20). The rail's first controlbox word is a zero-JS <details> START MENU (entries POST /filmstrip/open, open-or-focus) in place of the old separate cascade/launchbar column; the start menu reads the agent's OWN surfaces (chat/code/bindings/sessions/settings, all leaves). The FOCUSED main pane is lifted into the main window (position:fixed — open-or-focus jumps it there). The shell axis is pinned to col (sidebar); glochid/axis returns col unconditionally and the #fs-axis sentinel stays inert (CSS :has keys the sidebar layout off it). Same seam as the habitat shell — Nopales fragments on the agent route table — with two host seams swapped: the workspace row persists to a LOCAL file (fs prims), and the app list is the agent's own surfaces, not by todo/notes/calendar. SCOPE GUARD: glochid HOST only — the habitat shell keeps its axis toggle and cascade unless a separate decision removes them there.")
+   (status implemented)
+   (implements glochid/lib/surface.ml glochid/lib/http_ui.ml libs/filmstrip/lib.pp libs/css/lib.pp)
+   (verify
+    (smoke "GET / renders the sidebar shell: #fs-content + rail tabs (with the START MENU as the first controlbox word) + tree boxes + key sentinels, zero <script> tags")
+    (smoke "start-menu entry (or POST /filmstrip/open) /code -> pane appears with the dispatched code fragment + .focused; workspace round-trips through .agent/workspace.json on reload")
+    (smoke "trees in the sidebar: the windows tree lists panes under their desktop rows (switch action) + the shelf subtree; the code tree walks fs/ls; the prims tree walks the habitat grammar — no launcher, no pane-tag strip, no desktop switcher controlbox (sidebar-main-dichotomy)")
+    (smoke "every rail-tree action and pane-head action renders a GLYPH carrying its verb word as tooltip + aria-label + data-verb (filmstrip.borg action-glyphs); no verb words are rendered as button labels and the actions fold is narrow-only")
+    (smoke "alt+arrow focus POSTs answer OOB class swaps; close answers OOB delete + focus hand-off")
+    (smoke "POST /filmstrip/* dispatch through the route-table POST fallback; hx-vals form params reach request-param")
+    (smoke "glochid/axis returns col; POST /filmstrip/orient is GONE for this host (retired 2026-09-19); the #fs-axis sentinel is present and inert"))
+   (details
+    (doc (|
+         HOST SEAMS (what differs from the habitat shell:
+         filmstrip.borg's shell-protocol UNCHANGED — strips, OOB swaps,
+         zero-JS hotkeys, workspace round-trip are the same defs):
+
+         1. WORKSPACE BACKING. filmstrip/ws-node + filmstrip/ws-save are
+            the persistence seam (tree/get + tree/upsert on the image).
+            The glochid layer REDEFINES both after load: fields JSON
+            rides fs/read + fs/write into .agent/workspace.json
+            (project-local, beside .agent/sessions). No Postgres in the
+            agent rim; a lens-backed row (shared desktop across
+            devices) is the follow-up once the campaign-8 data prims
+            land — the seam is two defs on purpose for exactly that.
+
+         2. THE CASCADE IS THE AGENT'S. filmstrip/apps + filmstrip/browse
+            are redefined by the glochid layer: column 0 lists the
+            agent's interfaces as route LEAVES — chat (/chat), code
+            (/code), bindings (/bindings), sessions (/sessions),
+            settings (/settings) — each open-or-focuses a main-window
+            pane. There are no cascade walk entries: structure browsing
+            is the rail trees' job (code -> the fs walk tree, prims ->
+            the habitat grammar tree; filmstrip.borg
+            sidebar-main-dichotomy). The image's todo/notes/calendar
+            browse stays the habitat's shell.
+
+         3. FRAGMENT MODE = HX-Request PASSTHROUGH. http_ui dispatch_get
+            threads the client's HX-Request header into the agent route
+            table, so / /code /sessions /settings render pane fragments
+            when windowed — partial mode is the pane protocol (the
+            image's route-gate discipline, agent-host backed). POST
+            bodies (htmx hx-vals rides form-encoded) are parsed into
+            params before route-table dispatch. request-param is a
+            TWO-LINE NOPALES SHIM over query-param (params already
+            merged with the form body by the gate) — NOT a new host
+            prim, keeping the shared seam un-touched.
+
+         4. CHAT IN A PANE. GET / is the SHELL (the standalone chat page
+            moves to /chat); page bodies branch on hx-request? and
+            render the fragment skeleton only when windowed (style
+            lives in the shell head). ONE chat pane max: open-or-focus
+            is by route, so the fixed #log id stays unique under the
+            multipart stream targets.
+
+         5. HABITAT PANES (2026-09-20 operator make: load the existing
+            apps onto glochid). The habitat's app faces are already
+            htmx fragment routes — glochid panes WEAR them instead of
+            the agent porting them: bin/main.ml registers a small
+            forward-prefix set (/todos /notes /calendar; kernel paths
+            are refused by construction — auth.route-visibility) and
+            the http_ui gate forwards each request to the habitat with
+            the OPERATOR'S session, piping status + HX-* reply headers
+            + body straight back. The Nopales layer adds glochid/fwd-apps
+            (the cascade labels = the HABITAT's route vocabulary, never
+            renamed) and the fwd faces for the in-process pane OPEN
+            (filmstrip/open pane-content): the habitat's fragment loaded
+            through the habitat/fwd prim inside a boost shell
+            (glochid/fwd-wrap — one stable id per app, hx-boost makes
+            the faces' shell-level ANCHORS swap INTO the pane; explicit
+            hx-* elements keep their own targets). AUTH: ONE POST
+            /login per process — one argon2id verify — and the
+            pp_session cookie rides every forward; Basic auth per
+            request would re-verify argon2 on every click (a known
+            habitat floor). Fragment-vs-full-page is the CALLER's
+            htmx-ness: boosted anchors and in-process dispatch answer
+            fragments, address-bar GETs pipe the habitat's full page
+            raw (E2b locks the no-nested-document invariant). KNOWN
+            HABITAT FLOORS met while dogfooding: an overlapping
+            dispatch race on the shared per-identity session can 500 a
+            forwarded GET ('no active request'); notes-doc loads pay
+            the recorded 80s floor — both habitat product issues, on
+            file, not glochid's. PASS TWO (recorded): when the chat
+            loop should compose app defs inline, glochid adopts the
+            pp-remote data plane (proxy_rim / placer / def_cache, the
+            prims proxy to /api/prim with-transaction-goes-remote
+            discipline) — the fragment proxy is deliberately smaller
+            than that and does not preempt it.
+
+         EMBEDDING. libs/filmstrip + libs/css boot-load (in order) like
+         libs/html via the shared embed rules; the glochid layer loads
+         LAST so its redefinitions win (env-based late binding makes
+         cascade/focus/open pick them up on every call). The filmstrip
+         lib's tree prims are referenced only INSIDE ws-node/ws-save
+         (never called after the override); css/sheet comes from
+         libs/css; dict-set* is defined in the glochid layer (the pure
+         catalog lacks the flat multi-key form). Filmstrip make-note
+         dialect gotchas apply (let* single-body; exact-match routes;
+         cons-pair counting for length).
+
+         AXIS TOGGLE (v addition, 2026-09-11; RETIRED for the glochid
+         host 2026-09-19 per operator decision BORGE-1789879934):
+         POST /filmstrip/orient
+         flips the ws row's \"axis\" field (row=horizontal film, col=
+         LEFT RAIL — the shell narrows to a sidebar; the cascade stacks
+         as a vertical interface menu; trees render beneath, purely via
+         CSS flex-direction, no new geometry code). In rail mode the
+         focused MAIN pane is position:fixed into the main window right
+         of the rail (its rail slot collapses; open-or-focus moves the
+         big window), UNFOCUSED MAIN PANES are ABSENT from the rail
+         (a pane is visible as the lifted focused main pane, a pinned
+         region=rail body, or a windows-tree row), and
+         .chatpage is pinned to height:100% — its
+         normal calc(100vh - 6rem) always overflows a pane box. Focus
+         unpersisted-heals to pane 0 at shell render when unset, so a
+         main pane always exists while panes do. The
+         response is TWO OOB swaps — the #fs-axis sentinel div and the
+         toggle button — so live pane DOM survives; the selector side is
+         CSS :has(#fs-axis.col) on #fs-shell. save-all is redefined in
+         the glochid layer to carry the axis field through (the lib's
+         version writes only cascade/content/focus). The lib's
+         no-<script> rule holds: :has() is CSS, not JS.
+
+         KEYBOARD SHORTCUTS (2026-09-19): the filmstrip zero-JS hotkeys
+         mechanism extended to glochid's chord set. THE KEYBOARD MAP IS
+         ONE TABLE — glochid/shortcuts in glochid_source, one row per
+         chord (condition url vals guard); filmstrip/key-sentinels is
+         REDEFINED on that table (the lib's four alt+arrows restated
+         verbatim — a capture is not reload-safe, each load would nest
+         the join deeper — plus the glochid rows), so a new chord is a
+         row edit and the whole map reads in one place:
+         alt+1/2/3 desktops, alt+a axis, alt+n new session, alt+w/p/s
+         close/pin/single at the FOCUSED pane. Each sentinel POSTs the
+         same route the pointing UI uses. The guard clause (on the
+         glochid rows only — the lib rows keep their original
+         conditions) splices document.activeElement.tagName checks into
+         the trigger condition so a chord typed into the chat prompt
+         never fires the shell. FOCUSED-PANE VERBS: the shell has no JS
+         to scrape the DOM, and the focused pane is DECLARED ws state
+         anyway (the focus index in the row) — new routes
+         /filmstrip/keys/{close,pin,single} resolve glochid/focused-id
+         and re-dispatch the lib verb handler BY NAME with the id
+         injected through nested route/dispatch (the pane-content
+         seam; nested dispatch carries its own params), so the keyboard
+         wears the EXACT pointing-UI semantics and the lib owns the
+         mutation + OOB grammar. No focused pane answers the OOB status
+         line, never a 500. The rail tabs row adds a muted ⌨ hint whose
+         title tooltip IS the map.
+    |))))
+ (* agent note (|2026-09-16 SESSION (pane-trees: the /code face IS the rail's tree template): per the rail-trees-v4 amendment (filmstrip.borg), the /code dir face renders the SAME node rows the rail code box rides -- glochid/code-tree as the levelfn, filmstrip/tree-level directly (no box chrome, pane-local URL /code?path=<dir> unchanged, file arm stays the <pre>). OBITUARY for the replaced implementations: code/rows (the table two-column name walk) and code/link (the pane-local hx-get anchor twin) are DELETED, not wrapped -- the pane-local <a> discipline existed because the table walk had no fold; with the outline template the dir label folds IN PLACE (native <details>, no re-render, no URL change) and leaf labels open-or-focus via /filmstrip/open (acme Get), so there is no second template and no nav trick to maintain. Dialect NOTES recorded the hard way: (1) (define (f x) body "doc") makes the DOCSTRING the return value -- the doc must PRECEDE the body (or ride (define name (lambda ...) "doc")); the /code page first rendered its docstring as pane body. (2) (count) rejects cons pairs -- (length) accepts them (filmstrip map-indexed results are pairs); the glochid make-note was right. (3) The eager thresholds (glochid/tree-kids-max 12 / depth 1) are calibrated against the interpreter's 400k-step request budget measured with budget-remaining in pipe mode: walk 16k lazy / 60k eager, /code page render ~250k eager (fits), but the BOOT SHELL stacks chrome + windows + prims boxes -- which is why the boot/head rail render strips kids (filmstrip/tree-lazy) and splices/panes honor them. The repo root cwd is the honest boot test (node_modules + 49 root entries): / 62212 bytes, /code 58103 bytes, node_modules-scale dirs degrade to the ordinary one-GET lazy level. code/rows' json-parse(fs/ls) shape survives in glochid/fs-rows-of (same hidden-dot rule).|) *)
+ (* agent note (|2026-09-16 SESSION (pane-trees, bindings half): the /bindings face is now the SAME tree template as the rail prims box -- identical amendment as the /code face, no second pass. Face map: root = package dirs (tree over glochid/prims-tree ""), /bindings?pkg=<pkg> = that package's function LEVEL (tree over "prims/<pkg>"), /bindings?pkg=&name= = the detail ARM (docstring + source pre -- the file-arm twin). OBITUARY for the deleted: bind/rows + bind/packages-html + bind/pkg-html (the table walk, same rationale as code/rows) AND bind/browse-entries + bind/dir-of -- the bindings cascade childfn was ALREADY DEAD CODE (the sidebar-main-dichotomy retired cascade walks: filmstrip/browse is leaf-only and never called it; the test still pinned it -- both gone). bind/link SURVIVES for one caller: bind/trail (the pane's breadcrumb) -- in a tree the fold only goes DOWN, so the trail's pane-local anchors are the only way up and remain the one legal <a> use in a fragment. DELIBERATE DIFFERENCE vs the fs face: NO eager kids on prims rows -- unlike fs/ls, a package's entry count costs one habitat BRIDGE round-trip, so folds pull their level exactly once (same template, different cache locality; the /bindings page pays one bridge call for level 0, exactly what the table paid). HTML-escapes note for test authors: & in attr values renders &amp;, so "has" needles should anchor on "name=..." not "&name=...". boot-lazy strips the rail prims box (glass ceiling: 88 package rows ~136k steps fit, their fn levels pull per-fold). smoke GET-page timeouts widened -m 5 -> -m 30 (shape checks must not race the CPU: a cold first render after a heavy build+runtest measured >5s once; the /chat POST keeps its tight -m 10 -- that one asserts the streaming contract).|) *)
+ (* agent note (|2026-09-11 MAKE (filmstrip-shell) DONE: the filmstrip lib boots as glochid's shell. Mechanism: libs/css + libs/filmstrip embedded via the shared embed rules (new dune rule strips the pp-sync (package …) header the image intercepts but the agent's bare evaluator does not), then the glochid layer (glochid_source in surface.ml) loads BEFORE the agent surface and redefines the two host seams: ws-node/ws-save over fs prims into .agent/workspace.json (fs/write now mkdirs parents), and filmstrip/apps + filmstrip/browse over the agent's own surfaces with code as a FILESYSTEM cascade (fs/ls: dir -> dir -> file leaves opening /code?path= panes). http_ui threads HX-Request into the route-table context and falls unknown POST paths through to the route table (form body parsed into params; request-param is a Nopales shim over query-param). GET / is the shell (GET /filmstrip same, GET ?session= resumes as a chat fragment pane, ?open= is the launcher GET twin); GET /chat is the old page; all pages pane-aware via glochid/layout branching on hx-request?. GOTCHA FOUND LIVE: nested route/dispatch (filmstrip/pane-content inside the shell render) rebinds the request context, so hx-request? must be captured BEFORE opening panes (glochid/shell does). VERIFY: dune build @all; glochid_test 20/20 green; scripts/smoke_glochid_surface.sh 32/32 PASS (9 new filmstrip checks incl. OOB append pane, fragment-mode /, workspace round-trip, focus swap, close OOB delete, cascade walk, reload); chromium screenshot verified strip layout + two panes dispatched live; borge balance+parse clean; drift NONE (pre-existing baseline).|) *)
+ (* agent note (|2026-09-11 LIFECYCLE FIX (SIGTERM exit-wedge, found live): glochid --serve stopped DIED on SIGTERM — it printed "shutting down (signal)", removed its pid file, released the listen socket, then wedged forever: one thread parked in io_cqring_wait (io-uring backend) / poll (posix backend), immune to further signals a user sends in the visible way (launcher health checks then fail and omarchy launch appears to do nothing). Repro was deterministic: clean exit with NO prior HTTP connection; hang with any prior connection (even one already-finished curl GET). Both eio 1.3 backends wedge identically, so the root cause is an event-loop teardown op that never completes once connection fibers existed — upstream territory, NOT our rim wiring (the accept-loop/child-switch shutdown dance in Http_ui.serve worked: serve RETURNED; the eio_main.run tail hung). Fix in glochid/bin/main.ml: after Fun.protect returns from Http_ui.serve, call exit 0 explicitly — the process's durable state is already on disk (sessions + workspace under .agent/, pid file removed), so the process exits deterministically on any backend instead of trusting eio's teardown. Retry-driven limitation: the watcher/accept fibers have nothing left to finish. VERIFY: clean TERM exit after GETs and after a streamed /chat turn (both backends); dune runtest 0 failures; smoke 36/36 PASS.|) *)
+
+  (subsection generated-surface-artifacts
+   (doc "The dune-generated agent surface modules (Assets, Libs_source) — build slices produced into _build by dune rules, not authored source. Recorded so borge's module cross-reference is covered.")
+   (status partial)
+   (implements glochid/lib/assets.ml glochid/lib/libs_source.ml)
+   (details
+    (doc (|
+         These two modules do NOT exist as authored .ml source in the
+         tree: dune (rules) in glochid/lib/dune generate them into _build
+         from vendor sources — Assets embeds image/static/*.js
+         (htmx.min.js / hx-multipart.js / htmx-2-compat.min.js via
+         asset-mermaid quoted blocks) and Libs_source embeds the
+         libs/html/lib.pp + libs/hyper/lib.pp Nopales packages as
+         OCaml quoted strings so the agent binary is self-contained.
+         Their real authored sources are therefore libs/html/lib.pp +
+         libs/hyper/lib.pp + image/static/*.js (named in the surfaces
+         stanza's implements) — these modules are only the build slices.
+
+         BORGE MODELLING LIMIT. Because they exist only under _build,
+         borge's implements-exist check (which runs on Implemented /
+         Verified stanzas) would flag them "file not found"; they are
+         therefore declared here on a PARTIAL stanza (no existence
+         check) so the dune module cross-reference stays covered
+         without a false positive. Their real build/authoring home is
+         the surfaces stanza.
+    |))))
+
+  (subsection llm-config
+   (doc "Provider key/base arrive via sync round metadata (__config.json); model is a per-surface dial from the provider ABI; /settings surface + chat-header dropdown")
+   (status implemented)
+   (implements glochid/lib/config.ml glochid/lib/http_ui.ml glochid/lib/surface.ml glochid/bin/main.ml llm/lib/provider.ml)
+   (details
+    (doc (|
+         SEAMLESS VIA SYNC, NOT A BESPOKE EXPORT. The operator's LLM
+         key already lives on the habitat (auth.user-llm-keys). Glochid
+         never asks for it by hand: a sync/push round returns the
+         CALLER's OWN credential as round metadata (llm_config:
+         {api_key, base} — local-first.sync / auth.user-llm-keys 5b),
+         recorded to <lens>/__config.json. Boot with --lens DIR and the
+         key + base are simply THERE (precedence: --flag > env > lens
+         __config.json > ~/.config/agent/config.json). For lens-less
+         runs the config file (~/.config/agent/config.json, JSON —
+         yojson is already the dep; NOT the v0-non-goals toml table,
+         which named a model REGISTRY, still out) holds the same three
+         fields written from the settings surface.
+
+         MODEL IS A PER-SURFACE DIAL, FROM THE ABI. Model is NOT
+         replicated user data (auth.user-llm-keys 5b pins this). Each
+         surface populates a DROPDOWN from the provider's own ABI —
+         GET {base}/models with the resolved key — and persists its
+         OWN choice locally. /settings (Nopales-authored settings/page,
+         fed by agent/config + glochid/models prims) edits key/base/model
+         and POST /settings persists + retargets the RUNNING turn loop
+         (Provider.cfg is a mutable ref, not a boot-time constant).
+         The chat header carries the same dropdown (hx-post on change)
+         so model switches are one gesture from the prompt line.
+    |))))
+   (verify
+    (build "dune build @all")
+    (smoke "scripts/smoke_glochid_surface.sh 16/16 PASS (incl. /settings has model select + chat header has model dropdown)")
+    (smoke "remote/test/lens_store_test.ml client-config group: sync round records key+base to __config.json; the file is EXCLUDED from node_manifest; a locally chosen model SURVIVES the next sync round")
+    (smoke "LIVE-VERIFIED (real provider): GET /settings renders a <select> populated from GET {base}/models (11 models, current selected); POST /settings persists ~/.config/agent/config.json (0600) and the next render shows the new model selected; browser form gets 303, hx-post gets 200"))
+   (* agent note (|2026-12 make note: NOT YET live-verified — the image's
+      sync/push llm_config field end-to-end against a real habitat round
+      (needs the prod deploy of this change). The client tolerates its
+      absence (no __config.json write) and the field shape is pinned in
+      auth.user-llm-keys 5b.|) *)
+
+  (subsection sessions-persist
+   (doc "Persistent sessions: append-only JSONL transcripts in the local pp store (.agent/sessions/), one file per session; list/resume prims + REPL commands; /sessions surface; transcript backfill on resume")
+   (status implemented)
+   (implements glochid/lib/sessions.ml glochid/lib/http_ui.ml glochid/lib/surface.ml glochid/bin/main.ml llm/lib/loop.ml hostkit/chat_stream.ml)
+   (verify
+    (test "sessions-persist roundtrip: new/append/list/resume in an overridden GLOCHID_SESSIONS_DIR (legacy AGENT_SESSIONS_DIR) — message JSON (incl. tool_calls) survives write+read; appending CONTINUES the resumed file; resume refuses path escapes; session/name + session/data prims resolve through the runtime")
+    (test "turn-sink: Loop.run's ?on_msg fires exactly once per message the turn appends (user + assistant)")
+    (smoke "scripts/smoke_glochid_surface.sh PASS (surfaces unchanged; mock runs — no .agent/sessions/ litter)"))
+   (details
+    (doc (|
+         LOCAL-FIRST STORE, NOT POSTGRES. A session is an APPEND-ONLY
+         JSONL transcript in the working tree: .agent/sessions/<id>.
+         jsonl (one file per session, named by id, under .agent/ next
+         to .agent/plugins). Header line {"t":"session", id, ts,
+         model}, then one {"t":"msg", ts, msg:{role, content,
+         tool_call_id, tool_calls}} line per provider message. The
+         image is the DURABLE store at rest, but the session WRITE
+         path never leaves the laptop (offline-tolerant by
+         construction); sync-up of transcripts is local-first.sync
+         future work, out of scope here.
+
+         SINK AT THE LOOP BOUNDARY, NOT PER-SURFACE. llm/lib/loop.ml
+         grew an optional ?on_msg sink called at every history append
+         (user, assistant-with-tool_calls, each tool result) — shared
+         by the stdin REPL (run_turn), piped-turn mode, and the web
+         chat (Chat_stream.t gained on_msg, None on pp-remote). The
+         agent passes Sessions.on_msg (a closure over the
+         current-session REF): rotation (/new, /resume) re-points the
+         ref and later turns stream into whatever session is current
+         without re-wiring the sink.
+
+         PRIMS + REPL COMMANDS + SURFACE. glochid/lib/sessions.ml owns
+         the store and registers LIVE prims (session/name session/list
+         session/data session/new session/resume session/text) over
+         the host's history+session refs (surface loads inert defaults
+         first so pages render pre-serve; last-write-wins), plus REPL
+         commands /new /resume /sessions on the same command seam.
+         Surfaces (all Nopales-authored, redefinable live):
+         /sessions (sessions/page — newest-first table, resume/view
+         links), GET /new (rotates, redirects), GET /resume?id= (sets
+         history + current session, redirects to /?session=<id>), and
+         the chat page backfills the stored transcript into #log when
+         ?session= is present (chat/bubbles). Mock runs and pipe mode
+         never touch the store (no smoke litter). The retired
+         'session/append session/name' namespace line described the
+         pre-make sketch; the implemented family is the list above.
+    |))))
+
+  (subsection memory-bridge
+   (doc "glochid shares the habitat agent-memory store across residences: gregor's libs/memory (mem/remember / get / search / replace / forget) over POST /api/eval, shared store type gregor-memory in space cactus-ops")
+   (status implemented)
+   (implements glochid/lib/habitat.ml libs/memory/lib.pp llm/lib/tools.ml glochid/bin/main.ml)
+   (verify
+    (test "memory-bridge expr-builders: remote expr construction matches the libs/memory contract (TYPE first, tags default to [], quote/newline content survives the Nopales reader escaping)")
+    (smoke "LIVE-VERIFIED (2026-09-11): glochid /chat turn — the model searched, then remembered; the row (m-6aa4bffc-5e89) landed in gregor-memory (space cactus-ops) with author = the env identity; pp-eval (mem/get ...) returns the same content"))
+   (details
+    (doc (|
+         PAIRED RESIDENCES, ONE STORE (agent-native M4/M5). Gregor
+         (the resident agent identity) saves memory rows into the
+         habitat via libs/memory (wyo/memory-fns): remember/replace/
+         forget keyed by a caller-chosen stable string mid, fields
+         mid/ver/cat/uat/scope/ws/title/content/tags/src, author
+         attributed by the habitat (RLS): rows are shared through the
+         cactus-ops SPACE (space-admit + members), so gregor and
+         glochid see one another's rows.
+
+         THE BRIDGE. glochid/lib/habitat.ml exposes the SAME verbs as
+         LOCAL Nopales prims (mem/remember mem/replace mem/get
+         mem/search mem/forget mem/list mem/new-id) that forward-
+         evaluate the corresponding mem/* call on the habitat over
+         POST /api/eval (HTTP Basic — the ONE Pp_http client). Type is
+         the first arg (gregor's contract, habits transfer);
+         mem/search + mem/forget take TYPE as a 1-arg short form
+         against the default shared store (GLOCHID_MEMORY_TYPE, legacy AGENT_MEMORY_TYPE, default
+         gregor-memory). The model gets a `memory` TOOL (remember /
+         search / get / forget) with a prompt fact line: search before
+         saving. Registration happens in EVERY mode (serve, REPL,
+         pipe); the tool only when credentials resolve.
+
+         IDENTITY + CONFIG. The habitat sees the caller the env
+         presents: GLOCHID_HABITAT_(URL|USER|PASS|TOKEN) (legacy AGENT_HABITAT_*) >
+         PP_(URL|USER|PASS|TOKEN)
+         > ~/.config/pricklypear/env, which is a SHELL file and is
+         sourced through /bin/sh (same semantics pp-eval uses), so
+         quoting/expansion is the operator's own. TOKEN WINS when
+         set — a per-user api_key Bearer minted on the habitat
+         ((issue-token "glochid")) replaces user/pass everywhere
+         (eval calls AND the pane forwarder, which skips its /login
+         session jar), so an operator's laptop can hold a REVOCABLE
+         credential and never the password. Fail-soft: with no
+         reachable habitat the prims raise a habitat-unreachable
+         Prim_error at CALL time — boot, chat turns, sessions, and
+         sync never depend on the bridge.
+
+         SESSIONS VS MEMORY. transcripts (sessions-persist) are the
+         LOCAL append-only log of what was said; memory rows are the
+         DURABLE cross-device store of what is worth KEEPING. The
+         split is deliberate: a consumed turn replays locally; facts
+         worth carrying to the next device/residence are promoted by
+         the agent (or its operator) into the store explicitly.
+    |))))
+
+  (subsection v0-non-goals
+   (doc "Explicit exclusions for the first working version")
+   (status implemented)
+   (details
+    (doc (|
+         OUT for v0, even though pi has them:
+           - Session TREES / fork (flat one-file-per-session store, no
+             branching; basic sessions + resume are IMPLEMENTED —
+             sessions-persist — and the JSONL store is the seed they
+             would fork from)
+           - Compaction hooks, custom TUI widgets, theme system
+           - Provider discovery / model registry beyond a
+             ~/.config/agent/config.toml table
+           - Sandboxing of any kind (bash is bash)
+           - Sharing sessions across machines
+
+         HARD OUT (forever, or a different project):
+           - Postgres or any server-side store
+           - Multi-user, auth, branches, promote
+           - Lwt
+           - Language changes made in agent/ instead of through
+             lisp-interpreter.borg
+    |))))
+ )
+)

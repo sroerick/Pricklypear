@@ -1,0 +1,430 @@
+(project pricklypear-filmstrip
+ (doc "Pricklypear book chapter: FILMSTRIP — the habitat shell. Two infinite horizontal strips stacked iTunes-style: the top strip is a Miller-column cascade (structural menus, not popups), the bottom strip is the niri-style row of content panes. Panes are ordinary routes in partial mode — they don't know they're windowed. Workspace state is a per-user row; the desktop persists in the same object store as the todos it displays.")
+ (status implemented)
+ (* agent note (|2026-09 DESIGN SESSION (with pads.borg): the user's sketch (waybar + three small top panels + one large content area, \"kind of how iTunes is laid out\") plus \"two separate infinite horizontal panes\" crystallized the model. Prior art named in-session: iTunes column browser / Finder column view / ranger / Smalltalk browser for the top (Miller-column cascade); niri (and not-quite acme) for the bottom. The point that made it click: the cascade is STATE, not styling — which is why the filmstrip idea never modalized in CSS. Filmstrip is the FIRST consumer of pads vocabulary but is itself buildable stringly as a product; pads migration makes it provable. Dialog/overlay needs come from pads/layers-modality; filmstrip keeps floats for genuinely transient things only — navigation is structural.|) *)
+ (* agent note (|2026-09-04 MAKE (filmstrip v1, branch filmstrip-v1): shell shipped stringly per the handoff plan (archive/plans/filmstrip-v1.md). Dialect notes for the next agent: let* is a SINGLE-BODY macro — multi-step handlers wrap their tail in (seq ...); cons builds VPair chains which count rejects (length accepts both). browse lives as <pkg>/browse defs inside libs/filmstrip until promotion into todo/notes/calendar. Routes are exact-match, so /filmstrip/width/<id> became /filmstrip/<action> routes with id/dir/d/t params — same semantics, different spelling than this chapter's prose. Smoke: scripts/smoke_filmstrip.py (11 checks incl. zero-JS + round-trip).|) *)
+ (* agent note (|2026-10-01 NOMENCLATURE (discussion, roerick) — the words had drifted: 'glochid' was born the local agent harness (glochid.borg) but was being used loosely for the window-manager interface. LOCKED: FILMSTRIP = the window-manager interface / shell (cascade + pane strips, workspace state, rail/strip modes) — ONE vocabulary, TWO residences: the habitat (libs/filmstrip, /filmstrip, workspace rows in Postgres) and inside glochid (workspace persisted to a local file). GLOCHID = strictly the local agent HARNESS (laptop binary: chat + agent loop + browsers + lens). The harness's SCREEN is a filmstrip: shared shell verbs are filmstrip/* and the harness consumes them, while glochid/* names are harness-local (theme, chat surfaces). Consequence: 'make glochid the main interface on pricklypear' means 'make the filmstrip shell the default habitat view' — harness and habitat become two windows into one interface. Colloquial 'glochid' for the window manager is retired; say filmstrip.|) *)
+ (* agent note (|2026-10-01 WIRED AS DEFAULT (roerick: filmstrip becomes the default habitat view — the 2026-10-01 nomenclature session). TWO gaps closed: (1) KERNEL: / redirects authenticated users to /filmstrip (anonymous still goes to /welcome via require_login_redirect), and a post-login with no next= lands at /filmstrip directly (image/lib/http_pages.ml home_page + http_core post_login; ui/home stays bound, rollback = the one redirect line). (2) VAULT: libs/filmstrip/lib.pp gained a route-bindings footer — the shell routes were LIVE-ONLY pins on system/main (registered by an pp-sync push, never in the vault), so a fresh habitat booting from seed could not serve the shell at all; now (route ...) forms ride the lib and boot seed is self-sufficient. VERIFIED on the local dev stack: fresh user shell-cold-test: post-login -> 303 /filmstrip; GET / -> 303 /filmstrip; GET /filmstrip -> 200 with cascade (todos/notes/calendar) + empty strip; pane open persists across reload.|) *)
+ (convention ocaml-dune)
+
+ (section filmstrip-shell
+  (doc "The default habitat view. Screen model: a column of two rows —
+      the cascade strip (short, iTunes browser proportions) over the
+      content strip (grow). Both scroll horizontally and independently;
+      both are ordinary pad rows with (scroll . x) once pads exists.
+      Panes do not know they are windowed: a pane is any route
+      dispatched in partial mode (HX-Request on — the route gate's
+      existing fragment path, the hyper/visit trick productized). All
+      htmx inside a pane works unchanged, targeting its own fragment.")
+
+  (subsection workspace-model
+   (doc "Per-user workspace row: two sequences plus focus. cascade = an
+       ordered crumb path; content = an ordered list of pane records
+       {id route width}; focus = (strip . index). Open/close/focus/
+       width-preset are row mutations rendered back as swaps — the
+       strip follows niri's set-column-width presets (third / half /
+       full), never free pixel widths. Sessions persist: close the
+       laptop, the strip is where you left it, because the row is
+       Postgres like everything else grown in the garden.")
+   (details
+    (doc (|
+         ROW SHAPE (target):
+           (ws (user)
+             (cascade (list \"packages\" \"todo\" \"today\"))
+             (content (list (pane todo/today 'half)
+                            (pane notes/inbox 'third)))
+             (focus (cons 'content 0)))
+         EPHEMERAL CORNER (pads/layers-modality rule applied): scroll
+         position, hovered pane, live-drag in progress — transient,
+         keyed by pane id, patched around on sync; never rendered from.
+    |))
+   )
+   (implements libs/filmstrip/lib.pp scripts/smoke_filmstrip.py)
+   (status implemented)
+  )
+
+  (subsection cascade-protocol
+   (doc "The top strip is a Miller-column cascade: column N's selection
+       determines column N+1; the deepest selection acts on the content
+       strip. One function per package makes it filmstrip-native:
+       (pkg/browse path) -> (columns . leaf?). Clicking an entry at
+       depth d truncates the path to d, appends the choice, swaps the
+       tail columns. Leaf action opens-or-focuses a content pane.
+       Menus as STRUCTURE, not popups — plan 9's menus-are-text moved
+       from overlay into chrome; the float band survives only for
+       genuinely transient things (confirmations, plumbing menus,
+       notifications).")
+   (details
+    (doc (|
+         BROWSE IS THE WHOLE TRICK. Every package already has the
+         shape, it just renders it wrong today:
+           notes     outline headings walk down
+           calendar  year -> month -> day
+           bible     book -> chapter -> verse (dabar/strongs adjacent)
+           contacts  group -> person
+           todo      list -> item
+         DECISION RECORDED: cascade is GLOBAL v1 — one crumb path for
+         the shell, iTunes-style. Per-pane cascades (each content pane
+         carrying its own crumb path, workspace = N uniform cascade+
+         content columns) is the elegant unification but doubles the
+         state surface; revisit after v1 is dogfooded. NOTIFICATIONS:
+         transient cards in the cascade strip (waybar's \"pi finished\"
+         earns a home), promotable into content panes or dismissed —
+         filmstrip gives notifications a place to LIVE that isn't a
+         popup.
+    |))
+   )
+   (status implemented)
+  )
+
+  (subsection pane-protocol
+   (doc "A pane = route dispatched in-process with HX-Request on, the
+       route gate's existing fragment path. Zero-JS hotkeys: htmx key
+       filters on the shell body (keydown[altKey&&key=='ArrowLeft'] and
+       kin) POST focus/width/open to filmstrip routes; the server owns
+       which pane wears .focused and answers with OOB class swaps.
+       Optional JS is quarantined to ONE static file and buys only
+       scroll-into-view smoothness and horizontal wheel mapping —
+       nothing semantic. Twin-pane mode is a first-class pane kind for
+       the pads migration: one column showing [old string render |
+       pads-lowered render | soup/diff badge] — drift as something you
+       LOOK at, pads/drift-proofing made interactive.")
+   (details
+    (doc (|
+         NO NEW SUBSTRATE inventory (why this is a product, not a
+         research project): route/lookup + route/dispatch with the
+         header seam already exist; the route gate already serves
+         partial mode; css/sheet + theme/ extend to ~50 lines of strip
+         CSS; the workspace row is data_rows; the only optional
+         non-Nopales artifact is the quarantined scroll.js. Nothing in
+         image/ moves for v1.
+    |))
+   )
+   (status implemented)
+  )
+
+  (subsection shell-events
+   (doc "Open: launcher picks a route, POST /filmstrip/open, server
+       appends the pane record and dispatches the route — fragment goes
+       beforeend into the strip. Close/width/focus likewise: row
+       mutation, then minimal OOB swaps (this is the ops-contract of
+       pads worn by the web backend before pads exists — the shell is
+       the ops pilot). Dialogs and menus follow pads/layers-modality:
+       a #layers sibling of the strips takes float/scrim nodes; modal
+       = router scope while the node lives.")
+   (verify
+    (smoke "open todo -> strip gains pane with todo partial; interactions inside pane swap in-place")
+    (smoke "alt+arrows move .focused between panes with no JS")
+    (smoke "workspace row round-trip: reload restores strip order/widths/focus")
+    (smoke "cascade: packages -> todo -> today opens the today pane; truncation re-walks"))
+   (status implemented)
+  )
+
+  (subsection window-controlbox-v2
+   (doc "V2 shell model (glochid-led, habitat-shared). Two primitives, following acme: WINDOW = tag + body (tag row of words over a dispatched route fragment; the filmstrip pane head already IS a tag), CONTROLBOX = one labeled row of words where each word is a mutation POST (rail rows, pane heads, shelf rows are all control boxes). Everything renders from DECLARED STATE, never estimate geometry in code: panes gain region (rail | main), desktop (int), state (live | shelved); the workspace row grows a desktop int. The shell is two scroll-strips — a RAIL strip (vertical on wide-short screens, top-rotatable by 3 CSS rules; modes are rail panes: apps/files/windows/shelf, for PICKING not reading) over a MAIN strip (the niri horizontal strip third/half/full, unconditional) — same mutations on both. VIRTUAL DESKTOPS are class flips: one sentinel carries the current desktop, a generated :has() set display:nones the rest; zero JS. Shelf is the DEFAULT close (DOM survives via hx-preserve; shelf rows carry destroy; destroy is the OOB delete that exists today). NAV DISCIPLINE is part of the vocabulary: app-link = open-or-focus POST for cross-app nav; pane-local links target closest .fs-body; plain <a> is shell-level only (a pane escaping the shell — plain <a> inside a fragment — is a BUG CLASS, fixed by app-link). Focus always heals so a focused main pane exists while panes do. make harness: seeded fake workspace on a scratch instance, CDP screenshots with measured geometry per mutation; live hosts touched last.")
+   (* agent note (|2026-09-13 DESIGN SESSION (glochid rail work): the col axis grew the left rail (shell narrows to ~20rem; cascade stacks as a vertical app menu; presets re-read as rail heights — landed), then the focused pane was LIFTED into the main window via position:fixed with rail rows heads-only (landed; .chatpage height:100% fix landed with it). Session then RENAMED the target: main = niri strip (option B, not master-stack), sidebar = own scroll strip, desktops like hyprland via CSS hiding, close defaults to shelf, no JS drag — never. Inspiration named: acme tag lines = control boxes; gui-better-than-tui via TWO simple primitives instead of a renderer. Hidden-DOM cost confirmed negligible; live-updating shelved DOM is the only budget (later: server pauses streams to shelved panes). What landed pre-v2 stays in glochid.borg filmstrip-shell; THIS stanza owns the forward model.|) *)
+   (* agent note (|2026-09-14 UI REVIEW CYCLE CLOSED (dogfood + agent review, archive/reviews/glochid-shell-review-2026-09-14.md): the review CONFIRMED this stanza's model but caught three behavior gaps the geometry probes PASSED — (a) open-or-focus didn't know state: clicking a shelved app's cascade name moved .focused onto a display:none pane and BLANKED the main window; FIXED acme-get style (naming a hidden window re-shows it — open-apply unshelves on route hit) in 22906c9; (b) open/cascade mutations never refreshed the windows rail, so #fs-winbox went stale; FIXED same commit (shelf/winbox OOB hooks now answered on every open win); (c) the plain-<a> bug class was still live on every fragment surface (/code rows, chat h1 'agent' + resumed line, sessions resume/view, settings h1) — /code rows are pane-local links now (hx-target closest .fs-body, the tree walk stays INSIDE the pane), redirect-actions got fragment twins (POST /filmstrip/new, /filmstrip/resume; 2db1008), settings fragment h1 de-anchored (9a7bd3b via probe I5). The launcher advertised /todos on glochid (host vocab leak): placeholder + no-route message now derive from filmstrip/ hints themselves (hint-routes over the host's apps — glochid ALSO redefines filmstrip/apps now, which the host-variation note already named as allowed). The open-apply no-desktop gap (REPORT of archive/plans/window-controlbox-v2.md) is CLOSED via the filmstrip/pane-stamp host hook: fresh panes stamp the operator's current desktop. NEW HARNESS: scripts/probe_shell_sem.mjs asserts the invariants semantically (I1 visible-focused-always · I2 shelved-click unshelves · I3 winbox freshness · I4 launcher honesty · I5 pane-local anchors · I6 in-pane tree walk · I7 current-desktop stamp) — ALL GREEN, lisp/common runtest green, chat smoke green.|) *)
+   (implements scripts/probe_shell_wm.mjs scripts/probe_shell_sem.mjs)
+   (verify
+    (smoke "desktop flip: sentinel class change toggles which panes render; others display:none but keep live DOM")
+    (smoke "shelve: close moves pane to the shelf rail pane with DOM intact; restore returns it to its desktop+position")
+    (smoke "app-link inside a pane open-or-focuses the target route; a plain <a> inside a fragment never escapes the shell")
+    (smoke "geometry probe: seeded 8-pane 3-desktop workspace renders from state classes only (no inline styles)")
+    (smoke "semantic probe (scripts/probe_shell_sem.mjs): I1 visible-focused-always · I2 shelved-click unshelves (no 0x0 focused pane) · I3 winbox freshness · I4 launcher names only real host routes · I5 every fragment anchor pane-local · I6 /code dir walk inside the pane · I7 fresh panes stamp the current desktop — ALL GREEN")
+    (smoke "open-or-focus on a shelved route UNSHELVES it (acme Get); launcher placeholder + no-route message list only routes the host has"))
+   (status implemented)
+  )
+
+  (subsection window-controlbox-v3
+   (doc "V3 shell model: REGION SHIPS. window-controlbox-v2 declared panes gain region (rail | main) — the implementation never read it, so the rail is heads-only and exactly ONE body is ever on stage; the operator cannot hold two reading views at once (file tree + chat — the 2026-09-14 review's biggest ask + its design findings 1-3: dead rail middle, 16rem-capped cascade that cannot grow into the space it owns). V3 implements region as a pane-head PIN verb. region=rail panes render their LIVE BODY inside the rail (between the cascade and the controlboxes — filling the dead middle); region=main panes keep the v2 model (strip + one lifted focused pane, unchanged). RAIL PANES ARE DESKTOP-GLOBAL (dock semantics: one sidebar visible across desktop flips — no per-desktop duplication of a file tree). At most one lifted main pane exists at a time; focusing a rail pane highlights it WITHOUT lifting; open-or-focus of a pinned route highlights the rail pane in place instead of stealing the main window (and must never heal-focus onto a shelved pane — the I2 invariant holds in both regions). The FILE TREE graduates from a cascade walk to a pinned /code pane: the cascade keeps only PICKING (column 0 apps), the rail pane is the READING view at full rail height. Pane records carry region; all geometry stays in glochid/base-css as classes + :has — zero JS, zero inline styles, same discipline as v2. Make harness: scratch instance + CDP with scripts/probe_shell_sem.mjs (batch B) as the GATE — semantic invariants first, geometry second; live hosts last.")
+   (verify
+    (smoke "pin /code -> its body renders in the rail at a real height while /chat stays lifted in the main window; zero inline styles introduced")
+    (smoke "rail pin survives desktop flips (dock semantics); unpin returns the pane to the strip at its old position")
+    (smoke "open-or-focus on a pinned route highlights the rail pane in place (no lift, no 0x0 focused pane, I1/I2 hold)")
+    (smoke "probe_shell_sem.mjs ALL GREEN after every mutation (invariants are the gate; extend it with region invariants)")
+    (smoke "shelving a rail-region pane shelves it like any pane (shelf row; restore restores region)")
+    (smoke "a pinned files view fills available rail height — the cascade 16rem cap no longer bounds it")
+    (smoke "workspace round-trip: region persists through save-all and reload")
+   )
+   (* agent note (|2026-09-14 MAKE (window-controlbox-v3) DONE via the plan loop (archive/plans/window-controlbox-v3.md REPORT, commits 476f4db..55619a5 + ca7a9d8): region is a first-class pane state (records + data-region + native-scene); POST /filmstrip/pin flips it with the width-grammar OOBs; pin words in pane-head + win-row; rail-region panes render their LIVE BODY in the rail at flex rail-share (the cascade 16rem cap never touches them), desktop-GLOBAL (exempt from the desk :has hiding — dock semantics); focus/open/cascade never lift a rail pane (in-place live-DOM ring; a focused rail pane satisfies the visible-focus invariant when no main pane is live); healing (render heal-focus AND a new lib close-heal — the loop's probe caught v2's first-live-index healing onto HIDDEN 0x0 main panes when a pinned pane was closed on a foreign desktop) prefers main-on-current-desk, then dock-visible rail panes, never shelved. /code walks pane-locally at rail height. probe_shell_sem.mjs extended to the v3 block: 82 assertions ALL GREEN (default + final passes); geometry probe matches the v2 baseline with pinned bands as flex shares; chat smoke green; lisp/common runtest green; borge drift 0. Zero inline styles. Weak points deferred: rail focus ring is live-DOM state (server can re-derive on reload); shelved-DOM stream pause still open budget.|) *)
+   (status implemented)
+  )
+
+  (subsection rail-trees-v4
+   (doc "V4 rail model: ONE TREE GRAMMAR. The rail's inventory stops being N bespoke renderers and becomes N TREES over one control — mode tabs switch between ROOTS, not widget types. A TREE IS A GEOMETRY RULE OVER CONTROLBOXES, NOT A THIRD PRIMITIVE: a tree row is an acme tag-line row — leading FOLD arrow (its own hitbox, never coalesced with the label), LABEL word (navigates / open-or-focus — safe, acme Get on hidden things), TRAILING VERB words (mutation POSTs only: focus / shelve / destroy / pin). NO third interaction is ever added (no double-click, no context menus — words acme-execute, that is the whole grammar). A toolbar is a degenerate tree node (words, no children); 'every toolbar renders as a tree' is the unifier, and the shelf collapses into the window-control tree as a SUBTREE instead of its own face. HATEOAS NODES: every node carries its affordances as links; the app convention is a `/app/tree` route answering ONE LEVEL as a fragment — splice a nested <ul> into the open <details> (outline projection) or swap a replacement level into a drill container (drill-down projection; nested tree is Miller rotated 90°, SAME endpoint, template chosen by target, never a forked API). LAZY LEVELS ARE LOAD-BEARING: never render a whole tree server-side (the notes/doc/get 80s floor); expand fetches the next level, on first expand only. STATE LIVES IN THE DOM: folds are native <details>/<summary> — ZERO JS, ZERO server-side expansion state; mode flips, desktop flips, and shelving all preserve it for free (sentinel :has hiding + hx-preserve). Splice-inplace, NEVER re-render a level; the tree's head carries a `collapse-all` word (a mutation POST — grammar holds) as the DOM-growth escape hatch. TREES ARE DESKTOP-GLOBAL like any v3 rail panes: global roots (windows / files; glochid adds prims / packages) commute with app-contributed roots — a pinned rail pane contributes its tree as another rail MODE (chat -> contacts tree, calendar -> month-selector tree, todo -> list tree), and targeting-trees (nodes' verbs act on panes: window-control tree — requires panes to answer a route-derived node path) coexist with contents-trees (package -> prim -> function-doc leaves; describe made browsable). MOBILE EARNS THE PIVOT: fold IS the native small-screen nav gesture; responsive = DEPTH, not a new widget — past ~4 indent levels the drill-down projection takes over (level + breadcrumb back), and narrow viewports demote trailing verbs to an `actions` FOLD (verbs-as-children) while CSS :has hides the inline words; Miller columns died on phones, this doesn't. Make harness: scratch instance + probe_shell_sem.mjs batch C (tree invariants) as the gate; geometry probe after; live hosts last.")
+   (* agent note (|2026-09-13 DESIGN SESSION (rail trees, glochid-led): the session started from 'Miller is dead on widescreen, sidebars win — what if we just got REALLY GOOD at rendering trees in the sidebar, every window its own nested tree control, generated via HATEOAS' and sharpened into: (a) nested outline vs drill-down are TWO PROJECTIONS of one HATEOAS endpoint (nested tree = Miller rotated, drill-down = Miller on phones); (b) expansion state was the genuinely-undesigned piece — resolved as NEVER THE SERVER'S PROBLEM: <details> DOM state survives every flip because rail modes/desktop flips are :has sentinel hides and shelf is hx-preserve — splice never swap, collapse-all word as the pressure valve; (c) the acme split named for the record (the filmstrip spec already quotes acme: tag lines = word-rows that execute): label = open (safe), trailing words = verbs (mutate), fold arrow = isolated leading hitbox — the FIRST interaction on the grammar is also the LAST, no double-click ever; (d) 'every toolbar is a tree' <-> 'every controlbox is a degenerate tree node' is the real unification claim, shelf-as-subtree is its first proof; (e) mobile worry answered IN GRAMMAR: verbs demote to children on narrow rails, drill-down caps indentation depth — responsive depth, no overflow-menu widget; (f) scope guard against 'everything becomes a tree': only STRUCTURE faces become trees (contacts, month selectors, prim catalogs) — stream faces (chat body, calendar month grid, todo list body) stay bodies; targeting vs contents tree distinction recorded in the stanza. Open seam for make: whether <app>/tree returns outline-vs-drill fragments by route PARAM or by hx-target of the request — stanza leaves it to the first implementer, both are conformant.|) *)
+   (verify
+    (smoke "the rail's N mode contents all render through ONE tree renderer (windows / files / host extras); mode tab flips swap visible root only — expansion state of every root survives the flip")
+    (smoke "row grammar: fold arrow toggles without opening; label open-or-focuses (v2 acme-Get semantics — naming a shelved pane unshelves); every trailing verb POSTs and never navigates; no row has a third interaction")
+    (smoke "lazy levels: first render of any root emits exactly ONE level via /app/tree?node=<path>; expanding a node fetches its level exactly once; re-folding never refetches; collapse-all restores the head state with one POST")
+    (smoke "shelf a live rail tree -> restore it: expanded nodes and scroll position intact (hx-preserve); desktop flip leaves all rail trees DOM-live and hidden-state-clean")
+    (smoke "a pinned rail pane contributes its tree as a rail mode (chat contacts tree visible beside windows and files roots); unpining the pane removes its mode; open-or-focus on a tree label highlights the rail pane in place without lifting (I1/I2 hold)")
+    (smoke "narrow/rail-min geometry: indent caps visibly past level 4 and the drill projection serves deeper levels; trailing verbs collapse into the actions fold; probe measured — zero inline styles, glochid/base-css classes only")
+    (smoke "window-control tree reflects DECLARED STATE: shelve a pane -> its row moves under the shelf subtree on OOB; desktop int annotates rows from the workspace record, never from DOM scraping")
+    (smoke "probe_shell_sem.mjs batch C green (tree invariants alongside I1-I7 + v3 region assertions); downlevel surfaces (chat smoke, /code pane walk) still green"))
+   (* agent note (|2026-09-13 MAKE (rail-trees-v4) DONE (docs/plans/rail-trees-v4.md): ONE renderer in the lib (node dicts with verbs as JSON strings -- dict-set* refuses non-string values), /filmstrip/tree + /tree/collapse routes, url-enc/dec (SUBSTRING takes START LEN, not END -- the per-char walk must slice 1/2-char windows), <details> + hx-trigger "toggle once" lazy levels (fetch exactly once, provable via performance entries); glochid hosts windows/code/prims roots, rail mode tabs + #fs-railmode sentinel (:has, like the desktops). TWO mid-make discoveries: (1) OOB-swapping the whole box div made htmx drop listeners for subsequently spliced levels (0 XHRs on verb clicks) -- the mutation refresh seam is now an hx-swap-oob="innerHTML" on the level-0 UL (fs-tree-<id>-root); the head never changes and expansion state above the mutated rows SURVIVES mutations (truer to the DOM-state rule than the first draft) -- expansion loss at mutations was the first draft's design hole, closed by the same move; (2) acme Get on a CROSS-DESKTOP shelved row re-showed the pane on its OLD desktop (0x0 focused pane, latent v2/v3 bug the tree's cross-desk rows made reachable) -- open-apply's unshelve branch now passes through pane-stamp like fresh panes. probe_shell_sem.mjs: batch C landed, whole probe ALL GREEN (104 assertions: I1-I8 + T0-T6); agent tests +22 incl rail-trees; agent surface smoke updated to the v4 close contract (shelve OOB + tree rows, not the pre-v2 pane delete); chat model <select> inline style -> .fs-modelsel class. Substring of the session also landed the in-flight bindings-browser work this stanza builds on (bind/* bridge prims + /bindings face + cascade crumb).|) *)
+   (* agent note (|2026-09-16 SESSION (pane-trees: ONE template for rail + pane; the amendment): goal set by the operator -- the /code pane face and the rail's code tree use the SAME template, because "nothing in this tree display wouldn't work on both faces". AMENDMENT (node contract, additive): a node dict MAY carry "kids" -- a JSON string of a pre-walked child level; tree-node-li renders an eager dir INLINE (no toggle-once pull; the fold is pure <details>, zero XHRs) and keeps the v4 lazy GET when kids are absent/empty. The threshold is HOST policy, never lib state -- glochid's fs lewelfn rides glochid/tree-kids-max (12 visible entries per child level) and glochid/tree-kids-depth (1 level), CALIBRATED TO THE 400K STEP BUDGET (Measurements: root walk 16k lazy / 60k eager; the eager /code page render ~250k: fits a page, but the boot SHELL stacks chrome + windows box + prims box + code box). Therefore the materialization point differs per face: filmstrip/tree-box + tree-oob (boot/head renders) strip kids via filmstrip/tree-lazy -- the rail stays level-0-only with one-GET folding, while the splice endpoint and the pane face honor kids (a GET can answer a small subtree; the pane fold pulls nothing below threshold). SAME rows, same grammar, same endpoint; where the eager walk materializes is the budget's call. BUDGET INSTRUMENTS used: Budget.fn_step_counts via Eval.last_budget (the per-fn step profiler), budget-remaining in pipe mode (-p), and the boot fail line -- read all three before tuning anything. FOUR make discoveries: (1) label-word hx-vals were url-enc'd -- a LATENT V4 BUG: filmstrip/open route-matches via split-query, so an encoded %3F reads as literal text and EVERY query-bearing route (the fs face's /code?path=...) could never open from a tree label; vals are now RAW (url-enc stays for GET URLs only), fixed and probe-verified in a real browser. (2) filmstrip/url-enc gained a string-contains? fast path -- the per-char Nopales walk cost ~10 steps/char and the eager trees multiplied it to 141k steps; the OCaml prim probe settles the no-escapee case in one call. (3) Nopales define sugar: (define (f x) body "doc") makes the DOCSTRING the return value (doc must precede the body, or ride (define name (lambda ...) "doc")); the /code page initially rendered the docstring as its body. (4) (count) rejects cons pairs -- (length) accepts pairs (the glochid make-note was right). Verification: dune runtest lisp/common/agent all green (agent 22 incl new eager-kids assertions); smoke_glochid_surface.sh PASS (code-face assertion updated to tree rows); probe_shell_sem.mjs ALL GREEN 115 OK incl two new invariants (deep dir renders EAGER with zero XHRs; leaf acme-Get focuses the file pane); boot shell in the repo root renders (repo cwd is the honest worst case: node_modules + 49 root entries); borge drift clean.|) *)
+   (* agent note (|2026-09-20 OPERATOR MAKE (default-open desks + the move verb): two operator notes drove a small cross-stanza batch. (a) DESKTOP TREE EXPANDED BY DEFAULT: the node contract gains an optional "expand" field ("true" renders the <details> already open); it RIDES kids -- a parsed-open details never fires its "toggle once" pull, so expand without kids would hang open-empty, hosts pair them (lib docstring + tree-roots contract note). tree-lazy now PRESERVES eager kids on expand-marked nodes (the boot head AND the mutation OOB re-render open desks with their rows; everything else stays level-0-only, budget policy unchanged); the collapse-all pressure valve answers a NEW tree-closed projection (kids emptied AND expand cleared) so the one sanctioned server touch of expansion state still folds everything. glochid's windows tree pre-walks desk/0..2 kid rows + the expand seed (the shelf dir stays lazy-closed) -- the windows subtree is tiny, the budget gate was always the fs tree. (b) CROSS-DESKTOP MOVE (window-controlbox-v2's desktop int finally has a verb): POST /filmstrip/move-to (id + optional d) re-desks a pane record; without d the pane-head move glyph ("⇢", posts id only) CYCLES the declared ring (filmstrip/desk-count = 3, host-redefinable); the windows tree rows carry explicit to0/to1/to2 words for every desktop except the pane's own (rail panes carry none -- dock semantics are desktop-global, and the route refuses them with a status line). A FOCUSED pane leaving the operator's desktop heals focus first (close-heal's nearest-visible rule -- a hidden pane never holds the ring, I1); the answer is always winbox OOB (the row moved desk subtrees) + the whole strip OOB (show on arrival / refresh focus classes on leave), bodies preserved -- the pin grammar. Gates: agent_test rail-trees extended (open seeds + collapse-closed render) + NEW move-to-desktop test (record re-desked + persisted, head glyph, to-words skip the current desk), probe_shell_sem.mjs batch M (M0 default-open desks with zero pull attrs, M1 explicit to-words, M2 persisted desktop=1, M3 ring never stays on the moved-away pane, M4 head glyph) -- 168 OK, and the v5-era I3 assert was MADE HONEST by the same change: an eager desk never refetches its level, so the probe's out-of-band POST no longer updates the DOM -- the open now rides the page's own htmx.ajax like every other driver; probe + smoke + runtest ALL GREEN, borge drift clean.|) *)
+   (status implemented)
+  )
+
+  (subsection sidebar-main-dichotomy
+   (doc "THE SHELL'S NAV MODEL, one rule: trees live in the SIDEBAR
+       (the col-axis rail), interfaces live in the MAIN window. The
+       cascade is an interface PICKER only — its column 0 entries are
+       route LEAVES that open-or-focus a main-window pane; no host
+       ships cascade walk entries (structure browsing is tree work,
+       not menu work). The rail's inventory comes from rail-trees-v4,
+       and the windows tree is the ONE rendering of the pane inventory
+       — desktop rows (desktop 0..9) carry the switch verb, live pane
+       rows carry focus / pin / width / close, shelved panes are
+       restore / destroy rows under the shelf subtree — so a host
+       renders NO sibling desktop switcher, pane-tag strip, or
+       standalone shelf beside it: any second rendering of the pane
+       inventory is a stale copy waiting to drift. In the col axis an
+       unfocused main pane renders NOWHERE: a pane is visible as the
+       lifted focused main pane, a pinned (region=rail) body, or a row
+       of the windows tree. There is no route-text launcher — opening
+       is PICKING (cascade or tree). The axis toggle is a word on the
+       rail tabs row (its last entry). Filmstrip the framework keeps
+       the walk-capable cascade and the launcher/open endpoint as
+       primitives; the dichotomy is glochid's COMPOSITION of them —
+       glochid's column 0 is all leaves, its shell has no launcher, no
+       pane-tag strip, and no desktop controlbox.
+
+       AMENDED 2026-09-19/20 (glochid host decisions, BORGE-1789879934 /
+       BORGE-1789890061): the glochid shell retires BOTH the AXIS toggle
+       (pinned to col / sidebar-only) and the separate CASCADE column —
+       the app list now lives INSIDE the rail as a zero-JS <details>
+       START MENU (first word of the #fs-railtabs controlbox; entries
+       POST /filmstrip/open, open-or-focus). glochid/axis returns col
+       unconditionally; the #fs-axis sentinel stays inert for CSS. The
+       framework primitives (cascade, walk-capable browse, orient) STAY
+       for the habitat shell, which keeps its axis toggle and cascade
+       until a separate decision removes them there.")
+   (verify
+    (smoke "cascade column 0 entries are all route leaves; each open-or-focuses a main-window pane (HABITAT shell; glochid retired its cascade column 2026-09-20, start menu on the rail instead)")
+    (smoke "the col rail renders no pane-tag strip, desktop switcher controlbox, or launcher; the windows tree is the pane inventory")
+    (smoke "an unfocused main pane is absent from the col rail; focusing its tree row (or a shelf restore) lifts or shows it -- AMENDED by main-strip-v5: in niri mode there is no lift; a tree-row focus scrolls the pane's column into stage")
+    (smoke "HABITAT shell: the axis toggle renders as a word on the rail tabs row and persists through reload; GLOCHID shell: axis is pinned col (toggle retired 2026-09-19) and POST /filmstrip/orient is absent"))
+   (status implemented)
+  )
+
+  (subsection main-strip-v5
+   (doc "THE MAIN REGION IS THE NIRI STRIP AGAIN. window-controlbox-v2/v3
+       lifted the focused main pane out of the flow (position:fixed,
+       exactly one body on stage); v5 ⟶ region=main panes are COLUMNS
+       in one horizontal scroll strip — the model filmstrip v1 shipped
+       and the 2026-09-14 review named as the design gap ('more than
+       one reading view at once'). FOCUS IS SCROLL, NOT LIFT:
+       focusing a main pane scrolls the strip so the focused column is
+       ON-STAGE with its neighbors PEEKING at both edges (native
+       focus-scroll + scroll-margin peeks). EXACT CENTERING IS NOT
+       PROMISED: CSS scroll-margin takes no percentages, so niri's
+       perfectly-centered focus without JS is out of reach — the
+       contract is the niri FEEL (focused column fully on-stage, always
+       ≥ its scroll-margin of visible neighbor on each side, viewport
+       permitting), not the exact geometry; a probe-verified
+       no-JS centering path would be a welcome amendment, never a JS
+       permit (scroll.js stays quarantined). There is no lift, no
+       position:fixed main pane, no 'exactly one main body' invariant. NO NEW STATE: the strip is
+       the existing workspace rows rendered in place region=main (rank
+       order, width presets third/half/full ARE niri column widths,
+       desktop via the existing :has sentinel, shelf unchanged —
+       shelved panes never render in the strip). OPEN-OR-FOCUS RULES
+       (niri-ized): a main-pane open-or-focus focuses its column in
+       place (creating it first when absent) — nothing is stolen,
+       because geometry no longer moves; the acme-Get rule (naming a
+       shelved pane unshelves it, pane-stamp on entry) is unchanged;
+       close-heal prefers the adjacent column of the strip. REGION=RAIL
+       is untouched: pinned rail panes keep v3 dock semantics, and pin
+       + strip compose (strip = the reading surface, rail panes = the
+       persistent side views — the two together are the 2026-09-14
+       review's full ask). LIFT SURVIVES AS A VERB, NOT AS THE MODEL:
+       the pane head's width glyph gains a singling verb ('one-up')
+       that toggles a .fs-single class — full-width column, neighbors
+       hidden — the niri column-toggle analogue; it is pane state in
+       the workspace row (record field single: bool), never a DOM
+       estimate. SCROLL IS ZERO-JS: strip scroll-to-focus is native —
+       the OOB-swapped pane head carries autofocus on its tabbable head
+       element (or the focused pane's own tabindex=-1 dispatch
+       equivalent), and glochid/base-css uses scroll-margin (columns)
+       + scroll-padding (strip) to center the focused column with the
+       neighbors peeking; NO scroll.js, no inline styles, classes and
+       declared state only — if a probe proves the native-focus path
+       cannot center a column, the stanza is reopened as a borge issue
+       rather than smuggling JS in. HORIZONTAL WHEEL: native overflow-x
+       scroll on the strip, unmapped. Make harness unchanged in kind:
+       probe_shell_sem.mjs — I1 rewritten as strip invariants (focused
+       column on-stage and scroll-centered on its desktop within
+       measurement tolerance; adjacent columns peek; zero JS)
+       alongside the v3 region assertions; geometry probe after; live
+       hosts last.")
+   (* agent note (|2026-09-17 DESIGN SESSION (operator ask: 'the horizontally scrolling window function like niri — can we do that?'): read the model's own history first — filmstrip v1 WAS the niri strip ('bottom strip is the niri-style row of content panes', both strips scroll horizontally, independently); the glochid rail session (2026-09-13) recast main as the lift model, and the 2026-09-14 review flagged the loss as the design limit: 'the rail-modes model ... rules out the thing you most want — more than one reading view visible at once. That last one is a spec conversation, not a fix.' v5 IS that spec conversation. Key unpicking: the lift model exists because focus USED to be geometry (something must be position:fixed); once main is a strip, focus is purely which column is centered — the 'exactly one main body' invariant and the heal-lift machinery (close-heal's lift preference, open-apply's steal) stop being load-bearing and mostly simplify (a main pane is either strip-visible on its desktop, staged-single, pinned in the rail, shelved, or a tree row — dichotomy clause amended, repealing 'renders NOWHERE'). Decisions taken in-session: (a) NO new workspace state beyond single: bool — rank/width/desktop/region/focus already encode the strip; (b) lift demoted from implicit model to explicit pane verb (one-up), rather than deleted — niri itself has singling, and the operator liked it; (c) scroll impossibility is an issue, not a JS permit — the shell's zero-JS discipline held through v2/v3/v4, v5 holds it too; (d) ran the niri-vs-master-stack fork deliberately AGAIN (option B, per the 2026-09-13 note) — strip, not stack.|) *)
+   (verify
+    (smoke "two /code-style main panes open the strip: both render as columns side by side, the focused one fully on-stage with measured scroll-margin peeks of its neighbors — zero JS, zero inline styles")
+    (smoke "open-or-focus on an already-strip-visible pane does NOT move its geometry: it flips .focused, scrolls that column into stage (on-stage, neighbors peeking), and I1's visible-focused-always holds on the foreign desktop (:has hiding) too")
+    (smoke "width presets read as column widths (third/half/full resize the column, not the stage); the one-up verb stages the pane single and toggles back to the strip; single persists through reload (workspace row field)")
+    (smoke "close-heal focuses the adjacent column of the strip; closing the last main pane heals exactly as v3 did (rail pane, else none — the strip being empty is valid, launcher visible)")
+    (smoke "shelving hides a column (no strip footprint); acme-Get on its tree row unshelves it INTO the strip (appended or restored rank, pane-stamped); desktop flips hide foreign-desktop columns and never scroll the strip")
+    (smoke "Alt+arrow walks focus column-by-column across the strip; pinned rail panes are NOT strip columns (region=rail untouched); probe_shell_sem.mjs ALL GREEN with the rewritten I1 strip block plus v3/v4 assertions")
+    (smoke "the strip is an overflow container: horizontal wheel scrolls it natively; scroll-margin/scroll-padding carry all centering; grep-level check: no inline styles added, no .js artifact added for v5"))
+   (* agent note (|2026-09-16 MAKE (main-strip-v5) IN PROGRESS: lib + glochid + probe landed in the working tree; agent tests 22/22 green, probe_shell_sem ALL GREEN against a budget-healthy build (my files + HEAD libs). FOCUS AS SCROLL: OOB autofocus on the pane section (tabindex=-1, autofocus only on the pane TAKING focus — htmx focuses the first) + scroll-margin-inline peeks (3rem/1.5rem/0 by width) so neighbors peek; NO JS; exact centering not promised, per the stanza. ONE-UP: pane field single (MUST read THROUGH — the accessor checks as-str = "false", not key presence, or unstaging can't turn it off); verb glyph on head + windows-tree rows; css gate = :has(.fs-pane.fs-single:not(.shelved)) so any live single stages the strip, a shelved one releases it. REGION MOVES: pin answers filmstrip/oob-content-strip (in-place section swaps cannot cross containers); glochid splits the inventory into #fs-content (main strip) + #fs-rail (docked bodies + railtabs + trees) under one #fs-surface wrapper the override OOB-re-renders (bodies hx-preserve — live DOM survives the move). FOCUS DISCIPLINE: focus-step + close-heal share one visibility rule (live AND not :has-hidden; dock-visible rail panes everywhere; left neighbor wins a tied distance) — cutting the 0x0 focus arithmetic off at the source (an alt+arrow onto a shelved/foreign-desktop pane used to land the ring on a display:none section). BLOCKER RECORDED: the main-repo build cannot boot the scratch agent — the boot shell render exceeds the 400k budget with the same-day in-flight, uncommitted edits to libs/html + layout + std + pure (measured: tree-boxes ~94k on c184b00 vs ~224k working tree; ~112k with those files reverted at HEAD even with the v5 lib) — habitat issue i-1789591788-8d507ea1-4455-4421-97bd-ae8e9a3705b2; status stays planned until the gate re-runs green on the main tree.|) *)
+   (* agent note (|2026-10-02 SHIP (main-strip-v5) on main: the gate re-ran ALL GREEN on the main tree, so planned -> implemented. The recorded i-1789591788 boot-budget blocker was already dead — its 2026-09-16 cause was the same-day uncommitted libs/html+layout+std+pure edits, long since committed; the scratch-glochid boot render now fits the 400k budget with no change to the limit. VERIFICATION: probe_shell_sem.mjs ALL GREEN (168 OK, S1..S4 strip invariants + v3/v4 + one-up + region-move); dune runtest lisp/common green; dune runtest agent 27/27 green; geometry probe on a scratch instance shows two live main panes side by side as columns (508px third + 761px half) with the shelved pane 0x0 and no position:fixed lift; live habitat (dev stack) renders the v5 sheet (scroll-margin-inline 3rem/1.5rem/0 + .fs-pane.fs-single), post-login lands on /filmstrip, zero inline styles. TWO FIXES shipped with the gate: (a) libs/filmstrip/tree-node-li — an expand-marked dir with EMPTY kids now renders eager (an empty kids ul, no lazy pull) instead of carrying an hx-get="toggle once" that a parsed-open details can never fire; the desktop tree's empty desks (desk/1, desk/2 on a single-desktop workspace) were the live case, caught by probe_shell_sem M0b + the agent rail-trees test. (b) agent_test rail-trees' lazy-pull needle now searches hx-get, not any hx-trigger — 750b494 added hx-trigger="click" to the desk switch buttons, making the old bare-needle probe stale; the assertion INTENT (no lazy pull before the shelf) is unchanged, only the marker is corrected. NOTE FOR PROMOTE: prod's /filmstrip is still the pre-v5 shell on admin/personal (rules=22, no fs-single/scroll-margin) even though the v5 single/restore helpers are present — promote/reseed lands the strip there; not done in this ship pass.|) *)
+   (status implemented)
+  )
+
+  (subsection action-glyphs
+   (doc "THE UI VOCABULARY IS GLYPHS, and the word is metadata. An
+       action button renders a GLYPH; the verb WORD survives on it as
+       title (a human tooltip), aria-label (the accessible name) and
+       data-verb (the queryable identity). 'pin' / 'width' / 'close' /
+       'focus' were implementation vocabulary leaking into the UI -- a
+       user does not know what pinning MEANS, and a decision is not a
+       word; the glyphs are the decision, the words are its
+       documentation. This refines, and does not repeal, the
+       rail-trees-v4 acme row grammar: the split (fold arrow =
+       children, label = safe open-or-focus, trailing GLYPHS =
+       mutation verbs) is unchanged -- only the verb's rendering
+       changed from word to glyph, and the word moved to the tooltip
+       and data attributes. GLYPHS ARE HOST VOCABULARY: the table
+       filmstrip/act-glyphs (verb word -> glyph) lives in the LIB so
+       the lib's own pane head has a default, and a host redefines
+       that ONE value for another glyph set -- no renderer fork (same
+       seam discipline as filmstrip/apps). A verb absent from the
+       table renders its WORD: glyphs are an improvement over words,
+       never a hard requirement, and a missing glyph must never render
+       a blank button. ROW GRAMMAR (rails trees): fold arrow, label,
+       then the glyphs. THE ACTIONS FOLD IS NARROW-ONLY -- it is the
+       responsive demotion of those same glyphs (responsive = depth,
+       not a new widget), a PLAIN ul child of the node's own
+       <details>, with NO summary of its own and NO duplicate of the
+       node: at rail width the glyphs are hidden in the row and the
+       fold reveals them as children, past the breakpoint the fold is
+       hidden and the glyphs are inline. Exactly ONE of the two is
+       visible at any width; a nested 'actions' summary row that
+       re-lists verbs already shown inline is the bug this rule
+       prohibits (it also duplicated the parent's verbs at child
+       depth). Pane head (filmstrip/pane-head): the same contract --
+       pin/unpin, width and close are glyphs with the same tooltip /
+       aria-label / data-verb trio, so the rail's rows and the lifted
+       pane's header never disagree about vocabulary. rail mode tabs
+       and collapse-all: the tab names are CONTENT labels (like the
+       cascade's app names) and stay words; collapse-all is an action
+       and is a glyph. Every action button carries data-verb so
+       probes + tests select by identity, never by rendered glyph --
+       the glyph is free to change.")
+   (verify
+    (smoke "every action button in the rail trees and the pane head renders a glyph and carries title, aria-label and data-verb (the word is metadata, never the label)")
+    (smoke "a verb missing from filmstrip/act-glyphs renders its word -- never an empty button; redefining the table re-labels every surface at once")
+    (smoke "at rail width the row shows glyphs and the actions fold is hidden; past the breakpoint the glyphs are hidden and the fold reveals them -- never both, never neither")
+    (smoke "no tree row renders a nested actions summary or a second verb list beside the inline glyphs (the duplication regression)")
+    (smoke "probe_shell_sem.mjs T7 green: glyph + data-verb + aria-label + tooltip on every action button, no visible duplicate fold at rail width"))
+   (* agent note (|2026-09-16 SESSION (glochid rail): began as a bug report -- the windows tree rendered each pane's verbs TWICE (inline 'focus pin width close' in the row AND an always-present '... actions' nested details re-listing them; the nested fold was a sibling <li> INSIDE the dir's kids ul, so an expanded desktop showed its 'switch' verb inline on the parent summary and again at child depth). Root cause: the narrow-viewport demotion rule was half-implemented -- CSS hid .fs-tr-verb under max-width:40rem but the fold was ALWAYS emitted. Operator pushed past the bug to the real question: the verb words themselves ('pin'/'width'/'close'/'focus') are implementation vocabulary that means nothing in a UI. RESOLUTION: glyphs, NOT words, with the word surviving as tooltip + accessible name + queryable identity. Implemented: filmstrip/act-glyphs + filmstrip/act-glyph + filmstrip/verb-hint in the lib; tree-node-li renders glyph buttons (title/aria-label/data-verb) and the actions fold became a plain ul child of the node's <details> (CSS: hidden at rail width, revealed past 40rem where the inline glyphs hide instead); pane-head converted to the same trio; collapse-all -> a glyph; axis toggle -> a glyph (title names the axis, the glyph names the action after the flip). glochid's tree rows carry the glyph explicitly (4th tuple slot) via filmstrip/act-glyph, so its region-dependent pin/unpin label agrees with the pane head. Tests moved to data-verb selectors (probe_shell_sem.mjs had 6 textContent lookups + agent_test) and T7 was ADDED as the regression gate for both halves (glyph contract + no duplicate fold). MAKE GOTCHA (recorded): `(filmstrip/act-glyphs)` parses as a CALL on the list -- passing a table VALUE needs the bare symbol `filmstrip/act-glyphs`; Nopales is a Lisp-1 with no 'function value' paren convention, so parenthesizing a value is always a call form.|) *)
+   (status implemented)
+  )
+
+  (subsection lookbook
+   (doc "LOOKBOOK — the UI-element inspector (operator ask, 2026-09:
+       Storybook was too complex, Lookbook too foreign; 'our smalltalk
+       ui can shine here'). A reusABLE ui prim and an inspectABLE ui
+       prim are the same def read through a new face — no component
+       framework, no registry files, no compiled stories. THREE
+       OPERATOR DECISIONS, all recorded: (1) glochid (agent host) first,
+       habitat face rides the same lib later; (2) EXAMPLES ARE THE
+       DECLARATION — a def becomes an inspectable ui element by
+       defining a sibling `<name>/examples` def whose answer is a LIST
+       of param dicts (variants); no source-sniffing for 'def whose
+       body returns html' — self-declared or invisible; (3) do-it (edit
+       the def from the inspector) is PASS TWO — v1 is browse / render /
+       tweak only. PORTABILITY IS THE LOAD-BEARING RULE (operator:
+       'the html/htmx pipeline should happen SUBSEQUENT to the prim
+       declaration, so the primitives render locally or on mobile
+       later'): a lookbook ui prim DECLares, it never renders.
+       `(name params)` -> a UI VALUE — pure JSON-able declared state:
+       tag/attrs/kids (kids a JSON string of strings and nested
+       ui-value dicts, the same discipline as rail-tree kids);
+       hx-* verbs may ride attrs as DATA because that is the element's
+       declared behavior — the html projection emits them verbatim, a
+       foreign projection maps or badges known verbs. The fragment in
+       the pane is PROJECTION 1, built by ONE shared lib renderer over
+       the declared value; PROJECTION 2 ships in v1 as an indented
+       plain-text walkthrough of the same value — the portability claim
+       is falsifiable from day one, not an aspiration. pads/render-scene
+       (terminal) and the native tier are subsequent projections over
+       the SAME declaration, never a second authoring surface
+       (filmstrip scene + html are the precedent: two lowerings of one
+       row). COMPOSITION: an element def is an ordinary def calling the
+       element prims it needs and embedding their ui-values as kids —
+       reuse is a def call, inspection recurses naturally. THE FACE:
+       a `ui` rail-tree root (packages -> elements -> variants, the ONE
+       tree renderer, lazy levels like every tree) whose element labels
+       open a /lookbook pane: name + docstring on top, the DECLARED
+       value of the selected variant (the Smalltalk self, as
+       inspectable data), the html PROJECTION live on stage, and a
+       params form derived from the def's formals (source via the def
+       row) POSTing a pane-local re-render of the stage only (I5
+       discipline, zero JS). Inventory is read from the live env (the
+       same seam that serves /bindings), never scraped from files.
+       v1 home: libs/lookbook (value constructors + both projections +
+       the face + seed elements); glochid boots it like any lib.
+       Budget: elements and variants stay small — the boot shell stacks
+       this next to the other trees.")
+   (verify
+    (smoke "an <name>/examples def makes the element appear in the ui rail root with its variants as rows; deleting the examples def removes it (examples ARE the declaration)")
+    (smoke "a lookbook pane shows one variant's declared ui-value, its html projection rendered live on stage, and its source folded — all in one pane, zero JS")
+    (smoke "editing a param and POSTing re-renders ONLY the stage fragment inside the pane (pane-local target, I5; the shell never re-renders around it)")
+    (smoke "PROJECTIONS: the same declared ui-value renders through the html projection AND the text projection in v1 — two renderers, one value, no second authoring path")
+    (smoke "an element def that calls render-html or strings its own markup is a spec violation (declare, never render — the inspection of another projection would then fork)")
+    (smoke "do-it NOT in v1: the pane has no edit/save word yet — pass two adds define-back-on-branch with its own stanza")
+    (smoke "probe_shell_sem.mjs batch D: seed element visible in the ui root, variant opens the pane, variant params re-render the stage, both projections answer")
+   )
+   (* agent note (|2026-09-20 MAKE (lookbook v1, glochid) DONE: libs/
+   lookbook/lib.pp (pure: ui/elm + ui/text constructors, lookbook/html
+   PROJECTION 1, lookbook/text PROJECTION 2, seed elements ui/button +
+   ui/badge + ui/card with cards — the card is an ordinary def
+   (#name/examples), lb/obj is the flat-kvs dict builder since the
+   pure catalog has only dict-set). The glochid face (surface.ml):
+   lookbook/eval OCaml prim = the eval seam (one direct
+   eval_string_direct with a fresh budget, NO lock-take — callers
+   already run inside a route eval; errors surface as {"t":"err"}
+   cards, never 500s); routes /lookbook + /lookbook/run; ui rail root
+   via glochid/ui-tree over lookbook/elements (HOST SEAM,
+   filmstrip/apps pattern); lb/stage-id flattens the element name (/ ->
+   -) because url-enc keeps "/" and an href-target id must be a
+   selector-clean CSS word; variant tabs + param form are pane-local
+   (I5), params form targets ONLY the stage div. Boots via
+   llm/embed_rules.dune.inc (headerless embed — no pp-sync strip
+   needed). DIALECT: (define (f x) body "doc") RETURNS the docstring —
+   the face writes ;; comments; the lib writes the
+   (define name (lambda ...) "doc") filmstrip form. JSON round trip is
+   NATIVE (prims_json value_to_json keeps VStr-JSON structured through
+   json-emit/json-parse), so kids/attrs/variants nest without double
+   encoding. Gates: agent_test.ml lookbook test (24 tests green —
+   declaration purity, both projections, live pane, stage-only POST,
+   ui root, no-card fail-soft); probe_shell_sem.mjs batch D (D0-D6,
+   whole probe ALL GREEN — the v4+ dichotomy count moved to 4 trees /
+   10 tabs for the new root); borge drift clean. Version bumps in
+   session memory + dune rebuild may apply on boot after the embed
+   rule changes.|) *)
+   (status implemented)
+  )
+
+  (subsection roadmap-tiers
+   (doc "Where filmstrip points once the web product runs: (1) pads
+       migration makes the shell a pad tree — the same workspace value
+       then lowers to pads/render-ansi for a terminal desktop beside
+       pp-eval, and the twin-pane verify loop runs the port route by
+       route. (2) The native tier (river-protocol shim, C/clay soil)
+       consumes the SAME two-sequence workspace: policy events are
+       Lisp-frequency; frames never eval (pads/renderer-dialects
+       latency non-goal). (3) Multi-user + one seat stays the known
+       weirdness: single seat resolves to admin's workspace row; per-
+       identity strips are a later flourish, not a v1 promise.")
+ (* agent note (|2026-09-04 (soil M-A): roadmap tier (1) has STARTED — filmstrip/scene (in libs/filmstrip/lib.pp) renders the workspace as a pad tree via pads/render-scene; the native kiosk (soil-hello --eval "(filmstrip/scene)") consumes it (scripts/smoke_soil_ma.py). The HTML shell is unchanged; scene + HTML are two lowerings of one workspace row. Terminal (render-ansi) remains open.|) *)
+ (* agent note (|2026-09-04 PROMOTE: filmstrip + pads promoted to system/main on the dev stack AND on prod (pricklypear.rocks) — /filmstrip live for all identities, scene verified on prod; master merged (filmstrip-v1 fast-forward). Debt noted: todo/notes/calendar browse defs still live inside libs/filmstrip (one-file make constraint); promotion into their home packages is the next hygiene pass.|) *)
+ (* agent note (|2026-09-11 HOST VARIATION (glochid shell, see glochid.borg filmstrip-shell): the filmstrip lib now boots on the AGENT host too, as glochid's surface — the harness's request-runner seam makes this a load, not a port. Two seams are intentionally HOST-PROVIDED and this note records the allowed variation: (1) WORKSPACE BACKING — filmstrip/ws-node / ws-save are the persistence seam; the habitat uses tree/get + tree/upsert (one-tree, per-identity row), glochid redefines them over fs prims into .agent/workspace.json. Per-workspace state on a laptop is local-first state, NOT habitat content — retaining tree backing as the image default is right; a lens-backed row (same workspace following the operator across devices) is the deferred unification. (2) THE CASCADE INVENTORY — filmstrip/browse / pkg-browse / filmstrip/apps are the app list; the habitat lists todo/notes/calendar, glochid lists its own surfaces (chat/code/bindings/sessions/settings, with a filesystem cascade for code). The BINDINGS app (2026-09-14, BORGE-1789352277) is the AST browser: /bindings route (bind/page over packages -> fns -> doc+source) + bind/packages + bind/list + bind/get bridge prims in glochid/lib/habitat.ml; bindings data still rides POST /api/eval (lens-local defs are the deferred unification, same host-seam seam as ws). Everything else (strips, OOB swap grammar, zero-JS keys, open-or-focus, width presets) is the LIB's and stays shared. status here stays; glochid's stanza lives in glochid.borg.|) *)
+   (status planned)
+  )
+ )
+)

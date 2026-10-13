@@ -1,0 +1,213 @@
+(project pricklypear-migrations
+ (doc "Pricklypear book chapter: migrations")
+ (status partial)
+ (* agent note (|2026-08-02 status reconcile: applied-by-image+additive-only match ops; branching-interaction stays partial (type_defs merge/schema_vers messaging).|) *)
+ (convention ocaml-dune)
+ (section migrations
+
+  (doc "Schema evolution: image-applied, additive-only, schema authority in main")
+  (status partial)
+  (implements
+   migrations/001_branches.sql
+   migrations/002_auth.sql
+   migrations/003_data.sql
+   migrations/004_bible_ref_index.sql
+   migrations/008_agent_users.sql
+   migrations/010_notes_tree.sql
+   migrations/013_data_user_scoping.sql
+   migrations/014_guestbook_shared.sql
+   migrations/015_jobs.sql)
+  (verify
+   (build "dune build image")
+   (smoke "image boots against a fresh database; schema_migrations records 001..007; re-boot is a no-op"))
+  (subsection applied-by-image
+   (doc "The image owns schema state before it serves")
+   (status implemented)
+   (* agent note (|2026-08-02: migrations/001–012 + schema_migrations; apply via scripts/dev.sh and deploy hooks before serve (AGENTS.md). Idempotent SQL files.|) *)
+   (details
+    (doc (|
+         The IMAGE runs migrations. On boot it applies any
+         pending migrations in version order, and only then
+         starts serving. (scripts/dev.sh applies them
+         directly in the dev habitat.) Images assume "the
+         schema is current" once boot completes.
+
+         Migration source: SQL files in migrations/
+         (version-numbered). Tracked in the
+         schema_migrations table; application is
+         idempotent (IF NOT EXISTS guards), so re-applying
+         is a no-op.
+
+         Initial migrations:
+           001_branches.sql  — code store tables
+             (branches, function_defs, type_defs,
+             view_bindings, sessions, schema_migrations)
+           002_auth.sql      — auth tables
+             (users, credentials, auth_sessions, auth_log;
+             system_keys is inert legacy)
+           003_data.sql      — shared data_rows
+           004_bible_ref_index.sql — bible lookup indexes
+           005_ai_sessions.sql — agent conversation store
+             (ai_sessions, ai_messages; NOT auth_sessions).
+             Spec: ai-authoring.agent-portal.
+           006_route_visibility.sql — view_bindings.visibility
+             text NOT NULL DEFAULT 'private' (public|private).
+             Spec: auth.route-visibility. Additive column only;
+             existing routes stay private.
+           007_media.sql — media_blobs (bytea object store for
+             agent/browser image upload). Spec: storage.media.
+             Shared across branches like data_rows; ownership
+             via author column. Additive table only.
+           008_agent_users.sql — agent user rows / allow flags.
+           009_tree.sql — one-tree substrate (tree_nodes,
+             tree_branches, bidirectional deferred mirrors,
+             tree_* read views, tree_verify). Spec: one-tree.
+           012_code_history.sql — code_history table +
+             BEFORE UPDATE/DELETE triggers on function_defs,
+             type_defs, view_bindings. Append-only before-image
+             history for every code-row write.
+             Spec: branching.code-history.
+           015_jobs.sql — durable background jobs (jobs,
+             job_steps, schedules) as a DEDICATED table (not
+             data_rows/tree nodes): the runner's SKIP LOCKED
+             claim protocol needs real typed status/run_at
+             columns + partial jobs_claim_idx; kernel rows
+             belong to the migration tier. Spec: jobs.
+           018_tree_versions.sql — ADDITIVE versioned-leaf table
+             for tree-time (branch_id, path, gen) append-only
+             history + covering index + tree_generations row,
+             gen-range partitioned for retention GC, tombstone
+             representation. DESIGNED in tree-time.migration-018
+             (campaign 5.0 plan pass); the file lands with 5.1
+             (make versioned-leaves) and is not yet tracked.
+             Spec: tree-time.
+           019_tree_version_shadow.sql — tree-time Phase 1
+             dual-write shadow: AFTER trigger on tree_nodes
+             appends a tree_versions row per write (allocating
+             the head gen per path class) + tombstone on delete.
+             Additive; Spec: tree-time.versioned-leaves.
+           020_tree_version_echo_guard.sql — tree-time mirror-
+             echo guard: tree_version_append() REFINED to make a
+             no-op mirror bounce (same content body/author/kind/
+             type) return before allocating a gen or inserting a
+             version row, so one logical write is never double-
+             counted. Additive CREATE OR REPLACE; Spec:
+             tree-time.versioned-leaves.
+           021_tree_versions_reconcile.sql — tree-time head
+             reconciliation tool: tree_versions_reconcile_heads()
+             heals the one non-head-equivalent class (a shadowed
+             LIVE row whose newest version is a TOMBSTONE —
+             delete-then-recreate whose re-create did not re-
+             shadow) by appending the live content as a fresh
+             head, and repairs the branch/data head counters to
+             the max live gen. Additive CREATE OR REPLACE;
+             runner: scripts/reconcile_tree_version_head.sh.
+             Spec: tree-time.versioned-leaves.
+           022_tree_retention.sql — tree-time.gc retention
+             worker: tree_retention_policy (policy AS HABITAT
+             DATA, path_class code|data, type_name NULL = whole
+             class, UNIQUE(path_class,type_name)) + tree_
+             versions_retain(path_class, keep_windows): computes
+             the whole-class floor from the live head gen,
+             CHECKPOINTs the newest in-retained-past state of
+             every fully-retired path to a row at the floor
+             boundary, then DROP PARTITIONs every lazy gen-window
+             entirely below the floor — never the base gen_0
+             window. Additive + idempotent + image-applied; the
+             worker runs on the jobs runner (boot.ml,
+             migration-015) gated by wall-clock.
+             Spec: tree-time.gc.
+
+         A migration in flight blocks serving until it
+         completes (or fails). This guarantees the image
+         always sees a consistent schema. Migration failure
+         aborts boot and requires manual intervention — no
+         half-applied state. (The additive-only policy makes
+         failure recovery simpler.)
+   |))
+   )
+  )
+  (subsection additive-only
+   (doc "Schema changes can ADD, not remove or rename")
+   (status implemented)
+   (verify
+    (build "grep -rE 'DROP|RENAME|ALTER COLUMN TYPE' migrations/ = 0 matches")
+    (smoke "all migrations idempotently re-appliable"))
+
+   (details
+    (doc (|
+         Schema evolution policy for type_defs in main:
+         ADDITIVE ONLY. You can:
+           - Add a new type (new table)
+           - Add a new field to an existing type
+             (ALTER TABLE ADD COLUMN, with NOT NULL
+             forbidden unless a DEFAULT is specified)
+
+         You CANNOT:
+           - Remove a field (no DROP COLUMN)
+           - Rename a field (no RENAME)
+           - Change a field's type (no ALTER COLUMN TYPE
+             except widening)
+
+         WHY:
+         - Additive changes are backward-compatible with
+           running images. An image running old code that
+           doesn't know about a new field still works; it
+           just ignores the column.
+         - Removing/renaming breaks running images that
+           reference the field, with no compile-time error
+           to catch it (Nopales is dynamic).
+         - The cost is cruft accumulation: dead fields
+           pile up over time. Tradeoff accepted for
+           correctness.
+
+         When a field truly must go: a manual migration
+         (off-cycle, admin-run during scheduled downtime)
+         that also updates affected branch code. This is
+         rare and treated as an incident, not routine.
+
+         This policy is set early because retrofitting it
+         later (after non-additive migrations exist) is
+         expensive. It is a foundation constraint.
+   |))
+   )
+  )
+  (subsection branching-interaction
+   (doc "How migrations interact with branches")
+   (status partial)
+   (* agent note (|2026-08-02 confirm: shared tables + additive-only policy live; type_defs proposal→main migration path and schema_vers messaging still incomplete.|) *)
+   (details
+    (doc (|
+         Migrations only apply to the SHARED data tables,
+         governed by main's type_defs (which are
+         merge-governed into main).
+
+         Branches CANNOT migrate data tables. A branch
+         can PROPOSE a type change in its type_defs, but
+         the underlying table doesn't change until that
+         proposal is merged to main and the image applies
+         the resulting migration at next boot.
+
+         A branch running code that references a field
+         added in main but not yet handled by the branch's
+         own code: works (the column exists; branch code
+         ignores it on write, reads null on read if no
+         default).
+
+         A branch running code that references a field
+         that DOESN'T exist (because the branch's type_defs
+         is behind main's): runtime error at the primitive
+         layer. The user gets a clear message: "field X
+         not in current main schema; merge your schema
+         change or sync to main".
+
+         Schema version is tracked per type (schema_vers
+         in type_defs). Branches see the version they
+         declared; main sees its current version. The
+         primitive layer can validate against either at
+         query time.
+   |))
+   )
+  )
+ )
+)

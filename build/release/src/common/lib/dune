@@ -1,0 +1,5 @@
+(library
+ (name pricklypear_common)
+ (public_name pricklypear-common)
+ (modules manifest branch protocol auth_types llm_codec)
+ (libraries yojson))

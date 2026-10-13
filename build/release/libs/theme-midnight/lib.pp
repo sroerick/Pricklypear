@@ -1,0 +1,83 @@
+;; package theme-midnight — soft blue-gray dark (image.themes)
+;; Loaded by (theme/set "midnight") / (load-library "theme-midnight").
+
+(define theme/name
+  "midnight")
+
+;; WHITEPURPOSE: theme-midnight is THE WHITEOUT/PROBE THEME — every
+;; core token is magenta so ANY element still painted by a hardcoded
+;; hex (not var(--*)) glows magenta and exposes the leak. Real users
+;; pick midnight only to audit CSS theming coverage.
+
+(define theme/bg
+  "magenta")
+
+(define theme/ink
+  "magenta")
+
+(define theme/panel
+  "magenta")
+
+(define theme/chrome
+  "magenta")
+
+(define theme/link
+  "magenta")
+
+(define theme/visited
+  "magenta")
+
+(define theme/muted
+  "magenta")
+
+(define theme/err
+  "#bf616a")
+
+(define theme/ok
+  "#a3be8c")
+
+(define theme/border
+  "#3b4558")
+
+(define theme/row-alt
+  "#141b26")
+
+(define theme/shadow
+  "magenta")
+
+;; --- semantic style tokens (dark blue-gray values) ------------------
+(define theme/sel-bg "magenta")
+(define theme/sel-accent "magenta")
+(define theme/pending-bg "magenta")
+(define theme/pending-ink "magenta")
+(define theme/pending-border "magenta")
+(define theme/done-bg "magenta")
+(define theme/done-ink "magenta")
+(define theme/done-muted "magenta")
+(define theme/waiting-bg "magenta")
+(define theme/archived-bg "magenta")
+(define theme/archived-ink "magenta")
+(define theme/archived-border "magenta")
+(define theme/cancelled-bg "magenta")
+(define theme/today-bg "magenta")
+(define theme/banner-bg "magenta")
+(define theme/banner-border "magenta")
+(define theme/banner-ink "magenta")
+(define theme/badge-bg "magenta")
+(define theme/badge-border "magenta")
+
+;; --- font stacks (midnight: sans body, mono code) ----------------
+;; Colors are magenta on purpose (whiteout probe — see above). Fonts
+;; are real stacks so layout still reads while you hunt for leaks.
+(define theme/font-sans
+  "Geneva,\"Lucida Grande\",\"DejaVu Sans\",Verdana,sans-serif")
+(define theme/font-mono
+  "\"Courier New\",\"Lucida Console\",Monaco,\"DejaVu Sans Mono\",monospace")
+
+;; --- per-theme structural sheet hook (no-op) ----------------------
+;; Themes are token-only (colors + fonts); no structural sheets.
+(define theme/extra
+  (lambda
+    ()
+    "No-op: themes are token-only."
+    (css/sheet (list))))

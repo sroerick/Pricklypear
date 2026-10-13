@@ -1,0 +1,326 @@
+(project pricklypear-jobs
+ (doc "Pricklypear book chapter: jobs — durable background jobs, step checkpoints, and cron; host owns concurrency, guests see rows")
+ (status implemented)
+ (* agent note (|2026-12 plan pass: flipped planned -> implemented. All four deliverable subsections (node-shapes, runner, step-checkpoints, schedules) are implemented and live: image/lib/jobs.ml (5-field cron + every-ms, SKIP LOCKED claim, runner fiber forked in boot.ml), prims_db.ml registers submit-job/submit-job-at/job-status/cancel-job/jobs/schedule/unschedule/schedules. The label lagged the ship.|) *)
+ (convention ocaml-dune)
+ (section jobs
+
+  (doc "Durable jobs as typed data nodes; a host-owned runner fiber; step checkpoints for exactly-once; schedules for cron. The async story for Nopales is job-shaped, not call-shaped.")
+  (status implemented)
+  (details
+   (doc (|
+        =========================================================
+        WHY THIS CHAPTER EXISTS
+        =========================================================
+        A web framework needs background tasks and cron. AI calls
+        take minutes; renders take longer; backups and feed polls
+        must happen with no request in flight. Today every such
+        feature would hand-roll its own deferral, and the book
+        already carries three fragments of the same idea:
+        film-edit's job-first vocabulary (gen-submit / gen-status),
+        image.primitives-layer's deferred "host cron/scheduler
+        table", and one-tree's user-keyed data placement. This
+        chapter is THE async substrate: one design that those
+        surfaces build on.
+
+        The shape is dictated by decisions already made:
+          - ONE IMAGE PROCESS — the worker is an in-process host
+            fiber, not a fleet. No broker, no Redis, no worker
+            tier (the Celery shape is a symptom of stateless
+            web workers; we have the opposite constraint).
+          - THE TREE IS TRUTH — jobs are typed data nodes, not
+            rows in a queue table. Inspection, backlinks,
+            provenance, and /data browsing come free.
+            (SUPERSEDED — see the node-shapes reconcile note: v1
+            ships a DEDICATED jobs table, migrations/015_jobs.sql,
+            not tree nodes. Kept here as the original plan's
+            rationale; the dedicated-table design below records why
+            the implementation diverged.)
+          - HOST OWNS CONCURRENCY — Nopales has no fiber/async
+            API and gains none. Guests submit jobs and read job
+            rows; the host runner fiber calls back into eval
+            through the same Control rim an HTTP request uses.
+
+        =========================================================
+        THE MODEL: CALLERS AND CALLEES
+        =========================================================
+        Eval is always direct-style and request-shaped. What
+        varies is WHO CALLS:
+
+          HTTP request  ─┐
+          REPL line      ─┼─▶  Control.perform_prim  ─▶  rim (Eio fiber)
+          runner fiber   ─┘     (one-shot effect)         does the I/O
+
+        The runner fiber is a third caller into the same
+        dispatch. From a job function's perspective a job run
+        is indistinguishable from someone hitting a route:
+        same prims, same budget accounting, same with-transaction
+        semantics. No guest-visible suspension exists at any
+        point in this design.
+
+        =========================================================
+        NODE SHAPES (one-tree placement — RECONCILED 2026-08)
+        =========================================================
+        RECONCILE: the implementation ships a DEDICATED table, not
+        tree nodes. migrations/015_jobs.sql + image/lib/jobs.ml +
+        the boot-time runner fiber (image/lib/boot.ml) deliberately
+        chose a dedicated `jobs` table (plus `job_steps` and
+        `schedules`) over tree_nodes/data.shared.job.* for three
+        reasons, per the 015_jobs.sql header comment:
+          1. SKIP LOCKED CLAIM PROTOCOL — the runner's due-scan
+             ('UPDATE ... WHERE status='pending' AND run_at<=now
+             ORDER BY run_at FOR UPDATE SKIP LOCKED LIMIT 1') needs
+             real typed status/run_at columns and a partial claim
+             index (jobs_claim_idx ON jobs(run_at,id) WHERE
+             status='pending'). A matpath subtree scan over
+             data.shared.job.* cannot drive that partial index and
+             would force a tree walk per claim's ORDER-BY.
+          2. KERNEL AUTHORITY — migrations are the git-source-of-
+             truth kernel tier (AGENTS.md branching authority); job
+             rows are kernel state, so they belong to a migration
+             table, not a branch-lens Nopales type.
+          3. STRONGER BRANCHING EDGE — with a dedicated table (and
+             no branch id on the rows), fork/merge/promote
+             STRUCTURALLY cannot copy, diff, or move a job — the
+             'NEVER participates in branch lenses' hard edge holds
+             by construction, as originally intended.
+        The tree-truth aspiration (inspection/backlinks//data
+        browsing) is NOT met for jobs in v1: jobs are inspected via
+        the job prims + /data is not a job surface. This is an
+        accepted v1 tradeoff (kernel-backed queue state); a future
+        projection onto tree nodes is possible but not planned.
+
+        The original tree placement (kept for the decision trail):
+
+          job        data.shared.job.<id>
+          job-step   data.shared.job-step.<job-id>.<step-name>
+          schedule   data.shared.job-schedule.<name>
+
+        Shared placement was deliberate: the runner (host identity)
+        must claim and mutate job rows regardless of who submitted,
+        and path-prefix confinement on data.u.<user>.* would make
+        the runner a privilege exception. Visibility is enforced at
+        the PRIM layer instead: (jobs) and (job-status id) confine
+        to the caller's submitted_by unless the caller is admin —
+        same rule the notes garden applies to its shared indexes.
+        submitted_by / branch / run_at are set at submit time and
+        are NOT updatable through the CRUD prims (the runner owns
+        status transitions).
+
+        job fields (migrations/015_jobs.sql):
+          id           uuid     PK, gen_random_uuid at submit
+          fn           string   name of a 1-arity Nopales fn
+          args         json     single argument value
+          branch       string   code lens captured at submit time
+          submitted_by string   user who submitted (visibility key)
+          status       enum     pending | running | done | failed | dead
+          run_at       epoch-ms earliest start
+          attempts     int      runs so far
+          max_attempts int      default 3; exhausted ⇒ dead
+          result       json     return value on done
+          error        string   last failure message
+          runner_id    string   image boot instance that claimed it
+          created_at   timestamptz submit time (list ordering)
+
+        job-step fields (checkpoint rows):
+          job_id, step_name, value json, finished_at epoch-ms
+
+        schedule fields:
+          name, fn, args, branch, cron string (5-field) OR every-ms
+          int, next_run epoch-ms, enabled bool
+
+        =========================================================
+        GUEST PRIMS (the whole Nopales surface)
+        =========================================================
+          (submit-job "fn" args)           → job-id; captures caller's
+                                             branch + identity; run_at = now
+          (submit-job-at "fn" args when)   → job-id; when = epoch-ms
+          (job-status id)                  → the job row (confined)
+          (cancel-job id)                  → pending ⇒ failed/cancelled
+          (jobs)                           → caller's jobs, recent first
+          (with-step "name" (lambda () body))  → checkpoint boundary;
+                                             inside a job: memoized by
+                                             (job-id, name); outside a
+                                             job: plain function call
+          (NOTE: named with-step, not step — libs/rb already defines a
+          `step` recipe-DSL function; reserving the flat name `step` for a
+          kernel special form would clobber that library)
+          (schedule "name" "cron-or-ms" "fn" args)   → upsert
+          (unschedule "name")              → disable
+          (schedules)                      → list
+
+        Capability effects: submit/cancel/with-step are WriteDb;
+        status/jobs/schedules are ReadDb; schedule/unschedule are
+        WriteDb. Job FUNCTIONS carry whatever effects their bodies
+        carry — inference + badges work unchanged because a job
+        body is ordinary Nopales on an ordinary branch.
+
+        THERE IS NO await-job. Guests never block on a job; they
+        poll rows (htmx fragment refresh in the browser, job-status
+        in the REPL). Result delivery is pull, not push — the same
+        vocabulary film-edit specified for gen/render.
+
+        =========================================================
+        THE RUNNER (host side)
+        =========================================================
+        One Eio fiber forked at boot, beside the HTTP accept loop
+        and REPL. Loop:
+
+          1. CLAIM — due jobs (status=pending, run_at <= now),
+             oldest first, claimed with SELECT ... FOR UPDATE
+             SKIP LOCKED + status→running + runner_id, committed
+             before eval begins. SKIP LOCKED is correct from day
+             one and is exactly the claim protocol an out-of-process
+             worker (the Blender bridge shape) would run against
+             the same rows later.
+          2. EVAL — resolve fn on the job's recorded branch, call
+             it with args, under a synthetic request context
+             (whoami = submitted_by, branch = recorded branch) —
+             the same session record the REPL fabricates, no HTTP
+             request involved. Standard eval budget applies.
+          3. RECORD — success ⇒ status=done + result; exception ⇒
+             attempts+1 and either status=pending with
+             run_at = now + backoff(attempts), or status=dead when
+             attempts = max_attempts.
+
+        WAKE-UP: sleep until min(run_at) of pending jobs, with a
+        bounded poll interval (tunable, default seconds) as the
+        floor so earlier inserts are never missed by a stale
+        sleep target. v1 has no LISTEN/NOTIFY.
+
+        RECOVERY: each boot stamps a fresh runner_id. After claim
+        and before new work, the runner fails jobs left status=
+        running by a DEAD runner_id — they were mid-eval at crash —
+        retrying them under the attempts/backoff rule. Single-image
+        means the "fleet" is one fiber; runner_id exists so crash
+        recovery is explicit instead of implied.
+
+        =========================================================
+        STEP CHECKPOINTS (the DBOS idea, Nopales-shaped)
+        =========================================================
+        A job that dies at minute 9 of 10 should not re-spend
+        minutes 1–8. (with-step "name" thunk) is the boundary:
+
+          - First execution of (job-id, "name"): run the thunk,
+            write the checkpoint row, return the value.
+          - Re-execution (retry after crash): the checkpoint row
+            exists ⇒ return its value WITHOUT running the thunk.
+
+        Steps compose with with-transaction to give EXACTLY-ONCE
+        for DB-writing steps, the DBOS co-location trick in our
+        idiom: open one dynamic transaction, run the thunk (all
+        its creates/updates ride the same connection), write the
+        checkpoint row in the SAME transaction, commit. Either the
+        writes and the checkpoint both land or neither does — the
+        step provably never double-executes. The guest never sees
+        a transaction handle; exactly-once is the default shape of
+        (with-transaction (lambda () (with-step …))), not a discipline.
+
+        Resume is by CHECKPOINT LOOKUP, not code replay: there is
+        no determinism constraint on the job body. The one rule:
+        a step name is a stable string within one job definition —
+        (with-step "name" …) enforces this syntactically. Job code is
+        pinned at submit time (branch + fn name), so a redefine on
+        main mid-job does not change what a running retry resolves.
+
+        v1 steps are RETRY-scoped: they shorten re-execution of a
+        retried job; they do not suspend a live eval and resume it
+        across boots mid-run. A crash mid-job restarts the job
+        function from its top, replaying checkpoints.
+
+        =========================================================
+        SCHEDULES (cron)
+        =========================================================
+        Cron is sugar over the same machinery: a schedule row with
+        next_run; the runner's due-scan treats due schedules like
+        due jobs — submit the job, then compute the next next_run
+        from the cron string or every-ms interval and write it back.
+        One queue, one claim path, one recovery story. Missed fires
+        while the image was down collapse to ONE catch-up run at
+        boot (a backup that was down for three days runs once, not
+        seventy times).
+
+        =========================================================
+        HARD EDGES (non-goals for v1)
+        =========================================================
+        - NO guest-visible fibers, promises, or await. Host owns
+          concurrency; guests see rows.
+        - NO in-image out-of-process isolation. A job that wedges
+          in a blocking rim call can stall the image; eval budgets
+          bound runaway Nopales, dead-runner recovery bounds
+          crashes, and genuinely long external work belongs to an
+          external worker speaking the same SKIP LOCKED claim
+          (film-edit's Blender bridge is the precedent shape).
+        - NO multiple queues, priorities, rate limits, unique-job
+          constraints. Single FIFO queue, at-least-once at the job
+          level, exactly-once at the transactional-step level.
+        - NO mid-job guest notification. htmx polling or
+          job-status reads only.
+        - Job state NEVER participates in branch lenses. Paths
+          contain no branch id; fork/merge/promote structurally
+          cannot copy, diff, or move a job (one-tree branching-
+          interaction stands by construction).
+
+        =========================================================
+        RELATIONSHIP TO EXISTING CHAPTERS
+        =========================================================
+        - film-edit: gen-submit / gen-status / render-job become
+          applications of THIS substrate (a render job = a job row
+          whose fn calls the Blender bridge); film-edit keeps its
+          memoization-by-hash cache, which is orthogonal.
+        - image.primitives-layer: the deferred "host cron/
+          scheduler table" is this chapter's schedule nodes.
+        - one-tree: jobs are the first shared-NAMESPACE data type
+          placed under data.shared.* by design; the placement and
+          its prim-level confinement are specified above.
+        - lisp-interpreter.effects: new prims join the prim →
+          effect-set table; nothing else about inference changes.
+   |))
+  )
+
+  (subsection node-shapes
+   (doc "job / job-step / schedule rows in a dedicated migration table (015_jobs.sql): field contracts, runner-owned status transitions, SKIP LOCKED claim index; v1 is a dedicated table, not data.shared tree nodes (see details RECONCILE note)")
+   (status implemented)
+   (verify
+    (build "dune build @all")
+    (test "image/test: jobs_test.ml node-shapes — job node create/claim/status transitions (submit→pending→claim running→record done/failed→dead) incl. runner-owned field confinement (submitted_by + branch pinned at submit; (jobs)/(job-status)/(cancel-job) confine to caller unless admin; cancel only pending and only yours)")
+    (smoke "pp_eval '(submit-job …)' → (job-status id) shows submitted_by + branch pinned, then the runner fiber drives it pending→running→done with result (jobs are inspected via the job prims, NOT /data — v1 reconcile: no /data/job surface)")))
+
+  (subsection runner
+   (doc "boot-time Eio runner fiber: SKIP LOCKED claim, synthetic request context, budget, attempts/backoff, dead-runner recovery at boot. Jobs run UNBUDGETED (max_int steps) — long-running ingest/analytics ticks are the design target (upsets.ingest runs 400+ DB ops per tick); request-path evals keep the 100k sync budget (multi-user.budgets).")
+   (status implemented)
+   (* note (|2026-12 ralph loop 19 (campaign 4.0 plan verify) found the runner ARGS bug: eval_job wrapped job.args with Printf.sprintf "%S" (boot.ml), so a jsonb NUMBER arg was evaled as a STRING literal -(submit-job "f" 1) stores args=1 but the runner evaled (f "1") -> Interp_error -> retries -> dead. Numeric/bool/object args all failed; only JSON-string args round-tripped. 4.1 FIXED it (Jobs.eval_src): job.args is the jsonb column rendered ::text = one JSON literal, spliced DIRECTLY as the call (never %S-quoted), so numeric/object/bool args eval as their real type, and the runner surfaces the REAL error text (pp_interp_error) instead of opaque Interp_error(_). ARG-ENCODING CONTRACT on submit: the submit-job VStr branch stores the raw string as jsonb (unquoted), so a string arg must already be valid JSON -(submit-job "f" "\"hello\"") for the string hello; align submit+runner on one encoding (prim surface + Jobs.eval_src + boot runner are consistent; see image/test/jobs_test.ml args-bug suite).|) *)
+   (* agent note (|2026-09-05 plan pass (operator directed; upsets.ingest consumer): eval_job previously ran jobs on Session.eval_string_rim's fresh default budget = 100k steps (lisp/lib/eval.ml default_limit) - a 2-page market poll (400+ DB ops) died budget-exceeded mid-tick. The max_int budget people remember is the BENCH prim (session.ml bench run_once), not jobs. Fix: eval_job binds Eval.current_budget to Some (make_budget ~limit:max_int ()) around the job eval (Fun.protect restores) - jobs are host-owned, submitted by authed users on their own branch, with attempts/backoff + step checkpoints as the runaway guard; request-path budgets unchanged.|) *)
+   (verify
+    (build "dune build @all")
+    (test "image/test: jobs_test.ml runner — claim skips locked rows (second-connection FOR UPDATE); exponential backoff requeues into the future / exhausted→dead; dead-runner reaper fails stale running rows (retry or dead) while leaving our own runner_id untouched")
+        (test "job budget: a job stepping past 100k (long counter loop) completes done, does not die budget-exceeded - the same loop on the request path still budget-exceeds")
+    (smoke "submit a job that sleeps, watch status pending→running→done with result via (job-status)")
+    (smoke "submit a job whose fn raises → attempts increments, retry, eventual dead")
+    (smoke "restart image mid-job → stale running row recovered per attempts rule")))
+
+  (subsection step-checkpoints
+   (doc "(with-step \"name\" thunk) memoized by (job-id, name); with-transaction composition gives exactly-once for DB-writing steps; plain call outside jobs")
+   (status implemented)
+   (verify
+    (build "dune build @all")
+    (test "image/test: jobs_test.ml step-checkpoints — job-id fiber binding (with_current_job_id scopes current_job_id_opt; null outside a job) + checkpoint memoization round-trip on job_steps (write reads back, upsert overwrites, per (job-id,name) key independent across step names and across jobs)")
+    (smoke "two-step job killed between steps via forced retry: first step not re-executed (side-effect counter row stays 1)")))
+
+  (subsection schedules
+   (doc "cron/every-ms schedules as rows; due-scan fires by submitting a job + advancing next_run; downtime collapses to one catch-up run. Per-schedule tz (migration 032, roerick 09-11 'match cron with mountain time'): tz='utc' (default, historical meaning) or tz='local' — cron fields matched against the image process zone (prod: America/Denver via the 5cec9fe TZ knob), so \"0 15 * * *\" means 15:00 Denver, DST included. DST follows vixie-cron semantics: nonexistent spring-forward times never match, repeated fall-back hours fire twice. Retires the one-shot dst-flip class (b17824c9); re-create tz-carrying schedules (work-digest) with tz=local. Matcher is an injectable calendar fn (next_cron_ms_with) so tests pin a fixed-offset UTC-6 calendar without touching process TZ")
+   (status implemented)
+   (verify
+    (build "dune build @all")
+    (test "image/test: jobs_test.ml schedules — cron next-fire computation (every-minute boundary, across-month Jan-1, impossible Feb-30 never matches) + every-ms drift/interval + spec classification (integer is not cron) + schedule CRUD/claim/advance/disable lifecycle on the schedules table + cron tz: local calendar vs utc (09:00 local = 15:00Z in MDT; matcher routes by tz string)")
+    (smoke "pp_eval '(schedule \"t\" \"* * * * *\" fn args)' → runner fires a job within a minute; (schedules) shows advanced next_run + tz field")
+    (smoke "(schedule \"t9\" \"0 15 * * *\" fn args \"local\") → (schedules) shows tz=\"local\" and next_run at 21:00Z (15:00 MDT)")
+    (smoke "disable via (unschedule \"t\") → no further submissions")))
+
+  (subsection non-goals
+   (doc "no guest async/fibers/await; no fleet control plane; no multi-queue v1; out-of-process workers via shared claim protocol only")
+   (status planned)
+   (verify
+    (test "conformance: no Nopales binding exposes await/promise/fiber (surface lint over prim table)")))
+ )
+)
