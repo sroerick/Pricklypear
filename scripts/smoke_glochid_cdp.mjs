@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Agent chat-surface CDP smoke: drives a REAL headless chromium against
- * `agent --serve --mock-script`, submits the hx-post /chat form, and
+ * `glochid --serve --mock-script`, submits the hx-post /chat form, and
  * asserts the multipart stream landed in the DOM (user bubble, llm bubble,
  * assistant token span) and that the htmx request completed
  * (htmx:multipart:after:part fired per part per the upstream hx-multipart
@@ -10,7 +10,7 @@
  * This is the htmx-4 stack regression net: htmx.min.js upgrade, extension
  * re-vendor, or /chat framing regressions all fail here.
  *
- * Prereq: dune build agent/bin/main.exe; /usr/bin/chromium present.
+ * Prereq: dune build glochid/bin/main.exe; /usr/bin/chromium present.
  * Exit 0 on success.
  */
 import { spawn } from "node:child_process";
@@ -18,15 +18,15 @@ import { setTimeout as sleep } from "node:timers/promises";
 import http from "node:http";
 import fs from "node:fs";
 
-const AGENT = process.env.AGENT_BIN || "_build/default/agent/bin/main.exe";
+const AGENT = process.env.AGENT_BIN || "_build/default/glochid/bin/main.exe";
 const PORTC = 9025;
 const CHROME = process.env.CHROME || "/usr/bin/chromium";
-const USER_DATA = `/tmp/chrome-agent-cdp-${process.pid}`;
-const MOCK = `/tmp/agent-cdp-mock-${process.pid}.json`;
+const USER_DATA = `/tmp/chrome-glochid-cdp-${process.pid}`;
+const MOCK = `/tmp/glochid-cdp-mock-${process.pid}.json`;
 // Own agent cwd: a fresh glochid boot renders an EMPTY shell (no bare
 // /chat page anymore), so the smoke seeds its own workspace with one
 // focused /chat pane instead of inheriting the caller's .agent.
-const AGENT_DIR = `/tmp/agent-cdp-cwd-${process.pid}`;
+const AGENT_DIR = `/tmp/glochid-cdp-cwd-${process.pid}`;
 
 function ok(m) { console.log("OK  ", m); }
 function fail(m) { console.error("FAIL", m); cleanup(); process.exit(1); }
@@ -67,7 +67,7 @@ function cleanup() {
 }
 process.on("exit", cleanup);
 
-if (!fs.existsSync(AGENT)) fail(`${AGENT} missing (run: dune build agent/bin/main.exe)`);
+if (!fs.existsSync(AGENT)) fail(`${AGENT} missing (run: dune build glochid/bin/main.exe)`);
 fs.writeFileSync(MOCK, JSON.stringify([{ text: "cdp smoke reply", calls: [] }]) + "\n");
 fs.mkdirSync(`${AGENT_DIR}/.agent`, { recursive: true });
 fs.writeFileSync(`${AGENT_DIR}/.agent/workspace.json`, JSON.stringify({
@@ -82,12 +82,12 @@ let agentUrl = "";
 let buf = "";
 agent.stdout.on("data", (c) => {
   buf += c;
-  const m = buf.match(/agent serving (http:\/\/\S+)/);
+  const m = buf.match(/glochid serving (http:\/\/\S+)/);
   if (m) agentUrl = m[1].replace(/\/$/, "");
 });
 for (let i = 0; i < 60 && !agentUrl; i++) await sleep(250);
-if (!agentUrl) fail("agent never printed its URL");
-ok(`agent at ${agentUrl}`);
+if (!agentUrl) fail("glochid never printed its URL");
+ok(`glochid at ${agentUrl}`);
 
 // --- boot chromium CDP ---
 chrome = spawn(CHROME, [

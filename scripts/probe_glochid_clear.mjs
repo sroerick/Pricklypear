@@ -6,7 +6,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import http from "node:http";
 import fs from "node:fs";
 
-const AGENT = process.env.AGENT_BIN || "/home/roerick/dev/wyo.tech/pricklypear-sec/_build/default/agent/bin/main.exe";
+const AGENT = process.env.AGENT_BIN || "/home/roerick/dev/wyo.tech/pricklypear-sec/_build/default/glochid/bin/main.exe";
 const MOCK = `/tmp/glochid-clear-probe-${process.pid}.json`;
 const PORTC = 9033;
 const CHROME = process.env.CHROME || "/usr/bin/chromium";
@@ -26,10 +26,10 @@ process.on("exit", cleanup);
 fs.writeFileSync(MOCK, JSON.stringify([{ text: "clear-probe reply", calls: [] }]) + "\n");
 agent = spawn(AGENT, ["--serve", "--port", "0", "--mock-script", MOCK], { stdio: ["ignore", "pipe", "pipe"], cwd: "/home/roerick/dev/wyo.tech/pricklypear" });
 let agentUrl = "", buf = "";
-agent.stdout.on("data", (c) => { buf += c; const m = buf.match(/agent serving (http:\/\/\S+)/); if (m) agentUrl = m[1].replace(/\/$/, ""); });
+agent.stdout.on("data", (c) => { buf += c; const m = buf.match(/glochid serving (http:\/\/\S+)/); if (m) agentUrl = m[1].replace(/\/$/, ""); });
 for (let i = 0; i < 60 && !agentUrl; i++) await sleep(250);
-if (!agentUrl) { console.error("agent never printed URL"); process.exit(1); }
-console.log("agent at", agentUrl);
+if (!agentUrl) { console.error("glochid never printed URL"); process.exit(1); }
+console.log("glochid at", agentUrl);
 
 chrome = spawn(CHROME, [`--remote-debugging-port=${PORTC}`, `--user-data-dir=${USER_DATA}`, "--headless=new", "--disable-gpu", "--no-sandbox", "--disable-dev-shm-usage", "--window-size=1280,800", "about:blank"], { stdio: "ignore" });
 let ready = false;

@@ -12,7 +12,7 @@ discussions, edit the spec directly or just talk — do NOT file issues.
 **Naming (locked 2026-10-01, borge/filmstrip.borg):** **filmstrip** = the
 window-manager interface / shell (cascade + pane strips, workspace state) —
 habitat (`libs/filmstrip`, `/filmstrip`) and embedded in the harness.
-**glochid** = strictly the local agent harness (laptop binary, `agent/`).
+**glochid** = strictly the local agent harness (laptop binary, `glochid/`).
 The harness's screen IS a filmstrip; say "filmstrip" for window management.
 
 ## Status (2026-08-31 reconcile)

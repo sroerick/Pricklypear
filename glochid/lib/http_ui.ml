@@ -1,4 +1,4 @@
-(** glochid HTML primary surface (agent/lib; borge/agent.borg surfaces).
+(** glochid HTML primary surface (glochid/lib; borge/glochid.borg surfaces).
 
     A local HTTP server (Httpun_eio) bound to 127.0.0.1 (default port
     18090, --port to override; a busy port falls back to random). The
@@ -48,7 +48,7 @@ type server_state = {
   on_msg : Provider.message -> unit;
 }
 
-(** filmstrip-shell host seam #3 (borge/agent.borg): thread the client's
+(** filmstrip-shell host seam #3 (borge/glochid.borg): thread the client's
     request headers (HX-Request is the one that matters) into the route
     table's thin request context, so routes serve pane fragments in
     partial mode — the image's route-gate discipline, agent-backed. *)
@@ -106,7 +106,7 @@ let serve_asset (reqd : Httpun.Reqd.t) (name : string) : unit =
     ]
     name
 
-(* ---- habitat-pane forwarder gate hook (agent.borg habitat-panes):
+(* ---- habitat-pane forwarder gate hook (glochid.borg habitat-panes):
    allowlisted prefixes (registered by the Nopales boot layer via
    habitat/fwd-prefix) forward TO THE HABITAT with the operator's
    session — the gate carries the browser's method + query + body
@@ -177,7 +177,7 @@ let handle_chat (env : Eio_unix.Stdenv.base) (sw : Eio.Switch.t)
     ~finally:(fun () -> Eio.Mutex.unlock st.turn_mutex)
     (fun () -> Chat_stream.run ~env chat reqd)
 
-(* ---- POST /settings: retarget the running turn loop (borge/agent.borg
+(* ---- POST /settings: retarget the running turn loop (borge/glochid.borg
    llm-config). Blank fields keep their current values (the api_key
    password input round-trips blank on every render — a blank POST body
    field is KEEP, not clear). Persists to ~/.config/agent/config.json so
@@ -266,7 +266,7 @@ let serve ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t)
     }
   in
   (* llm-config host prims for the Nopales settings/chat surfaces
-     (borge/agent.borg llm-config). agent/models is CACHED — the
+     (borge/glochid.borg llm-config). agent/models is CACHED — the
      provider ABI (/models) is hit once lazily and refetched on POST
      /settings, so a chat-page render stays local. *)
   Runtime.add_prim st.rt "agent/models"
@@ -294,7 +294,7 @@ let serve ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t)
       match !(st.cfg).Provider.api_key with
       | "" -> Ast.VStr "not set"
       | k -> Ast.VStr ("set \194\183 last4=" ^ Config.last4 k));
-  (* Live session prims (borge/agent.borg sessions-persist) over the
+  (* Live session prims (borge/glochid.borg sessions-persist) over the
      surface's history + current-session ref; /new /resume /sessions
      REPL commands ride the same seam (hashtable registration). *)
   Sessions.register ~rt ~history:st.history ~sess:st.sess
@@ -319,7 +319,7 @@ let serve ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t)
       Eio.Fiber.fork ~sw (fun () ->
           (try f () with
            | Eio.Cancel.Cancelled _ as e -> raise e
-           | exn -> Printf.eprintf "[agent-ui] handler error: %s\n%!" (Printexc.to_string exn)))
+           | exn -> Printf.eprintf "[glochid-ui] handler error: %s\n%!" (Printexc.to_string exn)))
     in
     match req.Httpun.Request.meth with
     | `GET -> (
@@ -341,7 +341,7 @@ let serve ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t)
         | _ -> (
             (* habitat-pane forwarder rides BEFORE the route table: a
                registered prefix (/todo /notes /calendar) forwards to the
-               habitat with the operator's session (agent.borg
+               habitat with the operator's session (glochid.borg
                habitat-panes). *)
             if Habitat.fwd_matches_prefix path <> None then
               fork_work (fun () ->
@@ -416,7 +416,7 @@ let serve ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t)
     match bound_addr with `Tcp (_ip, p) -> p | _ -> 0
   in
   let url = Printf.sprintf "http://127.0.0.1:%d/" port in
-  print (Printf.sprintf "agent serving %s\n" url);
+  print (Printf.sprintf "glochid serving %s\n" url);
   if open_browser then (
     try
       let _ = Sys.command (Printf.sprintf "xdg-open '%s' >/dev/null 2>&1 &" url) in
@@ -446,4 +446,4 @@ let serve ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t)
        Eio.Fiber.first
          (fun () -> Eio.Switch.run (fun _ -> accept_loop ()))
          (fun () -> Eio.Promise.await p));
-  print "agent: shutting down (signal)\n"
+  print "glochid: shutting down (signal)\n"

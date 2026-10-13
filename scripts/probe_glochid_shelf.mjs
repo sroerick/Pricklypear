@@ -13,7 +13,7 @@ import http from "node:http";
 import fs from "node:fs";
 
 const REPO = process.env.PP_REPO || "/home/roerick/dev/wyo.tech/pricklypear";
-const AGENT = process.env.AGENT_BIN || `${REPO}/_build/default/agent/bin/main.exe`;
+const AGENT = process.env.AGENT_BIN || `${REPO}/_build/default/glochid/bin/main.exe`;
 const MOCK = `/tmp/glochid-shelf-probe-${process.pid}.json`;
 const CHROME = process.env.CHROME || "/usr/bin/chromium";
 const USER_DATA = `/tmp/chrome-glochid-shelf-${process.pid}`;
@@ -33,11 +33,11 @@ fs.writeFileSync(MOCK, JSON.stringify([{ text: "shelf-probe reply", calls: [] }]
 const TMP = fs.mkdtempSync("/tmp/glochid-shelf-cwd-");
 agent = spawn(AGENT, ["--serve", "--port", "0", "--mock-script", MOCK], { stdio: ["ignore", "pipe", "pipe"], cwd: TMP });
 let agentUrl = "", buf = "";
-agent.stdout.on("data", (c) => { buf += c; const m = buf.match(/agent serving (http:\/\/\S+)/); if (m) agentUrl = m[1].replace(/\/$/, ""); });
+agent.stdout.on("data", (c) => { buf += c; const m = buf.match(/glochid serving (http:\/\/\S+)/); if (m) agentUrl = m[1].replace(/\/$/, ""); });
 agent.stderr.on("data", (c) => { buf += c; });
 for (let i = 0; i < 60 && !agentUrl; i++) await sleep(250);
-if (!agentUrl) { console.error("agent never printed URL; out:\n" + buf.slice(-2000)); process.exit(1); }
-console.log("agent at", agentUrl);
+if (!agentUrl) { console.error("glochid never printed URL; out:\n" + buf.slice(-2000)); process.exit(1); }
+console.log("glochid at", agentUrl);
 
 chrome = spawn(CHROME, [`--remote-debugging-port=9047`, `--user-data-dir=${USER_DATA}`, "--headless=new", "--disable-gpu", "--no-sandbox", "--disable-dev-shm-usage", "--window-size=1880,1000", "about:blank"], { stdio: "ignore" });
 let ready = false;

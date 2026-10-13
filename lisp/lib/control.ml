@@ -67,7 +67,7 @@ let run_sync ~(prims : sync_prim_table) (thunk : unit -> 'a) : 'a =
     }
 
 (** Host rim: service [Prim_call] with a sync prim table, setting
-    [direct_prims] for nested eval (borge/agent.borg nopales-embed).
+    [direct_prims] for nested eval (borge/glochid.borg nopales-embed).
 
     Moved down from image/lib/control_rim.ml so both hosts (image and
     the agent binary) share one rim. Behavior identical: handler

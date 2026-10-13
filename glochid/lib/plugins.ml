@@ -1,4 +1,4 @@
-(** Plugin loading (borge/agent.borg plugin-model).
+(** Plugin loading (borge/glochid.borg plugin-model).
 
     Global plugins from ~/.config/agent/plugins/*.pp, then project
     plugins from ./.agent/plugins/*.pp (filename order). Each file's

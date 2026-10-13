@@ -10,7 +10,7 @@ PORT="${GLOCHID_PORT:-18090}"
 # development truth). A stable install at ~/.local/share/glochid/bin
 # lets the local service run a pinned, budget-verified build while the
 # working tree is mid-make (see habitat issue i-1789591788-8d507ea1).
-BIN="${GLOCHID_BIN:-/home/roerick/dev/wyo.tech/pricklypear/_build/default/agent/bin/main.exe}"
+BIN="${GLOCHID_BIN:-/home/roerick/dev/wyo.tech/pricklypear/_build/default/glochid/bin/main.exe}"
 
 case "${GLOCHID_SERVED_OPEN:-0}" in
   1) OPEN_FLAG="--open" ;;
