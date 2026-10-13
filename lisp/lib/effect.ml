@@ -196,6 +196,7 @@ let read_db_prims = [
   "export-package";
   "route-visibility";
   "branch/status";  (* branch-ops status row: read-only fold of Store.branch_status *)
+  "branch/cp-list"; "branch/cp-diff"; "branch/log";  (* branching.checkpoints reads: cp listing, cp diff, the oplog fold *)
   "list-usernames"; "list-ssh-keys";
   "llm-key-status";
   "log-tail"; "ops/summary"; "ops/incidents"; "ops/activity";
@@ -295,6 +296,8 @@ let write_db_prims = [
   "prune-synced"; "stub-function"; "unbind";
   "branch/pull";  (* branch-ops pull row: bulk unbind of behind pins (store writes) *)
     "branch/push";  (* branch-ops push row: dep-closure promote of own pins onto the owner's personal (store writes) *)
+    "branch/cp";  (* branch-ops checkpoint: name a point on the gen stream (store write) *)
+    "branch/cp-restore";  (* branch-ops checkpoint restore: re-land captured bodies as new writes (store writes) *)
   (* retention writes *)
   "retention-delete-policy"; "retention-policy-set"; "retention-run";
   (* auth writes *)
