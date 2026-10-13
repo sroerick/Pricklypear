@@ -832,6 +832,379 @@ let register ~(hooks : hooks) (t : t) (tbl : Primitives.t) : unit =
           | _ ->
               (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("branch/push", "need 1 branch ref (+ optional name strings)", "bad-args")))));
 
+
+    (* ---- branching.checkpoints: named points on the gen stream ----
+       (2026-10-12 plan-phase ratification: "checkpoints yes". The substrate
+       was already complete — tree_versions append-only + gen-stamped,
+       per-branch branch_generations, code_history before-images — the missing
+       primitive was NAMING a point. A cp is a name pinned to the branch's OWN
+       head gen; cp-diff is the branch_status decision discipline (hash
+       equality with ABSENT as its own value) over a WINDOWED coordinate, never
+       a second classifier; cp-restore is RESTORE IS A WRITE — captured bodies
+       re-land through the tree write helpers (fresh gens on the version trail
+       + reverse mirrors + code_history before-images; the gen counter only
+       moves forward; base_gen untouched — restore is not a merge). CODE ONLY:
+       fn/type/route pins; data never rolls back. Denied for anonymous;
+       server-only (branch-ops family). *)
+
+    (* (branch/cp "name" [message]) -> VStr JSON {branch_id, name, gen,
+       created_at} | raise. Captured AFTER prior writes commit (one atomic
+       INSERT..SELECT — the branch_generations bumps are trigger-side, 038).
+       Duplicate names refuse (checkpoints are immutable anchors, not moving
+       tags). Current branch only; author = caller. *)
+    Primitives.register_server_only tbl "branch/cp"
+      (fun args ->
+        if t.manifest.username = "anonymous" then
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("branch/cp", "denied for anonymous", "denied"))))
+        else
+          match args with
+          | Pricklypear_lisp.Ast.VStr name :: rest ->
+              let message =
+                match rest with
+                | [ Pricklypear_lisp.Ast.VStr m ] -> Some m
+                | [] -> None
+                | _ ->
+                    raise
+                      (Pricklypear_lisp.Ast.Interp_error
+                         (Pricklypear_lisp.Ast.Prim_error
+                            ( "branch/cp",
+                              "bad args (need a name string + optional message string)",
+                              "bad-args" )))
+              in
+              let branch_id = Store.current_branch_id t.store in
+              (match
+                 Store.create_checkpoint t.store ~branch_id ~name ~message
+                   ~author:(Prims_db_common.caller_username ~t ())
+               with
+               | Ok cp ->
+                   Pricklypear_lisp.Ast.VStr
+                     (Yojson.Safe.to_string
+                        (`Assoc
+                           [ ("branch_id", `String branch_id)
+                           ; ("name", `String cp.Store.cp_name)
+                           ; ("gen", `Int (Int64.to_int cp.Store.cp_gen))
+                           ; ("created_at", `String cp.Store.cp_created_at)
+                           ]))
+               | Error why ->
+                   raise
+                     (Pricklypear_lisp.Ast.Interp_error
+                        (Pricklypear_lisp.Ast.Prim_error
+                           ("branch/cp", why, "failed"))))
+          | _ ->
+              (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("branch/cp", "bad args (need a name string)", "bad-args")))));
+
+    (* (branch/cp-list [owner/branch]) -> VStr JSON {branch, checkpoints:[
+       {name,gen,message,author,created_at}...]} (newest first) | plain VStr
+       denial / "no such branch: ref". Optional ref: omitted = the current
+       branch; given = resolved like branch/status with read-side
+       authorization (branch_readable). Denied for anonymous. *)
+    Primitives.register_server_only tbl "branch/cp-list"
+      (fun args ->
+        if t.manifest.username = "anonymous" then
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("branch/cp-list", "denied for anonymous", "denied"))))
+        else
+          let cp_json (c : Store.cp_row) : Yojson.Safe.t =
+            `Assoc
+              [ ("name", `String c.Store.cp_name)
+              ; ("gen", `Int (Int64.to_int c.Store.cp_gen))
+              ; ( "message",
+                  match c.Store.cp_message with
+                  | Some m -> `String m
+                  | None -> `Null )
+              ; ("author", `String c.Store.cp_author)
+              ; ("created_at", `String c.Store.cp_created_at) ]
+          in
+          let emit ~label ~branch_id =
+            let cps = Store.list_checkpoints t.store ~branch_id in
+            Pricklypear_lisp.Ast.VStr
+              (Yojson.Safe.to_string
+                 (`Assoc
+                    [ ("branch", `String label)
+                    ; ("checkpoints", `List (List.map cp_json cps)) ]))
+          in
+          match args with
+          | [] ->
+              let branch_id = Store.current_branch_id t.store in
+              emit ~label:branch_id ~branch_id
+          | [ Pricklypear_lisp.Ast.VStr branch_ref ] ->
+              let owner, short = split_branch_ref branch_ref in
+              if not (branch_readable t owner) then
+                (Pricklypear_lisp.Ast.VStr
+                   (Printf.sprintf "denied: branch %s is owned by %s" branch_ref owner))
+              else
+                (match
+                   Store.lookup_branch_id_by_name t.store ~owner ~name:short
+                 with
+                 | None ->
+                     Pricklypear_lisp.Ast.VStr
+                       (Printf.sprintf "no such branch: %s" branch_ref)
+                 | Some branch_id -> emit ~label:branch_ref ~branch_id)
+          | _ ->
+              (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("branch/cp-list", "bad args (optional branch ref)", "bad-args")))));
+
+    (* (branch/cp-diff "name") -> VStr JSON {branch_id, cp:{name,gen,author,
+       created_at}, changed:[{kind,name,op,head_hash,cp_hash}],
+       counts:{changed,added,removed}} | plain VStr "no such checkpoint: name"
+       | raise. Per-pin classify between the captured gen and head — the
+       branch_status decision discipline WINDOWED, never a second classifier.
+       Current branch only (the cp was captured here). *)
+    Primitives.register_server_only tbl "branch/cp-diff"
+      (fun args ->
+        if t.manifest.username = "anonymous" then
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("branch/cp-diff", "denied for anonymous", "denied"))))
+        else
+          match args with
+          | [ Pricklypear_lisp.Ast.VStr name ] ->
+              let branch_id = Store.current_branch_id t.store in
+              (match Store.lookup_checkpoint t.store ~branch_id ~name with
+               | None ->
+                   Pricklypear_lisp.Ast.VStr
+                     (Printf.sprintf "no such checkpoint: %s" name)
+               | Some cp ->
+                   let rows =
+                     Store.checkpoint_diff t.store ~branch_id
+                       ~cp_gen:cp.Store.cp_gen
+                   in
+                   let count op =
+                     List.length
+                       (List.filter
+                          (fun (r : Store.cp_diff_row) -> r.Store.d_op = op)
+                          rows)
+                   in
+                   let row_json (r : Store.cp_diff_row) : Yojson.Safe.t =
+                     `Assoc
+                       [ ("kind", `String r.Store.d_kind)
+                       ; ("name", `String r.Store.d_name)
+                       ; ("op", `String (Store.cp_diff_op_s r.Store.d_op))
+                       ; ( "head_hash",
+                           match r.Store.d_head_hash with
+                           | Some h -> `String h
+                           | None -> `Null )
+                       ; ( "cp_hash",
+                           match r.Store.d_cp_hash with
+                           | Some h -> `String h
+                           | None -> `Null ) ]
+                   in
+                   Pricklypear_lisp.Ast.VStr
+                     (Yojson.Safe.to_string
+                        (`Assoc
+                           [ ("branch_id", `String branch_id)
+                           ; ( "cp",
+                               `Assoc
+                                 [ ("name", `String cp.Store.cp_name)
+                                 ; ("gen", `Int (Int64.to_int cp.Store.cp_gen))
+                                 ; ("author", `String cp.Store.cp_author)
+                                 ; ( "created_at",
+                                     `String cp.Store.cp_created_at ) ] )
+                           ; ("changed", `List (List.map row_json rows))
+                           ; ( "counts",
+                               `Assoc
+                                 [ ("changed", `Int (count Store.CpChanged))
+                                 ; ("added", `Int (count Store.CpAdded))
+                                 ; ("removed", `Int (count Store.CpRemoved)) ])
+                           ])))
+          | _ ->
+              (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("branch/cp-diff", "bad args (need 1 checkpoint name)", "bad-args")))));
+
+    (* (branch/cp-restore "name" [names...]) -> VStr JSON {branch_id,
+       cp:{name,gen}, restored:[{kind,name,op}], skipped:[why...]} | plain VStr
+       "no such checkpoint: name" | raise. RESTORE IS A WRITE, NOT A TIME
+       MACHINE: each selected pin's captured body re-lands through the tree
+       write helpers (fresh gen on the version trail + reverse mirrors +
+       code_history before-images; obituary rule); the gen counter only moves
+       forward; base_gen untouched (restore is not a merge). Default set: every
+       pin whose head hash differs from its captured hash AND has a captured
+       body (changed + removed-since); added-since pins have no captured body
+       and are skipped with a reason. system/main refuses (the unbind rule).
+       Rehydrates the env when anything landed (current-branch writes). *)
+    Primitives.register_server_only tbl "branch/cp-restore"
+      (fun args ->
+        if t.manifest.username = "anonymous" then
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("branch/cp-restore", "denied for anonymous", "denied"))))
+        else
+          let names_of_val = function
+            | Pricklypear_lisp.Ast.VStr s -> [ s ]
+            | Pricklypear_lisp.Ast.VSymbol s -> [ s ]
+            | Pricklypear_lisp.Ast.VList xs ->
+                List.filter_map
+                  (function
+                    | Pricklypear_lisp.Ast.VStr s -> Some s
+                    | Pricklypear_lisp.Ast.VSymbol s -> Some s
+                    | _ -> None)
+                  xs
+            | _ -> []
+          in
+          match args with
+          | Pricklypear_lisp.Ast.VStr name :: rest ->
+              if Store.current_branch_id t.store = Store.system_main_id then
+                (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("branch/cp-restore", "cannot restore on system/main", "denied"))))
+              else
+                let requested = List.concat_map names_of_val rest in
+                let branch_id = Store.current_branch_id t.store in
+                (match Store.lookup_checkpoint t.store ~branch_id ~name with
+                 | None ->
+                     Pricklypear_lisp.Ast.VStr
+                       (Printf.sprintf "no such checkpoint: %s" name)
+                 | Some cp ->
+                     let rows =
+                       Store.checkpoint_diff t.store ~branch_id
+                         ~cp_gen:cp.Store.cp_gen
+                     in
+                     let selectable (r : Store.cp_diff_row) =
+                       r.Store.d_op <> Store.CpAdded
+                       && r.Store.d_cp_body <> None
+                     in
+                     let selected, skipped =
+                       List.fold_left
+                         (fun (sel, skip) (r : Store.cp_diff_row) ->
+                            let in_scope =
+                              requested = [] || List.mem r.Store.d_name requested
+                            in
+                            if not in_scope then (sel, skip)
+                            else if selectable r then (r :: sel, skip)
+                            else
+                              ( sel,
+                                Printf.sprintf
+                                  "%s: added since the checkpoint; nothing to restore"
+                                  r.Store.d_name
+                                :: skip ))
+                         ([], []) rows
+                     in
+                     let selected = List.rev selected in
+                     let skipped = List.rev skipped in
+                     let skipped =
+                       if requested = [] then skipped
+                       else
+                         let matched =
+                           List.map
+                             (fun (r : Store.cp_diff_row) -> r.Store.d_name)
+                             selected
+                         in
+                         List.fold_left
+                           (fun acc n ->
+                              if List.mem n matched then acc
+                              else
+                                (n ^ ": no such changed pin at this checkpoint")
+                                :: acc)
+                           skipped (List.rev requested)
+                     in
+                     let outcomes =
+                       Store.restore_checkpoint t.store ~branch_id
+                         ~rows:selected
+                         ~author:(Prims_db_common.caller_username ~t ())
+                     in
+                     let restored, failed =
+                       List.fold_left
+                         (fun (ok, bad) (o : Store.cp_restore_outcome) ->
+                            match o.Store.ro_error with
+                            | None ->
+                                ( `Assoc
+                                    [ ("kind", `String o.Store.ro_kind)
+                                    ; ("name", `String o.Store.ro_name)
+                                    ; ("op", `String o.Store.ro_op) ]
+                                  :: ok,
+                                  bad )
+                            | Some why ->
+                                ( ok,
+                                  (o.Store.ro_name ^ ": restore failed: " ^ why)
+                                  :: bad ))
+                         ([], []) outcomes
+                     in
+                     let restored = List.rev restored in
+                     let failed = List.rev failed in
+                     let () =
+                       if restored <> [] then (hooks.rehydrate) t else ()
+                     in
+                     Pricklypear_lisp.Ast.VStr
+                       (Yojson.Safe.to_string
+                          (`Assoc
+                             [ ("branch_id", `String branch_id)
+                             ; ( "cp",
+                                 `Assoc
+                                   [ ("name", `String cp.Store.cp_name)
+                                   ; ("gen", `Int (Int64.to_int cp.Store.cp_gen))
+                                   ] )
+                             ; ("restored", `List restored)
+                             ; ( "skipped",
+                                 `List
+                                   (List.map (fun s -> `String s) skipped
+                                    @ List.map (fun s -> `String s) failed) )
+                             ])))
+          | _ ->
+              (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("branch/cp-restore", "bad args (need 1 checkpoint name + optional names)", "bad-args")))));
+
+    (* (branch/log [owner/branch] ["cp-name"]) -> VStr JSON {branch,
+       windowed_by, entries:[{kind,name,op,author,gen,changed_at}]} — the
+       oplog: newest-first write timeline from the version trail (op =
+       create|update|delete; code_history is the recovery substrate the restore
+       path consumes). Windowed by a cp name = writes since that checkpoint
+       (gen > cp.gen); else the last 64 writes. Read-side authorization like
+       branch/cp-list. *)
+    Primitives.register_server_only tbl "branch/log"
+      (fun args ->
+        if t.manifest.username = "anonymous" then
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("branch/log", "denied for anonymous", "denied"))))
+        else
+          let emit ~label ~branch_id ~cp_name =
+            let window =
+              match cp_name with
+              | None -> Ok None
+              | Some cn -> (
+                  match Store.lookup_checkpoint t.store ~branch_id ~name:cn with
+                  | None -> Error cn
+                  | Some cp -> Ok (Some cp.Store.cp_gen) )
+            in
+            match window with
+            | Error cn ->
+                Pricklypear_lisp.Ast.VStr
+                  (Printf.sprintf "no such checkpoint: %s" cn)
+            | Ok w ->
+                let entries =
+                  Store.checkpoint_log t.store ~branch_id ~since_gen:w
+                in
+                let e_json (e : Store.cp_log_row) : Yojson.Safe.t =
+                  `Assoc
+                    [ ("kind", `String e.Store.l_kind)
+                    ; ("name", `String e.Store.l_name)
+                    ; ("op", `String e.Store.l_op)
+                    ; ("author", `String e.Store.l_author)
+                    ; ("gen", `Int (Int64.to_int e.Store.l_gen))
+                    ; ("changed_at", `String e.Store.l_changed_at) ]
+                in
+                Pricklypear_lisp.Ast.VStr
+                  (Yojson.Safe.to_string
+                     (`Assoc
+                        [ ("branch", `String label)
+                        ; ( "windowed_by",
+                            match cp_name with
+                            | Some c -> `String c
+                            | None -> `Null )
+                        ; ("entries", `List (List.map e_json entries)) ]))
+          in
+          let resolve_ref branch_ref ~cp_name =
+            let owner, short = split_branch_ref branch_ref in
+            if not (branch_readable t owner) then
+              Pricklypear_lisp.Ast.VStr
+                (Printf.sprintf "denied: branch %s is owned by %s" branch_ref owner)
+            else
+              match Store.lookup_branch_id_by_name t.store ~owner ~name:short with
+              | None ->
+                  Pricklypear_lisp.Ast.VStr
+                    (Printf.sprintf "no such branch: %s" branch_ref)
+              | Some branch_id -> emit ~label:branch_ref ~branch_id ~cp_name
+          in
+          match args with
+          | [] ->
+              let branch_id = Store.current_branch_id t.store in
+              emit ~label:branch_id ~branch_id ~cp_name:None
+          | [ Pricklypear_lisp.Ast.VStr branch_ref ] ->
+              resolve_ref branch_ref ~cp_name:None
+          | [ Pricklypear_lisp.Ast.VStr branch_ref;
+              Pricklypear_lisp.Ast.VStr cn ] ->
+              resolve_ref branch_ref ~cp_name:(Some cn)
+          | _ ->
+              (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("branch/log", "bad args (optional branch ref + optional cp name)", "bad-args")))));
+
   (* (bench expr-string [n]) -> VFloat average microseconds per iteration.
      Parses once, warms up once, runs n times (default 1000) under a max
      budget so the bench loop itself never hits Budget_exceeded. Uses the

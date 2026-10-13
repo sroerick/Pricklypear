@@ -507,8 +507,9 @@
   )
     (subsection branch-faces
      (doc "Reserved-label second-level hosts {face}.{user}.{PP_BASE_DOMAIN} render a work branch — the agent demo without a promote")
-     (status planned)
-     (implements image/lib/http_core.ml image/lib/http.ml image/lib/boot.ml)
+      (status partial)
+      (implements image/lib/http_core.ml image/lib/http.ml image/lib/session_registry.ml image/test/face_hosts_test.ml)
+      (* agent note (|2026-10-12 BUILT (overnight run): classify_host gains Host_userbranch of (user, face) in http_core.ml. Strip the base-domain suffix; the remainder MUST be exactly two labels, first in the reserved set (agent, dev, fixed in code), second DNS-valid; the users-table/branch existence check rides the face-branch lookup at attach, so an unknown user or a missing branch renders the STUB PAGE (a real answer, not a 404 host). http.ml: the face branch parks the session; session_registry's key is generalized to (identity, served branch) with anonymous@park:<ref>, so the identity's own session is never re-parked under its feet. FACE->BRANCH fixed: agent -> <user>/agent, dev -> <user>/dev. Private-path confinement extends Host_garden's rule verbatim (whoami must be the face owner); https-only bounce for logged-in faces (a plain-http bounce drops the Secure session cookie). Tests: image/test/face_hosts_test.ml (host grammar + routing), full dune build + runtest green. DEPLOY PRE-REQS done 2026-10-12: prod wildcard TLS *.gregor via ACME DNS-01 on Epik + the nginx faces vhost. STILL OPEN: the GEN-PINNED paragraph here, ?at=<cp-name> face rendering; the checkpoints substrate (branching.checkpoints) is built, the face lens does not accept a named gen yet.|) *)
      (* agent note (|2026-10-12 plan-phase ratification: roerick picked two-level reserved labels over the hyphen-suffix and path-prefix options (in-conversation tonight: "two-level reserved labels looks amazing"). Written directly in plan phase, no issue filed. Depends on: branching.checkpoints (the ?at= face), security.origin-authenticated-verbs (prod gate).|) *)
      (details
       (doc (|
