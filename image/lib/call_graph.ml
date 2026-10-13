@@ -224,6 +224,64 @@ let holes (snap : snapshot) (name : string) : string list =
           (not (Hashtbl.mem snap.bodies c))
           && not (Hashtbl.mem snap.bound_kernel c))
         apps
+(* branch-ops push (branching.borg branch-ops table): the PUSH dependency
+   closure — the holes() analytic (App-Var heads) pointed at a push set over
+   two branch views. [src_defs] = effective (chain-walked, closest-wins)
+   defs of the SOURCE; [tgt_visible] = names the TARGET chain already
+   binds; [kernel] = the caller's prim catalog. For each requested name, a
+   referenced name the target does not bind is AUTO-INCLUDED when the
+   source defines it (recursively; mutual recursion safe), recorded as a
+   HOLE when nothing defines it — all-or-nothing: any hole refuses the
+   whole push, with a complete report (every holed name × its exact
+   missing refs) so one fix can land it (2026-10-05 incident:
+   pulse-row-from promoted without workstreams/stale-node? ->
+   system/main 500). Analytic limits are holes(): a function passed as a
+   VALUE is not visible to the scan; the closure travels the same
+   aperture, so what lands is fully covered by what it scans. Returns
+   Ok (requested names, auto-included names), each in discovery order. *)
+let push_closure ~(requested : string list)
+    ~(src_defs : (string * Ast.expr) list)
+    ~(tgt_visible : string list)
+    ~(kernel : string list)
+    : (string list * string list, (string * string list) list) result =
+  let src_bodies : (string, Ast.expr) Hashtbl.t = Hashtbl.create 64 in
+  List.iter (fun (n, e) -> Hashtbl.replace src_bodies n e) src_defs;
+  let bound : (string, unit) Hashtbl.t = Hashtbl.create 128 in
+  List.iter (fun n -> Hashtbl.replace bound n ()) kernel;
+  List.iter (fun n -> Hashtbl.replace bound n ()) special_forms;
+  List.iter (fun n -> Hashtbl.replace bound n ()) tgt_visible;
+  let seen : (string, unit) Hashtbl.t = Hashtbl.create 64 in
+  let holes : (string * string list) list ref = ref [] in
+  let auto : string list ref = ref [] in
+  let rec add (name : string) ~(is_auto : bool) : unit =
+    if not (Hashtbl.mem seen name) then
+      match Hashtbl.find_opt src_bodies name with
+      | None ->
+          (* requested, but nothing on the source chain defines it *)
+          holes := (name, []) :: !holes
+      | Some body ->
+          Hashtbl.replace seen name ();
+          if is_auto then auto := name :: !auto;
+          let refs = uniq_stable (collect_var_apps [] body) in
+          let miss = ref [] in
+          List.iter
+            (fun r ->
+               if Hashtbl.mem bound r || Hashtbl.mem seen r then ()
+               else if Hashtbl.mem src_bodies r then add r ~is_auto:true
+               else miss := r :: !miss)
+            refs;
+          if !miss <> [] then holes := (name, List.rev !miss) :: !holes
+  in
+  let requested_names = uniq_stable requested in
+  List.iter (fun n -> add n ~is_auto:false) requested_names;
+  if !holes <> [] then Error (List.rev !holes)
+  else
+    Ok
+      ( requested_names
+      , (* a dep also requested by name stays in [pushed], never auto *)
+        List.filter
+          (fun n -> not (List.mem n requested_names))
+          (List.rev !auto) )
 
 (** Load defs + routes from session store and build snapshot. *)
 let snapshot_of_session (session : Session_types.t) : snapshot =

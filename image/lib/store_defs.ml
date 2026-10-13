@@ -107,9 +107,55 @@ let list_function_names_meta (t : Store_db.t)
           acc
     with exn -> Store_db.reraise ~op:"list_function_names" exn)
 
+(** Branch-id-parameterized variant of [list_function_names_meta]:
+    effective defs (parent-chain walk, closest definition wins, depth-ASC
+    dedup) over [branch_id]'s chain WITHOUT checkout. The branch/push
+    closure preflight reads the source and target views side by side
+    (branching.borg branch-ops push row); mirrors [lookup_function_at]. *)
+let list_function_names_meta_at (t : Store_db.t) ~(branch_id : string)
+    : (string * string * string * int) list =  (* name, RAW body jsonb, author, depth *)
+  match t.conn with
+  | None -> []
+  | Some conn ->
+      (try
+        let sql =
+          Store_common.chain_sql ("SELECT fd.name, fd.body, fd.author, chain.depth, fd.package " ^
+          "FROM " ^ Store_common.fn_rel () ^ " fd " ^
+          "JOIN chain ON fd.branch_id = chain.id " ^
+          "ORDER BY chain.depth ASC, fd.name ASC") in
+        let rows =
+          Store_db.exec conn
+            ~params:[ Pgx.Value.of_string branch_id ]
+            sql in
+        let seen = Hashtbl.create 64 in
+        let acc =
+          List.filter_map
+            (fun row ->
+              match row with
+              | [ name_c; body_cell; author_cell; depth_c; _pkg_c ] ->
+                  (match Pgx.Value.to_string name_c,
+                          Pgx.Value.to_string body_cell,
+                          Pgx.Value.to_string author_cell,
+                          Pgx.Value.to_string depth_c with
+                   | Some name, Some body_str, Some author, Some d_s ->
+                       if Hashtbl.mem seen name then None
+                       else begin
+                         Hashtbl.replace seen name ();
+                         let depth =
+                           int_of_string_opt d_s |> Option.value ~default:0
+                         in
+                         Some (name, body_str, author, depth)
+                       end
+                   | _ -> None)
+              | _ -> None)
+            rows
+        in
+        acc
+      with exn -> Store_db.reraise ~op:"list_function_names_meta_at" exn)
+
 (** Effective defs only (deduped). Same as [list_function_names_meta] without depth. *)
 let list_function_names (t : Store_db.t)
-  : (string * string * string) list =  (* name, RAW body jsonb, author *)
+    : (string * string * string) list =  (* name, RAW body jsonb, author *)
   let rows = list_function_names_meta t in
   (List.map (fun (n, e, a, _) -> (n, e, a)) rows)
 

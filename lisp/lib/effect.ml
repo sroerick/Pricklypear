@@ -294,6 +294,7 @@ let write_db_prims = [
   (* branch-time writes *)
   "prune-synced"; "stub-function"; "unbind";
   "branch/pull";  (* branch-ops pull row: bulk unbind of behind pins (store writes) *)
+    "branch/push";  (* branch-ops push row: dep-closure promote of own pins onto the owner's personal (store writes) *)
   (* retention writes *)
   "retention-delete-policy"; "retention-policy-set"; "retention-run";
   (* auth writes *)

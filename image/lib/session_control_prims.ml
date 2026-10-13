@@ -681,6 +681,157 @@ let register ~(hooks : hooks) (t : t) (tbl : Primitives.t) : unit =
         | _ ->
             (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("branch/pull", "bad args (need 1 branch ref)", "bad-args")))));
 
+    (* (branch/push ref [name...]) -> VStr JSON {branch, pushed:[{kind,name}],
+       auto-included:[{kind,name}]}, or raise. branch-ops push row — the
+       promote_to_personal generalization: the ref's OWN code (or the named
+       subset) promotes onto <ref-owner>/personal, DEPENDENCY CLOSURE FIRST
+       (Branch_push over Call_graph.push_closure): a pin referencing a name
+       unbound on the target is auto-included from the source's own rows, or
+       the push is REFUSED with the exact hole list — never a partial
+       landing (2026-10-05 incident: pulse-row-from promoted without
+       workstreams/stale-node? -> system/main 500).
+
+       Callers: the ref's owner human (their garden — the branch-faces
+       decision flow), an agent user whose PARENT owns the ref workshop
+       (gated by the parent's allow_agent_promote, same gate as promote),
+       or admin. system/* is refused: promote-to-main stays the
+       admin-gated path. Not gated on agent_branch_lock (same class as
+       promote: the branch escape is authorized by the target owner's
+       toggle, not the delegated-session checkout lock). Server-only
+       (ref-addressed, fork/merge/checkout family). *)
+    Primitives.register_server_only tbl "branch/push"
+      (fun args ->
+        if t.manifest.username = "anonymous" then
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("branch/push", "denied for anonymous", "denied"))))
+        else
+          let names_of_val = function
+            | Pricklypear_lisp.Ast.VStr s -> [ s ]
+            | Pricklypear_lisp.Ast.VSymbol s -> [ s ]
+            | Pricklypear_lisp.Ast.VList xs ->
+                List.filter_map
+                  (function
+                    | Pricklypear_lisp.Ast.VStr s -> Some s
+                    | Pricklypear_lisp.Ast.VSymbol s -> Some s
+                    | _ -> None)
+                  xs
+            | _ -> []
+          in
+          match args with
+          | Pricklypear_lisp.Ast.VStr branch_ref :: rest ->
+              let owner, short = split_branch_ref branch_ref in
+              let u = Prims_db_common.caller_username ~t () in
+              let ledger ~ok =
+                ignore
+                  (Activity_ledger.push ~actor:u ~cls:"promote.attempt"
+                     ~target:
+                       (Activity_ledger.path_target
+                          (Printf.sprintf "%s->%s/personal" branch_ref owner))
+                     ~outcome:(if ok then "ok" else "denied")
+                     ())
+              in
+                let deny (why : string) =
+                ledger ~ok:false;
+                (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("branch/push", why, "denied"))))
+              in
+                let failed (why : string) =
+                ledger ~ok:false;
+                (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("branch/push", why, "failed"))))
+              in
+              (if owner = "system" then
+                 deny "system/* branches land via promote-to-main (admin)"
+               else
+                 (* authorization BEFORE any branch lookup (fork rule: a
+                    denial never leaks whether the ref exists) *)
+                 match Auth_store.get_user_by_username t.store u with
+                 | Some caller when caller.Auth_store.user_type = "agent" ->
+                     (match caller.Auth_store.parent_user_id with
+                      | None -> deny "agent has no parent"
+                      | Some pid ->
+                          (match Auth_store.get_user_by_id t.store pid with
+                           | None -> deny "parent user not found"
+                           | Some parent ->
+                               if parent.Auth_store.username <> owner then
+                                 deny
+                                   (Printf.sprintf
+                                      "denied: branch %s is owned by %s"
+                                      branch_ref owner)
+                               else if
+                                 not
+                                   (Auth_store.get_allow_agent_promote
+                                      t.store
+                                      ~user_id:parent.Auth_store.id)
+                               then
+                                 deny "agent promote disabled by parent"
+                               else ()))
+                 | Some _ ->
+                     (* human caller: own garden or verified admin —
+                        branch_owner_authorized covers both plus the
+                        documented admin bootstrap valve *)
+                     if not (branch_owner_authorized t owner) then
+                       deny
+                         (Printf.sprintf
+                            "denied: branch %s is owned by %s"
+                            branch_ref owner)
+                     else ()
+                 | None ->
+                     (* no users row (bootstrap image): the admin textual
+                        valve only, the same fallback the family keeps *)
+                     if
+                       u <> "admin"
+                       && not (Prims_db_common.is_verified_admin ~t ())
+                     then
+                       deny
+                         (Printf.sprintf
+                            "denied: branch %s is owned by %s"
+                            branch_ref owner)
+                     else ());
+              let source_id =
+                Store.lookup_branch_id_by_name t.store ~owner ~name:short
+              in
+              let target_id =
+                Store.lookup_branch_id_by_name t.store ~owner ~name:"personal"
+              in
+              (match (source_id, target_id) with
+               | None, _ -> failed ("no such branch: " ^ branch_ref)
+               | _, None ->
+                   failed
+                     (Printf.sprintf "no such branch: %s/personal" owner)
+               | Some source_id, Some target_id ->
+                   let names = List.concat_map names_of_val rest in
+                   let kernel = List.map fst t.kernel_catalog in
+                   (match
+                      Branch_push.push t.store ~source_id ~target_id ~names
+                        ~kernel
+                    with
+                    | Branch_push.Push_ok { pushed; auto } ->
+                        ledger ~ok:true;
+                        let () =
+                          if Store.current_branch_id t.store = target_id
+                          then (hooks.rehydrate) t
+                          else ()
+                        in
+                        let row_json (n : string) : Yojson.Safe.t =
+                          `Assoc
+                            [ ("kind", `String "fn")
+                            ; ("name", `String n) ]
+                        in
+                        (Pricklypear_lisp.Ast.VStr
+                           (Yojson.Safe.to_string
+                              (`Assoc
+                                 [ ("branch", `String (owner ^ "/personal"))
+                                 ; ("pushed", `List (List.map row_json pushed))
+                                 ; ( "auto-included",
+                                     `List (List.map row_json auto) )
+                                 ])))
+                    | Branch_push.Push_holes holes ->
+                        failed
+                          ("refused, unresolved deps: "
+                          ^ Branch_push.holes_msg holes)
+                    | Branch_push.Push_refused why ->
+                        failed why))
+          | _ ->
+              (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("branch/push", "need 1 branch ref (+ optional name strings)", "bad-args")))));
+
   (* (bench expr-string [n]) -> VFloat average microseconds per iteration.
      Parses once, warms up once, runs n times (default 1000) under a max
      budget so the bench loop itself never hits Budget_exceeded. Uses the
