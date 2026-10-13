@@ -505,6 +505,113 @@
     |))
    )
   )
+    (subsection branch-faces
+     (doc "Reserved-label second-level hosts {face}.{user}.{PP_BASE_DOMAIN} render a work branch — the agent demo without a promote")
+     (status planned)
+     (implements image/lib/http_core.ml image/lib/http.ml image/lib/boot.ml)
+     (* agent note (|2026-10-12 plan-phase ratification: roerick picked two-level reserved labels over the hyphen-suffix and path-prefix options (in-conversation tonight: "two-level reserved labels looks amazing"). Written directly in plan phase, no issue filed. Depends on: branching.checkpoints (the ?at= face), security.origin-authenticated-verbs (prod gate).|) *)
+     (details
+      (doc (|
+           ==========================================================
+           WHY
+           ==========================================================
+           user-subdomains exposes <user>/personal only. Agents
+           workshop in <parent>/agent (branching.agent-promote);
+           everything that reaches the human's garden must be
+           promoted first. There is no way to SHOW work unlanded.
+           A HOST per work branch closes the loop: the human
+           browses the agent's face, reads branch/status, and only
+           then decides branch/push (branching.branch-ops). The
+           agent never writes the human's branch.
+
+           ==========================================================
+           HOST GRAMMAR (locked 2026-10-12)
+           ==========================================================
+             {face}.{user}.{PP_BASE_DOMAIN}
+             face :: agent | dev    -- RESERVED LABELS, fixed in code
+
+           - RESERVED-ONLY: the label set is closed in code (starts:
+             agent, dev). Branch-name-as-hostname is explicitly out —
+             arbitrary labels are names a host grammar cannot
+             validate, multi-dot remainders are DNS ambiguity, and
+             every label would be one more route-hijack surface.
+             Adding a label is a kernel change, not data.
+
+           - classify_host gains Host_userbranch of (user, face):
+             strip the base-domain suffix; the remainder MUST be
+             exactly two DNS labels — first in the reserved set,
+             second passing the users-table check user-subdomains
+             already performs. Anything else falls to Host_unknown
+             exactly as today (single-label gardens unchanged).
+
+           - FACE->BRANCH is fixed: agent -> <user>/agent (the boot
+             workshop), dev -> <user>/dev. A face whose branch does
+             not exist renders a stub page (a real answer, not a
+             404 host).
+
+           ==========================================================
+           SERVING MODEL (composes the per-identity session work)
+           ==========================================================
+           - Session_registry generalizes its key from identity to
+             (identity, served branch): one session per pair, parked
+             on the face branch — own store connection, lazy env,
+             staleness stamps, all the 2026-08-21 machinery
+             unchanged.
+           - AUTH: the session cookie's Domain (.base) spans faces
+             unchanged, so the owner browsing their own face is
+             themselves; anonymous stays anonymous per branch.
+           - PRIVATE-PATH confinement extends Host_garden's rule
+             verbatim: private on a face requires whoami = face
+             owner; mismatch bounces like gardens.
+           - PUBLIC routes render against the FACE branch lens
+             (visible-public only) — the already-shipped product
+             model: a public route is raw HTML its owner authors;
+             branch_readable's cross-tenant CODE-copy gate is
+             untouched.
+           - DATA NEVER MOVES: a face renders shared data through
+             the branch's code; RLS keys on the requester, never on
+             the face owner.
+
+           ==========================================================
+           GEN-PINNED RENDERING (?at=)
+           ==========================================================
+           {face}.{user}.base/path?at=<cp-name> renders the branch
+           as of a checkpoint (branching.checkpoints): the gen-
+           bounded read substrate already answers "value at gen";
+           the face lens accepts a named gen instead of head.
+           Review handoffs carry stable URLs — "look at it as it
+           stood at before-lens-rework". Pure read: ?at= never
+           restores anything.
+
+           ==========================================================
+           DEPLOY PRE-REQS (order matters)
+           ==========================================================
+             - DNS/TLS: gardens ride the apex wildcard (*.{base});
+               faces need per-user wildcards (*.{user}.{base}) via
+               ACME DNS-01. RESOLVED 2026-10-12: the zone lives on
+               Epik (ns3/ns4.epik.com); Epik User API v2 does
+               per-record create/remove and lego ships an epik
+               provider since v4.5.0 (EPIK_SIGNATURE + IP whitelist
+               of the calling box). NEVER the v1 sethostrecords op —
+               it replaces the whole record set. Staging first (LE is
+               picky about failed challenges). Escape hatch if the
+               API proves flaky: delegate NS to Cloudflare/deSEC;
+               automation only ever touches challenge TXT rows.
+           - PROD STAYS DARK until security.origin-authenticated-
+             verbs lands: public-route same-origin scripts +
+             /api/eval cookie auth widen with every subdomain, and
+             faces multiply those vectors. PP_BASE_DOMAIN remains
+             the single switch; Host_legacy never changes.
+      |))
+     )
+     (verify
+      (build "dune build image")
+      (smoke "Host: agent.alice.example parses Host_userbranch (\"alice\",\"agent\") and serves alice/agent public routes to an anonymous visitor")
+      (smoke "private path on a face with a logged-in non-owner bounces to the visitor's garden, Host_garden-style")
+      (smoke "face whose branch is missing renders the stub page, not a Host_unknown 404")
+      (smoke "shared cookie: logged-in alice is alice on alice.base and on agent.alice.base")
+      (smoke "?at=<cp-name> renders the branch as of the checkpoint, differing from head where later writes exist"))
+    )
   (subsection user-llm-keys
    (doc "Per-user LLM provider keys; session AI uses user key with env fallback")
    (status implemented)
