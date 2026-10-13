@@ -10,6 +10,7 @@
 set -eu
 
 PATH="/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:${HOME}/.opam/poohstack/bin"
+export SSH_AUTH_SOCK="${SSH_AUTH_SOCK:-${HOME}/run/ship-agent.sock}"
 
 BRANCH="${BRANCH:-master}"
 REF="refs/heads/${BRANCH}"
@@ -20,7 +21,7 @@ TARGET_USER="${TARGET_USER:-deploy}"
 TARGET_STAGE="${TARGET_STAGE:-/home/deploy/incoming}"
 REMOTE_PROMOTE="${REMOTE_PROMOTE:-/usr/local/sbin/pricklypear-promote}"
 zero_rev="0000000000000000000000000000000000000000"
-lockdir="${WORKTREE}.deploy.lock"
+lockdir="/home/hollis/apps/deploy-lock/${BRANCH%%/*}.lock"
 target_rev=""
 oldrev=""
 
@@ -63,36 +64,11 @@ git -C "${WORKTREE}" fetch "${BARE_REPO}" "${REF}"
 git -C "${WORKTREE}" checkout -B "${BRANCH}" "${target_rev}"
 git -C "${WORKTREE}" reset --hard "${target_rev}"
 
-log "build release (opam switch ${OPAM_SWITCH})"
-# shellcheck disable=SC1090
-eval "$($(command -v opam) env --switch="${OPAM_SWITCH}" --set-switch)"
-cd "${WORKTREE}"
-/bin/ksh scripts/build-release-openbsd.ksh "${WORKTREE}/build"
 
-archive="${WORKTREE}/build/pricklypear-openbsd.tar.gz"
-[ -f "${archive}" ] || die "missing ${archive}"
-
-release_id="$(print -r -- "${target_rev}" | cut -c1-12)"
-remote_path="${TARGET_STAGE}/${release_id}.tar.gz"
-
-log "scp -> ${TARGET_USER}@${TARGET_HOST}:${remote_path}"
-ssh -o BatchMode=yes "${TARGET_USER}@${TARGET_HOST}" "mkdir -p ${TARGET_STAGE}"
-scp -o BatchMode=yes "${archive}" "${TARGET_USER}@${TARGET_HOST}:${remote_path}"
-
-log "promote on ${TARGET_HOST}"
-ssh -o BatchMode=yes "root@${TARGET_HOST}" \
-  "${REMOTE_PROMOTE} ${remote_path} ${release_id}"
-
-# ----------------------------------------------------------------
-# VAULT-DRIFT REMINDER (borge/branching.borg vault-authority, card
-# 8dff7c9e). Promote deploys the KERNEL. The additive boot seed only
-# ADDS names absent on system/main, so a libs/*.pp edit to an EXISTING
-# define is committed but NOT deployed — it stays in the vault while
-# prod runs the old body. If this hook has habitat credentials, run the
-# body-level drift view for the changed packages so the operator sees
-# exactly which .pp edits will not go live. Soft check: credentials
-# absent (or pp-sync not built) only prints the reminder.
-# ----------------------------------------------------------------
+# PRE-BUILD DRIFT CHECK (hoisted 2026-10-07 from the post-promote tail):
+# the operator sees which libs/*.pp edits will NOT go live BEFORE the
+# build/ship/promote runs — the land (reseed-package) decision happens
+# with the full picture, not after the fact.
 pp_sync_bin="${WORKTREE}/_build/default/cli/bin/pp_sync.exe"
 if [ -n "${PP_USER:-}" ] && [ -n "${PP_PASS:-}" ]; then
   if [ ! -x "${pp_sync_bin}" ]; then
@@ -120,7 +96,49 @@ else
   log "      (additive seed). Check with: pp-sync status <pkg> — see"
   log "      borge/branching.borg vault-authority (card 8dff7c9e)."
 fi
+# identity dispatch: each pushing uid ships with ITS OWN deploy key
+export PP_USER_ID="$(id -un)"
+case "${PP_USER_ID}" in
+  gregor) export SSH_ID="${HOME}/.ssh/pp_deploy_ed25519" ;;
+  hollis) export SSH_ID="${HOME}/.ssh/id_ed25519" ;;
+  *) export SSH_ID="" ;;
+esac
+SSH_ID_FLAG=""
+if [ -n "${SSH_ID}" ] && [ -r "${SSH_ID}" ]; then
+  SSH_ID_FLAG="-i ${SSH_ID} -o IdentitiesOnly=yes"
+fi
+SSH_BASE="-o BatchMode=yes ${SSH_ID_FLAG}"
 
+log "build release (opam switch ${OPAM_SWITCH})"
+# shellcheck disable=SC1090
+eval "$($(command -v opam) env --switch="${OPAM_SWITCH}" --set-switch)"
+cd "${WORKTREE}"
+/bin/ksh scripts/build-release-openbsd.ksh "${WORKTREE}/build"
+
+archive="${WORKTREE}/build/pricklypear-openbsd.tar.gz"
+[ -f "${archive}" ] || die "missing ${archive}"
+
+release_id="$(print -r -- "${target_rev}" | cut -c1-12)"
+remote_path="${TARGET_STAGE}/${release_id}.tar.gz"
+
+log "scp -> ${TARGET_USER}@${TARGET_HOST}:${remote_path}"
+ssh ${SSH_BASE} "${TARGET_USER}@${TARGET_HOST}" "mkdir -p ${TARGET_STAGE}"
+scp ${SSH_BASE} "${archive}" "${TARGET_USER}@${TARGET_HOST}:${remote_path}"
+
+log "promote on ${TARGET_HOST}"
+ssh ${SSH_BASE} "${TARGET_USER}@${TARGET_HOST}" \
+  "doas ${REMOTE_PROMOTE_DOAS:-/home/deploy/bin/deploy-promote}"
+
+# ----------------------------------------------------------------
+# VAULT-DRIFT REMINDER (borge/branching.borg vault-authority, card
+# 8dff7c9e). Promote deploys the KERNEL. The additive boot seed only
+# ADDS names absent on system/main, so a libs/*.pp edit to an EXISTING
+# define is committed but NOT deployed — it stays in the vault while
+# prod runs the old body. If this hook has habitat credentials, run the
+# body-level drift view for the changed packages so the operator sees
+# exactly which .pp edits will not go live. Soft check: credentials
+# absent (or pp-sync not built) only prints the reminder.
+# ----------------------------------------------------------------
 # Self-update AFTER success — never overwrite the running script mid-flight
 if [ -f "${WORKTREE}/scripts/post-receive-prod-hook.ksh" ]; then
   cp "${WORKTREE}/scripts/post-receive-prod-hook.ksh" \

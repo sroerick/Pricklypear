@@ -157,6 +157,7 @@ let as_identity (t : Session.t) ~(username : string) (expr : string) : value =
       ~env:t.eval_state.env
       ~is_admin:t.is_admin
       ~routes:(Pricklypear_image_lib.Request_context.copy_routes t.routes)
+      ~source_ip:None
   in
   Pricklypear_image_lib.Request_context.with_current ctx (fun () ->
       (* the manifest itself already carries [username]; the ctx snapshot is

@@ -286,7 +286,7 @@ let prune_due (now : float) : bool = now -. !last_prune >= prune_secs
    is the only gate and it must live in the query text. *)
 let json_row (row : Pgx.row) : string =
   match row with
-  | [ at; actor; cls; target; outcome; cost ] ->
+  | [ at; actor; cls; target; outcome; cost; source_ip ] ->
       let str v = match Pgx.Value.to_string v with Some s -> s | None -> "" in
       let opt v =
         match Pgx.Value.to_string v with Some s -> `String s | None -> `Null
@@ -300,7 +300,8 @@ let json_row (row : Pgx.row) : string =
         (`Assoc
            [ ("at", `String (str at)); ("actor", `String (str actor));
              ("class", `String (str cls)); ("target", opt target);
-             ("outcome", `String (str outcome)); ("cost", cost_j) ])
+             ("outcome", `String (str outcome)); ("cost", cost_j);
+             ("source_ip", opt source_ip) ])
   | _ -> "{}"
 
 let read_rows ~(store : Store.t) ~(caller : string) ~(is_admin : bool)
@@ -341,7 +342,7 @@ let read_rows ~(store : Store.t) ~(caller : string) ~(is_admin : bool)
       let conds = match !where with [] -> "" | xs -> "WHERE " ^ String.concat " AND " xs in
       let sql =
         Printf.sprintf
-          "SELECT at::text, actor, class, target, outcome, cost::text FROM activity_ledger %s \
+          "SELECT at::text, actor, class, target, outcome, cost::text, source_ip::text FROM activity_ledger %s \
            ORDER BY at DESC, id DESC LIMIT $%d"
           conds limit_i
       in

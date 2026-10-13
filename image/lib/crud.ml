@@ -45,15 +45,33 @@ let session_user () : string =
   | Some c -> (Request_context.manifest c).username
   | None -> "anonymous"
 
+(* Delegated-session actor (migration 039, FED3 gate): on a delegated
+    token the manifest.username stays the OWNER (standing law) and
+    Manifest.actor names the agent credential that carried the write.
+    The CRUD write prims stamp this into the tree env key 'acted_by'
+    (the reverse mirror copies it into data_rows.acted_by for free).
+    Create writes it (NULL = plain owner session); update/upsert take
+    it as a COALESCE so non-stamped bookkeeping writers (restore, sync,
+    merge) never silently clear attribution. Scripts and jobs bind no
+    request context -> None, i.e. a plain owner write. *)
+let session_actor () : string option =
+  match Request_context.get () with
+  | Some c -> Pricklypear_common.Manifest.actor (Request_context.manifest c)
+  | None -> None
+
 (** product-experience §activity-ledger: emit an activity row for a
     datum write. Target is a PATH (type/id), never a body. The push is a
     mutex + queue op — zero synchronous DB work on this surface. *)
 let emit_write ~(caller : string) ~(cls : string) ~(type_name : string)
     ~(id : string) ~(outcome : string) : unit =
+  (* d1399ea3 boundary-origin: mutating rows carry the client source_ip
+     (Request_context fiber binding; None outside a request). IP-class
+     metadata stays OFF data rows themselves — the ledger is the boundary. *)
+  let origin : string option = Request_context.source_ip (Request_context.get () |> Option.get) in
   ignore
     (Activity_ledger.push ~actor:caller ~cls
        ~target:(Activity_ledger.path_target (type_name ^ "/" ^ id))
-       ~outcome ())
+       ~outcome ?source_ip:origin ())
 
 (** product-experience §activity-ledger: a cross-identity content read
     rescued by the 033 admin disjunct. Deliberate access is an attributed
@@ -757,7 +775,8 @@ let create_outcome
   with_tree_tx store ~none:(fun () -> no_db "create") (fun conn ->
     guard_space_write conn ~prim:"create" ~type_name ~caller:author ~id:None;
     (* tree is truth; reverse trigger mirrors to data_rows *)
-    let id = Tree_store.insert_datum conn ~type_name ~fields_json ~author in
+    let id = Tree_store.insert_datum conn ~type_name ~fields_json ~author
+        ~acted_by:(session_actor ()) in
     (match id with
      | Ok s ->
          emit_write ~caller:author ~cls:"data.write" ~type_name ~id:s
@@ -795,7 +814,8 @@ let update_outcome
   with_tree_tx store ~none:(fun () -> no_db "update") (fun conn ->
     guard_space_write conn ~prim:"update" ~type_name ~caller
       ~id:(Some id);
-    let id' = Tree_store.update_datum conn ~type_name ~id ~fields_json in
+    let id' = Tree_store.update_datum conn ~type_name ~id ~fields_json
+        ~acted_by:(session_actor ()) in
     (match id' with
      | Ok s ->
          emit_write ~caller ~cls:"data.write" ~type_name ~id:s
@@ -920,7 +940,8 @@ let update_field_impl
              in
              let updated_json = Yojson.Safe.to_string (`Assoc updated) in
              let id' =
-               Tree_store.update_datum conn ~type_name ~id ~fields_json:updated_json
+            Tree_store.update_datum conn ~type_name ~id ~fields_json:updated_json
+              ~acted_by:(session_actor ())
              in
              (match id' with Ok s -> VStr s | Error _ -> VNil)))
 
@@ -1477,7 +1498,42 @@ let wrap_path_exn name (f : unit -> value) : value =
 
 (* ---- hierarchical tree prims (notes.tree-cutover K0) ---- *)
 
-let tree_get (store : Store.t) ~(path : string) ?(at_gen : int64 option) () : value =
+(* note-vis-p1: a direct-path read that lands in ANOTHER user's note
+   garden (data.note.u.<owner>...) must clear the note's body vis floor:
+   private = inside the owner's garden only, users = any signed-in
+   caller, public = anyone. Paths outside data.note.u (fn/route/data.book
+   paths) are untouched. Kernel-internal callers pass viewer=None
+   and stay ungated. Raises so probes get an explicit denial instead of
+   a silent miss. *)
+let gate_note_vis ~(node : Tree_store.node option) ~(path : string)
+    ~(viewer : string option) : unit =
+  match (node, viewer) with
+  | Some n, Some v ->
+    (match Tree_store.note_garden_owner n.path with
+     | Some owner when owner <> Tree_store.path_label v ->
+         let vis =
+           match Tree_store.body_string_field n.body "vis" with
+           | Some s -> s
+           | None -> "private"
+         in
+         let allowed =
+           match vis with
+           | "public" -> true
+           | "users" -> v <> "anonymous"
+           | _ -> false
+         in
+         if not allowed then
+           raise
+             (Pricklypear_lisp.Ast.Interp_error
+                (Pricklypear_lisp.Ast.User_error
+                   (Printf.sprintf "tree read: denied: %s is in %s's garden (vis %s)"
+                      n.path owner vis,
+                    "bad-args")))
+     | _ -> ())
+  | _ -> ()
+
+let tree_get (store : Store.t) ~(path : string) ?(at_gen : int64 option)
+    ?(viewer : string option = None) () : value =
   with_tree_tx store ~none:(fun () -> VNil) (fun conn ->
       let n =
         match at_gen with
@@ -1491,20 +1547,25 @@ let tree_get (store : Store.t) ~(path : string) ?(at_gen : int64 option) () : va
              | None -> None
              | Some v -> Tree_store.version_of_leaf v)
       in
+      gate_note_vis ~node:n ~path ~viewer;
       (match n with
        | None -> VNil
        | Some node -> (VStr (Tree_store.node_to_json node))))
 
-let tree_get_many (store : Store.t) ~(paths : string list) () : value =
+let tree_get_many (store : Store.t) ~(paths : string list)
+    ?(viewer : string option = None) () : value =
   (* One tree tx, N reads: the sync round's batched pull (and the lens
      seed) — N tree/get calls would pay per-call transaction + round
      trip. Envelopes return in path order; misses are SKIPPED (matches
-     the per-node pull's Ok VNil skip). *)
+     the per-node pull's Ok VNil skip). note-vis-p1: each fetched node
+     clears the same vis gate as tree/get — no batch bypass. *)
   with_tree_tx store ~none:(fun () -> VList []) (fun conn ->
       let envs =
         List.filter_map
           (fun p ->
-            match Tree_store.get_by_path conn ~path:p with
+            let n = Tree_store.get_by_path conn ~path:p in
+            gate_note_vis ~node:n ~path:p ~viewer;
+            match n with
             | None -> None
             | Some node -> Some (VStr (Tree_store.node_to_json node)))
           paths
@@ -2001,9 +2062,11 @@ let tree_children_html (store : Store.t) ~(prefix : string) ~(garden_root : stri
 let emit_tree_write ~(caller : string) ~(target : string) ~(outcome : string)
     : unit =
   if caller <> "" && caller <> "unknown" then
+    let origin : string option = Request_context.source_ip (Request_context.get () |> Option.get) in
     ignore
       (Activity_ledger.push ~actor:caller ~cls:"data.write"
-         ~target:(Activity_ledger.path_target target) ~outcome ())
+         ~target:(Activity_ledger.path_target target) ~outcome
+         ?source_ip:origin ())
 
 let tree_upsert_outcome (store : Store.t) ~(path : string) ~(kind : string)
     ~(type_name : string) ~(body_json : string) ~(author : string)
@@ -2019,10 +2082,10 @@ let tree_upsert_outcome (store : Store.t) ~(path : string) ~(kind : string)
          (Error msg)
      | None ->
      with_tree_tx store ~none:(fun () -> no_db "tree/upsert") (fun conn ->
-       let r =
-         Tree_store.upsert_datum conn ~path ~type_name ~body_json ~author
-           ~rank:None
-       in
+        let r =
+            Tree_store.upsert_datum conn ~path ~type_name ~body_json ~author
+              ~rank:None ~acted_by:(session_actor ())
+        in
        emit_tree_write ~caller:author ~target:path
          ~outcome:(match r with Ok _ -> "ok" | Error _ -> "error");
        r))
@@ -2540,18 +2603,23 @@ let tree_insert_child (store : Store.t) ~(parent : string) ~(kind : string)
                      | None -> VStr p)
                  | Error e -> VStr ("tree/insert-child: " ^ e))))
 
-let tree_get_uuid (store : Store.t) ~(uuid : string) : value =
+let tree_get_uuid (store : Store.t) ~(uuid : string)
+    ?(viewer : string option = None) () : value =
   with_tree_tx store ~none:(fun () -> VNil) (fun conn ->
       let n = Tree_store.get_by_uuid conn ~uuid in
       (match n with
        | None -> VNil
-       | Some node -> (VStr (Tree_store.node_to_json node))))
+       | Some node ->
+           gate_note_vis ~node:n ~path:node.path ~viewer;
+           (VStr (Tree_store.node_to_json node))))
 
 let tree_find_by (store : Store.t) ~(kind : string option) ~(field : string)
-    ~(value : string) ?(prefix : string = "") ?(limit : int = 50) () : value =
+    ~(value : string) ?(prefix : string = "") ?(viewer : string option = None)
+    ?(limit : int = 50) () : value =
   with_tree_tx store ~none:(fun () -> VList []) (fun conn ->
       let nodes =
-        Tree_store.find_by_body_field conn ~kind ~field ~value ~prefix ~limit ()
+        Tree_store.find_by_body_field conn ~kind ~field ~value ~prefix ~viewer
+          ~limit ()
       in
       (VList (List.map (fun n -> VStr (Tree_store.node_to_json n)) nodes)))
 

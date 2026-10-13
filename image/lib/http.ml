@@ -123,6 +123,7 @@ let launch (env : route_env) (page_fn : Session.t -> unit) : unit =
                  ~env:(Session.env session)
                  ~is_admin:(Session.is_admin session)
                  ~routes:(Request_context.copy_routes (Session.routes session))
+                 ~source_ip:(Some env.source_ip)
              in
              (* SELECT the identity's session, then attach on IT.
                 image.per-identity-sessions: attach selects, never
@@ -322,9 +323,56 @@ let launch (env : route_env) (page_fn : Session.t -> unit) : unit =
                      | _ -> redirect_response reqd "/");
                     ()
                   end
-                  else begin
-                    (* Product analytics (in-memory day counters). *)
-                    let uname = Session.username session in
+                   else begin
+                      (* Tier write rate limit (spec_town_profile P1):
+                         restricted sessions under a named profile are
+                         capped per-minute on mutating methods; a denial
+                         short-circuits to a bare 429 BEFORE analytics,
+                         shell eval, or DB work. Admins + the mainframe
+                         (no profile) are never throttled. *)
+                      let mutating =
+                        match env.meth with
+                        | `POST | `PUT | `DELETE -> true
+                        | _ -> false
+                      in
+                      let uname_gate = Session.username session in
+                      let page_fn =
+                        if (not mutating)
+                           || not (Session.restricted session)
+                           || uname_gate = "anonymous"
+                           || uname_gate = ""
+                        then page_fn
+                         else if
+                           (match Profile.tenant_limits () with
+                            | None -> true (* no limits configured: allow *)
+                            | Some l ->
+                                Tier_limits.allow_write
+                                  ~username:uname_gate
+                                  ~limit:l.Tier_limits.writes_per_min
+                                   ~now:(Unix.gettimeofday ()))
+                           then page_fn
+                        else fun _s ->
+                          ignore
+                            (Ops_log.info ~component:"http"
+                               ~context:
+                                 [ ("path", path); ("user", uname_gate) ]
+                               "write rate limit exceeded (429)");
+                          let body = "rate limit exceeded" in
+                          let headers =
+                            Httpun.Headers.of_list
+                              ([ ("content-type", "text/plain")
+                               ; ("content-length", string_of_int (String.length body))
+                               ; ("retry-after", "60") ]
+                              @ Timing.timing_header ()
+                              @ security_headers ())
+                          in
+                          let resp =
+                            Httpun.Response.create ~headers `Too_many_requests
+                          in
+                          safe_respond_with_string reqd resp body
+                      in
+                      (* Product analytics (in-memory day counters). *)
+                      let uname = Session.username session in
                     let is_authed =
                       uname <> "anonymous" && uname <> "public" && uname <> ""
                     in
@@ -599,13 +647,11 @@ let invoke_user_route (env : route_env)
               (fun () -> Session.call_handler session ~request handler_name)
           in
           match result with
-          | Session.Handler_ok value ->
-              (* Public front-door pages: no product chrome (private nav). *)
-              if env.path = "/welcome"
-                 || env.path = "/background" || env.path = "/roadmap"
-                 || env.path = "/signup"
-                 || env.path = "/guestbook"
-              then begin
+            | Session.Handler_ok value ->
+                (* Public front-door pages: no product chrome (private nav).
+                   The list lives in Http_core.front_door_pages — one source
+                   of truth shared with the hard-public gate. *)
+                if List.mem env.path Http_core.front_door_pages then begin
                 let title =
                   if env.path = "/background" then "Background"
                   else if env.path = "/roadmap" then "Roadmap"
@@ -1275,6 +1321,44 @@ let routes : route list =
       (fun env ->
         let name = Packages.name_decode (prefix_rest "/edit/" env.path) in
         launch env (fun session -> save_edit session name env.reqd));
+    (* ---- notes cross-garden read (note-vis-p1) ----
+       /notes/<user>/<slug> resolves slug inside <user>'s garden; the vis
+       floor in tree/find-by decides whether the caller may see it (the
+       lib never decides visibility). Segments ride as cross-user /
+       cross-slug params, percent-decoded per the /edit/ convention, so
+       notes/page keeps one body for /notes and this shape. No POST arm:
+       cross-garden pages are read-only in phase one. *)
+    rt "notes-cross" [ `GET ] (Prefix_nonempty "/notes/")
+      (fun env ->
+        match String.split_on_char '/' (prefix_rest "/notes/" env.path) with
+        | [ user; slug ] when user <> "" && slug <> "" ->
+            launch env (fun session ->
+                let request : Session.request =
+                  { method_ = `GET
+                  ; path = env.path
+                  ; params =
+                      [ ("cross-user", Packages.name_decode user)
+                      ; ("cross-slug", Packages.name_decode slug)
+                      ]
+                      @ parse_query env.target
+                  ; body = ""
+                  ; headers = env.headers
+                  }
+                in
+                match Session.call_handler session ~request "notes/page" with
+                | Session.Handler_ok value ->
+                    respond_handler_value ~session ~reqd:env.reqd
+                      ~path:env.path ~fragment:false value
+                | Session.Handler_unbound ->
+                    text_response env.reqd ~status:`Not_found
+                      ~content_type:"text/plain"
+                      "notes/page unbound — (load-library \"notes\")"
+                | Session.Handler_error msg ->
+                    text_response env.reqd ~status:`Internal_server_error
+                      ~content_type:"text/plain" msg)
+        | _ ->
+            bad_path_page env ~title:"Bad notes path"
+              "use /notes/<user>/<slug>");
     (* ---- CATCH-ALLS (must stay last) ---- *)
     (* User routes: GET + POST (it33). Same path → same handler;
        request-* prims expose method/params for branching. *)

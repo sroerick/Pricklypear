@@ -557,16 +557,20 @@ let lww_client_wins (client_updated : float option) (server_updated : float)
     : bool =
   match client_updated with Some c -> c > server_updated | None -> false
 
-type commit_report = {
-  applied : int;
-  conflicts : (string * string * string) list; (* path, ours_hash, theirs_hash *)
-  lww_client_won : string list;  (* conflicts arbitrated TO the client copy (applied) *)
-  lww_server_kept : string list; (* conflicts arbitrated TO the server copy (client edit surfaced as lost) *)
-  client_deletes : string list;  (* Ours_del: server deleted; client's stale copy must go too *)
-  failed : string list;          (* pushes the server REJECTED (typed-boundary validation etc.) —
-                                    surfaced so the client keeps + re-pushes them instead of
-                                    converging to the server copy (the obituary rule) *)
-}
+  type commit_report = {
+    applied : int;
+    conflicts : (string * string * string) list; (* path, ours_hash, theirs_hash *)
+    lww_client_won : string list;  (* conflicts arbitrated TO the client copy (applied) *)
+    lww_server_kept : string list; (* conflicts arbitrated TO the server copy (client edit surfaced as lost) *)
+    client_deletes : string list;  (* Ours_del: server deleted; client's stale copy must go too *)
+    failed : string list;          (* pushes the server REJECTED (typed-boundary validation etc.) —
+                                      surfaced so the client keeps + re-pushes them instead of
+                                      converging to the server copy (the obituary rule) *)
+    failed_reasons : (string * string) list; (* the same paths WITH the apply error text
+                                                (undeclared type, validation, space guard) —
+                                                the log/ntfy surface; without it a rejection
+                                                is silent at every layer (10-07 push outage) *)
+  }
 
 (** True for a shared-space data path (data.s.<space>.<type>.<id>,
     migration 029). Space subtrees are NEVER in a lens's write scope
@@ -593,67 +597,81 @@ let commit (store : Store.t)
      they land in [failed] so the client is told to drop the local copy
      and keep the server's. Ours_del passes through: a server-side
      space deletion is the authority speaking, and must mirror. *)
-  List.fold_left
-    (fun r { path; outcome } ->
-      match outcome with
-      | Theirs_add | Theirs_mod when is_space_path path ->
-          { r with failed = path :: r.failed }
-      | Theirs_del when is_space_path path ->
-          { r with failed = path :: r.failed }
-      | Conflict (p, _, _, _) when is_space_path p ->
-          { r with failed = p :: r.failed }
-      | Theirs_add | Theirs_mod ->
-          (match List.assoc_opt path client_bodies with
-           | Some env ->
-               (match apply_client_node store ~env with
-                | Ok () -> { r with applied = r.applied + 1 }
-                | Error _ -> { r with failed = path :: r.failed })
-           | None -> { r with failed = path :: r.failed })
-      | Theirs_del ->
-          (match Store.conn_of store with
-           | Some conn ->
-               let n = Tree_store.delete_path conn ~path ~recursive:false in
-               if n > 0 then { r with applied = r.applied + 1 } else r
-           | None -> r)
-      | Conflict (p, _b, o, t) ->
-          (* LWW v0 (sync-conflicts): arbitrate by updated_at, then SURFACE
-             the resolution either way — the obituary rule applies to the
-             losing side, never a silent drop. *)
-          let r = { r with conflicts = (p, o, t) :: r.conflicts } in
-          let client_won =
-            match List.assoc_opt p epochs with
-            | None -> false (* server node unreadable: keep the server *)
-            | Some sv ->
-                let cl =
-                  match List.assoc_opt p client_bodies with
-                  | Some env -> envelope_updated_at env
-                  | None -> None
-                in
-                lww_client_wins cl sv
-          in
-          if client_won then
-            match List.assoc_opt p client_bodies with
-            | Some env -> (
-                match apply_client_node store ~env with
-                | Ok () ->
-                    { r with
-                      applied = r.applied + 1;
-                      lww_client_won = p :: r.lww_client_won }
-                | Error _ ->
-                    { r with lww_server_kept = p :: r.lww_server_kept })
-            | None -> { r with lww_server_kept = p :: r.lww_server_kept }
-          else { r with lww_server_kept = p :: r.lww_server_kept }
-      | Ours_del -> { r with client_deletes = path :: r.client_deletes }
-      | Unchanged | Ours_keep | Identical -> r)
-    {
-      applied = 0;
-      conflicts = [];
-      lww_client_won = [];
-      lww_server_kept = [];
-      client_deletes = [];
-      failed = [];
-    }
-    plans
+    List.fold_left
+      (fun r { path; outcome } ->
+        let reject p msg =
+          (* every server REJECTION is surfaced WITH its reason: the client
+             keeps its copy and re-pushes instead of converging away (the
+             obituary rule), and the sync log/ntfy shows WHY. *)
+          { r with
+            failed = p :: r.failed;
+            failed_reasons = (p, msg) :: r.failed_reasons }
+        in
+        match outcome with
+        | Theirs_add | Theirs_mod when is_space_path path ->
+            reject path "space path: server-authoritative (lens rows are pull-only)"
+        | Theirs_del when is_space_path path ->
+            reject path "space path: server-authoritative (lens rows are pull-only)"
+        | Conflict (p, _, _, _) when is_space_path p ->
+            reject p "space path: server-authoritative (lens rows are pull-only)"
+        | Theirs_add | Theirs_mod ->
+            (match List.assoc_opt path client_bodies with
+             | Some env ->
+                 (match apply_client_node store ~env with
+                  | Ok () -> { r with applied = r.applied + 1 }
+                  | Error msg -> reject path msg)
+             | None -> reject path "no client body for planned path")
+        | Theirs_del ->
+            (match Store.conn_of store with
+             | Some conn ->
+                 let n = Tree_store.delete_path conn ~path ~recursive:false in
+                 if n > 0 then { r with applied = r.applied + 1 } else r
+             | None -> r)
+        | Conflict (p, _b, o, t) ->
+            (* LWW v0 (sync-conflicts): arbitrate by updated_at, then SURFACE
+               the resolution either way — the obituary rule applies to the
+               losing side, never a silent drop. *)
+            let r = { r with conflicts = (p, o, t) :: r.conflicts } in
+            let client_won =
+              match List.assoc_opt p epochs with
+              | None -> false (* server node unreadable: keep the server *)
+              | Some sv ->
+                  let cl =
+                    match List.assoc_opt p client_bodies with
+                    | Some env -> envelope_updated_at env
+                    | None -> None
+                  in
+                  lww_client_wins cl sv
+            in
+            if client_won then
+              match List.assoc_opt p client_bodies with
+              | Some env -> (
+                  match apply_client_node store ~env with
+                  | Ok () ->
+                      { r with
+                        applied = r.applied + 1;
+                        lww_client_won = p :: r.lww_client_won }
+                  | Error msg ->
+                      (* the client WON arbitration but the apply was rejected
+                         (typed-boundary gate): a REJECTION, not a server win —
+                         it lands in failed, NOT lww_server_kept, or the client
+                         would drop its newer copy and converge to the stale
+                         server row. *)
+                      reject p msg)
+              | None -> { r with lww_server_kept = p :: r.lww_server_kept }
+            else { r with lww_server_kept = p :: r.lww_server_kept }
+        | Ours_del -> { r with client_deletes = path :: r.client_deletes }
+        | Unchanged | Ours_keep | Identical -> r)
+      {
+        applied = 0;
+        conflicts = [];
+        lww_client_won = [];
+        lww_server_kept = [];
+        client_deletes = [];
+        failed = [];
+        failed_reasons = [];
+      }
+      plans
 
 (* ---- report rendering (for the sync/plan prim + UI) ---- *)
 

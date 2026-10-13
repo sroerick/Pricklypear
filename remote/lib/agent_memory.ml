@@ -212,3 +212,128 @@ let read_content (file : string) : string =
     let s = really_input_string ic n in
     close_in ic;
     s
+type node_record = {
+  node_id : string;
+  tree_path : string;
+  type_ : string;
+  mid : string;
+  title : string;
+  content : string;
+  tags : string list;   (* decoded from the stored JSON-encoded array *)
+  scope : string;
+  cat : string;         (* creation CL universal time *)
+  uat : string;         (* last-update CL universal time *)
+  ver : int;
+}
+
+let core_of_key (s : string) : string =
+  String.concat "" (String.split_on_char '-' (String.lowercase_ascii s))
+
+let body_assoc_of_json (json : string) :
+    (string * Yojson.Safe.t) list option =
+  let trimmed = String.trim json in
+  if trimmed = "" then None
+  else
+    (try
+       (match Yojson.Safe.from_string trimmed with
+        | `Assoc kv -> (
+            match List.assoc_opt "body" kv with
+            | Some (`Assoc b) -> Some b
+            | _ -> None)
+        | _ -> None)
+     with _ -> None)
+
+let body_str (b : (string * Yojson.Safe.t) list) (k : string) : string =
+  match List.assoc_opt k b with Some (`String s) -> s | _ -> ""
+
+let tags_of_body (b : (string * Yojson.Safe.t) list) : string list =
+  (try
+     (match String.trim (body_str b "tags") with
+      | "" -> []
+      | raw -> (
+          match Yojson.Safe.from_string raw with
+          | `List xs ->
+              List.filter_map (function `String s -> Some s | _ -> None) xs
+          | _ -> []))
+   with _ -> [])
+
+let rec_of_body ~(lens : Lens_store.lens) ~(type_ : string) ~(node_id : string)
+    (b : (string * Yojson.Safe.t) list) : node_record =
+  { node_id;
+    tree_path = data_path ~lens ~type_ ~node_id;
+    type_;
+    mid = body_str b "mid";
+    title = body_str b "title";
+    content = body_str b "content";
+    tags = tags_of_body b;
+    scope = body_str b "scope";
+    cat = body_str b "cat";
+    uat = body_str b "uat";
+    ver =
+      (match int_of_string_opt (body_str b "ver") with Some v -> v | None -> 1) }
+
+let read_node ~(lens : Lens_store.lens) ~(type_ : string) ~(node_id : string) :
+    node_record option =
+  match Lens_store.get ~lens (data_path ~lens ~type_ ~node_id) with
+  | None -> None
+  | Some json -> (
+      match body_assoc_of_json json with
+      | Some b -> Some (rec_of_body ~lens ~type_ ~node_id b)
+      | None -> None)
+
+(** Read one memory node by NODE ADDRESS (dashed/dashless hex32) or by MID.
+    Stage-2 read verb (borge/agent.borg): reads resolve from the tree; the
+    caller's own log is the cache. Pure lens operation, works offline. *)
+let get ~(lens : Lens_store.lens) ~(type_ : string) (key : string) :
+    node_record option =
+    let core = core_of_key key in
+    if is_hex32 core then read_node ~lens ~type_ ~node_id:core
+    else
+      (* MID search keeps the ORIGINAL key: the stable memory id carries
+         dashes and case, so core_of_key must not feed find_by_mid. *)
+      (match find_by_mid ~lens type_ key with
+       | Some (node_id, _, _) -> read_node ~lens ~type_ ~node_id
+       | None -> None)
+
+(** All memory nodes in the lens for the owner across the memory types,
+    newest-first (uat desc, creation cat as tie-break). *)
+let list ~(lens : Lens_store.lens) : node_record list =
+  let rows =
+    List.flatten
+      (List.map
+         (fun type_ ->
+           let dir = type_dir ~lens type_ in
+           match Sys.readdir dir with
+           | exception _ -> []
+           | entries ->
+               List.filter_map
+                 (fun e ->
+                   if Filename.check_suffix e ".json" then
+                     read_node ~lens ~type_
+                       ~node_id:(Filename.remove_extension e)
+                   else None)
+                 (Array.to_list entries))
+         memory_types)
+  in
+  let int_of_opt (s : string) : int =
+    match int_of_string_opt s with Some v -> v | None -> 0
+  in
+  List.sort
+    (fun a b ->
+      let c = compare (int_of_opt b.uat) (int_of_opt a.uat) in
+      if c <> 0 then c else compare (int_of_opt b.cat) (int_of_opt a.cat))
+    rows
+
+let node_to_json (r : node_record) : Yojson.Safe.t =
+  `Assoc
+    [ ("node_id", `String r.node_id);
+      ("tree_path", `String r.tree_path);
+      ("type", `String r.type_);
+      ("mid", `String r.mid);
+      ("title", `String r.title);
+      ("content", `String r.content);
+      ("tags", `List (List.map (fun t -> `String t) r.tags));
+      ("scope", `String r.scope);
+      ("cat", `String r.cat);
+      ("uat", `String r.uat);
+      ("ver", `Int r.ver) ]

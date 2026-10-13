@@ -182,7 +182,7 @@ let jobs_runner_loop ~(session : Session.t) : unit =
       let ctx =
         Request_context.make
           ~manifest:t.manifest ~env:t.eval_state.env ~routes:t.routes
-          ~is_admin:t.is_admin
+          ~is_admin:t.is_admin ~source_ip:None
       in
       (* Bind the current job id on this fiber so the (with-step "name"
          thunk) special form (__step__ prim) scopes its checkpoints to this
@@ -272,9 +272,10 @@ let jobs_runner_loop ~(session : Session.t) : unit =
                    ~branch:sch.Jobs.s_branch
                    ~submitted_by:sch.Jobs.s_submitted_by
                    ~run_at_ms:fired_at ());
-              Jobs.advance_schedule ~store:session.store
-                ~name:sch.Jobs.s_name ~fired_at
-                ~cron:sch.Jobs.s_cron ~every_ms:sch.Jobs.s_every_ms
+               Jobs.advance_schedule ~store:session.store
+                 ~name:sch.Jobs.s_name ~fired_at
+                 ~cron:sch.Jobs.s_cron ~every_ms:sch.Jobs.s_every_ms
+                 ~tz:sch.Jobs.s_tz
             with _ -> ());
            fire_schedules ()
      in
