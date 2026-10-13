@@ -516,36 +516,6 @@
   "Escape s for embedding in a JSON string literal: backslash, quote,
 newline, CR, tab (coerces via as-str; backslash first).")
 
-(define list-ref
-  nth)
-
-(define list/filter
-  (lambda
-    (p xs)
-    (if
-      (null? xs)
-      (list)
-      (if
-        (p (car xs))
-        (cons (car xs) (list/filter p (cdr xs)))
-        (list/filter p (cdr xs))))))
-
-(define list/foldl
-  (lambda
-    (f acc xs)
-    (if
-      (null? xs)
-      acc
-      (list/foldl f (f acc (car xs)) (cdr xs)))))
-
-(define list/map
-  (lambda
-    (f xs)
-    (if
-      (null? xs)
-      (list)
-      (cons (f (car xs)) (list/map f (cdr xs))))))
-
 ;; --- list/ ---
 ;; list/map, list/filter, list/foldl (and list/foldr) are KERNEL SPECIAL
 ;; FORMS (eval.ml): OCaml loops + apply, provided by the image; defining
