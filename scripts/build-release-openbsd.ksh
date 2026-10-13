@@ -35,7 +35,7 @@ eval "$(opam env --switch=poohstack --set-switch)"
 export LIBRARY_PATH="/usr/local/lib${LIBRARY_PATH:+:${LIBRARY_PATH}}"
 
 log "dune build"
-dune build image/bin/main.exe
+dune build image/bin/main.exe glochid/bin/main.exe
 
 IMG_BIN="$PP_ROOT/_build/default/image/bin/main.exe"
 [ -f "$IMG_BIN" ] || { log "missing binary: $IMG_BIN"; exit 1; }
@@ -143,6 +143,17 @@ cp scripts/openbsd/pricklypear-promote.ksh "$STAGE/pricklypear-promote.ksh"
 cp scripts/openbsd/pricklypear-watchdog.ksh "$STAGE/pricklypear-watchdog.ksh"
 chmod 755 "$STAGE/bin/run-image.ksh" "$STAGE/pricklypear-promote.ksh" \
   "$STAGE/pricklypear-watchdog.ksh"
+# glochid: stage the shared harness when it has been built. Tolerant:
+# releases still cut when glochid has not been compiled yet.
+if [ -f "$PP_ROOT/_build/default/glochid/bin/main.exe" ]; then
+  mkdir -p "$STAGE/glochid"
+  cp "$PP_ROOT/_build/default/glochid/bin/main.exe" "$STAGE/glochid/glochid"
+  cp "scripts/rc.d/glochid" "$STAGE/rc.d/glochid"
+  chmod 555 "$STAGE/glochid/glochid" "$STAGE/rc.d/glochid"
+  log "staged glochid harness"
+else
+  log "WARN: glochid not built (_build/default/glochid/bin/main.exe missing); harness NOT staged"
+fi
 chmod 555 "$STAGE/rc.d/pricklypear"
 
 {
