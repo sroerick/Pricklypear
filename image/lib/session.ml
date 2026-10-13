@@ -982,6 +982,22 @@ and handle_package_form (t : t) (args : Pricklypear_lisp.Ast.expr list)
                | _ ->
                    List.concat_map export_names rest
              in
+             (* image.package-form-defines (2026-10-07): forms nested in
+                the package body that are NOT export declarations are
+                evaluated — historically they were silently dropped, so a
+                lib whose defines sat inside (package …) seeded nothing
+                but its header ("loaded N form(s)" counted the header)
+                and every session inherited unbound handlers. Evaluating
+                them keeps wrapped libs working and makes the define-
+                interceptor (persist + env bind) see them. Defines at
+                top level remain the convention (spec: the libs chapter). *)
+             List.iter
+               (fun f ->
+                 match f with
+                 | Pricklypear_lisp.Ast.App
+                     (Pricklypear_lisp.Ast.Var "export", _) -> ()
+                 | _ -> ignore (eval_form t f))
+               rest;
              t.eval_state.current_package <- Some name;
               let () =
                 (* spec_delegation: delegated sessions never write the
@@ -2366,6 +2382,7 @@ let () =
           ~env:t.eval_state.env
           ~is_admin:t.is_admin
           ~routes:(Request_context.copy_routes t.routes)
+          ~source_ip:None
       in
       Request_context.with_current ctx (fun () ->
         match call_handler t ~request:req handler with

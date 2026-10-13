@@ -18,6 +18,41 @@
     filmstrip/launcher-hint
 ))
 
+;; filmstrip-ws workspace row type: declared up top because the kernel's
+;; typed-boundary rule rejects writes to an undeclared datum type
+;; (crud.check_type_fields) and returns that rejection as a plain string
+;; VALUE which ws-save silently discards -- an undeclared type made every
+;; pane open fail to persist across reload (prod 10-12, UI gate da8e0223:
+;; GET /filmstrip rendered fs-content empty after every open).
+;; Guarded like todo/comments-init!. Zero fields = the declared
+;; schemaless case (crud.ml: [Some []] vs [None] are distinct): the row
+;; body is lib-managed JSON that gains keys across versions and is also
+;; written by the habitat shell's deskt wrapper, so the type stays
+;; free-form. The toplevel call seeds the declaration at boot/reseed
+;; (boot-admin context); delegated sessions no-op by design (the
+;; denial lands as the value, not an error).
+
+(define filmstrip/ws-init!
+  (lambda
+      ()
+      (if
+        (null? (type-fields (quote filmstrip-ws)))
+        (deftype (quote filmstrip-ws))
+        "filmstrip-ws ok"))
+  "Declare the filmstrip-ws workspace row type (guarded, idempotent). A
+zero-field type reports (type-fields) as null, so the guard re-fires on
+every load/reseed and the re-declare lands as an ON CONFLICT upsert. A
+delegated session no-ops by design: the deftype denial lands as this
+call's return value, not an error.")
+
+;; Load/reseed-time declaration: the boot seed/reseed evals toplevel
+;; forms once (todo/comments-init! seam). Deliberately NOT called from
+;; the render/write path (workstreams/projects-init! lesson: a delegated
+;; render would abort on the deftype denial) -- the declaration is what
+;; the typed-boundary kernel needs before any filmstrip-ws tree/upsert
+;; can persist.
+(filmstrip/ws-init!)
+
 (define calendar/browse
   (lambda
     (path)
@@ -563,12 +598,31 @@
             "background"
             "var(--panel)"
             "overflow"
-            "hidden"))
+            "hidden"
+            ;; v5 focus-scroll: when the OOB swap autofocuses the focused
+            ;; pane, the browser scrolls every scrollable ancestor so the
+            ;; section is on-stage; these inline margins reserve peek
+            ;; space so the NEIGHBOR columns stay visible at the edges
+            ;; (niri semantics; the margin shrinks as the column grows).
+            "scroll-margin-inline"
+            "3rem"))
         (css/rule
           ".fs-pane.fs-third"
-          (list "flex-basis" "33.333%"))
-        (css/rule ".fs-pane.fs-half" (list "flex-basis" "50%"))
-        (css/rule ".fs-pane.fs-full" (list "flex-basis" "100%"))
+          (list "flex-basis" "33.333%" "scroll-margin-inline" "3rem"))
+        (css/rule ".fs-pane.fs-half" (list "flex-basis" "50%" "scroll-margin-inline" "1.5rem"))
+        (css/rule ".fs-pane.fs-full" (list "flex-basis" "100%" "scroll-margin-inline" "0"))
+        ;; v5 one-up: while ANY LIVE single pane exists it takes the
+        ;; whole strip and its strip siblings step aside (shelved and
+        ;; cross-desktop panes are already display:none; a shelved
+        ;; single releases the strip back). Rail-region panes are not
+        ;; strip siblings (glochid renders them in its rail box; a bare
+        ;; host shell shows pinned panes as columns) - the region guard
+        ;; keeps those visible.
+        (css/rule ".fs-pane.fs-single"
+          (list "flex-basis" "100%" "scroll-margin-inline" "0"))
+        (css/rule
+          ".fs-shell:has(.fs-pane.fs-single:not(.shelved)) .fs-pane[data-region=\"main\"]:not(.fs-single)"
+          (list "display" "none"))
         (css/rule
           ".fs-pane.focused"
           (list

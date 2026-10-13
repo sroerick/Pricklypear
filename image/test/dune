@@ -49,6 +49,11 @@
  (modules crud_no_db_test)
  (libraries pricklypear-image pricklypear-lisp alcotest))
 
+
+(test
+ (name actor_provenance_test)
+ (modules actor_provenance_test)
+ (libraries pricklypear-image pricklypear-lisp pricklypear-common alcotest eio_main pgx unix mirage-crypto-rng.unix))
 (test
  (name branch_algebra_test)
  (modules branch_algebra_test)
@@ -59,10 +64,15 @@
  (modules packages_test)
  (libraries pricklypear-image alcotest))
 
+ (test
+  (name auth_password_test)
+  (modules auth_password_test)
+  (libraries pricklypear-image alcotest mirage-crypto-rng.unix))
+
 (test
- (name auth_password_test)
- (modules auth_password_test)
- (libraries pricklypear-image alcotest mirage-crypto-rng.unix))
+ (name tier_limits_test)
+ (modules tier_limits_test)
+ (libraries pricklypear-image alcotest))
 
 (test
  (name ai_store_test)

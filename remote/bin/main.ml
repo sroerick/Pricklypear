@@ -109,6 +109,8 @@ let () =
   let memory_id = ref None in
   let memory_type = ref "agent-memory" in
   let memory_delete = ref None in
+    let memory_get = ref None in
+    let memory_list = ref false in
   let anon _ = () in
   let speclist =
     Arg.align
@@ -142,6 +144,8 @@ let () =
           ("--memory-id", Arg.String (fun s -> memory_id := Some s), "MID stable memory id (default: fresh uuid; re-put updates in place)");
           ("--memory-type", Arg.String (fun s -> memory_type := s), "agent-memory|agent-agenda for --memory-delete (default agent-memory)");
           ("--memory-delete", Arg.String (fun s -> memory_delete := Some s), "ADDRESS node address (dashed or dashless) to delete; removes the lens node and enqueues a tombstone");
+          ("--memory-get", Arg.String (fun s -> memory_get := Some s), "KEY node address (dashed or dashless) or MID: print one memory node as JSON");
+      ("--memory-list", Arg.Set memory_list, "print all agent memory nodes as JSON, newest first (uat desc)");
       ]
   in
     Arg.parse speclist anon
@@ -430,6 +434,46 @@ let () =
                memory_run ();
                Ok ()
              with
+             | Invalid_argument m -> Error m
+             | Failure m -> Error m
+             | Sys_error m -> Error m
+             | e -> Error (Printexc.to_string e))
+          with
+          | Error m ->
+              prerr_endline ("error: " ^ m);
+              exit 1
+          | Ok () -> exit 0)
+   end);
+  (if !memory_get <> None && !memory_list then
+     (prerr_endline "--memory-get and --memory-list are mutually exclusive";
+      exit 2)
+   else ());
+  (if !memory_get <> None || !memory_list then begin
+     match lens_opt with
+     | None ->
+         prerr_endline "--memory-get/--memory-list require --lens DIR";
+         exit 2
+     | Some lens ->
+         let read_run () =
+           (match !memory_get with
+            | Some key -> (
+                match Agent_memory.get ~lens ~type_:!memory_type key with
+                | Some r ->
+                    print_endline
+                      (Yojson.Safe.pretty_to_string (Agent_memory.node_to_json r))
+                | None ->
+                    prerr_endline ("error: no memory node: " ^ key);
+                    exit 1)
+            | None -> ());
+           (if !memory_list then
+              print_endline
+                (Yojson.Safe.pretty_to_string
+                   (`List
+                     (List.map Agent_memory.node_to_json (Agent_memory.list ~lens))))
+            else ())
+         in
+         (match
+            (try read_run (); Ok () with
              | Invalid_argument m -> Error m
              | Failure m -> Error m
              | Sys_error m -> Error m

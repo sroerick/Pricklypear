@@ -18,11 +18,17 @@ type t = {
   env : Pricklypear_lisp.Ast.env;
   routes : (string, string * string) Hashtbl.t;
   is_admin : bool;
+  (* d1399ea3 boundary-origin: the client source_ip for this request =
+     (behind relayd, the X-Forwarded-For hop that [source_ip_of_sockaddr]
+     resolved at dispatch). None only for boot-time contexts (no request). *)
+  source_ip : string option;
   (* store : Store.t;                       -- Phase 3 *)
 }
 
-let make ~is_admin ~manifest ~env ~routes : t =
-  { manifest; env; routes; is_admin }
+let make ~source_ip ~is_admin ~manifest ~env ~routes : t =
+  { manifest; env; routes; is_admin; source_ip }
+
+let source_ip (t : t) : string option = t.source_ip
 
 let manifest (t : t) = t.manifest
 

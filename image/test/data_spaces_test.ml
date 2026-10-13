@@ -498,6 +498,74 @@ let test_open_space () =
           Crud.space_admit store ~caller:"bob" ~kernel_admin:false ~space:sp
             ~type_name:(ty ^ "x")))
 
+(* ---------------- regression: shared-space field write is not a silent
+   no-op ------------------------------------------------ a1ce59db -------
+   The todo surface's field-update path once wrote into a shared-space
+   datum (update by path/id collision) and returned silent ok while the
+   field stayed stale — the bug behind the "the button did nothing" report
+   tonight. These two cases pin the same contract the UI depends on:
+
+     1. a MEMBER's field delta on a shared-space row LANDS — projection
+        (Crud.get) reflects the new value and returns non-Nil;
+     2. a bookkeeping/restore write that carries no acted_by stamp does
+        not CLEAR an existing stamp (migration 039 COALESCE in
+        Tree_store.update_datum). *)
+
+let test_shared_field_update_lands () =
+  with_s2 (fun store ~sp ~ty ->
+      let conn = Option.get (S.conn_of store) in
+      let id = insert conn ~type_name:ty ~author:"alice" in
+      (* bob is a member; update ONE field via the real Crud path *)
+      (match
+         Crud.update_field_guarded store ~type_name:ty ~id ~field:"n"
+           ~value:"2" ~caller:"bob"
+       with
+       | Ast.VStr _ -> ()
+       | Ast.VNil ->
+           Alcotest.fail
+             "shared-space update-field returned no value (a1ce59db silent no-op)"
+       | _ -> Alcotest.fail "shared-space update-field returned unexpected shape");
+      (* the projection reflects the new value *)
+      let sql =
+        "SELECT fields->>'n'::text FROM tree_data_rows \
+         WHERE type_name = $1 AND id = $2::uuid"
+      in
+      let rows =
+        S.exec conn ~params:[ s ty; s id ] sql in
+      (match rows with
+       | [ [ v ] ] ->
+           Alcotest.(check (option string)) "n lands in projection"
+             (Some "2") (Pgx.Value.to_string v)
+       | _ -> Alcotest.fail "projection row missing after shared update"))
+
+let test_shared_bookkeeping_keeps_acted_by () =
+  with_s2 (fun store ~sp ~ty ->
+      let conn = Option.get (S.conn_of store) in
+      let id = insert conn ~type_name:ty ~author:"alice" in
+      (* delegated-clock write stamps acted_by = the actor *)
+      (match
+         TS.update_datum ~type_name:ty ~id
+           ~fields_json:"{\"n\":1}"
+           ~acted_by:(Some "gregor") conn
+       with
+       | Ok _ -> ()
+       | Error e -> Alcotest.fail ("stamped update failed: " ^ e));
+      let stamp connx =
+        q_string connx ~params:[ s id ]
+          "SELECT COALESCE(acted_by,'') FROM data_rows WHERE id = $1::uuid"
+      in
+      Alcotest.(check string) "stamp present after delegated write" "gregor"
+        (stamp conn);
+      (* bookkeeping/restore write with NO stamp must PRESERVE it *)
+      (match
+         TS.update_datum ~type_name:ty ~id
+           ~fields_json:"{\"n\":9}" ~acted_by:None conn
+       with
+       | Ok _ -> ()
+       | Error e -> Alcotest.fail ("bookkeeping update failed: " ^ e));
+      Alcotest.(check string) "bookkeeping does not clear acted_by"
+        "gregor" (stamp conn))
+
 let () =
   Alcotest.run "data_spaces"
     [
@@ -529,6 +597,13 @@ let () =
         [
           Alcotest.test_case "body space routes; open write; id survives" `Quick
             test_row_level_routing;
+        ] );
+      ( "by returned-and-stamped writes (a1ce59db)",
+        [
+          Alcotest.test_case "shared field update lands" `Quick
+            test_shared_field_update_lands;
+          Alcotest.test_case "bookkeeping keeps acted_by" `Quick
+            test_shared_bookkeeping_keeps_acted_by;
         ] );
       ( "open spaces",
         [
