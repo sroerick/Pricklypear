@@ -1819,6 +1819,106 @@
     |))
    )
   )
+    (subsection checkpoints
+     (doc "Named points on the gen stream: branch/cp, branch/cp-list, branch/cp-diff, branch/cp-restore + the branch/log oplog face")
+      (status implemented)
+     (* agent note (|2026-10-12 plan-phase ratification: roerick OK'd checkpoints + the log face in-conversation tonight ("checkpoints yes"). The substrate already records every write (tree_versions append-only, per-branch branch_generations counter); the only missing primitive is NAMING a point. jj names an implicitly-snapshotted working copy; DeltaDB sells addressable deltas — both reduce to names pinned to gens here. Spec written directly in plan phase, no issue filed.|) *)
+     (* agent note (|2026-10-12 implemented same-session as the plan pass (roerick approved the overnight run): migration 040 branch_checkpoints (UNIQUE(branch_id,name), name CHECK [a-z0-9-]+, ON DELETE CASCADE), image/lib/store_checkpoints.ml as the 7th store family (store facade include + verify_store_split.sh updated; opaque jsonb only), prims branch/cp + branch/cp-list + branch/cp-diff + branch/cp-restore + branch/log in session_control_prims.ml (server-only, anonymous-denied, ref-readable like branch/status), effect.ml write rows for cp + cp-restore, image/test/checkpoints_test.ml 4/4 green + dune build @all. Judgment calls: (1) cp gen = the branch's OWN branch_generations counter captured atomically in one INSERT..SELECT (never the ancestry-walk max, so ancestor moves never skew the window); duplicate names refuse — immutable anchors, not moving tags. (2) cp-diff = the branch_status decision discipline windowed (hash equality with ABSENT as its own value): changed / added-since / removed-since; unchanged filtered. (3) cp-restore default set = changed + removed-since only — added-since pins have NO captured body to restore to and are skipped with a reason; restore lands NEW writes through the tree write helpers (version trail + reverse mirrors + code_history before-images; gen only moves forward; base_gen untouched; system/main refuses; env rehydrates when anything lands). (4) branch/log reads the version trail (every def write fires it); code_history is the recovery substrate restore consumes, not a second oplog source; windowed by cp = gen > cp.gen, else last 64 writes.|) *)
+     (details
+      (doc (|
+           ==========================================================
+           WHY
+           ==========================================================
+           "Value of path P on branch B at gen G" is already a
+           READ (branch-status details; tree_versions is
+           append-only, content-hashed, gen-stamped). code-history
+           keeps every before-image per name. Nothing NAMES a
+           point. An agent mid-make cannot say "back to before the
+           lens rework" except by carrying gen numbers in its head;
+           a reviewer cannot be handed a stable anchor for "the
+           work as it stood at X". Checkpoints are names pinned to
+           gens — the one primitive the jj/DeltaDB aesthetic names
+           that the substrate does not.
+
+           ==========================================================
+           STORAGE (additive migration)
+           ==========================================================
+             branch_checkpoints(
+               id          bigint GENERATED ALWAYS AS IDENTITY
+                             PRIMARY KEY,
+               branch_id   uuid NOT NULL REFERENCES branches(id),
+               name        text NOT NULL,   -- [a-z0-9-]+
+               gen         bigint NOT NULL, -- branch head gen at cp time
+               message     text,
+               author      text NOT NULL,
+               created_at  timestamptz NOT NULL DEFAULT now(),
+               UNIQUE (branch_id, name)
+             )
+
+           GEN CAPTURE borrows branch-status's discipline: the
+           branch_generations triggers are DEFERRED, so a gen read
+           inside the tx that wrote sees the PRE value. branch/cp
+           captures the branch's current generation AFTER prior
+           writes commit — never inside a store tx holding pins.
+
+           ==========================================================
+           NOPALES SURFACE (server-only family, like the other
+           ref-addressed branch prims)
+           ==========================================================
+             (branch/cp "name" [message])     -- capture on the CURRENT branch
+             (branch/cp-list [owner/branch])  -- newest first, own or
+                                               readable ref
+             (branch/cp-diff "name")          -- per-pin classify between
+                                               the captured gen and head;
+                                               the branch_status decision
+                                               table windowed, NOT a second
+                                               classifier
+             (branch/cp-restore "name" [names...]) -- restore the named
+                                               pins (default: every pin
+                                               whose head hash differs
+                                               from its captured hash) to
+                                               their captured bodies
+             (branch/log [owner/branch] ["cp-name"]) -- the oplog: newest-
+                                               first write timeline
+                                               (name, kind, op, author,
+                                               gen, changed_at) from the
+                                               version trail + code_history;
+                                               windowed by cp name, else
+                                               the last 64 writes
+
+           ==========================================================
+           SEMANTICS
+           ==========================================================
+           RESTORE IS A WRITE, NOT A TIME MACHINE: restorations land
+           as new writes at head gen (code_history before-images fire
+           for free — nothing is silent; obituary rule), and the gen
+           counter only moves forward.
+           CODE ONLY: a checkpoint restores function/type/route pins.
+           Data never rolls back (branches are CODE, not data —
+           shared-data-spaces).
+           NO BASE_GEN ENTANGLEMENT: a cp records gen, not a fork
+           point. branch/cp-restore does not move base_gen (that is
+           merge's move); a restored branch stays genuinely diverged
+           rather than fake-synced.
+           RECOVERABLE BY CONSTRUCTION: cp/restore of a pin another
+           member changed after the cp is never the only copy — the
+           clobbered body lives in code_history exactly like a merge
+           clobber.
+
+           ==========================================================
+           NOT BUILT YET (named here, not in implements):
+           migrations/0NN_branch_checkpoints.sql,
+           image/lib/store_checkpoints.ml (rides store_history),
+           agent/SSH surface unchanged — pure image prims.
+           ==========================================================
+      |))
+     )
+     (verify
+      (build "dune build image")
+      (test "image/test/checkpoints_test.ml — cp captures post-commit head gen; cp-list newest first; cp/restore fires one code_history row per changed pin; restore leaves base_gen untouched")
+      (smoke "(branch/cp \"before\") after defines; more defines; (branch/cp-diff \"before\") lists the diverged worklist; (branch/cp-restore \"before\") restores and reports per name")
+      (smoke "(branch/log) renders newest-first writes with author + gen, windowed by cp name"))
+    )
   (subsection ast-nodes
    (doc "Design: addressable AST nodes as substrate for surgical edits and AI patches")
    (status planned)
@@ -1948,12 +2048,14 @@
    body : (list/map ...) — never a line hunk, never a whole-define
    clobber). Hash = the canonical-sexp hash (the pin-hygiene hash) — no
    text lines anywhere in the mechanism.")
-  (status planned)
+   (status partial)
   (* agent note (|2026-10-07 ralph loop (branch ralph/spec-branching-rework): the 2026-10-06 draft restructured into book forms — the nested (section ast-diff / ast-merge / debts) drafts became subsections sexp-diff / ast-merge / branch-ops, each (status planned) with a details block preserving the draft text + a verify block (branch-status exemplar style). The OPS TABLE and GRANULARITY paragraphs moved from this section's details into branch-ops details; the debts list folded into branch-ops details too. roerick's DECISION doc above is VERBATIM, untouched. implements lines name only files that exist (the diff spine ast_diff.ml, the algebra branch_algebra.ml); unbuilt modules are named in details text instead. The section status 'draft' (not a valid borge status — lint flagged it) became 'planned', matching its subsections. 'branches are for CODE, not data' framing + shared-data-spaces untouched (T6, blocked on roerick).|) *)
+   (* agent note (|2026-10-12 overnight reconcile (branching rework): statuses flipped against the built substrate. sexp-diff -> implemented (T1, commit e5d030a); ast-merge -> implemented (8922851 merge ralph/ast-merge-store, plus 6fe8dac list frame rule); branch-ops -> partial (status/pull/push + the checkpoint family built; tree face, delete/rename, branch/land still open). Section planned -> partial to match its subsections.|) *)
   (subsection sexp-diff
    (doc "Pure structural diff of two exprs into a FLAT path-keyed edit script; apply round-trips the script")
-   (status planned)
-   (implements lisp/lib/ast_diff.ml)
+    (status implemented)
+    (implements lisp/lib/ast_diff.ml lisp/lib/sexp_diff.ml lisp/lib/ast_path.ml lisp/test/sexp_diff_test.ml)
+    (* agent note (|2026-10-12 BUILT (T1, commit e5d030a): lisp/lib/ast_path.ml, select_path/replace_path over the child-path vocabulary the walk already labels (if.test/then/else, lambda.params/body, letrec.binding[NAME], app.arg[i], ...); lisp/lib/sexp_diff.ml, the Ast_diff walk (same/modified/replaced + list-LCS) flattened into the flat path-keyed Replace/Insert/Delete edit script; apply replays it sequence-safely (a mid-sequence insert does NOT shift following siblings' paths). No second comparison algorithm, no schema change. Tests: lisp/test/sexp_diff_test.ml round-trip property apply(diff(a,b),a)=b over all 11 expr ctors + generated pairs against a naive reference. Build + tests green.|) *)
    (details
     (doc (|
          sexp_diff.ml: pure structural diff on canonical sexps. Edit
@@ -1973,9 +2075,6 @@
          paths. The node selector it needs ships beside it in lisp/lib:
          ast_path.ml (select_path / replace_path) — no second comparison
          algorithm, no schema change.
-         NOT BUILT YET (named here, not in implements):
-         lisp/lib/ast_path.ml, lisp/lib/sexp_diff.ml,
-         lisp/test/sexp_diff_test.ml.
     |))
    )
    (verify
@@ -1985,7 +2084,9 @@
     (smoke "diff+apply reuse Ast_diff's walk decisions (same/modified/replaced + list-LCS) — no second comparison algorithm")))
   (subsection ast-merge
    (doc "Three-way merge at subtree granularity; conflicts are DATA in the result, never silently resolved")
-   (status planned)
+    (status implemented)
+    (implements lisp/lib/sexp_merge.ml lisp/lib/sexp_diff.ml image/lib/store.ml image/lib/session_control_prims.ml lisp/test/sexp_merge_test.ml)
+    (* agent note (|2026-10-12 BUILT (T5): lisp/lib/sexp_merge.ml, pure three-way merge at subtree granularity: disjoint path edits compose, both-identical applies once, both-different = CONFLICT at the exact subtree path, conflicts are DATA in the result (merged body + conflict list), never silently resolved, never landed in the tree (the jj divergence named above stands). 6fe8dac added the list frame rule: a shared edit never leaves the live side's frame. Store.merge_branch (image/lib/store.ml) routes diverged defines through the merge3 hook at the eval boundary (8922851, merge ralph/ast-merge-store); image/lib/session_control_prims.ml owns the eval-boundary side and the conflict worklist surface. Tests: lisp/test/sexp_merge_test.ml green.|) *)
    (details
     (doc (|
          Three-way merge at subtree granularity: base = the fork-point
@@ -2005,8 +2106,15 @@
          silently resolved. Re-validate the merged body (canonical-sexp
          hash). A merge always has a base: the fork point (base_gen via
          the branch-status read path), or a code_history before-image.
-         NOT BUILT YET (named here, not in implements):
-         lisp/lib/sexp_merge.ml, lisp/test/sexp_merge_test.ml.
+           DELIBERATE DIVERGENCE FROM JJ, NAMED 2026-10-12 so nobody
+           "fixes" it later: jj stores conflicts INSIDE revisions — a
+           tree floats with markers until you resolve it. A
+           Pricklypear branch is live evaluated state: a stored
+           conflicted body 500s every route it serves, in every
+           session that touches it. So the conflict NEVER lands in
+           the tree: merge returns data, resolution happens in the
+           worklist, and the branch holds resolved bodies only.
+
     |))
    )
    (verify
@@ -2016,8 +2124,8 @@
     (smoke "a conflict is reported with the exact subtree path + ours/theirs values, target unchanged")))
   (subsection branch-ops
    (doc "The ergonomics layer over branch_algebra.ml: status/pull/push/tree/delete/rename faces + prims, every surface rendered from the store")
-   (status planned)
-   (implements image/lib/branch_algebra.ml)
+    (status partial)
+    (implements image/lib/branch_algebra.ml image/lib/branch_push.ml image/lib/session_control_prims.ml image/test/branch_push_test.ml)
    (details
     (doc (|
          OPS TABLE — the ergonomics layer over branch_algebra.ml. The
@@ -2074,10 +2182,15 @@
          explicit label.
     |))
    )
+      (* agent note (|2026-10-12 branch/push BUILT (the push row above): target = <ref-owner>/personal — the promote_to_personal target generalized over any ref the caller controls; the branch-GRAPH parent of a workshop is system/main itself, so branch/push refuses system/* and promote-to-main stays the admin-gated path. Callers: the ref's owner human (own garden, no gate — the branch-faces decision flow in auth.borg), the parent-linked agent user (allow_agent_promote gate, same as promote), or admin. Closure FIRST via Call_graph.push_closure — the holes App-Var analytic over the source chain's effective defs: kernel prims + special forms + target-visible names are bound; an unbound ref auto-includes from the source's OWN rows or the push REFUSES WHOLE (complete hole report; never a partial landing — the 2026-10-05 pulse-row-from class); inherited-only names refuse fork-first (promote_functions' own-row lookup would silently skip); default set = depth-0 own code; writes via promote_functions (atomic, routes travel, package stamp preserved). Lands: Store.list_function_names_meta_at, Call_graph.push_closure, Branch_push.push, session_control_prims "branch/push", effect.ml write_db floor. Tests: image/test/branch_push_test.ml.|) *)
+      (* agent note (|2026-10-12 reconcile of the OPS TABLE: status (branch/status, a2d7a44) and pull (branch/pull, unbind-path bulk adopt, a2d7a44) BUILT; push BUILT (note below); the checkpoint family (branch/cp, branch/cp-list, branch/cp-diff, branch/cp-restore + the branch/log face, migration 040) BUILT (see branching.checkpoints). Still OPEN, why this subsection is (status partial): the tree face (one-page forest with per-edge ahead/behind/diverged counts), delete/rename prims + UI, and the branch/land prim (vault bodies onto live main, the REPL form of pp-sync land).|) *)
    (verify
     (build "dune build image/test/branch_algebra_test.exe && ./_build/default/image/test/branch_algebra_test.exe")
     (test "image/test/branch_algebra_test.ml — rename detection: hash-equal body under a new name = RENAMED(from,to); same-name-different-body vs different-name-same-body discriminate delete+add from rename")
     (test "image/test/branch_algebra_test.ml — pull_set = exactly the BEHIND pins of classify on a randomized forest; diverged/ahead/synced/clean never in the pull set (naive reference)")
-    (smoke "(branch/status ref) renders per-pin classify + counts + the divergent worklist from Store.branch_status — the ONE classifier, read from the store, never the session snapshot")
-    (smoke "(branch/pull ref) adopts the parent's version on every BEHIND pin via the unbind path (never a body copy — pin hygiene); diverged pins untouched; returns the pulled + skipped-diverged lists"))))
+      (smoke "(branch/status ref) renders per-pin classify + counts + the divergent worklist from Store.branch_status — the ONE classifier, read from the store, never the session snapshot")
+      (smoke "(branch/pull ref) adopts the parent's version on every BEHIND pin via the unbind path (never a body copy — pin hygiene); diverged pins untouched; returns the pulled + skipped-diverged lists")
+      (test "image/test/branch_push_test.ml — push_closure: target-visible/kernel/special-form refs are free; an unbound ref auto-includes from the source (discovery order, mutual recursion safe) or holes its carrier; holes refuse the push all-or-nothing with a complete report; an explicit dep lands in pushed, never auto")
+      (test "image/test/branch_push_test.ml — store push: a pierced set (entry + broken->absent) refuses WHOLE and the target stays untouched; a clean push lands entry + auto deps verbatim; a name inherited by both sides stays a chain view on the target, never an own row; an inherited-only name refuses fork-first; the default set is depth-0 own code")
+      (smoke "(branch/push \"gregor/agent\" entry) by gregor (or the parent-linked agent when allow_agent_promote) lands entry + auto-included callees on gregor/personal via promote_functions (routes travel); a push with a dep unbound everywhere is refused with the exact hole list — no partial landing"))))
 )
