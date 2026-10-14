@@ -1,6 +1,6 @@
 (library
- (name pricklypear_agent_lib)
- (public_name pricklypear-agent.lib)
+ (name pricklypear_glochid_lib)
+ (public_name pricklypear-glochid.lib)
  (wrapped false)
  (modules runtime plugins http_ui surface assets libs_source config lifecycle sessions habitat)
  (libraries

@@ -12,7 +12,7 @@
 
 (package
  (name pricklypear-llm)
- (description "Host-agnostic LLM agent loop for Pricklypear: OpenAI-compatible provider transport + turn loop + builtin read/bash tool bodies. Linked by the agent (agent/) and pp-remote (remote/) hosts — see borge/agent.borg agent-loop + borge/remote-eval.borg agent-loop"))
+ (description "Host-agnostic LLM agent loop for Pricklypear: OpenAI-compatible provider transport + turn loop + builtin read/bash tool bodies. Linked by glochid (glochid/) and pp-remote (remote/) hosts — see borge/glochid.borg agent-loop + borge/remote-eval.borg agent-loop"))
 
 (package
  (name pricklypear-image)
@@ -31,8 +31,8 @@
  (description "Laptop/agent CLIs: pp-eval, pp-sync (HTTP clients for the live image; no Python)"))
 
 (package
- (name pricklypear-agent)
- (description "Local Nopales-native coding agent (pi-inspired): minimal agent loop, Nopales plugins, HTML code browser. Sibling of the image, not part of it — see borge/agent.borg"))
+ (name pricklypear-glochid)
+ (description "Local Nopales-native coding agent (pi-inspired): minimal agent loop, Nopales plugins, HTML code browser. Sibling of the image, not part of it — see borge/glochid.borg"))
 
 (package
  (name pricklypear-remote)
@@ -40,7 +40,7 @@
 
 (package
  (name pricklypear-hostkit)
- (description "Shared host kit for the two local Nopales hosts (agent + pp-remote): Host_seam (the lifted route-table/request/tool host seam, parameterized by run_in_rim), Http_kit, Multipart_emitter, Chat_stream — ONE home for the ~1,000 lines agent/lib and remote/lib used to mirror (i-1788671304-d)"))
+ (description "Shared host kit for the two local Nopales hosts (glochid + pp-remote): Host_seam (the lifted route-table/request/tool host seam, parameterized by run_in_rim), Http_kit, Multipart_emitter, Chat_stream — ONE home for the ~1,000 lines glochid/lib and remote/lib used to mirror (i-1788671304-d)"))
 
 (package
  (name pricklypear-httpc)

@@ -1141,7 +1141,7 @@ let eval_string ~(prims : prim_table) (env : env) (s : string) : value =
     [Prim_call] effect (hosts: image Control_rim in session, agent
     Control.run_with_rim). Returns the last form's value. Used by host
     plugin/file loaders that want file-per-file or form-per-form eval
-    without string re-rendering. (Added for borge/agent.borg
+    without string re-rendering. (Added for borge/glochid.borg
     nopales-embed.) *)
 let read_eval_all_direct ~(prims : prim_table) (env : env) (s : string)
     : value =

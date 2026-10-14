@@ -1,7 +1,7 @@
-(** Agent Nopales surface (borge/agent.borg surfaces).
+(** Agent Nopales surface (borge/glochid.borg surfaces).
 
     The chat + code browser pages are NOPALES-AUTHORED htmx fragments on
-    the agent route table, rendered by Nopales via [libs/html] — NOT
+    the glochid route table, rendered by Nopales via [libs/html] — NOT
     compiled OCaml pages and NOT vanilla-JS SSE. The surface is
     redefinable live (same env as plugins/REPL): re-evaluating a
     `(define chat/page …)` at the REPL changes the next render without a
@@ -23,10 +23,10 @@ open Pricklypear_lisp
 
 (** The surface source. Defines chat/page, chat/user-bubble,
     chat/llm-bubble-open, chat/token, code/page and registers
-    the / and /code routes via the agent route table. Uses libs/html +
-    the agent's request-shape prims (query-param). *)
+    the / and /code routes via the glochid route table. Uses libs/html +
+    the glochid request-shape prims (query-param). *)
 let surface_source = {pp|
-;; ---- shared page chrome (borge/agent.borg filmstrip-shell) ----
+;; ---- shared page chrome (borge/glochid.borg filmstrip-shell) ----
 ;; Pages are PANE-AWARE: under HX-Request (filmstrip partial mode) a
 ;; route renders the BODY fragment only; a full GET gets the doc
 ;; skeleton + htmx scripts. One css block shared by every page + the
@@ -75,7 +75,6 @@ let surface_source = {pp|
     ".card input,.card select{width:100%;padding:.5rem;margin-top:.25rem}"
     "button{background:var(--pp-btn);color:#fff;border:0;border-radius:6px;padding:.5rem 1rem;cursor:pointer}"
     ".fs-shell{height:calc(100vh - 2rem)}"
-    ".fs-sh-axis{display:none}"
     ;; v5 col axis is a ROW, not a collapsed rail: cascade app menu
     ;; (20rem) | #fs-rail box (20rem: docked pane bodies + railtabs +
     ;; trees) | #fs-content = THE NIRI STRIP of main panes (full
@@ -126,19 +125,6 @@ let surface_source = {pp|
     "::-webkit-scrollbar-thumb{background:var(--sel-bg);border-radius:6px}"
     "::-webkit-scrollbar-thumb:hover{background:var(--muted)}"
     "::-webkit-scrollbar-corner{background:transparent}"
-    ;; v2 desktops: the #ws-desk sentinel carries the current desktop to
-    ;; CSS — one :has pair per desktop (0..9) hides panes of the others
-    ;; (data-desktop is on every pane section; no JS, no re-render).
-    ".fs-shell:has(#ws-desk.dsk-0) .fs-pane[data-desktop]:not([data-desktop=\"0\"]):not([data-region=\"rail\"]){display:none}"
-    ".fs-shell:has(#ws-desk.dsk-1) .fs-pane[data-desktop]:not([data-desktop=\"1\"]):not([data-region=\"rail\"]){display:none}"
-    ".fs-shell:has(#ws-desk.dsk-2) .fs-pane[data-desktop]:not([data-desktop=\"2\"]):not([data-region=\"rail\"]){display:none}"
-    ".fs-shell:has(#ws-desk.dsk-3) .fs-pane[data-desktop]:not([data-desktop=\"3\"]):not([data-region=\"rail\"]){display:none}"
-    ".fs-shell:has(#ws-desk.dsk-4) .fs-pane[data-desktop]:not([data-desktop=\"4\"]):not([data-region=\"rail\"]){display:none}"
-    ".fs-shell:has(#ws-desk.dsk-5) .fs-pane[data-desktop]:not([data-desktop=\"5\"]):not([data-region=\"rail\"]){display:none}"
-    ".fs-shell:has(#ws-desk.dsk-6) .fs-pane[data-desktop]:not([data-desktop=\"6\"]):not([data-region=\"rail\"]){display:none}"
-    ".fs-shell:has(#ws-desk.dsk-7) .fs-pane[data-desktop]:not([data-desktop=\"7\"]):not([data-region=\"rail\"]){display:none}"
-    ".fs-shell:has(#ws-desk.dsk-8) .fs-pane[data-desktop]:not([data-desktop=\"8\"]):not([data-region=\"rail\"]){display:none}"
-    ".fs-shell:has(#ws-desk.dsk-9) .fs-pane[data-desktop]:not([data-desktop=\"9\"]):not([data-region=\"rail\"]){display:none}"
     ;; v2 app-links: a button styled as a bare link (chat/sessions/settings
     ;; nav in pane chrome; the anchor version navigated the whole window
     ;; out of the shell with a full GET). Overrides the generic button look.
@@ -195,10 +181,6 @@ let surface_source = {pp|
     ".fs-start-entry{width:100%;text-align:left;padding:.3rem .5rem;white-space:nowrap}"
     ".fs-start-entry:hover{background:var(--sel-bg)}"
     ".fs-railtab.fs-btn{background:none;border:1px solid transparent;color:var(--sel-accent)}"
-    ".fs-shell:has(#fs-railmode.rm-windows) .fs-rmode:not([data-rmode=\"windows\"]){display:none}"
-    ".fs-shell:has(#fs-railmode.rm-code) .fs-rmode:not([data-rmode=\"code\"]){display:none}"
-    ".fs-shell:has(#fs-railmode.rm-prims) .fs-rmode:not([data-rmode=\"prims\"]){display:none}"
-    ".fs-shell:has(#fs-railmode.rm-ui) .fs-rmode:not([data-rmode=\"ui\"]){display:none}"
     ;; /code file arm: CodeMirror boots into .pp-cm-host (replaces the
     ;; tagged <pre>; theme rides the shell dark palette).
     ".pp-cm-host .CodeMirror{height:80vh;font-size:13px;line-height:1.4;background:var(--chrome);color:var(--ink)}"
@@ -236,8 +218,8 @@ let surface_source = {pp|
           "<script src=\"/assets/pp-cm.js\"></script>"
           "</body></html>"))))
 
-;; ---- llm-config helpers (borge/agent.borg llm-config) ----
-;; The model dropdown is fed by the provider ABI (agent/models = GET
+;; ---- llm-config helpers (borge/glochid.borg llm-config) ----
+;; The model dropdown is fed by the provider ABI (glochid/models = GET
 ;; {base}/models, cached host-side); the choice POSTs to /settings and
 ;; persists per-surface (model is NEVER replicated user data).
 (define (settings/model-options current ms)
@@ -253,20 +235,20 @@ let surface_source = {pp|
 ;; The chat page skeleton: log target + an hx-post=/chat form with the
 ;; upstream htmx-4 hx-multipart extension so a multipart/mixed reply
 ;; streams each part live into the bubble. htmx + hx-multipart are
-;; vendored assets served at /assets/*.js (baked into the agent binary).
+;; vendored assets served at /assets/*.js (baked into the glochid binary).
 ;; hx-config '{"timeout":0}' disables htmx's 60s defaultTimeout for a
-;; request whose lawful lifetime is "a whole agent turn".
+;; request whose lawful lifetime is "a whole glochid turn".
 ;; hx-config '{"'timeout'":0}' disables htmx's 60s defaultTimeout for a
-;; request whose lawful lifetime is "a whole agent turn".
+;; request whose lawful lifetime is "a whole glochid turn".
 (define (chat/head frag)
-  ;; The 'agent' root anchor is shell-level (it reloads / in place) — a
+  ;; The 'glochid' root anchor is shell-level (it reloads / in place) — a
   ;; plain <a> inside a fragment is the escape bug class, so fragments
   ;; get a muted label instead; nav words stay app-links in both modes.
   (string-append
     "<h1>"
     (if frag
-        "<span class=\"muted\">agent</span>"
-        "<a href=\"/\">agent</a>")
+        "<span class=\"muted\">glochid</span>"
+        "<a href=\"/\">glochid</a>")
     " <span class=\"muted\">— "
     (filmstrip/app-link "/code" "/code")
     " · "
@@ -277,13 +259,13 @@ let surface_source = {pp|
     (filmstrip/app-link "/settings" "/settings")
     " · model: "
     "<select name=\"model\" class=\"fs-modelsel\" hx-post=\"/settings\" hx-trigger=\"change\" hx-swap=\"none\">"
-    (settings/model-options (agent/model) (agent/models))
+    (settings/model-options (glochid/model) (glochid/models))
     "</select></span></h1>"))
 
 (define (chat/body)
   "Chat surface body — one structure for page AND pane, so the stream's
-#log target works in both (borge/agent.borg filmstrip-shell #4).
-Fragment-mode (hx-request?) differences: the h1 'agent' anchor and the
+#log target works in both (borge/glochid.borg filmstrip-shell #4).
+Fragment-mode (hx-request?) differences: the h1 'glochid' anchor and the
 resumed-line +new //sessions anchors are shell-level escapes — a plain
 <a> inside a fragment is the filmstrip bug class, so fragments get
 app-link/button twins (POST /filmstrip/new, open-or-focus /sessions)."
@@ -294,7 +276,7 @@ app-link/button twins (POST /filmstrip/new, open-or-focus /sessions)."
       (chat/head frag)
       "<div id=\"log\">"
       (if (null? sid)
-          "<div class=\"muted\">agent ready.</div>"
+          "<div class=\"muted\">glochid ready.</div>"
           (string-append
             "<div class=\"muted\">resumed session " (html-escape sid) " · "
             (if frag
@@ -314,11 +296,11 @@ app-link/button twins (POST /filmstrip/new, open-or-focus /sessions)."
       "</form></div>")))
 
 (define (chat/page)
-  (glochid/layout "glochid — agent" (chat/body)))
+  (glochid/layout "glochid — chat" (chat/body)))
 (route "/chat" "chat/page")
 
-;; ---- sessions surface (GET /sessions; borge/agent.borg sessions-persist) ----
-;; Appended-only JSONL transcripts under .agent/sessions/. Resume:
+;; ---- sessions surface (GET /sessions; borge/glochid.borg sessions-persist) ----
+;; Appended-only JSONL transcripts under .glochid/sessions/ (legacy .agent/sessions trees keep working). Resume:
 ;; GET /resume?id=<id> re-points the live history + current session,
 ;; then lands back on the chat page with the transcript backfilled.
 (define (redirect loc)
@@ -378,14 +360,14 @@ app-link/button twins (POST /filmstrip/new, open-or-focus /sessions)."
     (string-append
       (if (hx-request?)
           "<h1><span class=\"muted\">/sessions</span></h1>"
-          "<h1><a href=\"/\">agent</a> <span class=\"muted\">— /sessions</span></h1>")
+          "<h1><a href=\"/\">glochid</a> <span class=\"muted\">— /sessions</span></h1>")
       (if (hx-request?)
           "<p><button class=\"fs-applink\" hx-post=\"/filmstrip/new\" hx-target=\"#fs-sink\" hx-swap=\"innerHTML\">+ new session</button></p>"
           "<p><a href=\"/new\">+ new session</a></p>")
       "<table class=\"sess\"><tr><th>time</th><th>model</th><th>msgs</th><th>first prompt</th><th></th></tr>"
       (sessions/rows (session/list))
       "</table>"
-      "<p class=\"muted\">transcripts: .agent/sessions/*.jsonl (append-only, local store)</p>")))
+      "<p class=\"muted\">transcripts: .glochid/sessions/*.jsonl (append-only, local store)</p>")))
 (route "/sessions" "sessions/page")
 
 (define (sessions/new)
@@ -398,7 +380,7 @@ app-link/button twins (POST /filmstrip/new, open-or-focus /sessions)."
     (begin
       (session/resume id)
       (redirect (string-append "/?session=" (html-escape id))))))
-(route "/resume" "sessions/resume");; ---- settings surface (GET /settings; borge/agent.borg llm-config) ----
+(route "/resume" "sessions/resume");; ---- settings surface (GET /settings; borge/glochid.borg llm-config) ----
 ;; Blank fields KEEP their values (password input round-trips blank).
 ;; Key + base normally arrive invisibly: pp-remote --sync writes them
 ;; to <lens>/__config.json from the habitat's sync round metadata
@@ -409,14 +391,14 @@ app-link/button twins (POST /filmstrip/new, open-or-focus /sessions)."
     (string-append
       (if (hx-request?)
           "<h1><span class=\"muted\">/settings</span></h1>"
-          "<h1><a href=\"/\">agent</a> <span class=\"muted\">— /settings</span></h1>")
+          "<h1><a href=\"/\">glochid</a> <span class=\"muted\">— /settings</span></h1>")
       "<div class=\"card\"><form method=\"post\" action=\"/settings\">"
-      "<p><label>API key — " (agent/key-status) " · blank keeps current</label>"
+      "<p><label>API key — " (glochid/key-status) " · blank keeps current</label>"
       "<input type=\"password\" name=\"api_key\" autocomplete=\"off\"></p>"
       "<p><label>Base URL</label>"
-      "<input type=\"text\" name=\"base_url\" value=\"" (html-escape (agent/base-url)) "\"></p>"
+      "<input type=\"text\" name=\"base_url\" value=\"" (html-escape (glochid/base-url)) "\"></p>"
       "<p><label>Model</label>"
-      "<select name=\"model\">" (settings/model-options (agent/model) (agent/models)) "</select></p>"
+      "<select name=\"model\">" (settings/model-options (glochid/model) (glochid/models)) "</select></p>"
       "<button>save</button></form>"
       "<p class=\"muted\">Key + base come down invisibly via pp-remote --sync "
       "(lens __config.json). Model is chosen per surface from the provider's /models.</p>"
@@ -482,8 +464,8 @@ app-link/button twins (POST /filmstrip/new, open-or-focus /sessions)."
 
 ;; ---- code browser (GET /code) ----
 ;; Read-only file tree + file content arm, rendered by Nopales via fs/ls
-;; + fs/read + fs/dir? (agent host prims). query-param "path" selects
-;; the entry (relative to the agent's cwd); the agent's fs prims refuse
+;; + fs/read + fs/dir? (glochid host prims). query-param "path" selects
+;; the entry (relative to the glochid cwd); the glochid fs prims refuse
 ;; ".." escapes (sandbox posture).
 ;; ONE TEMPLATE, TWO FACES (rail-trees-v4 amendment): the dir arm
 ;; renders the SAME outline rows the rail code box renders --
@@ -497,7 +479,7 @@ app-link/button twins (POST /filmstrip/new, open-or-focus /sessions)."
 (define (code/head)
   (if (hx-request?)
       "<h1><span class=\"muted\">/code</span></h1>"
-      "<h1><a href=\"/\">agent</a> <span class=\"muted\">/</span> <a href=\"/code\">code</a></h1>"))
+      "<h1><a href=\"/\">glochid</a> <span class=\"muted\">/</span> <a href=\"/code\">code</a></h1>"))
 
 (define (code/tree rel)
   "The /code dir face, both modes: the same node rows the rail tree
@@ -545,11 +527,11 @@ the ONE /filmstrip/tree endpoint; neither face gets box chrome here)."
 
 (route "/code" "code/page")
 
-;; ---- bindings browser (GET /bindings; borge/agent.borg filmstrip-shell cascade) ----
+;; ---- bindings browser (GET /bindings; borge/glochid.borg filmstrip-shell cascade) ----
 ;; The habitat's FUNCTION GRAMMAR (the image's /bindings face) as a
 ;; glochid app: package -> function -> doc+source, read-only over the
-;; bind/* habitat-bridge prims (agent/lib/habitat.ml — the one
-;; POST /api/eval client; creds AGENT_HABITAT_(URL|TOKEN|USER|PASS) > PP_*,
+;; bind/* habitat-bridge prims (glochid/lib/habitat.ml — the one
+;; POST /api/eval client; creds GLOCHID_HABITAT_(URL|TOKEN|USER|PASS) (legacy AGENT_*) > PP_*,
 ;; token wins when set).
 ;; FAIL-SOFT at CALL time like the mem/* bridge, so every page/cascade
 ;; touch wraps its call in bind/safe (a guard) and renders a muted
@@ -575,7 +557,7 @@ habitat-unreachable at CALL time, so the surface renders instead of
   (lambda (msg)
     (string-append
       "<p class=\"muted\">habitat bridge: " (html-escape (as-str msg)) "</p>"
-      "<p class=\"muted\">set AGENT_HABITAT_URL / AGENT_HABITAT_USER / AGENT_HABITAT_PASS "
+      "<p class=\"muted\">set GLOCHID_HABITAT_URL / GLOCHID_HABITAT_USER / GLOCHID_HABITAT_PASS "
       "(or PP_URL / PP_USER / PP_PASS) so glochid can read the habitat's function grammar.</p>"))
   "The page's bridge-down block: the bridge's own error text + the
 credential pointer (same env trio the mem/* bridge uses).")
@@ -584,7 +566,7 @@ credential pointer (same env trio the mem/* bridge uses).")
   (lambda ()
     (if (hx-request?)
         "<h1><span class=\"muted\">/bindings</span></h1>"
-        "<h1><a href=\"/\">agent</a> <span class=\"muted\">/</span> <a href=\"/bindings\">bindings</a></h1>"))
+        "<h1><a href=\"/\">glochid</a> <span class=\"muted\">/</span> <a href=\"/bindings\">bindings</a></h1>"))
   "Pane-mode head is a muted label (a plain <a> in a fragment is the
 shell-escape bug class).")
 
@@ -682,14 +664,14 @@ its detail pane, the trail is the only way up.")
 (route "/bindings" "bind/page")
 |pp}
 
-(** The glochid layer (borge/agent.borg filmstrip-shell). Load order:
+(** The glochid layer (borge/glochid.borg filmstrip-shell). Load order:
     libs/html, libs/css, libs/filmstrip, THIS, then [surface_source].
     The filmstrip lib boots as glochid's shell with two HOST seams
     swapped (the harness's request-runner seam makes this a load, not a
     port — the allowed variation is recorded in borge/filmstrip.borg):
 
       1. WORKSPACE BACKING: filmstrip/ws-node / ws-save redefined over
-         fs prims into .agent/workspace.json (project-local, beside
+         fs prims into the resolved glochid/ws-file (project-local, beside
          .agent/sessions). The habitat's tree/upsert row stays the
          image's; a lens-backed row is the deferred unification.
       2. THE CASCADE IS THE AGENT'S: filmstrip/apps + filmstrip/browse
@@ -894,7 +876,7 @@ lookbook IS the theme the shell is wearing.")
       (list
         "name" "ui/railtab"
         "doc" "One rail mode tab (glochid shell chrome): flips the railmode sentinel."
-        "file" "agent/lib/surface.ml (glochid layer)"
+        "file" "glochid/lib/surface.ml (glochid layer)"
         "formals" (json-emit (list "label"))
         "variants" (json-emit
                      (list
@@ -910,7 +892,7 @@ lookbook IS the theme the shell is wearing.")
       (list
         "name" "ui/start-entry"
         "doc" "One start-menu entry (glochid shell chrome): opens route as a pane."
-        "file" "agent/lib/surface.ml (glochid layer)"
+        "file" "glochid/lib/surface.ml (glochid layer)"
         "formals" (json-emit (list "label" "route"))
         "variants" (json-emit
                      (list
@@ -926,7 +908,7 @@ lookbook IS the theme the shell is wearing.")
       (list
         "name" "ui/bubble"
         "doc" "One chat bubble (id pins the streamed swap target; empty id = static)."
-        "file" "agent/lib/surface.ml (glochid layer)"
+        "file" "glochid/lib/surface.ml (glochid layer)"
         "formals" (json-emit (list "kind" "text" "id"))
         "variants" (json-emit
                      (list
@@ -943,7 +925,7 @@ attrs (declaration), never markup.")
       (list
         "name" "ui/tool-line"
         "doc" "One tool trace line (label + text, both escaped)."
-        "file" "agent/lib/surface.ml (glochid layer)"
+        "file" "glochid/lib/surface.ml (glochid layer)"
         "formals" (json-emit (list "label" "text"))
         "variants" (json-emit
                      (list
@@ -958,7 +940,7 @@ attrs (declaration), never markup.")
       (list
         "name" "ui/turn-open"
         "doc" "Per-turn skeleton: thinking+tools fold + the streamed LLM bubble target."
-        "file" "agent/lib/surface.ml (glochid layer)"
+        "file" "glochid/lib/surface.ml (glochid layer)"
         "formals" (json-emit (list "id"))
         "variants" (json-emit
                      (list
@@ -974,7 +956,7 @@ plain calls, the nesting visible in BOTH projections.")
       (list
         "name" "ui/think-open"
         "doc" "One reasoning-run fold (starts closed; deltas stream into #id)."
-        "file" "agent/lib/surface.ml (glochid layer)"
+        "file" "glochid/lib/surface.ml (glochid layer)"
         "formals" (json-emit (list "id"))
         "variants" (json-emit
                      (list
@@ -989,7 +971,7 @@ plain calls, the nesting visible in BOTH projections.")
       (list
         "name" "ui/tool-open"
         "doc" "One tool-call fold (summary #id-sum; trace lines stream into #id)."
-        "file" "agent/lib/surface.ml (glochid layer)"
+        "file" "glochid/lib/surface.ml (glochid layer)"
         "formals" (json-emit (list "id" "name"))
         "variants" (json-emit
                      (list
@@ -1004,7 +986,7 @@ plain calls, the nesting visible in BOTH projections.")
       (list
         "name" "ui/turn-error"
         "doc" "One turn error line (trace-styled, bracketed, escaped)."
-        "file" "agent/lib/surface.ml (glochid layer)"
+        "file" "glochid/lib/surface.ml (glochid layer)"
         "formals" (json-emit (list "text"))
         "variants" (json-emit
                      (list
@@ -1019,7 +1001,7 @@ plain calls, the nesting visible in BOTH projections.")
       (list
         "name" "ui/swatch"
         "doc" "One palette swatch chip (dot + token name) -- the theme's lookbook row."
-        "file" "agent/lib/surface.ml (glochid layer)"
+        "file" "glochid/lib/surface.ml (glochid layer)"
         "formals" (json-emit (list "label" "color"))
         "variants" (json-emit
                      (list
@@ -1036,7 +1018,7 @@ plain calls, the nesting visible in BOTH projections.")
         "name" "ui/palette"
         "doc"
         "The active omarchy theme as UI prims: one ui/swatch per palette token (resolved at load; HUP re-resolves after omarchy theme set)."
-        "file" "agent/lib/surface.ml (glochid layer)"
+        "file" "glochid/lib/surface.ml (glochid layer)"
         "formals" (json-emit (list))
         "variants" (json-emit (list))
         "source"
@@ -1058,19 +1040,30 @@ formals, tokens resolved through glochid/tg.")
 shell chrome. Every entry answers a <name>/examples card; the ui rail
 root + /lookbook face read this one def.")
 
-;; ---- 1. WORKSPACE BACKING: .agent/workspace.json ----
-(define glochid/ws-file ".agent/workspace.json")
-(define filmstrip/ws-node
+;; ---- 1. WORKSPACE BACKING: .glochid/workspace.json ----
+;; Legacy .agent trees keep their store while .agent exists (existing
+;; data stays readable and writable there); glochid trees + fresh
+;; projects use .glochid (fs/write creates the parent). Resolved once
+;; at boot: cwd is fixed for the process.
+(define glochid/ws-file
+  (if (fs/exists? ".glochid")
+      ".glochid/workspace.json"
+      (if (fs/exists? ".agent")
+          ".agent/workspace.json"
+          ".glochid/workspace.json")))
+;; HOST SEAM 1 ride: the workspace row lives in the local fs. Legacy
+;; .agent trees keep their store while .agent exists; glochid trees
+;; and fresh projects use .glochid. The read/write pair registers
+;; HERE at boot through the framework store-backend knob; the
+;; framework ws-node/ws-save/save-all verbs route through the pair
+;; and no verb body is copied anymore.
+(filmstrip/register-store!
   (lambda ()
     (if (fs/exists? glochid/ws-file)
         (dict-set "{}" "body" (fs/read glochid/ws-file))
         ()))
-  "This workspace's fields holder, or () when never saved. The habitat
-uses tree/get + node-path; glochid rides the local fs (HOST SEAM 1).")
-(define filmstrip/ws-save
   (lambda (fields)
-    (seq (fs/write glochid/ws-file fields) fields))
-  "Persist workspace fields to .agent/workspace.json (HOST SEAM 1).")
+    (seq (fs/write glochid/ws-file fields) fields)))
 
 ;; ---- 2a. THE SHEET IS A LAZY MEMO (lisp-interpreter.lazy-env-thunks) ---
 ;; The filmstrip sheet is static lib vocabulary, yet filmstrip/shell-html
@@ -1099,40 +1092,6 @@ the memo stale until the session rehydrates."
   "Pinned shell axis: COL (left rail) always — the axis toggle was
 retired, see the obituary above.")
 
-(define filmstrip/save-all
-  (lambda (cascade panes focus)
-    (let*
-      ;; CARRY-FORWARD (was a live bug): save-all rebuilt the dict from
-      ;; "{}" WITHOUT railmode/boxrows, so every pane mutation silently
-      ;; reset the rail mode to the windows default and would have wiped
-      ;; the visited-box MRU. Both ride ws-fields through the write
-      ;; (read-modify-write, same discipline as every field above).
-      ((ws (filmstrip/ws-fields))
-        (rm (dict-get ws "railmode"))
-        (br (dict-get ws "boxrows")))
-      (filmstrip/ws-save
-        (dict-set*
-          "{}"
-          (list
-            "cascade"
-            (json-emit (list/map (lambda (c) c) cascade))
-            "content"
-            (filmstrip/panes-emit panes)
-            "focus"
-            (string-append "content:" (as-str focus))
-            "axis"
-            (glochid/axis)
-            "desktop"
-            (as-str (glochid/deskt))
-            "railmode"
-            (if (null? rm) "" (as-str rm))
-            "boxrows"
-            (if (null? br) "" (as-str br)))))))
-  "Write all workspace fields (cascade/content/focus + axis + desktop)
-in one row upsert (glochid: the lib's save-all would drop the shell
-fields). save-all REBUILDS the dict — every field added to the ws row
-must be carried HERE through every write path.")
-
 ;; ---- 2. THE CASCADE IS THE AGENT'S ----
 (define glochid/apps
   (lambda ()
@@ -1145,7 +1104,7 @@ must be carried HERE through every write path.")
         (list "sessions" "/sessions")
         (list "settings" "/settings"))
       (glochid/fwd-apps)))
-  "Column 0: the agent's interfaces + the habitat's app faces the
+  "Column 0: glochid's interfaces + the habitat's app faces the
 panes wear (glochid/fwd-apps), ALL route leaves
 (borge/filmstrip.borg sidebar-main-dichotomy): every entry
 open-or-focuses a main-window pane. Structure browsing is the rail
@@ -1160,18 +1119,18 @@ launcher advertised /todos on a host with no /todos route.")
 
 (define filmstrip/apps
   (lambda () (glochid/apps))
-  "glochid's shell app list (HOST SEAM 2): the agent's interfaces, all
+  "glochid's shell app list (HOST SEAM 2): glochid's interfaces, all
 leaves. Redefined so any lib read of the app list (hint-routes) sees
 host vocabulary, never habitat apps.")
 
 (define filmstrip/browse
   (lambda (path)
     (cons (list (glochid/apps)) #f))
-  "glochid's shell cascade (HOST SEAM 2): column 0 is the agent's
+  "glochid's shell cascade (HOST SEAM 2): column 0 is glochid's
 interfaces, all leaves — no deeper columns, no crumbs. The stored path
 only ever names the picked route (entry-html wears it as fs-sel).")
 
-;; ---- 2c. HABITAT PANES (agent.borg habitat-panes, 2026-09-20) ----
+;; ---- 2c. HABITAT PANES (glochid.borg habitat-panes, 2026-09-20) ----
 ;; The habitat's app faces are ordinary htmx fragment routes already;
 ;; glochid panes WEAR them: the gate forwards these prefixes to the
 ;; habitat with the operator's session (habitat/fwd-prefix at boot;
@@ -1237,7 +1196,7 @@ only ever names the picked route (entry-html wears it as fs-sel).")
         (string-append
           "<p class=\"muted\">habitat bridge: "
           (html-escape (as-str (nth e 1)))
-          " -- set AGENT_HABITAT_URL/USER/PASS (or PP_URL/PP_USER/PP_PASS)."
+          " -- set GLOCHID_HABITAT_URL/USER/PASS (or PP_URL/PP_USER/PP_PASS)."
           "</p>"))
       (glochid/fwd-wrap
         app
@@ -1253,121 +1212,6 @@ only ever names the picked route (entry-html wears it as fs-sel).")
 (define (glochid/fwd-notes) (glochid/fwd-face "notes"))
 (define (glochid/fwd-calendar) (glochid/fwd-face "calendar"))
 
-;; ---- 2d. DESKTOPS ----
-;; The ws row carries "desktop":N (0 default) and each pane record a
-;; "desktop" field. An inert #ws-desk sentinel beside #fs-axis carries
-;; the current desktop to CSS (:has hides the other desktops' panes —
-;; ten pairs in glochid/base-css, no JS); the windows tree's desktop
-;; rows carry the switch verb (no separate desktop controlbox —
-;; sidebar-main-dichotomy). Focus heals onto the first live pane of the target
-;; desktop when the focused pane lives elsewhere (a live MAIN pane is
-;; preferred — the lift; a rail pane satisfies I1 when no main exists).
-(define glochid/deskt
-  (lambda ()
-    (let
-      ((v (dict-get (filmstrip/ws-fields) "desktop")))
-      (if (null? v) 0 (parse-int (as-str v)))))
-  "Current shell desktop from the ws row (0 when unset).")
-
-(define glochid/first-on-desk
-  (lambda (panes d i)
-    (let
-      ((m (glochid/first-region-on-desk panes d i "main")))
-      (if (< m 0) (glochid/first-region-on-desk panes d i "rail") m)))
-  "Index of the first LIVE pane on desktop d, else -1 (v3 heal
-discipline: a live MAIN pane is preferred — it takes the lift; rail
-panes are valid focus targets too and satisfy I1 when the desktop has
-no live main pane. Never a shelved pane: pane-live? gates both passes.")
-
-(define glochid/first-region-on-desk
-  (lambda (panes d i region)
-    (if
-      (null? panes)
-      -1
-      (if
-        (and (= (filmstrip/pane-desk (car panes)) d)
-             (string-eq (filmstrip/pane-region (car panes)) region)
-             (filmstrip/pane-live? (car panes)))
-        i
-        (glochid/first-region-on-desk (cdr panes) d (+ i 1) region))))
-  "Index of the first LIVE pane of one REGION on desktop d, else -1.")
-
-(define glochid/desk-sentinel
-  (lambda (d ?oob)
-    (html/tag
-      "div"
-      (html/attrs
-        (append
-          (list
-            (html/attr "id" "ws-desk")
-            (html/attr "class" (string-append "fs-sh-axis dsk-" (as-str d))))
-          (if ?oob
-              (list (html/attr "hx-swap-oob" "outerHTML:#ws-desk"))
-              (list))))
-      ""))
-  "Inert desktop sentinel beside the axis one; CSS :has(#ws-desk.dsk-N)
-hides the other desktops' panes. ?oob renders it as an OOB outerHTML
-swap (the desktop response).")
-
-(define glochid/desktop-set
-  (lambda ()
-    (let*
-      ((dv (request-param "d"))
-        (d (if (null? dv) 0 (parse-int (as-str dv))))
-        (row (filmstrip/row))
-        (cascade (nth row 0))
-        (panes (nth row 1))
-        (focus (nth row 2))
-        (focus2
-          (if
-            (and (>= focus 0)
-                 (= (filmstrip/pane-desk (filmstrip/pane-at panes focus)) d))
-            focus
-            (let
-              ((f (glochid/first-on-desk panes d 0)))
-              (if (< f 0) focus f)))))
-      (seq
-        (filmstrip/ws-save
-          (dict-set* (filmstrip/ws-fields) (list "desktop" (as-str d))))
-        (filmstrip/save-all cascade panes focus2)
-        (render-html
-          (html/join
-            (list
-              (filmstrip/oob-msg "")
-              (glochid/desk-sentinel d #t)
-              (filmstrip/oob-content-strip panes focus2)))))))
-  "POST /filmstrip/desktop: d param -> set + persist the shell desktop;
-heal focus onto the first live pane of that desktop when the focused
-pane lives elsewhere; answer with OOB swaps of the desk sentinel + a
-re-render of the content strip (panes of the new desktop keep their
-live DOM via hx-preserve; panes of the others re-render inert — the
-workspace row keeps every record, only the swapped DOM shrinks).")
-
-;; focus healing at render: an unset focus OR one pointing at a shelved
-;; pane heals to the first LIVE pane ON THE CURRENT DESKTOP (v2 task 3;
-;; v3: main panes first, rail panes as the valid fallback; falls back to
-;; the first live pane anywhere when the desktop has none).
-(define glochid/heal-focus
-  (lambda (panes focus)
-    (if
-      (if (< focus 0)
-          #t
-          (string-eq
-            (filmstrip/pane-state (filmstrip/pane-at panes focus))
-            "shelved"))
-      (let
-        ((f (glochid/first-on-desk panes (glochid/deskt) 0)))
-        (if (< f 0) (filmstrip/first-live-index panes) f))
-      focus))
-  "Focus that always has a live pane behind it: unset (-1) and
-shelved-pointing both heal to the first live pane on the CURRENT
-desktop — v3: a live MAIN pane first (the lift), the first live RAIL
-pane as the fallback (a focused rail pane in the rail satisfies I1
-when the desktop has no live main pane); -1 only when the desktop has
-no live pane at all (falls back to the first live pane anywhere).
-Never a shelved pane (I2). Not persisted — alt+right heals it for real
-on the next focus step.")
-
 ;; ---- 2b2. RAIL TREES (v4: the rail inventory = N trees, ONE renderer) ----
 ;; borge/filmstrip.borg rail-trees-v4. Three roots:
 ;;   windows -- TARGETING tree from DECLARED ws state (desktops 0..2 +
@@ -1381,159 +1225,6 @@ on the next focus step.")
 ;; redefinitions live BELOW the v2 defines so load order wins).
 ;; Expansion state is <details> DOM state -- splice never swap; rail
 ;; mode flips are a sentinel :has hide exactly like desktops.
-(define glochid/pane-verb
-  (lambda (word route vals)
-    (list word route
-      (string-append "{" (list/foldl
-        (lambda (acc kv)
-          (string-append acc
-            (if (string-eq acc "") "" ",")
-            "\"" (car kv) "\":\"" (filmstrip/url-enc (car (cdr kv))) "\""))
-        "" vals)
-        "}")
-      ;; 4th element = the GLYPH. Rows carry it explicitly (the renderer
-      ;; falls back to the word when it is empty), so a host edit or a
-      ;; lib table change cannot silently re-label the rail.
-      (filmstrip/act-glyph word)))
-  "One tree verb row spec: (word route vals-json glyph) from (key val)
-pairs; values ride filmstrip/url-enc (route/path vals carry ?&). The
-glyph is filmstrip/act-glyph's answer for the word (host: pin/pin
-label by region, so the row and the pane head agree).")
-
-(define glochid/windows-pane-node
-  (lambda (p shelved?)
-    (let*
-      ((id (filmstrip/pane-id p))
-        (route (filmstrip/pane-route p))
-        (v-verbs
-          (lambda (pairs)
-            (list/map
-              (lambda (pr)
-                (glochid/pane-verb (car pr) (car (cdr pr))
-                  (list (list "id" id))))
-              pairs)))
-        (live-verbs
-          (v-verbs
-            (list
-              (list "focus" "/filmstrip/focus-id")
-              (if (string-eq (filmstrip/pane-region p) "rail")
-                  (list "unpin" "/filmstrip/pin")
-                  (list "pin" "/filmstrip/pin"))
-              (list "width" "/filmstrip/width")
-              (list "single" "/filmstrip/single")
-              (list "close" "/filmstrip/close"))))
-        (desk (as-str (filmstrip/pane-desk p)))
-        ;; cross-desktop MOVE words: an explicit destination verb per
-        ;; desktop EXCEPT the pane's current one (rail panes carry none
-        ;; -- dock semantics mean nothing to move). The pane-head move
-        ;; glyph cycles; the tree row words are acme-explicit.
-        (m-verbs
-          (if (string-eq (filmstrip/pane-region p) "rail")
-              (list)
-              (list/map
-                (lambda (d)
-                  (glochid/pane-verb
-                    (string-append "to" d)
-                    "/filmstrip/move-to"
-                    (list (list "id" id) (list "d" d))))
-                (list/filter
-                  (lambda (d) (not (string-eq d desk)))
-                  (list "0" "1" "2")))))
-        (live-verbs2 (append live-verbs m-verbs))
-        (shelved-verbs
-          (v-verbs
-            (list (list "restore" "/filmstrip/restore")
-                  (list "destroy" "/filmstrip/destroy")))))
-      (dict-set*
-        "{}"
-        (list
-          "label" route
-          "kind" "leaf"
-          "node" (string-append "pane/" id)
-          "open" route
-          "verbs" (json-emit (if shelved? shelved-verbs live-verbs2))))))
-  "One pane row: label = route (open-or-focus, acme Get on a shelved
-row), verbs by CURRENT state (live: focus/pin/width/close + to<N>
-move words for every OTHER desktop; shelved: restore/destroy). Rail
-panes carry no move words (dock semantics -- desktop-global). Declared
-state only -- no DOM scraping.")
-
-(define glochid/keep-nodes
-  (lambda (nodes)
-    (if (null? nodes)
-        (list)
-        (if (string-eq (car nodes) "")
-            (glochid/keep-nodes (cdr nodes))
-            (cons (car nodes) (glochid/keep-nodes (cdr nodes))))))
-  "Drop the empty-string markers map-indexed leaves in place (the tree
-renderer takes only real node dicts).")
-
-(define glochid/windows-tree
-  (lambda (path)
-    (let*
-      ((panes (nth (filmstrip/row) 1))
-        (live-on-desk
-          (lambda (d)
-            (glochid/keep-nodes
-              (filmstrip/map-indexed
-                (lambda (p i)
-                  (if
-                    (if (string-eq (filmstrip/pane-state p) "shelved") #f
-                        (string-eq (as-str (filmstrip/pane-desk p)) d))
-                    (glochid/windows-pane-node p #f)
-                    ""))
-                panes 0))))
-        (desk-dir
-          (lambda (d)
-            ;; DEFAULT-OPEN (rail-trees-v4 expand seed + operator note:
-            ;; the desktop tree reads expanded): eager kids (this
-            ;; desktop's live panes, pre-walked -- a parsed-open details
-            ;; never fires its toggle-once pull, so expand RIDES kids)
-            ;; + the switch verb. The windows subtree is tiny, so the
-            ;; eager head cost is host-trivial (the budget gate is the
-            ;; FS tree, not this one).
-            (dict-set*
-              "{}"
-              (list
-                "label" (string-append "desktop " d)
-                "kind" "dir"
-                "node" (string-append "desk/" d)
-                "open" ""
-                "verbs"
-                (json-emit
-                  (list
-                    (list "switch" "/filmstrip/desktop"
-                      (string-append "{\"d\":\"" d "\"}"))))
-                "kids" (glochid/json-arr (live-on-desk d))
-                "expand" "true"))))
-        (shelf-dir
-          (dict-set*
-            "{}"
-            (list
-              "label" "shelf"
-              "kind" "dir"
-              "node" "shelf"
-              "open" ""
-              "verbs" ""))))
-      (if
-        (string-eq path "")
-        (list (desk-dir "0") (desk-dir "1") (desk-dir "2") shelf-dir)
-        (if
-          (string-eq path "shelf")
-          (glochid/keep-nodes
-            (filmstrip/map-indexed
-              (lambda (p i)
-                (if (string-eq (filmstrip/pane-state p) "shelved")
-                    (glochid/windows-pane-node p #t)
-                    ""))
-              panes 0))
-          (live-on-desk (substring path 5 (string-length path)))))))
-  "levelfn for the windows tree (node 'desk/<n>' -> that desktop's
-panes; 'shelf' -> the shelved panes): DESKTOP-GLOBAL data from the
-one workspace row, never from live DOM. Desk dirs 0..2 render
-DEFAULT-OPEN: their level answer pre-walks the pane rows as eager
-kids + the expand seed (the lazy level pull stays for the shelf).")
-
 ;; ---- 2b2b. THE SHARED FILE TREE (rail + pane ARE the same rows) ----
 ;; rail-trees-v4 amendment: a node dict MAY carry "kids" -- a JSON
 ;; string of its walked child level; the lib renders eager kids INLINE
@@ -1550,20 +1241,6 @@ kids + the expand seed (the lazy level pull stays for the shelf).")
 ;; pane are the same rows.
 (define glochid/tree-kids-max 12)
 (define glochid/tree-kids-depth 1)
-
-(define glochid/json-arr-tail
-  (lambda (xs)
-    (if (null? (cdr xs))
-        (car xs)
-        (string-append (car xs) "," (glochid/json-arr-tail (cdr xs)))))
-  "Comma join (glochid/json-arr's inner walk).")
-
-(define glochid/json-arr
-  (lambda (xs)
-    (if (null? xs)
-        "[]"
-        (string-append "[" (glochid/json-arr-tail xs) "]")))
-  "Join already-encoded JSON object strings into one array literal.")
 
 (define glochid/fs-node
   (lambda (name is-dir path kids-json)
@@ -1596,7 +1273,7 @@ kids = ordinary lazy dir; a non-empty kids array string = eager dir.")
           ((entries (json-parse (fs/ls dir))))
           (if (> (count entries) glochid/tree-kids-max)
               ""
-              (glochid/json-arr
+              (filmstrip/json-arr
                 (glochid/fs-rows-of dir (+ depth 1) entries))))))
   "The eager threshold in one place: one readdir to COUNT the child
 level, inline it only under the cap and below the depth bound; else
@@ -1604,7 +1281,7 @@ lazy (empty string, no kids field).")
 
 (define glochid/fs-rows-of
   (lambda (path depth entries)
-    (glochid/keep-nodes
+    (filmstrip/keep-nodes
       (filmstrip/map-indexed
         (lambda (e i)
           (let*
@@ -1652,7 +1329,7 @@ open-or-focuses the /bindings?pkg=&name= detail pane via acme Get.")
   (lambda (path)
     (if
       (string-eq path "")
-      (glochid/keep-nodes
+      (filmstrip/keep-nodes
         (filmstrip/map-indexed
           (lambda (p i)
             (dict-set*
@@ -1753,7 +1430,7 @@ alive.")
             (html/attrs
               (list
                 (html/attr "class" "fs-btn fs-start-word")
-                (html/attr "title" "start: open one of the agent surfaces")
+                (html/attr "title" "start: open one of the glochid surfaces")
                 (html/attr "aria-label" "start menu")))
             (html/text "start"))
           (html/tag
@@ -1791,7 +1468,7 @@ filmstrip.borg sidebar-main-dichotomy -- the axis toggle word was
 retired, BORGE-1789879934: sidebar-only shell) + the keyboard-hint
 glyph (the shortcut map is the glyph's title tooltip).")
 
-;; ---- 2e. KEYBOARD SHORTCUTS (borge/agent.borg keyboard-shortcuts:
+;; ---- 2e. KEYBOARD SHORTCUTS (borge/glochid.borg keyboard-shortcuts:
 ;; the filmstrip zero-JS hotkeys mechanism, glochid's chord set) ----
 ;; THE KEYBOARD MAP IS ONE TABLE restated as body sentinels: rows 1-4
 ;; restate the lib's alt+arrows (focus / row move) verbatim -- a capture
@@ -1834,21 +1511,29 @@ session, alt+w/p/s close/pin/single at the FOCUSED pane. A row edit
 adds a chord; the renderer below splices the guard into the condition
 and the sentinel POSTs the same route the pointing UI does.")
 
-(define filmstrip/key-sentinels
-  (lambda ()
-    (html/join
-      (filmstrip/map-indexed
-        (lambda (row i)
-          (let ((condn (car row))
-                (url (car (cdr row)))
-                (vals (car (cdr (cdr row))))
-                (gcond (car (cdr (cdr (cdr row))))))
-            (filmstrip/sentinel url vals
-              (string-append "keydown[" condn
+;; Keyboard: rows 1-4 ride the framework registry defaults (the same
+;; alt-arrow rows the wholesale renderer restated with an empty
+;; guard); only the glochid OWN rows append at boot through the
+;; framework register-keys! seam. The guard still splices into the
+;; trigger condition exactly as the old renderer did, and the row
+;; order is preserved (framework defaults first, extras after).
+(filmstrip/register-keys!
+  (list/map
+    (lambda (row)
+      (let ((condn (car row))
+            (url (car (cdr row)))
+            (vals (car (cdr (cdr row))))
+            (gcond (car (cdr (cdr (cdr row))))))
+        (list
+          url
+          vals
+              (string-append "keydown[" (car row)
                 (if (string-eq gcond "") "" (string-append "&&" gcond))
-                "] from:body"))))
-        (glochid/shortcuts) 0)))
-  "REDEFINES the lib's key sentinels on the ONE table (glochid/\nshortcuts) so the whole keyboard map reads in one place and a new\nchord is a row edit. Zero JS files still: filmstrip/sentinel carries\nthe trigger filter, the guard only extends the condition.")
+                  "] from:body"))))
+                  ;; rows 5+ ride the boot append (rows 1-4 restate the
+                  ;; framework's alt+arrow defaults; the lib registry
+                  ;; already carries those, see filmstrip/key-rows.
+                  (cdr (cdr (cdr (cdr (glochid/shortcuts)))))))
 
 ;; ---- 2e2. FOCUSED-PANE VERBS (alt+w/p/s land here) ----
 ;; The shell has no JS to read the DOM, and the focused pane is
@@ -1913,13 +1598,6 @@ one-up staging (v5 single).")
   "The keyboard map as a muted glyph in the rail tabs row: the map is
 the title tooltip (hover affordance), zero JS.")
 
-(define glochid/railmode
-  (lambda ()
-    (let
-      ((m (as-str (dict-get (filmstrip/ws-fields) "railmode"))))
-      (if (string-eq m "") "windows" m)))
-  "Rail mode read (ws fields; empty = the first root, never an error).")
-
 (define glochid/railmode-set
   (lambda ()
     (let*
@@ -1936,7 +1614,7 @@ the title tooltip (hover affordance), zero JS.")
           (html/join
             (list
               (filmstrip/oob-msg "")
-              (glochid/railmode-sentinel root #t)
+              (filmstrip/railmode-sentinel root #t)
               ;; lazy-first-reveal (BORGE-1789950734): a FIRST-visit flip
               ;; OOBs the level rows into the freshly-revealed box; a
               ;; revisit sends no rows -- its expansion DOM stays alive.
@@ -2013,7 +1691,7 @@ place.")
 (define glochid/tree-boxes
   (lambda ()
     (let*
-      ((active (glochid/railmode))
+        ((active (filmstrip/railmode))
         (visited (glochid/boxrows)))
       (list/map
         (lambda (r)
@@ -2028,22 +1706,6 @@ place.")
 (+ the MRU-2 recently visited ones) materializes rows on a doc render;
 the remaining hidden boxes answer empty chrome. The sentinel :has
 hiding is unchanged -- the mode flip OOB fills stubs in place.")
-
-(define glochid/railmode-sentinel
-  (lambda (m ?oob)
-    (html/tag
-      "div"
-      (html/attrs
-        (append
-          (list
-            (html/attr "id" "fs-railmode")
-            (html/attr "class" (string-append "fs-sh-axis rm-" m)))
-          (if ?oob
-              (list (html/attr "hx-swap-oob" "outerHTML:#fs-railmode"))
-              (list))))
-      ""))
-  "Inert rail-mode sentinel (like the axis/desk ones); CSS
-:has(#fs-railmode.rm-<id>) hides every other tree box.")
 
 (define filmstrip/shelf-oob
   (lambda () "")
@@ -2065,7 +1727,7 @@ destroy/refresh call this on every mutation response).")
 ;; must not read glochid row fields — same seam discipline as save-all.
 (define filmstrip/pane-stamp
   (lambda (rec)
-    (dict-set rec "desktop" (as-str (glochid/deskt))))
+    (dict-set rec "desktop" (as-str (filmstrip/ws-desktop))))
   "A fresh pane record with the operator's current desktop.")
 
 ;; The sessions table's resume/+new links are shell-level actions wearing
@@ -2298,7 +1960,7 @@ bodies preserved). The pin/move responses land here.")
           (html/join
             (list
               (glochid/content-area panes focus)
-              (glochid/railmode-sentinel (glochid/railmode) #f)
+              (filmstrip/railmode-sentinel (filmstrip/railmode) #f)
               (filmstrip/key-sentinels)
               (html/tag
                 "div"
@@ -2318,7 +1980,7 @@ bodies preserved). The pin/move responses land here.")
                     (html/attr "hidden" "hidden")))
                 "")
               (glochid/axis-sentinel (glochid/axis) #f)
-              (glochid/desk-sentinel (glochid/deskt) #f)))))))
+              (filmstrip/desk-sentinel (filmstrip/ws-desktop) #f)))))))
   "The shell inner (filmstrip/shell-html's parts minus the launcher and
 the desktop controlbox, plus rail tabs + rail trees + sentinels —
 filmstrip.borg sidebar-main-dichotomy, v5-ized: content-area wrapper
@@ -2336,7 +1998,7 @@ sentinel's class and hides off-desktop panes from the desk one).")
         ;; do. Heal an unset focus (or one sitting on a shelved pane) to
         ;; the first live pane at RENDER (not persisted — alt+right
         ;; heals it for real on the next focus step).
-        (focus (glochid/heal-focus (nth row 1) (nth row 2))))
+        (focus (filmstrip/heal-focus (nth row 1) (nth row 2))))
       (glochid/shell-doc
         frag
         (glochid/shell-inner (nth row 0) (nth row 1) focus))))
@@ -2365,7 +2027,7 @@ every live main pane of the desktop, so the heal picks the ring only
 (define (lookbook/head)
   (if (hx-request?)
       "<h1><span class=\"muted\">/lookbook</span></h1>"
-      "<h1><a href=\"/\">agent</a> <span class=\"muted\">/</span> <a href=\"/lookbook\">lookbook</a></h1>"))
+      "<h1><a href=\"/\">glochid</a> <span class=\"muted\">/</span> <a href=\"/lookbook\">lookbook</a></h1>"))
 
 ;; The <name>/examples card through the lookbook/eval seam (guarded),
 ;; validated by the lib's lookbook/card: (card-text) or ().
@@ -2611,7 +2273,7 @@ every live main pane of the desktop, so the heal picks the ring only
 (route "/filmstrip/tree" "filmstrip/tree")
 (route "/filmstrip/tree/collapse" "filmstrip/tree-collapse")
 (route "/filmstrip/railmode" "glochid/railmode-set")
-(route "/filmstrip/desktop" "glochid/desktop-set")
+(route "/filmstrip/desktop" "filmstrip/desktop-set")
 (route "/filmstrip/new" "glochid/new")
 (route "/filmstrip/resume" "glochid/resume")
 (route "/filmstrip/keys/close" "glochid/keys-close")
@@ -2622,16 +2284,16 @@ every live main pane of the desktop, so the heal picks the ring only
 (** Boot-load the embedded Nopales packages + this surface into the
     shared env, registering the route-table routes. Idempotent-ish:
     re-evaluating defines redefines bindings live. *)
-(* Inert defaults for the llm-config host prims (agent/models,
-    agent/model, agent/base-url, agent/key-status) so the surface
+(* Inert defaults for the llm-config host prims (glochid/models,
+    glochid/model, glochid/base-url, glochid/key-status) so the surface
     renders in non-serve contexts (tests, -p pipe evals).
     [Http_ui.serve] RE-REGISTERS them with live cfg backing — prim
     registration is last-write-wins on the same name. *)
 let register_config_default_prims ~(rt : Runtime.t) : unit =
-  Runtime.add_prim rt "agent/models" (fun _ -> Ast.VList []);
-  Runtime.add_prim rt "agent/model" (fun _ -> Ast.VStr "");
-  Runtime.add_prim rt "agent/base-url" (fun _ -> Ast.VStr "");
-  Runtime.add_prim rt "agent/key-status" (fun _ -> Ast.VStr "not set");
+  Runtime.add_prim rt "glochid/models" (fun _ -> Ast.VList []);
+  Runtime.add_prim rt "glochid/model" (fun _ -> Ast.VStr "");
+  Runtime.add_prim rt "glochid/base-url" (fun _ -> Ast.VStr "");
+  Runtime.add_prim rt "glochid/key-status" (fun _ -> Ast.VStr "not set");
   (* inert session prims (sessions-persist) so the pages render in
      non-serve contexts; Http_ui.serve / the REPL re-register with live
      store backing — prim registration is last-write-wins. *)
@@ -2728,7 +2390,7 @@ let load ~(rt : Runtime.t) : unit =
   register_lookbook_prims ~rt;
   (* Boot order (glochid_source header): libs, then the glochid layer
      (whose ws/browse/shell redefinitions must win over the filmstrip
-     defaults via env late binding), then the agent surface. *)
+     defaults via env late binding), then the glochid surface. *)
   Runtime.load_source ~rt Libs_source.html_lib;
   Runtime.load_source ~rt Libs_source.css_lib;
   Runtime.load_source ~rt Libs_source.hyper_lib;

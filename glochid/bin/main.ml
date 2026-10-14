@@ -1,7 +1,7 @@
-(** glochid — local-first Nopales-native agent harness (borge/agent.borg).
+(** glochid — local-first Nopales-native agent harness (borge/glochid.borg).
 
-    v0.0 surface: stdin REPL. `agent` boots, loads ~/.config/agent/plugins/*.pp
-    then ./.agent/plugins/*.pp, and enters a read/eval/print loop. Lines
+    v0.0 surface: stdin REPL. `glochid` boots, loads ~/.config/glochid/plugins/*.pp
+    then ./.glochid/plugins/*.pp (legacy ~/.config/agent + ./.agent still read), and enters a read/eval/print loop. Lines
     starting with `/` dispatch as plugin commands; lines starting with
     `(` are evaluated as Nopales; anything else is a prompt for the
     model.
@@ -10,24 +10,32 @@
       --mock-script FILE   canned provider replies (test/demo)
       --model NAME
       --base-url URL
-      --once               run ONE full agent turn from piped stdin and exit
+      --once               run ONE full glochid turn from piped stdin and exit
       -p EXPR              eval one Nopales expr and exit (pipe mode)
 
     Piped-turn mode: with either --once or non-tty stdin, the whole of
-    stdin is read as the prompt (one string), a single full agent turn
+    stdin is read as the prompt (one string), a single full glochid turn
     (model call -> tool calls -> final reply) runs, the final assistant
     text is printed, and we exit 0. This is the surfaces smoke #2
-    trigger: `echo "say hello" | agent --mock-script m.json`.
+    trigger: `echo "say hello" | glochid --mock-script m.json`.
 *)
 
 open Pricklypear_lisp
+
+(* Env-var compat window (glochid rename): the GLOCHID_ spelling wins
+   when set to a non-empty value; legacy AGENT_* names stay readable
+   (through Envcfg.getenv, so .env files keep feeding them too). *)
+let envget (n : string) (default : string) : string =
+  match Sys.getenv_opt ("GLOCHID_" ^ n) with
+  | Some v when v <> "" -> v
+  | _ -> Envcfg.getenv ("AGENT_" ^ n) ~default
 
 (* Identity + harness-specific fact lines / conduct for the system
    prompt. The shared skeleton (facts block + assembly) lives in
    llm/lib/harness.ml; these segments are this binary's own narrative
    (i-1788671587-9). *)
 let pre_facts =
-  "You are pp-agent, the local Nopales-native coding agent of the \
+  "You are glochid, the local Nopales-native coding agent of the \
    Pricklypear project. The human operator talks to you through this \
    binary's browser chat surface or line REPL. You run as ONE unix \
    process directly on the operator's machine -- no container, no \
@@ -36,7 +44,7 @@ let pre_facts =
 let fact_lines =
   "- tools: read, bash, memory (habitat durable store), plus any Nopales \
    plugin tools loaded from \
-   ~/.config/agent/plugins/*.pp and ./.agent/plugins/*.pp\n\
+   ~/.config/glochid/plugins/*.pp and ./.glochid/plugins/*.pp\n\
    - /code on this binary's web surface is a read-only file browser over cwd\n\
    - /bindings is a read-only browser of the habitat's function grammar via \
      the bind/* bridge prims\n\
@@ -111,7 +119,7 @@ let () =
         ("--lens",
          Arg.String (fun s -> lens_dir := Some s),
          "DIR local-first lens root; its __config.json (sync-provided llm key+base) feeds provider config");
-        ("--once", Arg.Set once, "run one full agent turn from piped stdin and exit");
+        ("--once", Arg.Set once, "run one full glochid turn from piped stdin and exit");
         ("--serve", Arg.Set serve, "serve the HTML chat surface on 127.0.0.1 until Ctrl-C (default port 18090)");
         ("--port", Arg.Int (fun p -> port := p), "PORT fixed port for --serve (default 18090; 0 = random)");
         ("--open", Arg.Set open_browser, "with --serve: best-effort browser launch");
@@ -120,18 +128,18 @@ let () =
         ("-p", Arg.String (fun s -> pipe_expr := Some s), "EXPR eval and exit");
       ]
   in
-  Arg.parse speclist anon "agent [--mock-script F] [--provider N] [--once] [--serve [--port P] [--open]] [-p EXPR]";
+  Arg.parse speclist anon "glochid [--mock-script F] [--provider N] [--once] [--serve [--port P] [--open]] [-p EXPR]";
   (* Pipe mode is entered either explicitly (--once) or implicitly when
-     stdin is not a tty (surfaces smoke #2: `echo ... | agent ...`). *)
+     stdin is not a tty (surfaces smoke #2: `echo ... | glochid ...`). *)
   if !do_stop then begin
     match Lifecycle.signal_running Sys.sigterm with
-    | Ok () -> print_endline "agent: stop sent"; exit 0
-    | Error e -> Printf.eprintf "agent: stop failed: %s\n%!" e; exit 1
+    | Ok () -> print_endline "glochid: stop sent"; exit 0
+    | Error e -> Printf.eprintf "glochid: stop failed: %s\n%!" e; exit 1
   end;
   if !do_reload then begin
     match Lifecycle.signal_running Sys.sighup with
-    | Ok () -> print_endline "agent: reload sent"; exit 0
-    | Error e -> Printf.eprintf "agent: reload failed: %s\n%!" e; exit 1
+    | Ok () -> print_endline "glochid: reload sent"; exit 0
+    | Error e -> Printf.eprintf "glochid: reload failed: %s\n%!" e; exit 1
   end;
   let pipe_mode = !once || not (Unix.isatty Unix.stdin) in
   (* TLS (tls-eio) needs a seeded RNG before any HTTPS provider call;
@@ -146,7 +154,7 @@ let () =
   let rt = Runtime.make () in
   Tools.install ~env ~resolve_path:Runtime.resolve_path
     ~register:(fun name run -> Runtime.register_builtin_tool rt name ~run);
-  (* Habitat bridge (borge/agent.borg memory-bridge): mem/* prims on the
+  (* Habitat bridge (borge/glochid.borg memory-bridge): mem/* prims on the
      shared env + the `memory` tool when env credentials exist (no
      creds -> prims still registered; they fail-soft at call time).
      Registers in every mode (serve, REPL, pipe). *)
@@ -159,9 +167,9 @@ let () =
    | None -> ());
   (* Boot-load the Nopales surface (libs/html + libs/hyper + the chat/code
      route-table handlers) so the HTML surface is Nopales-authored and
-     redefinable live (borge/agent.borg surfaces). *)
+     redefinable live (borge/glochid.borg surfaces). *)
   Surface.load ~rt;
-  (* habitat-pane forward prefixes (agent.borg habitat-panes): register
+  (* habitat-pane forward prefixes (glochid.borg habitat-panes): register
      OCaml-side so the Nopales boot layer has no boot prim dependency --
      kernel paths refuse by construction in fwd_register_prefix. *)
   ignore (List.map Habitat.fwd_register_prefix [ "/todos"; "/notes"; "/calendar" ]);
@@ -175,10 +183,10 @@ let () =
          Printf.eprintf "error: %s\n%!" (Ast.pp_interp_error ie);
          exit 1)
   | None ->
-      (* borge/agent.borg llm-config — layered provider config.
+      (* borge/glochid.borg llm-config — layered provider config.
          Per field, first non-empty wins:
-           --flag > env (the AGENT_ vars) > <lens>/__config.json
-             (sync-provided) > ~/.config/agent/config.json (the
+           --flag > env (the GLOCHID_* vars; legacy AGENT_* still read) > <lens>/__config.json
+             (sync-provided) > ~/.config/glochid/config.json (the
              /settings surface's store).
          The lens file is how the habitat's llm credential arrives
          INVISIBLY through the sync exchange (auth.user-llm-keys 5b) —
@@ -198,16 +206,16 @@ let () =
             else (match fallback with Some v -> v | None -> default)
       in
       let cfg_model =
-        pick ~flag:!model ~env:(Envcfg.getenv "AGENT_MODEL" ~default:"")
+        pick ~flag:!model ~env:(envget "MODEL" "")
           ~fallback:merged.model ~default:"hf:zai-org/GLM-4.7-Flash"
       in
       let cfg_base =
-        pick ~flag:!base_url ~env:(Envcfg.getenv "AGENT_BASE_URL" ~default:"")
+        pick ~flag:!base_url ~env:(envget "BASE_URL" "")
           ~fallback:merged.base_url
           ~default:"https://api.synthetic.new/openai/v1"
       in
       let cfg_key =
-        pick ~flag:None ~env:(Envcfg.getenv "AGENT_API_KEY" ~default:"")
+        pick ~flag:None ~env:(envget "API_KEY" "")
           ~fallback:merged.api_key ~default:""
       in
       let cfg : Provider.cfg =
@@ -215,9 +223,7 @@ let () =
           base_url = cfg_base;
           api_key = cfg_key;
           model = cfg_model;
-          system =
-            Envcfg.getenv "AGENT_SYSTEM"
-              ~default:(harness_context ~model:cfg_model ~base_url:cfg_base);
+          system = envget "SYSTEM" (harness_context ~model:cfg_model ~base_url:cfg_base);
         }
       in
       let script_cell =
@@ -241,7 +247,7 @@ let () =
       let on_msg =
         Sessions.on_msg ~create:persist ~model:(fun () -> cfg_model) sess
       in
-      (* Run one full agent turn (model call -> tool calls -> final
+      (* Run one full glochid turn (model call -> tool calls -> final
          reply) for the given prompt, streaming events via print_event.
          Returns Ok () / Error msg. Exit status is derived by callers. *)
       let run_turn prompt =
@@ -251,12 +257,12 @@ let () =
       if !serve then begin
         (* HTML primary surface: serve until shutdown resolves. *)
         let reload_surface () =
-          Printf.eprintf "[agent] SIGHUP: reloading surface + plugins\n%!";
+          Printf.eprintf "[glochid] SIGHUP: reloading surface + plugins\n%!";
           (try Surface.load ~rt with e ->
-             Printf.eprintf "[agent] surface reload failed: %s\n%!" (Printexc.to_string e));
+             Printf.eprintf "[glochid] surface reload failed: %s\n%!" (Printexc.to_string e));
           (try Plugins.load_all rt with e ->
-             Printf.eprintf "[agent] plugin reload failed: %s\n%!" (Printexc.to_string e));
-          Printf.eprintf "[agent] reloaded\n%!"
+             Printf.eprintf "[glochid] plugin reload failed: %s\n%!" (Printexc.to_string e));
+          Printf.eprintf "[glochid] reloaded\n%!"
         in
         Lifecycle.write_pid_file ();
         let shutdown_promise, watcher = Lifecycle.install ~on_reload:reload_surface in
@@ -275,7 +281,7 @@ let () =
                 one thread parked in io_cqring_wait / poll forever,
                 SIGTERM-ignoring since our own handler owns TERM). All
                 durable state is already on disk (sessions + workspace
-                under .agent/, the pid file removed by the finally
+                under .agent/ or .glochid/, the pid files removed by the finally
                 above), so the exit is safe and the watcher/accept
                 fibers have nothing left to finish. *)
              exit 0)
@@ -292,15 +298,15 @@ let () =
         match run_turn prompt with
         | Ok () -> () (* final assistant text already printed via print_event *)
         | Error e ->
-            Printf.eprintf "agent turn error: %s\n%!" e;
+            Printf.eprintf "glochid turn error: %s\n%!" e;
             exit 1)
       else (
       (* Live session prims + /new /resume /sessions commands (REPL
-         process shares the store; borge/agent.borg sessions-persist). *)
+         process shares the store; borge/glochid.borg sessions-persist). *)
       Sessions.register ~rt ~history ~sess ~model:(fun () -> cfg_model);
-      print_endline "agent v0.0 — Nopales plugins. (expr) evaluates; /cmd dispatches; other lines prompt the model.";
+      print_endline "glochid v0.0 — Nopales plugins. (expr) evaluates; /cmd dispatches; other lines prompt the model.";
       let rec loop () =
-        print_string "\027[1magent>\027[0m ";
+        print_string "\027[1mglochid>\027[0m ";
         flush stdout;
         match input_line stdin with
         | exception End_of_file -> print_endline "bye"
@@ -348,3 +354,4 @@ let () =
               loop ())
       in
       loop () )
+

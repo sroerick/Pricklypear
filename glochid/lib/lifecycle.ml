@@ -9,10 +9,12 @@
                 runtime env. The HTTP listener never restarts; the next
                 render sees the new definitions.
 
-    Restartable: the PID file ([~/.config/agent/glochid.pid]) lets an
+    Restartable: the PID file ([~/.config/glochid/glochid.pid]) lets an
                  external wrapper (systemd user unit, shell script,
                  omarchy/QML tray widget) find and signal the running
-                 process without pgrep races.
+                 process without pgrep races. The legacy agent path
+                 stays valid for one compat cycle (still written and
+                 read; see below).
 
     Signal delivery is the self-pipe pattern: the Sys.signal handler does
     ONE async-signal-safe write(2) into a pipe; a dedicated fiber awaits
@@ -21,16 +23,23 @@
 
 open Eio_unix.Stdenv
 
-let pid_file () : string =
+let pid_dir () : string =
   match Sys.getenv_opt "XDG_CONFIG_HOME" with
-  | Some d when d <> "" -> Filename.concat d "agent/glochid.pid"
+  | Some d when d <> "" -> d
   | _ ->
       (match Sys.getenv_opt "HOME" with
-       | Some h when h <> "" -> Filename.concat h ".config/agent/glochid.pid"
-       | _ -> ".config/agent/glochid.pid")
+       | Some h when h <> "" -> Filename.concat h ".config"
+       | _ -> ".config")
 
-let write_pid_file () : unit =
-  let path = pid_file () in
+let glochid_pid_file () : string =
+  Filename.concat (pid_dir ()) "glochid/glochid.pid"
+
+let legacy_pid_file () : string =
+  Filename.concat (pid_dir ()) "agent/glochid.pid"
+
+let pid_file () : string = glochid_pid_file ()
+
+let write_one (path : string) : unit =
   Config.mkdir_p (Filename.dirname path);
   let tmp = path ^ ".tmp" in
   let oc = open_out_bin tmp in
@@ -39,14 +48,24 @@ let write_pid_file () : unit =
   close_out oc;
   Unix.rename tmp path
 
+let write_pid_file () : unit =
+  (* compat window: BOTH pid files carry the same pid, so the omarchy
+     tray (still on the legacy agent path) cannot break. *)
+  write_one (glochid_pid_file ());
+  write_one (legacy_pid_file ())
+
 let remove_pid_file () : unit =
-  (try Sys.remove (pid_file ()) with Sys_error _ -> ())
+  (try Sys.remove (glochid_pid_file ()) with Sys_error _ -> ());
+  (try Sys.remove (legacy_pid_file ()) with Sys_error _ -> ())
 
 (** Read the pidfile and signal it.  Returns [Ok ()] when a signal was
     delivered to a live process, [Error msg] otherwise (no pidfile, stale
     pid, or ESRCH). *)
 let signal_running (sig_ : Sys.signal) : (unit, string) result =
-  let path = pid_file () in
+  let glochid_path = glochid_pid_file () in
+  let path =
+    if Sys.file_exists glochid_path then glochid_path
+    else legacy_pid_file () in
   if not (Sys.file_exists path) then
     Error ("no pid file at " ^ path)
   else
