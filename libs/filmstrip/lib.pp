@@ -213,7 +213,7 @@ call's return value, not an error.")
                    ev-years
                    (calendar/browse-insert-sorted y ev-years)))))
             (list/map
-              (lambda (row) (cons row row))
+              (lambda (row) (list row row))
               ys))))))
   "Years with events, plus the current year; sorted ascending.")
 
