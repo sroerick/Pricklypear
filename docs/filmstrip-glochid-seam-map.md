@@ -124,20 +124,24 @@ replacing framework bodies:
   `glochid/css-text`, the `ui/*` + `lookbook` declarations
 - keyboard CONTENT: `glochid/shortcuts` rows (verbs stay framework)
 
-## 3. Proposed framework seams (what libs/filmstrip must grow to be loadable
-by both hosts)
+## 3. Proposed framework seams (status after phase-1 cut-over, fe6df36)
 
-1. **Storage seam** — a read+write **pair**, not a single knob (a single
-   `row->json` is half a knob: `ws-node` is a READ, `ws-save`/`save-all`
-   are writes; the shapes are carried by two pods or one two-leg seam):
-   `(filmstrip/store-backend (lambda (read-row) (lambda (save!row upsert!row))) )`
-   habitat = tree prims/Postgres; glochid = fs prims/file.
-   `ws-node` calls the read leg; `ws-save`/`save-all` call the write legs.
+1. **Storage seam — LANDED (4a0e0d5, deployed fe6df363ac99).** A
+   read+write **pair**, not a single knob: `filmstrip/store-backend`
+   carries both legs; habitat = tree prims/Postgres; glochid = fs
+   prims/file. `ws-node` calls the read leg; `ws-save` calls the write
+   leg. **Parked divergent: the embedded `save-all`** — its copy carries
+   railmode/boxrows/axis/desktop carry-forward the framework save-all
+   lacks, so it stays in place and rides the storage write leg in
+   phase 2 (the copy's extras must be reconciled, not silently dropped).
 2. **App registry verb** — `(filmstrip/register-app! name browse-fn)`
    replacing the apps/browse wholesale redefinition (idempotent; idem
-   re-load safe).
-3. **Keyboard registry verb** — `(filmstrip/register-keys! rows)`
-   appending sentinels instead of copying the registry.
+   re-load safe). PENDING — rides phase 3 with the §3a refusal guard.
+3. **Keyboard registry verb — LANDED (4a0e0d5).**
+   `(filmstrip/register-keys! rows)` appends sentinels; the embedded
+   `key-sentinels` copy is gone and glochid appends its own shortcut
+   rows at boot. Basic confirmed: glochid runtest holds the pre-existing
+   baseline of 10 (the 3b re-home clears them, not p1).
 4. **OOB hook table** — shelf/winbox/content-strip re-renders become
    framework internals with app-supplied *content*, not redefined bodies.
 5. **Local-prim purge** — `dict-set*` and `request-param` shims copied
