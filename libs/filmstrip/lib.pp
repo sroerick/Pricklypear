@@ -213,10 +213,9 @@ call's return value, not an error.")
                    ev-years
                    (calendar/browse-insert-sorted y ev-years)))))
             (list/map
-              (lambda (row)
-                (cons row row))
-              ys))))
-      "Years with events, plus the current year; sorted ascending.")))
+              (lambda (row) (cons row row))
+              ys))))))
+  "Years with events, plus the current year; sorted ascending.")
 
 (define calendar/month-name
   (lambda
