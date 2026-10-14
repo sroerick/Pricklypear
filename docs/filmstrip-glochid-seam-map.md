@@ -21,23 +21,23 @@ the harness `GET /` render from the same body.
 ## 1. The fork, quantified
 
 `glochid/lib/surface.ml` embeds `glochid_source` (1926 lines, 92 defines).
-Of those, **10 redefine framework verbs**:
+Of the 11 verb redefinitions in `glochid/lib/surface.ml`, **8 are redefs to delete** (3 are legitimate app extension points):
 
-| redefined define | what it is | legit? |
+| redefined define | verdict | fate |
 |---|---|---|
-| `filmstrip/apps` | app registry | **YES** — the app extension point |
-| `filmstrip/browse` | cascade dispatch to apps | **YES** — the app extension point |
-| `filmstrip/tree-roots` | rail content roots | **YES** — app content |
-| `filmstrip/ws-node` | workspace row read | NO — storage seam copy |
-| `filmstrip/ws-save` | workspace row write | NO — storage seam copy |
-| `filmstrip/save-all` | workspace row upsert | NO — storage seam copy |
-| `filmstrip/key-sentinels` | keyboard registry | NO — registry wholesale-copied |
-| `filmstrip/shelf-oob` | shelf OOB re-render | NO — framework internals |
-| `filmstrip/winbox-oob` | windows-tree OOB | NO — framework internals |
-| `filmstrip/pane-stamp` | pane DOM stamping | NO — framework internals |
-| `filmstrip/oob-content-strip` | content-strip OOB | NO — framework internals |
+| `filmstrip/apps` | **legit** | becomes seam: `filmstrip/register-app!` |
+| `filmstrip/browse` | **legit** | dispatched by the framework, app supplies handlers |
+| `filmstrip/tree-roots` | **legit** | app content, framework calls it |
+| `filmstrip/ws-node` | NO | dies into the storage seam (read leg) |
+| `filmstrip/ws-save` | NO | dies into the storage seam (write leg) |
+| `filmstrip/save-all` | NO | dies into the storage seam (write leg) |
+| `filmstrip/key-sentinels` | NO | dies into `filmstrip/register-keys!` |
+| `filmstrip/shelf-oob` | NO | framework body + app-supplied content |
+| `filmstrip/winbox-oob` | NO | framework body + app-supplied content |
+| `filmstrip/pane-stamp` | NO | framework body (host hook already exists) |
+| `filmstrip/oob-content-strip` | NO | framework body (region-move answer) |
 
-(11 rows; apps/browse/tree-roots are the 3 legitimate.)
+(Counts the ledger the way it consumes: **11 rows, 8 redefs to delete**, 3 promoted to seams — gregor recount 2026-10-14, matches `surface.ml` define grep: every row above is a `(define …)`; no other filmstrip/ verb is overridden.)
 
 And the reverse direction: **desktops were born in the app, not the
 framework.** `glochid/deskt`, `glochid/desk-sentinel`,
@@ -63,10 +63,12 @@ replacing framework bodies:
 ## 3. Proposed framework seams (what libs/filmstrip must grow to be loadable
 by both hosts)
 
-1. **Storage seam** — one knob, not three copied verbs:
-   `(filmstrip/store-backend (lambda (row->json) ...))` habitat = tree
-   prims/Postgres; glochid = fs prims/file. `ws-node`/`ws-save`/
-   `save-all` call THROUGH it.
+1. **Storage seam** — a read+write **pair**, not a single knob (a single
+   `row->json` is half a knob: `ws-node` is a READ, `ws-save`/`save-all`
+   are writes; the shapes are carried by two pods or one two-leg seam):
+   `(filmstrip/store-backend (lambda (read-row) (lambda (save!row upsert!row))) )`
+   habitat = tree prims/Postgres; glochid = fs prims/file.
+   `ws-node` calls the read leg; `ws-save`/`save-all` call the write legs.
 2. **App registry verb** — `(filmstrip/register-app! name browse-fn)`
    replacing the apps/browse wholesale redefinition (idempotent; idem
    re-load safe).
@@ -75,8 +77,37 @@ by both hosts)
 4. **OOB hook table** — shelf/winbox/content-strip re-renders become
    framework internals with app-supplied *content*, not redefined bodies.
 5. **Local-prim purge** — `dict-set*` and `request-param` shims copied
-   inside the embedded source belong in the shared library floor
+   inside the embedded source sit in the shared library floor
    (b164c1f already did this for the vault; same move for glochid).
+
+## 3a. Two seams reread by gregor 2026-10-14 (checklist before anyone cuts)
+
+These two belong kernel/boot side and MUST be in place before or
+with the redef deletion — a bare delete is not sufficient:
+
+- **Load-order seam.** Deleting the embedded redefs is necessary but not
+  sufficient unless the runtime guarantees framework-before-app at boot.
+  Cheapest structural guarantee: `filmstrip/register-app!` (seam 2)
+  **refuses** to run until every framework verb it knows is bound, then
+  idempotently binds. A shadow-return becomes structurally impossible
+  once `surface.ml` regenerates, instead of depending on boot order
+  staying correct by hand.
+- **Kernel-datum-type checklist line** (the `filmstrip-ws` class, live
+  on prod twice now): when the desktops feature back-migrates into
+  `libs/filmstrip`, **declare the desktops datum types kernel-side
+  before the first migrated write** — same class as the undeclared
+  `agent-memory`/`agent-agenda` on prod today (typed-boundary reject,
+  silent discard), and the `ws-init!` guarded-boot-seed (2c9e65d) is
+  the precedent to copy for each desktops datum type.
+
+## 3b. Test re-home (rides the bodies)
+
+The framework test groups living in `glochid/test/glochid_test.ml`
+surfaces 0-8 — rail-trees, move-to-desktop, lookbook, habitat-panes,
+keyboard-shortcuts, bindings-browser — migrate WITH the bodies as each
+redef retires. That also clears the 10-failure glochid baseline
+(pre-existing at HEAD 2026-10-14); do not silently absorb those
+failures into the migration.
 
 ## 4. Proof the fork bites twice
 
@@ -90,8 +121,11 @@ structurally impossible.
 ## 5. Suggested divide of labor
 
 - gregor (already in glochid/): grow the seams in `libs/filmstrip`,
-  migrate glochid to consume them, delete the 10 redefinitions, pull
-  the desktops feature back into the framework.
+  migrate glochid to consume them, delete the 8 redefs, pull the
+  desktops feature back into the framework.
 - hollis: keep this map current as the refactor lands; sweep the board
   cards whose bodies cite the old "two residences" framing; watch
-  glochid's copy of the year-entry shape when surface.ml regenerates.
+  glochid's copy of the year-entry shape when surface.ml regenerates;
+  **per-verb habitat e2e on each redef retirement** (main-strip-v5
+  gate style — verbs enumerated in section 1's table, one pass per
+  retirement, recorded in the journal like 2026-10-13's regate).
