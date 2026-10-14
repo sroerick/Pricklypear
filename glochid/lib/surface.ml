@@ -1061,9 +1061,9 @@ root + /lookbook face read this one def.")
   (lambda ()
     (if (fs/exists? glochid/ws-file)
         (dict-set "{}" "body" (fs/read glochid/ws-file))
-        ())
+        ()))
   (lambda (fields)
-    (seq (fs/write glochid/ws-file fields) fields))
+    (seq (fs/write glochid/ws-file fields) fields)))
 
 ;; ---- 2a. THE SHEET IS A LAZY MEMO (lisp-interpreter.lazy-env-thunks) ---
 ;; The filmstrip sheet is static lib vocabulary, yet filmstrip/shell-html
@@ -1529,7 +1529,11 @@ and the sentinel POSTs the same route the pointing UI does.")
           vals
               (string-append "keydown[" (car row)
                 (if (string-eq gcond "") "" (string-append "&&" gcond))
-                "] from:body"))))))
+                  "] from:body"))))
+                  ;; rows 5+ ride the boot append (rows 1-4 restate the
+                  ;; framework's alt+arrow defaults; the lib registry
+                  ;; already carries those, see filmstrip/key-rows.
+                  (cdr (cdr (cdr (cdr (glochid/shortcuts)))))))
 
 ;; ---- 2e2. FOCUSED-PANE VERBS (alt+w/p/s land here) ----
 ;; The shell has no JS to read the DOM, and the focused pane is
@@ -1687,7 +1691,7 @@ place.")
 (define glochid/tree-boxes
   (lambda ()
     (let*
-      ((active (filmstrip/railmode)))
+        ((active (filmstrip/railmode))
         (visited (glochid/boxrows)))
       (list/map
         (lambda (r)
