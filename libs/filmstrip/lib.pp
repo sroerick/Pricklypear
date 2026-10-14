@@ -924,28 +924,34 @@ check is skipped). Never a shelved pane.")
         rs)))
   "Route names the launcher may honestly suggest: the apps' route-leaf\ntargets when the host has them (glochid: /chat /code /sessions\n/settings), else /+label for package-key apps (habitat: /todos\n/notes /calendar). Env late binding picks up host redefinitions of\nfilmstrip/apps — no host seam needed.")
 
+(define filmstrip/key-rows
+  (list
+    (list "/filmstrip/focus" "{\"dir\":\"left\"}" "keydown[altKey&&!shiftKey&&key=='ArrowLeft'] from:body")
+    (list "/filmstrip/focus" "{\"dir\":\"right\"}" "keydown[altKey&&!shiftKey&&key=='ArrowRight'] from:body")
+    (list "/filmstrip/move" "{\"dir\":\"left\"}" "keydown[altKey&&shiftKey&&key=='ArrowLeft'] from:body")
+    (list "/filmstrip/move" "{\"dir\":\"right\"}" "keydown[altKey&&shiftKey&&key=='ArrowRight'] from:body"))
+  "Framework keyboard registry rows (url vals trigger): the four
+alt+arrow defaults. Host apps APPEND extra rows at boot through
+filmstrip/register-keys! instead of copying this registry.")
+
+;; register-keys! is the setter half of the keyboard registry. The
+;; expansion lands as a top-level define in the caller's env, so the
+;; host's boot-time append rides the same env-late-binding surface the
+;; old wholesale redefinitions rode -- the framework registry stays
+;; the one truth; nothing gets copied or redefined wholesale.
+(defmacro filmstrip/register-keys! (rows)
+  `(seq
+    (define filmstrip/key-rows (append filmstrip/key-rows ,rows))))
+
 (define filmstrip/key-sentinels
   (lambda
     ()
     (html/join
-      (list
-        (filmstrip/sentinel
-          "/filmstrip/focus"
-          "{\"dir\":\"left\"}"
-          "keydown[altKey&&!shiftKey&&key=='ArrowLeft'] from:body")
-        (filmstrip/sentinel
-          "/filmstrip/focus"
-          "{\"dir\":\"right\"}"
-          "keydown[altKey&&!shiftKey&&key=='ArrowRight'] from:body")
-        (filmstrip/sentinel
-          "/filmstrip/move"
-          "{\"dir\":\"left\"}"
-          "keydown[altKey&&shiftKey&&key=='ArrowLeft'] from:body")
-        (filmstrip/sentinel
-          "/filmstrip/move"
-          "{\"dir\":\"right\"}"
-          "keydown[altKey&&shiftKey&&key=='ArrowRight'] from:body"))))
-  "alt+arrows move focus; alt+shift+arrows move pane order. The server\nowns focus and answers with OOB class swaps (borge pane-protocol).")
+      (list/map
+        (lambda (row)
+          (filmstrip/sentinel (car row) (car (cdr row)) (car (cdr (cdr row)))))
+        filmstrip/key-rows)))
+  "alt+arrows move focus; alt+shift+arrows move pane order. The server\nowns focus and answers with OOB class swaps (borge pane-protocol).\nSentinels render from the keyboard registry (filmstrip/key-rows):\nframework defaults, then host-appended rows.")
 
 (define filmstrip/last-col
   (lambda
@@ -2763,11 +2769,55 @@ wrapper does; the lib never touches host pane-row fields.")
       (if (< n 9) -1 (parse-int (substring v 8 n)))))
   "Focused content index from the row's focus value (content:N); -1 = none.")
 
-(define filmstrip/ws-node
+;; filmstrip/store-backend: the storage knob -- the ONE store seam
+;; (seam-map section 3). GET = (filmstrip/store-backend); SET = the
+;; filmstrip/register-store! macro. Default read/write = the habitat
+;; floor (tree prims under the user's stable node id), so the habitat
+;; works byte-for-byte unchanged; a host app registers its own pair
+;; once at boot through the setter (glochid: the local fs pair) and
+;; the three ws verbs route through it -- no verb body ever copied.
+
+(define filmstrip/store-read
   (lambda
     ()
     (tree/get (node-path filmstrip/ws-type (whoami))))
-  "This user's workspace node, or () when never saved.")
+  "Store-backend default read (habitat floor): this user's workspace
+node, or () when never saved. Swappable per boot through
+filmstrip/register-store! -- never by copying a verb body.")
+
+(define filmstrip/store-write
+  (lambda
+    (fields)
+    (seq
+      (tree/upsert
+        (node-path filmstrip/ws-type (whoami))
+        "datum"
+        filmstrip/ws-type
+        fields)
+      fields))
+  "Store-backend default write (habitat floor): one workspace row
+upsert under the user's stable id; returns fields. Swappable through
+filmstrip/register-store!.")
+
+(define filmstrip/store-backend
+  (lambda
+    ()
+    (list filmstrip/store-read filmstrip/store-write))
+  "GET the knob: the currently registered (read write) storage pair.
+The names late-bind and register-store! rebinds them at host boot;
+every ws verb routes through the pair.")
+
+(defmacro filmstrip/register-store! (read write)
+  `(seq
+    (define filmstrip/store-read ,read)
+    (define filmstrip/store-write ,write)))
+
+(define filmstrip/ws-node
+  (lambda
+    ()
+    (filmstrip/store-read))
+  "This user's workspace node, or () when never saved. Routes through
+the store-backend knob's current read (filmstrip/store-read).")
 
 (define filmstrip/ws-panes
   (lambda
@@ -2785,14 +2835,9 @@ wrapper does; the lib never touches host pane-row fields.")
 (define filmstrip/ws-save
   (lambda
     (fields)
-    (seq
-      (tree/upsert
-        (node-path filmstrip/ws-type (whoami))
-        "datum"
-        filmstrip/ws-type
-        fields)
-      fields))
-  "Persist workspace fields under the user's stable row id.")
+    (filmstrip/store-write fields))
+  "Persist workspace fields under the user's stable row id. Routes
+through the store-backend knob's current write (filmstrip/store-write).")
 
 (define filmstrip/ws-type
   "filmstrip-ws")
