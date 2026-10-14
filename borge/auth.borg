@@ -596,8 +596,9 @@
                of the calling box). NEVER the v1 sethostrecords op —
                it replaces the whole record set. Staging first (LE is
                picky about failed challenges). Escape hatch if the
-               API proves flaky: delegate NS to Cloudflare/deSEC;
-               automation only ever touches challenge TXT rows.
+               API proves flaky: delegate NS to deSEC (roerick
+               2026-10-13: NO Cloudflare, ever); automation only
+               ever touches challenge TXT rows.
            - PROD STAYS DARK until security.origin-authenticated-
              verbs lands: public-route same-origin scripts +
              /api/eval cookie auth widen with every subdomain, and
