@@ -490,12 +490,10 @@ call's return value, not an error.")
       (list
           ;; THE PALETTE IS THE THEME (1a ledger): every token resolves
           ;; live from the omarchy theme's colors.toml via glochid/tg
-          ;; where that host prim is bound (the app), and falls back to
-          ;; renders this sheet; omarchy-less boxes never resolve past
-          ;; renders this sheet; omarchy-less boxes never resolve past
-          ;; past tg's own fail-soft defaults).
+          ;; where that host prim is bound (the app); omarchy-less boxes
+          ;; never resolve past tg's own fail-soft defaults.
           (css/rule
-            ##Q##:root##Q##
+            ":root"
             (list
               "color-scheme" (guard (lambda (e) "dark")
                 (glochid/tg "mode" "dark"))
