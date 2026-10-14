@@ -1069,17 +1069,19 @@ root + /lookbook face read this one def.")
       (if (fs/exists? ".agent")
           ".agent/workspace.json"
           ".glochid/workspace.json")))
-(define filmstrip/ws-node
+;; HOST SEAM 1 ride: the workspace row lives in the local fs. Legacy
+;; .agent trees keep their store while .agent exists; glochid trees
+;; and fresh projects use .glochid. The read/write pair registers
+;; HERE at boot through the framework store-backend knob; the
+;; framework ws-node/ws-save/save-all verbs route through the pair
+;; and no verb body is copied anymore.
+(filmstrip/register-store!
   (lambda ()
     (if (fs/exists? glochid/ws-file)
         (dict-set "{}" "body" (fs/read glochid/ws-file))
-        ()))
-  "This workspace's fields holder, or () when never saved. The habitat
-uses tree/get + node-path; glochid rides the local fs (HOST SEAM 1).")
-(define filmstrip/ws-save
+        ())
   (lambda (fields)
     (seq (fs/write glochid/ws-file fields) fields))
-  "Persist workspace fields to the resolved glochid/ws-file (HOST SEAM 1).")
 
 ;; ---- 2a. THE SHEET IS A LAZY MEMO (lisp-interpreter.lazy-env-thunks) ---
 ;; The filmstrip sheet is static lib vocabulary, yet filmstrip/shell-html
@@ -1843,21 +1845,25 @@ session, alt+w/p/s close/pin/single at the FOCUSED pane. A row edit
 adds a chord; the renderer below splices the guard into the condition
 and the sentinel POSTs the same route the pointing UI does.")
 
-(define filmstrip/key-sentinels
-  (lambda ()
-    (html/join
-      (filmstrip/map-indexed
-        (lambda (row i)
-          (let ((condn (car row))
-                (url (car (cdr row)))
-                (vals (car (cdr (cdr row))))
-                (gcond (car (cdr (cdr (cdr row))))))
-            (filmstrip/sentinel url vals
-              (string-append "keydown[" condn
+;; Keyboard: rows 1-4 ride the framework registry defaults (the same
+;; alt-arrow rows the wholesale renderer restated with an empty
+;; guard); only the glochid OWN rows append at boot through the
+;; framework register-keys! seam. The guard still splices into the
+;; trigger condition exactly as the old renderer did, and the row
+;; order is preserved (framework defaults first, extras after).
+(filmstrip/register-keys!
+  (list/map
+    (lambda (row)
+      (let ((condn (car row))
+            (url (car (cdr row)))
+            (vals (car (cdr (cdr row))))
+            (gcond (car (cdr (cdr (cdr row))))))
+        (list
+          url
+          vals
+              (string-append "keydown[" (car row)
                 (if (string-eq gcond "") "" (string-append "&&" gcond))
-                "] from:body"))))
-        (glochid/shortcuts) 0)))
-  "REDEFINES the lib's key sentinels on the ONE table (glochid/\nshortcuts) so the whole keyboard map reads in one place and a new\nchord is a row edit. Zero JS files still: filmstrip/sentinel carries\nthe trigger filter, the guard only extends the condition.")
+                "] from:body"))))))
 
 ;; ---- 2e2. FOCUSED-PANE VERBS (alt+w/p/s land here) ----
 ;; The shell has no JS to read the DOM, and the focused pane is
