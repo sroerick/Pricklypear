@@ -75,7 +75,6 @@ let surface_source = {pp|
     ".card input,.card select{width:100%;padding:.5rem;margin-top:.25rem}"
     "button{background:var(--pp-btn);color:#fff;border:0;border-radius:6px;padding:.5rem 1rem;cursor:pointer}"
     ".fs-shell{height:calc(100vh - 2rem)}"
-    ".fs-sh-axis{display:none}"
     ;; v5 col axis is a ROW, not a collapsed rail: cascade app menu
     ;; (20rem) | #fs-rail box (20rem: docked pane bodies + railtabs +
     ;; trees) | #fs-content = THE NIRI STRIP of main panes (full
@@ -126,19 +125,6 @@ let surface_source = {pp|
     "::-webkit-scrollbar-thumb{background:var(--sel-bg);border-radius:6px}"
     "::-webkit-scrollbar-thumb:hover{background:var(--muted)}"
     "::-webkit-scrollbar-corner{background:transparent}"
-    ;; v2 desktops: the #ws-desk sentinel carries the current desktop to
-    ;; CSS — one :has pair per desktop (0..9) hides panes of the others
-    ;; (data-desktop is on every pane section; no JS, no re-render).
-    ".fs-shell:has(#ws-desk.dsk-0) .fs-pane[data-desktop]:not([data-desktop=\"0\"]):not([data-region=\"rail\"]){display:none}"
-    ".fs-shell:has(#ws-desk.dsk-1) .fs-pane[data-desktop]:not([data-desktop=\"1\"]):not([data-region=\"rail\"]){display:none}"
-    ".fs-shell:has(#ws-desk.dsk-2) .fs-pane[data-desktop]:not([data-desktop=\"2\"]):not([data-region=\"rail\"]){display:none}"
-    ".fs-shell:has(#ws-desk.dsk-3) .fs-pane[data-desktop]:not([data-desktop=\"3\"]):not([data-region=\"rail\"]){display:none}"
-    ".fs-shell:has(#ws-desk.dsk-4) .fs-pane[data-desktop]:not([data-desktop=\"4\"]):not([data-region=\"rail\"]){display:none}"
-    ".fs-shell:has(#ws-desk.dsk-5) .fs-pane[data-desktop]:not([data-desktop=\"5\"]):not([data-region=\"rail\"]){display:none}"
-    ".fs-shell:has(#ws-desk.dsk-6) .fs-pane[data-desktop]:not([data-desktop=\"6\"]):not([data-region=\"rail\"]){display:none}"
-    ".fs-shell:has(#ws-desk.dsk-7) .fs-pane[data-desktop]:not([data-desktop=\"7\"]):not([data-region=\"rail\"]){display:none}"
-    ".fs-shell:has(#ws-desk.dsk-8) .fs-pane[data-desktop]:not([data-desktop=\"8\"]):not([data-region=\"rail\"]){display:none}"
-    ".fs-shell:has(#ws-desk.dsk-9) .fs-pane[data-desktop]:not([data-desktop=\"9\"]):not([data-region=\"rail\"]){display:none}"
     ;; v2 app-links: a button styled as a bare link (chat/sessions/settings
     ;; nav in pane chrome; the anchor version navigated the whole window
     ;; out of the shell with a full GET). Overrides the generic button look.
@@ -195,10 +181,6 @@ let surface_source = {pp|
     ".fs-start-entry{width:100%;text-align:left;padding:.3rem .5rem;white-space:nowrap}"
     ".fs-start-entry:hover{background:var(--sel-bg)}"
     ".fs-railtab.fs-btn{background:none;border:1px solid transparent;color:var(--sel-accent)}"
-    ".fs-shell:has(#fs-railmode.rm-windows) .fs-rmode:not([data-rmode=\"windows\"]){display:none}"
-    ".fs-shell:has(#fs-railmode.rm-code) .fs-rmode:not([data-rmode=\"code\"]){display:none}"
-    ".fs-shell:has(#fs-railmode.rm-prims) .fs-rmode:not([data-rmode=\"prims\"]){display:none}"
-    ".fs-shell:has(#fs-railmode.rm-ui) .fs-rmode:not([data-rmode=\"ui\"]){display:none}"
     ;; /code file arm: CodeMirror boots into .pp-cm-host (replaces the
     ;; tagged <pre>; theme rides the shell dark palette).
     ".pp-cm-host .CodeMirror{height:80vh;font-size:13px;line-height:1.4;background:var(--chrome);color:var(--ink)}"
@@ -1110,40 +1092,6 @@ the memo stale until the session rehydrates."
   "Pinned shell axis: COL (left rail) always — the axis toggle was
 retired, see the obituary above.")
 
-(define filmstrip/save-all
-  (lambda (cascade panes focus)
-    (let*
-      ;; CARRY-FORWARD (was a live bug): save-all rebuilt the dict from
-      ;; "{}" WITHOUT railmode/boxrows, so every pane mutation silently
-      ;; reset the rail mode to the windows default and would have wiped
-      ;; the visited-box MRU. Both ride ws-fields through the write
-      ;; (read-modify-write, same discipline as every field above).
-      ((ws (filmstrip/ws-fields))
-        (rm (dict-get ws "railmode"))
-        (br (dict-get ws "boxrows")))
-      (filmstrip/ws-save
-        (dict-set*
-          "{}"
-          (list
-            "cascade"
-            (json-emit (list/map (lambda (c) c) cascade))
-            "content"
-            (filmstrip/panes-emit panes)
-            "focus"
-            (string-append "content:" (as-str focus))
-            "axis"
-            (glochid/axis)
-            "desktop"
-            (as-str (glochid/deskt))
-            "railmode"
-            (if (null? rm) "" (as-str rm))
-            "boxrows"
-            (if (null? br) "" (as-str br)))))))
-  "Write all workspace fields (cascade/content/focus + axis + desktop)
-in one row upsert (glochid: the lib's save-all would drop the shell
-fields). save-all REBUILDS the dict — every field added to the ws row
-must be carried HERE through every write path.")
-
 ;; ---- 2. THE CASCADE IS THE AGENT'S ----
 (define glochid/apps
   (lambda ()
@@ -1264,121 +1212,6 @@ only ever names the picked route (entry-html wears it as fs-sel).")
 (define (glochid/fwd-notes) (glochid/fwd-face "notes"))
 (define (glochid/fwd-calendar) (glochid/fwd-face "calendar"))
 
-;; ---- 2d. DESKTOPS ----
-;; The ws row carries "desktop":N (0 default) and each pane record a
-;; "desktop" field. An inert #ws-desk sentinel beside #fs-axis carries
-;; the current desktop to CSS (:has hides the other desktops' panes —
-;; ten pairs in glochid/base-css, no JS); the windows tree's desktop
-;; rows carry the switch verb (no separate desktop controlbox —
-;; sidebar-main-dichotomy). Focus heals onto the first live pane of the target
-;; desktop when the focused pane lives elsewhere (a live MAIN pane is
-;; preferred — the lift; a rail pane satisfies I1 when no main exists).
-(define glochid/deskt
-  (lambda ()
-    (let
-      ((v (dict-get (filmstrip/ws-fields) "desktop")))
-      (if (null? v) 0 (parse-int (as-str v)))))
-  "Current shell desktop from the ws row (0 when unset).")
-
-(define glochid/first-on-desk
-  (lambda (panes d i)
-    (let
-      ((m (glochid/first-region-on-desk panes d i "main")))
-      (if (< m 0) (glochid/first-region-on-desk panes d i "rail") m)))
-  "Index of the first LIVE pane on desktop d, else -1 (v3 heal
-discipline: a live MAIN pane is preferred — it takes the lift; rail
-panes are valid focus targets too and satisfy I1 when the desktop has
-no live main pane. Never a shelved pane: pane-live? gates both passes.")
-
-(define glochid/first-region-on-desk
-  (lambda (panes d i region)
-    (if
-      (null? panes)
-      -1
-      (if
-        (and (= (filmstrip/pane-desk (car panes)) d)
-             (string-eq (filmstrip/pane-region (car panes)) region)
-             (filmstrip/pane-live? (car panes)))
-        i
-        (glochid/first-region-on-desk (cdr panes) d (+ i 1) region))))
-  "Index of the first LIVE pane of one REGION on desktop d, else -1.")
-
-(define glochid/desk-sentinel
-  (lambda (d ?oob)
-    (html/tag
-      "div"
-      (html/attrs
-        (append
-          (list
-            (html/attr "id" "ws-desk")
-            (html/attr "class" (string-append "fs-sh-axis dsk-" (as-str d))))
-          (if ?oob
-              (list (html/attr "hx-swap-oob" "outerHTML:#ws-desk"))
-              (list))))
-      ""))
-  "Inert desktop sentinel beside the axis one; CSS :has(#ws-desk.dsk-N)
-hides the other desktops' panes. ?oob renders it as an OOB outerHTML
-swap (the desktop response).")
-
-(define glochid/desktop-set
-  (lambda ()
-    (let*
-      ((dv (request-param "d"))
-        (d (if (null? dv) 0 (parse-int (as-str dv))))
-        (row (filmstrip/row))
-        (cascade (nth row 0))
-        (panes (nth row 1))
-        (focus (nth row 2))
-        (focus2
-          (if
-            (and (>= focus 0)
-                 (= (filmstrip/pane-desk (filmstrip/pane-at panes focus)) d))
-            focus
-            (let
-              ((f (glochid/first-on-desk panes d 0)))
-              (if (< f 0) focus f)))))
-      (seq
-        (filmstrip/ws-save
-          (dict-set* (filmstrip/ws-fields) (list "desktop" (as-str d))))
-        (filmstrip/save-all cascade panes focus2)
-        (render-html
-          (html/join
-            (list
-              (filmstrip/oob-msg "")
-              (glochid/desk-sentinel d #t)
-              (filmstrip/oob-content-strip panes focus2)))))))
-  "POST /filmstrip/desktop: d param -> set + persist the shell desktop;
-heal focus onto the first live pane of that desktop when the focused
-pane lives elsewhere; answer with OOB swaps of the desk sentinel + a
-re-render of the content strip (panes of the new desktop keep their
-live DOM via hx-preserve; panes of the others re-render inert — the
-workspace row keeps every record, only the swapped DOM shrinks).")
-
-;; focus healing at render: an unset focus OR one pointing at a shelved
-;; pane heals to the first LIVE pane ON THE CURRENT DESKTOP (v2 task 3;
-;; v3: main panes first, rail panes as the valid fallback; falls back to
-;; the first live pane anywhere when the desktop has none).
-(define glochid/heal-focus
-  (lambda (panes focus)
-    (if
-      (if (< focus 0)
-          #t
-          (string-eq
-            (filmstrip/pane-state (filmstrip/pane-at panes focus))
-            "shelved"))
-      (let
-        ((f (glochid/first-on-desk panes (glochid/deskt) 0)))
-        (if (< f 0) (filmstrip/first-live-index panes) f))
-      focus))
-  "Focus that always has a live pane behind it: unset (-1) and
-shelved-pointing both heal to the first live pane on the CURRENT
-desktop — v3: a live MAIN pane first (the lift), the first live RAIL
-pane as the fallback (a focused rail pane in the rail satisfies I1
-when the desktop has no live main pane); -1 only when the desktop has
-no live pane at all (falls back to the first live pane anywhere).
-Never a shelved pane (I2). Not persisted — alt+right heals it for real
-on the next focus step.")
-
 ;; ---- 2b2. RAIL TREES (v4: the rail inventory = N trees, ONE renderer) ----
 ;; borge/filmstrip.borg rail-trees-v4. Three roots:
 ;;   windows -- TARGETING tree from DECLARED ws state (desktops 0..2 +
@@ -1392,159 +1225,6 @@ on the next focus step.")
 ;; redefinitions live BELOW the v2 defines so load order wins).
 ;; Expansion state is <details> DOM state -- splice never swap; rail
 ;; mode flips are a sentinel :has hide exactly like desktops.
-(define glochid/pane-verb
-  (lambda (word route vals)
-    (list word route
-      (string-append "{" (list/foldl
-        (lambda (acc kv)
-          (string-append acc
-            (if (string-eq acc "") "" ",")
-            "\"" (car kv) "\":\"" (filmstrip/url-enc (car (cdr kv))) "\""))
-        "" vals)
-        "}")
-      ;; 4th element = the GLYPH. Rows carry it explicitly (the renderer
-      ;; falls back to the word when it is empty), so a host edit or a
-      ;; lib table change cannot silently re-label the rail.
-      (filmstrip/act-glyph word)))
-  "One tree verb row spec: (word route vals-json glyph) from (key val)
-pairs; values ride filmstrip/url-enc (route/path vals carry ?&). The
-glyph is filmstrip/act-glyph's answer for the word (host: pin/pin
-label by region, so the row and the pane head agree).")
-
-(define glochid/windows-pane-node
-  (lambda (p shelved?)
-    (let*
-      ((id (filmstrip/pane-id p))
-        (route (filmstrip/pane-route p))
-        (v-verbs
-          (lambda (pairs)
-            (list/map
-              (lambda (pr)
-                (glochid/pane-verb (car pr) (car (cdr pr))
-                  (list (list "id" id))))
-              pairs)))
-        (live-verbs
-          (v-verbs
-            (list
-              (list "focus" "/filmstrip/focus-id")
-              (if (string-eq (filmstrip/pane-region p) "rail")
-                  (list "unpin" "/filmstrip/pin")
-                  (list "pin" "/filmstrip/pin"))
-              (list "width" "/filmstrip/width")
-              (list "single" "/filmstrip/single")
-              (list "close" "/filmstrip/close"))))
-        (desk (as-str (filmstrip/pane-desk p)))
-        ;; cross-desktop MOVE words: an explicit destination verb per
-        ;; desktop EXCEPT the pane's current one (rail panes carry none
-        ;; -- dock semantics mean nothing to move). The pane-head move
-        ;; glyph cycles; the tree row words are acme-explicit.
-        (m-verbs
-          (if (string-eq (filmstrip/pane-region p) "rail")
-              (list)
-              (list/map
-                (lambda (d)
-                  (glochid/pane-verb
-                    (string-append "to" d)
-                    "/filmstrip/move-to"
-                    (list (list "id" id) (list "d" d))))
-                (list/filter
-                  (lambda (d) (not (string-eq d desk)))
-                  (list "0" "1" "2")))))
-        (live-verbs2 (append live-verbs m-verbs))
-        (shelved-verbs
-          (v-verbs
-            (list (list "restore" "/filmstrip/restore")
-                  (list "destroy" "/filmstrip/destroy")))))
-      (dict-set*
-        "{}"
-        (list
-          "label" route
-          "kind" "leaf"
-          "node" (string-append "pane/" id)
-          "open" route
-          "verbs" (json-emit (if shelved? shelved-verbs live-verbs2))))))
-  "One pane row: label = route (open-or-focus, acme Get on a shelved
-row), verbs by CURRENT state (live: focus/pin/width/close + to<N>
-move words for every OTHER desktop; shelved: restore/destroy). Rail
-panes carry no move words (dock semantics -- desktop-global). Declared
-state only -- no DOM scraping.")
-
-(define glochid/keep-nodes
-  (lambda (nodes)
-    (if (null? nodes)
-        (list)
-        (if (string-eq (car nodes) "")
-            (glochid/keep-nodes (cdr nodes))
-            (cons (car nodes) (glochid/keep-nodes (cdr nodes))))))
-  "Drop the empty-string markers map-indexed leaves in place (the tree
-renderer takes only real node dicts).")
-
-(define glochid/windows-tree
-  (lambda (path)
-    (let*
-      ((panes (nth (filmstrip/row) 1))
-        (live-on-desk
-          (lambda (d)
-            (glochid/keep-nodes
-              (filmstrip/map-indexed
-                (lambda (p i)
-                  (if
-                    (if (string-eq (filmstrip/pane-state p) "shelved") #f
-                        (string-eq (as-str (filmstrip/pane-desk p)) d))
-                    (glochid/windows-pane-node p #f)
-                    ""))
-                panes 0))))
-        (desk-dir
-          (lambda (d)
-            ;; DEFAULT-OPEN (rail-trees-v4 expand seed + operator note:
-            ;; the desktop tree reads expanded): eager kids (this
-            ;; desktop's live panes, pre-walked -- a parsed-open details
-            ;; never fires its toggle-once pull, so expand RIDES kids)
-            ;; + the switch verb. The windows subtree is tiny, so the
-            ;; eager head cost is host-trivial (the budget gate is the
-            ;; FS tree, not this one).
-            (dict-set*
-              "{}"
-              (list
-                "label" (string-append "desktop " d)
-                "kind" "dir"
-                "node" (string-append "desk/" d)
-                "open" ""
-                "verbs"
-                (json-emit
-                  (list
-                    (list "switch" "/filmstrip/desktop"
-                      (string-append "{\"d\":\"" d "\"}"))))
-                "kids" (glochid/json-arr (live-on-desk d))
-                "expand" "true"))))
-        (shelf-dir
-          (dict-set*
-            "{}"
-            (list
-              "label" "shelf"
-              "kind" "dir"
-              "node" "shelf"
-              "open" ""
-              "verbs" ""))))
-      (if
-        (string-eq path "")
-        (list (desk-dir "0") (desk-dir "1") (desk-dir "2") shelf-dir)
-        (if
-          (string-eq path "shelf")
-          (glochid/keep-nodes
-            (filmstrip/map-indexed
-              (lambda (p i)
-                (if (string-eq (filmstrip/pane-state p) "shelved")
-                    (glochid/windows-pane-node p #t)
-                    ""))
-              panes 0))
-          (live-on-desk (substring path 5 (string-length path)))))))
-  "levelfn for the windows tree (node 'desk/<n>' -> that desktop's
-panes; 'shelf' -> the shelved panes): DESKTOP-GLOBAL data from the
-one workspace row, never from live DOM. Desk dirs 0..2 render
-DEFAULT-OPEN: their level answer pre-walks the pane rows as eager
-kids + the expand seed (the lazy level pull stays for the shelf).")
-
 ;; ---- 2b2b. THE SHARED FILE TREE (rail + pane ARE the same rows) ----
 ;; rail-trees-v4 amendment: a node dict MAY carry "kids" -- a JSON
 ;; string of its walked child level; the lib renders eager kids INLINE
@@ -1561,20 +1241,6 @@ kids + the expand seed (the lazy level pull stays for the shelf).")
 ;; pane are the same rows.
 (define glochid/tree-kids-max 12)
 (define glochid/tree-kids-depth 1)
-
-(define glochid/json-arr-tail
-  (lambda (xs)
-    (if (null? (cdr xs))
-        (car xs)
-        (string-append (car xs) "," (glochid/json-arr-tail (cdr xs)))))
-  "Comma join (glochid/json-arr's inner walk).")
-
-(define glochid/json-arr
-  (lambda (xs)
-    (if (null? xs)
-        "[]"
-        (string-append "[" (glochid/json-arr-tail xs) "]")))
-  "Join already-encoded JSON object strings into one array literal.")
 
 (define glochid/fs-node
   (lambda (name is-dir path kids-json)
@@ -1607,7 +1273,7 @@ kids = ordinary lazy dir; a non-empty kids array string = eager dir.")
           ((entries (json-parse (fs/ls dir))))
           (if (> (count entries) glochid/tree-kids-max)
               ""
-              (glochid/json-arr
+              (filmstrip/json-arr
                 (glochid/fs-rows-of dir (+ depth 1) entries))))))
   "The eager threshold in one place: one readdir to COUNT the child
 level, inline it only under the cap and below the depth bound; else
@@ -1615,7 +1281,7 @@ lazy (empty string, no kids field).")
 
 (define glochid/fs-rows-of
   (lambda (path depth entries)
-    (glochid/keep-nodes
+    (filmstrip/keep-nodes
       (filmstrip/map-indexed
         (lambda (e i)
           (let*
@@ -1663,7 +1329,7 @@ open-or-focuses the /bindings?pkg=&name= detail pane via acme Get.")
   (lambda (path)
     (if
       (string-eq path "")
-      (glochid/keep-nodes
+      (filmstrip/keep-nodes
         (filmstrip/map-indexed
           (lambda (p i)
             (dict-set*
@@ -1928,13 +1594,6 @@ one-up staging (v5 single).")
   "The keyboard map as a muted glyph in the rail tabs row: the map is
 the title tooltip (hover affordance), zero JS.")
 
-(define glochid/railmode
-  (lambda ()
-    (let
-      ((m (as-str (dict-get (filmstrip/ws-fields) "railmode"))))
-      (if (string-eq m "") "windows" m)))
-  "Rail mode read (ws fields; empty = the first root, never an error).")
-
 (define glochid/railmode-set
   (lambda ()
     (let*
@@ -1951,7 +1610,7 @@ the title tooltip (hover affordance), zero JS.")
           (html/join
             (list
               (filmstrip/oob-msg "")
-              (glochid/railmode-sentinel root #t)
+              (filmstrip/railmode-sentinel root #t)
               ;; lazy-first-reveal (BORGE-1789950734): a FIRST-visit flip
               ;; OOBs the level rows into the freshly-revealed box; a
               ;; revisit sends no rows -- its expansion DOM stays alive.
@@ -2028,7 +1687,7 @@ place.")
 (define glochid/tree-boxes
   (lambda ()
     (let*
-      ((active (glochid/railmode))
+      ((active (filmstrip/railmode)))
         (visited (glochid/boxrows)))
       (list/map
         (lambda (r)
@@ -2043,22 +1702,6 @@ place.")
 (+ the MRU-2 recently visited ones) materializes rows on a doc render;
 the remaining hidden boxes answer empty chrome. The sentinel :has
 hiding is unchanged -- the mode flip OOB fills stubs in place.")
-
-(define glochid/railmode-sentinel
-  (lambda (m ?oob)
-    (html/tag
-      "div"
-      (html/attrs
-        (append
-          (list
-            (html/attr "id" "fs-railmode")
-            (html/attr "class" (string-append "fs-sh-axis rm-" m)))
-          (if ?oob
-              (list (html/attr "hx-swap-oob" "outerHTML:#fs-railmode"))
-              (list))))
-      ""))
-  "Inert rail-mode sentinel (like the axis/desk ones); CSS
-:has(#fs-railmode.rm-<id>) hides every other tree box.")
 
 (define filmstrip/shelf-oob
   (lambda () "")
@@ -2080,7 +1723,7 @@ destroy/refresh call this on every mutation response).")
 ;; must not read glochid row fields — same seam discipline as save-all.
 (define filmstrip/pane-stamp
   (lambda (rec)
-    (dict-set rec "desktop" (as-str (glochid/deskt))))
+    (dict-set rec "desktop" (as-str (filmstrip/ws-desktop))))
   "A fresh pane record with the operator's current desktop.")
 
 ;; The sessions table's resume/+new links are shell-level actions wearing
@@ -2313,7 +1956,7 @@ bodies preserved). The pin/move responses land here.")
           (html/join
             (list
               (glochid/content-area panes focus)
-              (glochid/railmode-sentinel (glochid/railmode) #f)
+              (filmstrip/railmode-sentinel (filmstrip/railmode) #f)
               (filmstrip/key-sentinels)
               (html/tag
                 "div"
@@ -2333,7 +1976,7 @@ bodies preserved). The pin/move responses land here.")
                     (html/attr "hidden" "hidden")))
                 "")
               (glochid/axis-sentinel (glochid/axis) #f)
-              (glochid/desk-sentinel (glochid/deskt) #f)))))))
+              (filmstrip/desk-sentinel (filmstrip/ws-desktop) #f)))))))
   "The shell inner (filmstrip/shell-html's parts minus the launcher and
 the desktop controlbox, plus rail tabs + rail trees + sentinels —
 filmstrip.borg sidebar-main-dichotomy, v5-ized: content-area wrapper
@@ -2351,7 +1994,7 @@ sentinel's class and hides off-desktop panes from the desk one).")
         ;; do. Heal an unset focus (or one sitting on a shelved pane) to
         ;; the first live pane at RENDER (not persisted — alt+right
         ;; heals it for real on the next focus step).
-        (focus (glochid/heal-focus (nth row 1) (nth row 2))))
+        (focus (filmstrip/heal-focus (nth row 1) (nth row 2))))
       (glochid/shell-doc
         frag
         (glochid/shell-inner (nth row 0) (nth row 1) focus))))
@@ -2626,7 +2269,7 @@ every live main pane of the desktop, so the heal picks the ring only
 (route "/filmstrip/tree" "filmstrip/tree")
 (route "/filmstrip/tree/collapse" "filmstrip/tree-collapse")
 (route "/filmstrip/railmode" "glochid/railmode-set")
-(route "/filmstrip/desktop" "glochid/desktop-set")
+(route "/filmstrip/desktop" "filmstrip/desktop-set")
 (route "/filmstrip/new" "glochid/new")
 (route "/filmstrip/resume" "glochid/resume")
 (route "/filmstrip/keys/close" "glochid/keys-close")

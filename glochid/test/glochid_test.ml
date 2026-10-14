@@ -660,7 +660,7 @@ let test_rail_trees ~rt () =
     (Runtime.eval_string ~rt
       {|(list/map
           (lambda (n) (as-str (dict-get n "label")))
-          (glochid/windows-tree ""))|});
+          (filmstrip/windows-tree ""))|});
   (* toggling: dir rows carry the laziness attrs; labels carry open verbs *)
   let box =
     match Runtime.eval_string ~rt
@@ -701,9 +701,9 @@ let test_rail_trees ~rt () =
     (Ast.VStr "true []")
     (Runtime.eval_string ~rt
       {|(string-append
-          (as-str (dict-get (car (glochid/windows-tree "")) "expand"))
+          (as-str (dict-get (car (filmstrip/windows-tree "")) "expand"))
           " "
-          (as-str (dict-get (car (glochid/windows-tree "")) "kids")))|});
+          (as-str (dict-get (car (filmstrip/windows-tree "")) "kids")))|});
   (* collapse-all answers the FULLY-CLOSED render: expand seeds cleared *)
   (match
      Runtime.dispatch_route ~rt ~handler:"filmstrip/tree-collapse"
@@ -866,7 +866,7 @@ let test_move_to_desk ~rt () =
       (match
          Runtime.eval_string ~rt
            {|(render-html (filmstrip/tree-level "windows"
-               (glochid/windows-tree "desk/1")))|}
+               (filmstrip/windows-tree "desk/1")))|}
        with
        | Ast.VStr rows ->
            Alcotest.(check bool) "tree row: move words skip the current desk" true
