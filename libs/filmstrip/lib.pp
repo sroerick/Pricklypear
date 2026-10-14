@@ -779,7 +779,19 @@ call's return value, not an error.")
           (css/rule ".fs-shell:has(#fs-railmode.rm-ui) .fs-rmode:not([data-rmode=\"ui\"])" (list "display" "none"))
         (css/rule ".fs-sentinel" (list "display" "none"))
         (css/rule ".fs-sink" (list "display" "none"))
-        (css/rule ".fs-oob-delete" (list "display" "none")))))
+          (css/rule ".fs-oob-delete" (list "display" "none"))
+          ;; v5 theme + layout (ported from the glochid app surface's
+          ;; base-css, 10-14): the :root palette ABOVE declares the theme;
+          ;; these rules APPLY it (dark shell, sidebar row layout, rail
+          ;; box, start menu, lookbook + CM pane chrome).
+          (css/raw "html,body{height:100%}body{background:var(--pp-bg);color:var(--ink);font-family:ui-monospace,Menlo,monospace;margin:0;padding:1rem;box-sizing:border-box}a{color:var(--sel-accent);text-decoration:none}a:hover{text-decoration:underline}.muted{color:var(--muted)}h1{margin:.25rem 0 .75rem 0;font-size:1.1rem}table{border-collapse:collapse;width:100%;max-width:60rem}td,th{padding:.35rem .6rem;border-bottom:1px solid var(--border);text-align:left;white-space:nowrap}pre{background:var(--chrome);padding:1rem;border-radius:6px;overflow:auto}input{background:var(--panel);color:var(--ink);border:1px solid var(--border);border-radius:6px;padding:.5rem}select{background:var(--panel);color:var(--ink);border:1px solid var(--border);border-radius:4px}label{color:var(--muted)}button{background:var(--pp-btn);color:#fff;border:0;border-radius:6px;padding:.5rem 1rem;cursor:pointer}")
+          (css/raw ".fs-shell{height:calc(100vh - 2rem)}.fs-shell:has(#fs-axis.col){flex-direction:row}.fs-shell:has(#fs-axis.col) .fs-content{order:0;flex:1 1 auto;min-height:0;min-width:0}#fs-surface{display:contents}#fs-rail{display:contents}.fs-shell:has(#fs-axis.col) #fs-rail{order:-3;display:flex;flex-direction:column;flex:0 0 20rem;max-width:20rem;min-width:0;min-height:0;overflow-y:auto;overflow-x:hidden;gap:.25rem;padding:.25rem .25rem .25rem 0}")
+          (css/raw ".fs-shell:not(:has(#fs-axis.col)) .fs-pane[data-region=\\\"rail\\\"]{flex:0 0 auto;max-height:20rem;min-width:20rem;min-height:0;overflow:hidden}.fs-shell:not(:has(#fs-axis.col)) .fs-pane[data-region=\\\"rail\\\"] .fs-body{display:block;flex:1 1 auto;min-height:0;overflow:auto}.fs-shell:has(#fs-axis.col) .fs-pane[data-region=\\\"rail\\\"]{flex:1 1 auto;width:100%;min-height:0}.fs-shell:has(#fs-axis.col) .fs-pane[data-region=\\\"rail\\\"] .fs-body{display:block;flex:1 1 auto;min-height:0;overflow:auto}.fs-shell:has(#fs-axis.col) .chatpage{height:100%}")
+          (css/raw ".bubble{background:var(--panel);border-radius:6px;padding:.5rem .75rem;margin:.5rem 0;white-space:pre-wrap}.bubble.user{color:var(--pp-ok)}.bubble.llm{color:var(--ink)}.bubble.repl{color:var(--pp-repl)}.trace{color:var(--muted);font-size:.85em;white-space:pre-wrap}.think{color:var(--muted);font-size:.9em;margin:.4rem 0}.think summary{cursor:pointer}.think>div{white-space:pre-wrap}.reason{color:var(--muted);font-style:italic}.think .tk,.think .tool{margin:.25rem 0 .25rem .25rem}.think .tk>summary,.think .tool>summary{color:var(--muted)}.think .tk>div,.think .tool>div{margin-left:.9rem;padding-left:.5rem;border-left:1px solid var(--border)}.think:not(:has(.reason,.trace)){display:none}.chatpage{display:flex;flex-direction:column;height:calc(100vh - 6rem)}.chatpage #log{flex:1;min-height:0;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:.75rem;margin-bottom:.75rem}.chatpage form{display:flex;gap:.5rem;flex-shrink:0}.chatpage #msg{flex:1}.chatpage form button{flex-shrink:0}")
+          (css/raw "*{scrollbar-width:thin;scrollbar-color:var(--sel-bg) transparent}::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--sel-bg);border-radius:6px}::-webkit-scrollbar-thumb:hover{background:var(--muted)}::-webkit-scrollbar-corner{background:transparent}.fs-applink{background:none;border:0;color:var(--sel-accent);padding:0;margin:0;font:inherit;cursor:pointer;text-decoration:none}.fs-applink:hover{text-decoration:underline}.fs-modelsel{font-size:.6em;padding:.1rem .3rem}")
+          (css/raw ".lb-btn{font:inherit;padding:.25rem .7rem;border:1px solid var(--border);border-radius:4px;background:var(--panel);color:inherit;cursor:pointer}.lb-btn-primary{background:var(--pp-btn-hi);border-color:var(--pp-btn-hi);color:#fff}.lb-btn-danger{background:var(--pp-danger);border-color:var(--pp-danger);color:#fff}.lb-badge{display:inline-block;font-size:.72em;padding:.05rem .45rem;border-radius:999px;border:1px solid var(--border);color:var(--muted)}.lb-badge-ok{color:var(--pp-ok);border-color:var(--pp-ok)}.lb-badge-warn{color:var(--pp-warn);border-color:var(--pp-warn)}.lb-card{border:1px solid var(--border);border-radius:6px;padding:.75rem;background:var(--panel)}.lb-card h3{margin:0 0 .5rem;display:flex;gap:.5rem;align-items:center}.lb-card p{margin:.25rem 0 0}.lb-stage{border:1px dashed var(--border);padding:.9rem;border-radius:6px;display:flex;gap:.6rem;align-items:center;flex-wrap:wrap}.lb-form{display:flex;gap:.4rem;flex-wrap:wrap;align-items:center;margin:.6rem 0}.lb-form input{font:inherit;padding:.2rem .4rem;background:var(--panel);color:inherit;border:1px solid var(--border);border-radius:4px}.lb-form label{color:var(--muted,#9aa3b2);font-size:.85em}.lb-folds{margin-top:.6rem}.lb-folds details{margin:.3rem 0}.lb-folds summary{cursor:pointer;color:var(--muted,#9aa3b2)}.lb-folds pre{overflow:auto;font-size:.85em;background:var(--panel);padding:.5rem;border-radius:4px;border:1px solid var(--border)}.lb-vtabs{display:flex;gap:.3rem;flex-wrap:wrap;margin:.4rem 0}.lb-vtab{cursor:pointer}.lb-vtab.fs-sel{outline:1px solid var(--sel-accent)}.lb-swatch{display:inline-flex;align-items:center;gap:.4rem;padding:.15rem .55rem;border:1px solid var(--border);border-radius:4px;font-size:.85em}.lb-swatch b{width:.95em;height:.95em;display:inline-block;border-radius:3px;border:1px solid var(--border)}.lb-palette{display:flex;gap:.35rem;flex-wrap:wrap}.lb-palette .lb-swatch{border:none;padding-left:0}.lb-palette .lb-swatch b{width:1.6em;height:1.6em}.lb-palette .lb-swatch span{color:var(--muted)}")
+          (css/raw ".fs-railtabs{display:flex;gap:.3rem;align-items:center;border:1px solid var(--border);background:var(--panel);padding:.3rem .35rem}.fs-start{position:relative;flex:0 0 auto}.fs-start-word{cursor:pointer;list-style:none;font-weight:700}.fs-start-word::-webkit-details-marker{display:none}.fs-start-menu{position:absolute;left:0;top:100%;z-index:30;display:flex;flex-direction:column;min-width:10rem;background:var(--panel);border:1px solid var(--border);box-shadow:0 4px 14px rgba(0,0,0,.5);padding:.25rem}.fs-start-entry{width:100%;text-align:left;padding:.3rem .5rem;white-space:nowrap}.fs-start-entry:hover{background:var(--sel-bg)}.fs-railtab.fs-btn{background:none;border:1px solid transparent;color:var(--sel-accent)}.fs-keys{margin-left:auto;color:var(--muted,#6b7080);cursor:help;font-size:1.1em;user-select:none}")
+          (css/raw ".pp-cm-host .CodeMirror{height:80vh;font-size:13px;line-height:1.4;background:var(--chrome);color:var(--ink)}.pp-cm-host .CodeMirror-gutters{background:var(--chrome);border-right:1px solid var(--border)}.pp-cm-host .CodeMirror-linenumber{color:var(--muted)}.pp-cm-host .CodeMirror-cursor{border-left:1px solid var(--sel-accent)}.pp-cm-bar{display:flex;gap:.6rem;align-items:center;margin:.35rem 0}.pp-cm-save{cursor:pointer}.pp-cm-status::after{content:none}"))))
   "Strip + pane + launcher stylesheet (~50 lines of rules). Widths are\nthe three presets only; .focused is the server-owned ring.")
 
 (define filmstrip/default-width
@@ -1605,18 +1617,27 @@ kids + the expand seed (the lazy level pull stays for the shelf).")
             0)))))
   "OOB re-render of the cascade strip after a crumb click.")
 
-(define filmstrip/oob-content-strip
-  (lambda
-    (panes focus)
-    (html/tag
-      "div"
-      (html/attrs
-        (list
-          (html/attr "id" "fs-content")
-          (html/attr "class" "fs-content")
-          (html/attr "hx-swap-oob" "true")))
-      (html/join (filmstrip/panes-html panes focus))))
-  "OOB re-render of the whole content strip (pane order changes; every\nbody is an hx-preserve placeholder, so live pane DOM survives).")
+  (define filmstrip/oob-content-strip
+    (lambda
+      (panes focus)
+      (html/tag
+        "div"
+        (html/attrs
+          (list
+            (html/attr "id" "fs-surface")
+            (html/attr "class" "fs-surface")
+            (html/attr "hx-swap-oob" "true")))
+        (html/join
+          (list
+            (html/tag
+              "div"
+              (html/attrs
+                (list
+                  (html/attr "id" "fs-content")
+                  (html/attr "class" "fs-content")))
+              (html/join (filmstrip/panes-region panes focus "main")))
+            (filmstrip/rail-box panes focus)))))
+    "OOB re-render of the whole surface area (the main strip + the rail\nbox; every body is an hx-preserve placeholder, so live pane DOM\nsurvives the move between strip and rail on pin/unpin).")
 
 (define filmstrip/oob-delete-pane
   (lambda
@@ -2468,6 +2489,260 @@ retires; this framework body is the one residence).")
   (lambda () "")
   "OOB payload re-rendering the shelf controlbox after\nclose/restore/destroy. Default empty -- the plain habitat shell has\nno shelf rail yet; glochid redefines it to swap its #fs-shelf rows.")
 
+;; ---- v5 shell furniture (ported from the glochid app surface, 10-14:
+;; the desktops/rail-mode back-migration moved the DEFS; this completes
+;; the COMPOSITION + theme so the framework shell IS the v5 shell --
+;; sidebar-only (BORGE-1789879934), start menu on the railtabs row) ----
+
+(define filmstrip/boxrows
+  (lambda ()
+    (let ((v (dict-get (filmstrip/ws-fields) "boxrows")))
+      (if
+        (if (null? v) #t (string-eq (as-str v) ""))
+        (list)
+        (json-parse (as-str v)))))
+  "Visited-rail-box MRU: JSON array of root ids, newest first (ws field
+boxrows; absent/empty = none visited this session lineage -- save-all
+carries the field as \"\" when unset, so the empty string answers the
+empty set, never a parse error).")
+
+(define filmstrip/boxrows-has
+  (lambda (root rows)
+    (if (null? rows) #f
+        (if (string-eq (as-str (car rows)) root) #t
+            (filmstrip/boxrows-has root (cdr rows)))))
+  "Membership probe for the MRU set (string-eq, order-irrelevant).")
+
+(define filmstrip/tree-stub
+  (lambda (root)
+    (let*
+      ((id (as-str (car root)))
+        (title (as-str (car (cdr root)))))
+      (html/tag
+        "div"
+        (html/attrs
+          (list
+            (html/attr "id" (string-append "fs-tree-" id))
+            (html/attr "class" "fs-cbox fs-rmode")
+            (html/attr "data-rmode" id)))
+        (html/join
+          (list
+            (html/span (html/attr "class" "fs-title") (html/text title))
+            (html/tag
+              "ul"
+              (html/attrs
+                (list
+                  (html/attr "id" (string-append "fs-tree-" id "-root"))
+                  (html/attr "class" "fs-tr-kids fs-tr-root")))
+              ""))))))
+  "Lazy-first-reveal stub (BORGE-1789950734): the rail box chrome with
+an EMPTY level-0 UL -- no rows materialized while the box is hidden.
+The UL id is the mutation OOB seam, so a first-visit flip fills it in
+place.")
+
+(define filmstrip/tree-boxes
+  (lambda ()
+    (let*
+      ((active (filmstrip/railmode))
+        (visited (filmstrip/boxrows)))
+      (list/map
+        (lambda (r)
+          (let ((id (as-str (car r))))
+            (if
+              (if (string-eq id active) #t
+                  (filmstrip/boxrows-has id visited))
+              (filmstrip/tree-box r)
+              (filmstrip/tree-stub r))))
+        (filmstrip/tree-roots))))
+  "Lazy-first-reveal (BORGE-1789950734): only the ACTIVE railmode's box
+(+ the MRU-2 recently visited ones) materializes rows on a doc render;
+the remaining hidden boxes answer empty chrome. The sentinel :has
+hiding is unchanged -- the mode flip OOB fills stubs in place.")
+
+(define filmstrip/axis-sentinel
+  (lambda (axis ?oob)
+    (html/tag
+      "div"
+      (html/attrs
+        (append
+          (list
+            (html/attr "id" "fs-axis")
+            (html/attr "class" (string-append "fs-sh-axis " axis)))
+          (if ?oob
+              (list (html/attr "hx-swap-oob" "outerHTML:#fs-axis"))
+              (list))))
+      ""))
+  "Inert axis sentinel (axis PINNED col -- BORGE-1789879934); CSS
+:has(#fs-axis.col) lays the shell out as the left-rail sidebar; no OOB
+mutator remains for it.")
+
+(define ui/railtab
+  (lambda (label)
+    (ui/elm
+      "button"
+      (list
+        "class" "fs-btn fs-railtab"
+        "title" (string-append "show the " label " tree")
+        "hx-post" "/filmstrip/railmode"
+        "hx-vals" (string-append "{\"root\":\"" label "\"}")
+        "hx-target" "#fs-sink"
+        "hx-swap" "innerHTML")
+      (list (ui/text label))))
+  "One rail mode tab: POSTs /filmstrip/railmode with this root (the
+sentinel :has flip -- expansion DOM stays alive). Declared behavior
+data: the hx-* verbs ride attrs verbatim through the projection.")
+
+(define ui/start-entry
+  (lambda (label route)
+    (ui/elm
+      "button"
+      (list
+        "class" "fs-btn fs-start-entry"
+        "title" (string-append "open " label)
+        "hx-post" "/filmstrip/open"
+        "hx-vals" (string-append "{\"route\":\"" route "\"}")
+        "hx-target" "#fs-sink"
+        "hx-swap" "innerHTML")
+      (list (ui/text label))))
+  "One start-menu entry: opens `route` as a pane via /filmstrip/open.")
+
+(define filmstrip/railtabs
+  (lambda ()
+    (list/map
+      (lambda (r)
+        (lookbook/html (ui/railtab (as-str (car r)))))
+      (filmstrip/tree-roots)))
+  "The rail mode tabs: one word per tree root (mode names are CONTENT
+labels, not verbs -- they stay words, like the cascade's app names).
+POST /filmstrip/railmode flips the #fs-railmode sentinel -- the SAME
+:has hiding desktops use, so mode flips keep every tree's expansion
+DOM alive.")
+
+(define filmstrip/start-menu
+  (lambda ()
+    (html/tag
+      "details"
+      (html/attrs
+        (list
+          (html/attr "id" "fs-start")
+          (html/attr "class" "fs-start")))
+      (html/join
+        (list
+          (html/tag
+            "summary"
+            (html/attrs
+              (list
+                (html/attr "class" "fs-btn fs-start-word")
+                (html/attr "title" "start: open one of the surfaces")
+                (html/attr "aria-label" "start menu")))
+            (html/text "start"))
+          (html/tag
+            "div"
+            (html/attrs
+              (list (html/attr "class" "fs-start-menu")))
+            (html/join
+              (list/map
+                (lambda (app)
+                  (lookbook/html
+                    (ui/start-entry (car app) (car (cdr app)))))
+                  (filmstrip/apps))))))))
+  "The start menu lives on the rail (B: replaced the cascade/launchbar
+column, 2026-09-20 operator decision). A zero-JS <details> fold; the
+cascade column is gone from the shell; /filmstrip/cascade stays routed
+for the lib contract, filmstrip/apps stays HOST SEAM 2.")
+
+(define filmstrip/keys-hint
+  (lambda ()
+    (html/span
+      (html/attrs
+        (list
+          (html/attr "class" "fs-keys")
+          (html/attr "title"
+            (string-append
+              "alt+←/→ focus · alt+shift+←/→ move "
+              "· alt+1/2/3 desktop · alt+n new session "
+              "· alt+w close · alt+p pin · alt+s single"))))
+      (html/text "⌨")))
+  "The keyboard map as a muted glyph in the rail tabs row: the map is
+the title tooltip (hover affordance), zero JS.")
+
+(define filmstrip/railtabs-html
+  (lambda ()
+    (html/tag
+      "div"
+      (html/attrs
+        (list
+          (html/attr "id" "fs-railtabs")
+          (html/attr "class" "fs-cbox fs-railtabs")
+          (html/attr "data-cbox" "railtabs")))
+      (html/join
+        (append
+          (list (filmstrip/start-menu))
+          (list (html/span (html/attr "class" "fs-title") (html/text "rail")))
+          (filmstrip/railtabs)
+          (list (filmstrip/keys-hint))))))
+  "The rail mode controlbox (one word per tree root, per
+filmstrip.borg sidebar-main-dichotomy -- the axis toggle word was
+retired, BORGE-1789879934: sidebar-only shell) + the keyboard-hint
+glyph (the shortcut map is the glyph's title tooltip).")
+
+(define filmstrip/panes-region
+  (lambda (panes focus region)
+    (filmstrip/map-indexed
+      (lambda (p i)
+        (if (string-eq (filmstrip/pane-region p) region)
+            (filmstrip/pane-html p (= i focus)
+              (filmstrip/pane-content (filmstrip/pane-route p)))
+            ""))
+      panes 0))
+  "Pane sections of ONE region only (v5 split): main panes render into
+the #fs-content strip and rail (pinned) panes into #fs-rail -- the
+strip is the reading surface, the rail box the dock. Empty strings for
+the other region keep map-indexed's shape (html/join skips them).")
+
+(define filmstrip/rail-box
+  (lambda (panes focus)
+    (html/tag
+      "div"
+      (html/attrs
+        (list
+          (html/attr "id" "fs-rail")
+          (html/attr "class" "fs-rail")))
+      (html/join
+        (append
+          (filmstrip/panes-region panes focus "rail")
+          (list
+            (filmstrip/railtabs-html)
+            (html/join (filmstrip/tree-boxes)))))))
+  "The rail BOX (v5): docked panes + railtabs + tree boxes in one
+flex-column side panel. Row-axis CSS turns #fs-rail into
+display:contents (the furniture flows into the shell column as
+before); col-axis CSS makes it a real 20rem left panel.")
+
+(define filmstrip/content-area
+  (lambda (panes focus)
+    (html/tag
+      "div"
+      (html/attrs
+        (list
+          (html/attr "id" "fs-surface")
+          (html/attr "class" "fs-surface")))
+      (html/join
+        (list
+          (html/tag
+            "div"
+            (html/attrs
+              (list
+                (html/attr "id" "fs-content")
+                (html/attr "class" "fs-content")))
+            (html/join (filmstrip/panes-region panes focus "main")))
+          (filmstrip/rail-box panes focus)))))
+  "The surface area (v5): the main strip FIRST, then the rail box.
+Wrapping both under #fs-surface gives the region-move OOB ONE swap
+target (filmstrip/oob-content-strip re-renders this wrapper; every
+pane body is an hx-preserve placeholder, so live DOM survives the move
+between strip and rail).")
+
 (define filmstrip/shell-html
   (lambda
     (cascade panes focus)
@@ -2482,26 +2757,32 @@ retires; this framework body is the one residence).")
               (html/attr "id" "fs-shell")))
           (html/join
             (list
-              (filmstrip/cascade-html cascade)
-              (filmstrip/launcher-html)
-              (html/tag
-                "div"
-                (html/attrs
-                  (list
-                    (html/attr "id" "fs-content")
-                    (html/attr "class" "fs-content")))
-                (html/join (filmstrip/panes-html panes focus)))
+              (filmstrip/content-area panes focus)
+              (filmstrip/railmode-sentinel (filmstrip/railmode) #f)
               (filmstrip/key-sentinels)
-                (filmstrip/desk-sentinel (filmstrip/ws-desktop) #f)
-                (filmstrip/railmode-sentinel (filmstrip/railmode) #f)
               (html/tag
                 "div"
                 (html/attrs
                   (list
                     (html/attr "id" "fs-sink")
                     (html/attr "class" "fs-sink")))
-                "")))))))
-  "The whole shell: style + cascade strip over launcher + content strip,\nkey sentinels, and the invisible OOB sink. The HTTP gate wraps this\nfragment in chrome on full-page requests.")
+                "")
+              (html/span
+                (html/attrs
+                  (list
+                    (html/attr "id" "fs-launch-msg")
+                    (html/attr "class" "fs-msg")
+                    (html/attr "hidden" "hidden")))
+                "")
+              (filmstrip/axis-sentinel "col" #f)
+              (filmstrip/desk-sentinel (filmstrip/ws-desktop) #f)))))))
+  "The whole shell (v5, sidebar-only -- BORGE-1789879934): style +
+surface area (main strip + rail box: docked panes, railtabs, start
+menu, trees), sentinels, the OOB sink + a status-line anchor. The
+cascade column and the launcher are retired (the start menu rides the
+railtabs row); the axis is pinned col; the cascade arg is kept for the
+route signature. Zero scripts (CSS :has flips the layout from the axis
+sentinel's class and hides off-desktop panes from the desk one).")
 
 (define filmstrip/single
   (lambda
