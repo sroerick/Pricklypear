@@ -1,7 +1,9 @@
-(** Plugin loading (borge/agent.borg plugin-model).
+(** Plugin loading (borge/glochid.borg plugin-model).
 
-    Global plugins from ~/.config/agent/plugins/*.pp, then project
-    plugins from ./.agent/plugins/*.pp (filename order). Each file's
+    Global plugins from ~/.config/glochid/plugins/*.pp, then project
+    plugins from ./.glochid/plugins/*.pp (filename order; legacy
+    ~/.config/agent + ./.agent plugin dirs stay readable as read-only
+    fallbacks while the glochid dirs are absent). Each file's
     forms are evaluated in order into the one shared runtime env;
     errors are contained and reported, loading continues. *)
 
@@ -16,11 +18,25 @@ let pp_files_of dir =
     |> List.map (Filename.concat dir)
 
 let global_dir () =
-  match Sys.getenv_opt "HOME" with
-  | Some h -> Filename.concat h ".config/agent/plugins"
-  | None -> ".config/agent/plugins"
+  (* Glochid plugin dirs win when they exist; the legacy agent dirs
+     remain READ-ONLY fallbacks (never created by glochid). *)
+  let dir app =
+    match Sys.getenv_opt "HOME" with
+    | Some h ->
+        Filename.concat (Filename.concat h ".config")
+          (Filename.concat app "plugins")
+    | None -> Filename.concat ".config" (Filename.concat app "plugins")
+  in
+  let glochid = dir "glochid" in
+  if Sys.file_exists glochid && Sys.is_directory glochid then glochid
+  else dir "agent"
 
-let project_dir () = ".agent/plugins"
+let project_dir () =
+  if Sys.file_exists ".glochid/plugins" && Sys.is_directory ".glochid/plugins"
+  then ".glochid/plugins"
+  else if Sys.file_exists ".agent/plugins" && Sys.is_directory ".agent/plugins"
+  then ".agent/plugins"
+  else ".glochid/plugins"
 
 let slurp path =
   let ic = open_in_bin path in

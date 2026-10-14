@@ -370,8 +370,8 @@
  )
 
  (section agent
-  (doc "Book chapter — local Nopales-native coding agent (pi-inspired sibling, not the image); full text inlined from borge/agent.borg")
-  (inline borge/agent.borg)
+  (doc "Book chapter — local Nopales-native coding agent (pi-inspired sibling, not the image); full text inlined from borge/glochid.borg")
+  (inline borge/glochid.borg)
  )
  (section prim-seam
   (doc "Book chapter — the Prim_call seam: eval is local, prims are remote (renamed from remote-eval 2026-09-04). Nopales interprets in a client process while the corpus + data plane stay authoritative in Postgres; full text inlined from borge/prim-seam.borg")
@@ -382,7 +382,7 @@
    (inline borge/bumpers.borg)
   )
  (section agent-native
-  (doc "Book chapter — agent-native: server-resident agent identities (bot users) that wake on cron, work member-gated data.s rooms, act through the prim seam under their own identity, and push via ntfy; glochid (agent.borg) is the local counterpart. Milestones M1-M5, M1 shipped 2026-09-03. Full text inlined from borge/agent-native.borg")
+  (doc "Book chapter — agent-native: server-resident agent identities (bot users) that wake on cron, work member-gated data.s rooms, act through the prim seam under their own identity, and push via ntfy; glochid (glochid.borg) is the local counterpart. Milestones M1-M5, M1 shipped 2026-09-03. Full text inlined from borge/agent-native.borg")
   (inline borge/agent-native.borg)
  )
  (section local-first

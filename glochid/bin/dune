@@ -1,0 +1,8 @@
+(executable
+ (name main)
+ (public_name glochid)
+ (package pricklypear-glochid)
+ (modules main)
+ (libraries
+  pricklypear-glochid.lib pricklypear-lisp eio eio_main unix
+  mirage-crypto-rng.unix))

@@ -7,7 +7,7 @@ import http from "node:http";
 import fs from "node:fs";
 
 const REPO = "/home/roerick/dev/wyo.tech/pricklypear";
-const AGENT = `${REPO}/_build/default/agent/bin/main.exe`;
+const GLOCHID = `${REPO}/_build/default/glochid/bin/main.exe`;
 const MOCK = `/tmp/glochid-shelf2-${process.pid}.json`;
 const TMP = fs.mkdtempSync("/tmp/glochid-shelf2-cwd-");
 const USER_DATA = `/tmp/chrome-glochid-shelf2-${process.pid}`;
@@ -19,20 +19,20 @@ function httpGet(url) {
 }
 const wsData = (ev) => { const d = ev?.data ?? ev; return Buffer.isBuffer?.(d) ? d.toString() : String(d); };
 
-let agent, chrome;
-function cleanup() { try { agent?.kill(); } catch (_) {} try { chrome?.kill(); } catch (_) {} fs.rmSync(USER_DATA, { recursive: true, force: true }); fs.rmSync(MOCK, { force: true }); try { fs.rmSync(TMP, { recursive: true, force: true }); } catch (_) {} }
+let glochid, chrome;
+function cleanup() { try { glochid?.kill(); } catch (_) {} try { chrome?.kill(); } catch (_) {} fs.rmSync(USER_DATA, { recursive: true, force: true }); fs.rmSync(MOCK, { force: true }); try { fs.rmSync(TMP, { recursive: true, force: true }); } catch (_) {} }
 process.on("exit", cleanup);
 
 fs.writeFileSync(MOCK, JSON.stringify([{ text: "shelf2 reply", calls: [] }]) + "\n");
-agent = spawn(AGENT, ["--serve", "--port", "0", "--mock-script", MOCK], { stdio: ["ignore", "pipe", "ignore"], cwd: TMP });
-let agentUrl = "", buf = "";
-agent.on("exit", (c) => { buf += "agent exited " + c; });
+glochid = spawn(GLOCHID, ["--serve", "--port", "0", "--mock-script", MOCK], { stdio: ["ignore", "pipe", "ignore"], cwd: TMP });
+let glochidUrl = "", buf = "";
+glochid.on("exit", (c) => { buf += "glochid exited " + c; });
 // port 0 prints URL to stdout
 let out = "";
-agent.stdout?.on("data", (c) => { out += c; const m = out.match(/agent serving (http:\/\/\S+)/); if (m) agentUrl = m[1].replace(/\/$/, ""); });
-for (let i = 0; i < 60 && !agentUrl; i++) await sleep(250);
-if (!agentUrl) { console.error("no url", buf); process.exit(1); }
-console.log("agent at", agentUrl);
+glochid.stdout?.on("data", (c) => { out += c; const m = out.match(/glochid serving (http:\/\/\S+)/); if (m) glochidUrl = m[1].replace(/\/$/, ""); });
+for (let i = 0; i < 60 && !glochidUrl; i++) await sleep(250);
+if (!glochidUrl) { console.error("no url", buf); process.exit(1); }
+console.log("glochid at", glochidUrl);
 
 chrome = spawn("/usr/bin/chromium", ["--remote-debugging-port=9048", `--user-data-dir=${USER_DATA}`, "--headless=new", "--disable-gpu", "--no-sandbox", "--disable-dev-shm-usage", "--window-size=1880,1000", "about:blank"], { stdio: "ignore" });
 let ready = false;
@@ -60,7 +60,7 @@ async function evalJs(expression) {
 }
 
 await send("Page.enable"); await send("Runtime.enable"); await send("Network.enable");
-await send("Page.navigate", { url: agentUrl });
+await send("Page.navigate", { url: glochidUrl });
 await sleep(2000);
 
 const open = await evalJs(`htmx.ajax('POST', '/filmstrip/open', { values: { route: '/settings' }, target: '#fs-sink', swap: 'innerHTML' })`);

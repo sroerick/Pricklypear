@@ -1,7 +1,7 @@
 (project pricklypear-hypermedia-harness
  (doc "Pricklypear book chapter: a headless hypermedia client — a server-side htmx swap simulator that is the reference implementation of the fixi-five contract, for debug agents and verification harnesses. It runs in the image, fetches no HTTP, runs no browser, and calls route handlers in-process.")
  (status implemented)
- (* agent note (|2026-08-14 RECONCILE, with agent.borg: the harness is now a SHARED, host-portable layer. soup/* stays DB-free and is lifted into the shared pure-prims layer so the image (Postgres corpus) and the agent (local-first lens corpus) register the same tree prims. The ONE host seam is route/dispatch + route/lookup (request-runner): Nopales signatures identical, host-local backing (Session.t Postgres routes vs Runtime.t lens routes; fat Request_context vs thin agent request context). libs/hyper runs unchanged on both. Streaming swaps (hx-multipart multipart/mixed, HX-Target/HX-Swap per part) move INTO the contract as data — soup/apply-parts! applies an ordered part list; hyper/stream wraps it immutably; transport/timing stays CDP-tier (unsupported-boundary). This is the refactor that lifts the agent's chat/agent UI from SSE+vanilla-JS to Nopales-authored htmx fragments.|) *)
+ (* agent note (|2026-08-14 RECONCILE, with glochid.borg: the harness is now a SHARED, host-portable layer. soup/* stays DB-free and is lifted into the shared pure-prims layer so the image (Postgres corpus) and the agent (local-first lens corpus) register the same tree prims. The ONE host seam is route/dispatch + route/lookup (request-runner): Nopales signatures identical, host-local backing (Session.t Postgres routes vs Runtime.t lens routes; fat Request_context vs thin agent request context). libs/hyper runs unchanged on both. Streaming swaps (hx-multipart multipart/mixed, HX-Target/HX-Swap per part) move INTO the contract as data — soup/apply-parts! applies an ordered part list; hyper/stream wraps it immutably; transport/timing stays CDP-tier (unsupported-boundary). This is the refactor that lifts the agent's chat/agent UI from SSE+vanilla-JS to Nopales-authored htmx fragments.|) *)
  (convention ocaml-dune)
  (section hypermedia-harness
   (doc "A headless htmx client living inside the image. It invokes route
@@ -167,7 +167,7 @@
        lens corpus (Runtime route table + a thinner request context). The
        Nopales signatures are identical, so libs/hyper runs unchanged on
        both hosts.")
-   (implements image/lib/http.ml image/lib/session.ml image/lib/request_context.ml image/lib/prims_hyper.ml agent/lib/runtime.ml)
+   (implements image/lib/http.ml image/lib/session.ml image/lib/request_context.ml image/lib/prims_hyper.ml glochid/lib/runtime.ml)
    (details
     (doc (|
          Request_context.make ~manifest ~env ~routes constructs the
@@ -193,7 +193,7 @@
            (route/lookup path)               -> handler-name VStr | nil
          resolves a URL path to its handler via the route table.
 
-         AGENT HOST BACKING (see agent.borg agent-route-table). The agent
+         AGENT HOST BACKING (see glochid.borg agent-route-table). The agent
          implements the SAME prim signatures against its runtime: routes
          live on a Runtime-scoped route table (Runtime.t.routes), populated
          by the agent's (route path handler) prim reading its lens-resident

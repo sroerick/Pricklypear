@@ -3,16 +3,16 @@
 
     mem/* LOCAL prims delegating to the habitat's libs/memory package
     over POST /api/eval (HTTP Basic, the ONE Pp_http client). The
-    remote contract is gregor's (borge/agent.borg memory-bridge):
+    remote contract is gregor's (borge/glochid.borg memory-bridge):
     (mem/remember TYPE MID TITLE CONTENT TAGS) etc., rows keyed by a
     caller-chosen stable string id (mid), fields
     mid/ver/cat/uat/scope/ws/title/content/tags/src, author = the
     CALLER the habitat sees (our env credentials), shared store =
     type "gregor-memory" in space cactus-ops.
 
-    Config (first non-empty wins): AGENT_HABITAT_URL > PP_URL;
-    AGENT_HABITAT_USER > PP_USER; AGENT_HABITAT_PASS > PP_PASS;
-    AGENT_HABITAT_TOKEN > PP_TOKEN. TOKEN WINS when set: a per-user
+    Config (first non-empty wins): GLOCHID_HABITAT_URL > PP_URL;
+    GLOCHID_HABITAT_USER > PP_USER; GLOCHID_HABITAT_PASS > PP_PASS;
+    GLOCHID_HABITAT_TOKEN > PP_TOKEN. TOKEN WINS when set: a per-user
     api_key Bearer token (mint once on the habitat: run
     (issue-token "glochid") in a REPL or /api/eval) replaces
     user/pass everywhere (eval Basic AND the
@@ -27,9 +27,13 @@ open Pricklypear_lisp
 open Ast
 
 let eval_timeout_s = 30.
-
-let getenv ?(default = "") (n : string) : string =
-  match Sys.getenv_opt n with Some s when s <> "" -> s | _ -> default
+(* Habitat env names under the glochid rename compat window: the
+   GLOCHID_HABITAT_* spelling wins when set non-empty; legacy
+   AGENT_HABITAT_* names stay readable. [n] is a bare suffix. *)
+let getenv_bridge (n : string) : string =
+  match Config.getenv_compat ("HABITAT_" ^ n) with
+  | Some v when v <> "" -> v
+  | _ -> ""
 
 type creds = { url : string; user : string; pass : string; token : string }
 
@@ -82,22 +86,22 @@ let file_fallback ~env n =
 (** Bridge env configuration; None = no habitat reachable from env. *)
 let creds ~(env : Eio_unix.Stdenv.base) : creds option =
   let url =
-    match getenv "AGENT_HABITAT_URL" with
+    match getenv_bridge "URL" with
     | "" -> file_fallback ~env "PP_URL"
     | u -> u
   in
   let user =
-    match getenv "AGENT_HABITAT_USER" with
+    match getenv_bridge "USER" with
     | "" -> file_fallback ~env "PP_USER"
     | u -> u
   in
   let pass =
-    match getenv "AGENT_HABITAT_PASS" with
+    match getenv_bridge "PASS" with
     | "" -> file_fallback ~env "PP_PASS"
     | p -> p
   in
   let token =
-    match getenv "AGENT_HABITAT_TOKEN" with
+    match getenv_bridge "TOKEN" with
     | "" -> file_fallback ~env "PP_TOKEN"
     | t -> t
   in
@@ -130,7 +134,7 @@ let eval (env : Eio_unix.Stdenv.base) (expr : string)
   match creds ~env with
   | None ->
       Error
-        "habitat bridge not configured: set AGENT_HABITAT_URL/USER/PASS \
+        "habitat bridge not configured: set GLOCHID_HABITAT_URL/USER/PASS \
          (or PP_URL/PP_USER/PP_PASS)"
   | Some { url; user; pass } -> (
       match Pp_http.split_base (trim_url url) with
@@ -193,9 +197,12 @@ let call ~(env : Eio_unix.Stdenv.base) (expr : string) : Ast.value =
 
 (* ---- remote expr builders (pure; unit-tested) ---- *)
 
-(** The default shared store: type "gregor-memory" (AGENT_MEMORY_TYPE
-    overrides). *)
-let default_type () = getenv ~default:"gregor-memory" "AGENT_MEMORY_TYPE"
+(** The default shared store: type "gregor-memory" (GLOCHID_MEMORY_TYPE;
+    legacy AGENT_MEMORY_TYPE still read). *)
+let default_type () =
+  match Config.getenv_compat "MEMORY_TYPE" with
+  | Some v when v <> "" -> v
+  | _ -> "gregor-memory"
 
 let remote (fn : string) (args : string list) : string =
   "(" ^ fn ^ " " ^ String.concat " " args ^ ")"
@@ -228,7 +235,7 @@ let list_expr ~(typ : string) ~(n : int) : string =
   remote "json-emit" [ remote "mem/list" [ q typ; string_of_int n ] ]
 
 (* ---- bindings browser verbs (the AST browser over the habitat's
-   function grammar; borge/agent.borg filmstrip-shell cascade) ---- *)
+   function grammar; borge/glochid.borg filmstrip-shell cascade) ---- *)
 
 (* (bind/packages) <= (json-emit (list-packages)) -> JSON array of
    package name strings (top-level prefixes on the bridge identity's
@@ -431,7 +438,7 @@ let memory_tool ~(env : Eio_unix.Stdenv.base) (args : Yojson.Safe.t) : string
       ^ "}"
   | Error e -> "{\"error\":" ^ q e ^ "}"
 
-(* ---- habitat/fwd: the habitat-pane forwarder (agent.borg
+(* ---- habitat/fwd: the habitat-pane forwarder (glochid.borg
    habitat-panes stanza, 2026-09-20). Habitat app faces are ordinary
    htmx fragment routes already — glochid panes WEAR them: the gate
    forwards allowlisted prefixes (glochid/fwd-apps registers
@@ -624,7 +631,7 @@ let forward_response ~(env : Eio_unix.Stdenv.base) ~(meth : string)
   match creds ~env with
   | None ->
       Error
-        "habitat bridge not configured: set AGENT_HABITAT_URL + TOKEN \
+        "habitat bridge not configured: set GLOCHID_HABITAT_URL + TOKEN \
          (or USER/PASS) — env PP_URL/PP_TOKEN (or PP_USER/PP_PASS) also works"
   | Some c ->
       let rec walk path query redirects =
@@ -696,3 +703,4 @@ let fwd_register ~(rt : Runtime.t) ~(env : Eio_unix.Stdenv.base) : unit =
                        "kernel paths cannot be forwarded (auth.route-visibility)",
                        "refused" )))
        | _ -> prim_err "habitat/fwd-prefix" "usage: (habitat/fwd-prefix path)")
+

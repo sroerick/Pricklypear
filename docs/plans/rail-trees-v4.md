@@ -115,7 +115,7 @@ tree-lazy); splices and pane faces honor them. Latent v4 bug fixed
 en route: label-word hx-vals were url-enc'd, which broke
 filmstrip/open's split-query route matching for every query-bearing
 route (fs leaves could never open from tree labels); vals are raw
-now. code/rows + code/link deleted (obituary in borge/agent.borg
+now. code/rows + code/link deleted (obituary in borge/glochid.borg
 filmstrip-shell, amendment note in borge/filmstrip.borg
 rail-trees-v4). Full battery green: runtest, smoke, probe 115 OK.
 

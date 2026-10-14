@@ -7,7 +7,7 @@
     each host owns its wire (curl vs hand-rolled Eio HTTP); this module
     owns the value<->json boundary.
 
-    Spec gate ([borge/agent.borg] / [borge/remote-eval.borg]): a shared,
+    Spec gate ([borge/glochid.borg] / [borge/remote-eval.borg]): a shared,
     tested value<->json codec. The robustness the image has bled for —
     GLM-class [reasoning_content] selection and XML-in-content tool-call
     fallback — lives here so the standalone agent inherits it. *)

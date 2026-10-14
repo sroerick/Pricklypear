@@ -1,7 +1,7 @@
 (** Agent runtime: the shared Nopales env + rim host.
 
     One runtime per process. All evaluation is serialized through
-    [eval_mutex] (per borge/agent.borg nopales-embed); host prims are
+    [eval_mutex] (per borge/glochid.borg nopales-embed); host prims are
     synchronous and block the calling fiber under Eio.
 
     The host seam (request shape, route table + dispatch, template
@@ -77,7 +77,7 @@ let eval_string ~(rt : t) (src : string) : Ast.value =
 (** Evaluate all top-level forms in [src] into the shared env, under
     the eval lock + rim. Used to boot-load Nopales packages (libs/std,
     libs/html, libs/hyper) as SOURCE — the same env as plugins/REPL, so
-    the surface is redefinable live (borge/agent.borg surfaces). *)
+    the surface is redefinable live (borge/glochid.borg surfaces). *)
 let load_source ~(rt : t) (src : string) : unit =
   ignore
     (rt.seam.run_in_rim (fun () ->
@@ -255,7 +255,7 @@ let register_soup_prims (t : t) : unit =
     UNBOUND — authorship is a DB-row concept (agent-route-table.pg-prim-
     unbound pins it: routes calling it must report unbound), and the lens
     has no author column. Same name, host-local backing — the route/
-    dispatch seam philosophy (borge/agent.borg, borge/local-first.borg). *)
+    dispatch seam philosophy (borge/glochid.borg, borge/local-first.borg). *)
 let operator_name () : string =
   try Unix.getlogin ()
   with _ -> (

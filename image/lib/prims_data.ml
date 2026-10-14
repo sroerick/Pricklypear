@@ -802,6 +802,34 @@ let register (t : t) (tbl : Primitives.t) : unit =
       | _ ->
           ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("tree/list-kind", "need prefix kind [, limit]", "bad-args"))))));
 
+  (* 82871ca1: note-garden confinement. The note prims are PREFIX-wide, so
+     the prefix IS the boundary: an arbitrary caller-chosen prefix reads
+     every user's notes (found live on prod from a delegated agent seat,
+     read-only). Each caller may sweep ALWAYS (1) its own note garden
+     [data.note.u.<caller>], or (2) the SHARED seed corpus under
+     data.shared.* (garden-root parity with the no-arg shapes). Anything
+     other than those two prefixes belongs to somebody else - rejected
+     loudly. Admin unrestricted (workspace-level visibility). *)
+    let gate_note_prefix ~caller ~(viewer_is_admin : bool) ~(prefix : string) : unit =
+    let owned_prefix = "data.note.u." ^ caller in
+    let shared_prefix = "data.shared" in
+    let ok =
+      viewer_is_admin
+      || String.length prefix = 0
+      || (String.length prefix >= String.length owned_prefix
+          && String.sub prefix 0 (String.length owned_prefix) = owned_prefix)
+      || (String.length prefix >= String.length shared_prefix
+          && String.sub prefix 0 (String.length shared_prefix) = shared_prefix)
+    in
+    if not ok then
+      raise (Pricklypear_lisp.Ast.Interp_error
+        (Pricklypear_lisp.Ast.Prim_error
+           ("tree/note-index",
+            Printf.sprintf
+              "note prefix %s is outside your garden (82871ca1 confinement)"
+              prefix,
+            "denied")))
+    else () in
   register_crud "tree/note-index"
     (fun args ->
       match args with
@@ -809,8 +837,14 @@ let register (t : t) (tbl : Primitives.t) : unit =
           Crud.tree_note_index t.store
             ~prefix:(Tree_store.garden_root ~user:(actor ())) ()
       | [ Pricklypear_lisp.Ast.VStr prefix ] ->
+          gate_note_prefix ~caller:(actor ())
+            ~viewer_is_admin:(Prims_db_common.is_verified_admin ~t ())
+            ~prefix;
           Crud.tree_note_index t.store ~prefix ()
       | [ Pricklypear_lisp.Ast.VStr prefix; Pricklypear_lisp.Ast.VInt n ] ->
+          gate_note_prefix ~caller:(actor ())
+            ~viewer_is_admin:(Prims_db_common.is_verified_admin ~t ())
+            ~prefix;
           Crud.tree_note_index t.store ~prefix ~limit:(Int64.to_int n) ()
       | _ ->
           ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("tree/note-index", "[] | prefix [, limit]", "bad-args"))))));
@@ -827,8 +861,14 @@ let register (t : t) (tbl : Primitives.t) : unit =
             ~prefix:(Tree_store.garden_root ~user:(actor ()))
             ~with_outline:true ()
       | [ Pricklypear_lisp.Ast.VStr prefix ] ->
+          gate_note_prefix ~caller:(actor ())
+            ~viewer_is_admin:(Prims_db_common.is_verified_admin ~t ())
+            ~prefix;
           Crud.tree_note_index t.store ~prefix ~with_outline:true ()
       | [ Pricklypear_lisp.Ast.VStr prefix; Pricklypear_lisp.Ast.VInt n ] ->
+          gate_note_prefix ~caller:(actor ())
+            ~viewer_is_admin:(Prims_db_common.is_verified_admin ~t ())
+            ~prefix;
           Crud.tree_note_index t.store ~prefix ~limit:(Int64.to_int n)
             ~with_outline:true ()
       | _ ->
@@ -841,6 +881,9 @@ let register (t : t) (tbl : Primitives.t) : unit =
           Crud.tree_folder_index t.store
             ~prefix:(Tree_store.garden_root ~user:(actor ())) ()
       | [ Pricklypear_lisp.Ast.VStr prefix ] ->
+          gate_note_prefix ~caller:(actor ())
+            ~viewer_is_admin:(Prims_db_common.is_verified_admin ~t ())
+            ~prefix;
           Crud.tree_folder_index t.store ~prefix ()
       | _ ->
           ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("tree/folder-index", "[] | prefix", "bad-args"))))));
@@ -878,11 +921,17 @@ let register (t : t) (tbl : Primitives.t) : unit =
       | [ Pricklypear_lisp.Ast.VStr needle; Pricklypear_lisp.Ast.VInt n ] ->
           run ~prefix:(garden ()) ~needle ~limit:(Int64.to_int n)
       | [ Pricklypear_lisp.Ast.VStr prefix; Pricklypear_lisp.Ast.VStr needle ] ->
+          gate_note_prefix ~caller:(actor ())
+            ~viewer_is_admin:(Prims_db_common.is_verified_admin ~t ())
+            ~prefix;
           run ~prefix ~needle ~limit:20
       | [ Pricklypear_lisp.Ast.VStr prefix
         ; Pricklypear_lisp.Ast.VStr needle
         ; Pricklypear_lisp.Ast.VInt n
         ] ->
+          gate_note_prefix ~caller:(actor ())
+            ~viewer_is_admin:(Prims_db_common.is_verified_admin ~t ())
+            ~prefix;
           run ~prefix ~needle ~limit:(Int64.to_int n)
       | _ ->
           ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("tree/search-text", "needle [, limit] | prefix needle [, limit]", "bad-args"))))));

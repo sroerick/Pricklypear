@@ -77,7 +77,7 @@ history only.)
 | `image/` | Sole runtime binary |
 | `libs/` | Nopales packages seeded to `system/main` |
 | `cli/` | OCaml laptop clients: `pp-eval`, `pp-sync` (no Python) |
-| `agent/` | **glochid** — local-first agent harness: Nopales-native coding agent; Nopales htmx fragments + multipart/mixed streamed turns ([`borge/agent.borg`](borge/agent.borg)) |
+| `glochid/` | **glochid** — local-first agent harness: Nopales-native coding agent; Nopales htmx fragments + multipart/mixed streamed turns ([`borge/glochid.borg`](borge/glochid.borg)) |
 | `scripts/` | `dev.sh`, `pp-eval.sh` wrappers, `verify_habitat.sh` (on-image `libs/verify`), seed ETL |
 | `docs/` | **Living docs only**: [`one-tree.md`](docs/one-tree.md) (storage overview), [`notes-ui-contract.md`](docs/notes-ui-contract.md), [`agent-ui-harness.md`](docs/agent-ui-harness.md) (agent FE verify research) |
 | `archive/` | Executed handoffs / superseded plans / UI reviews / retired probes — receipts, not spec ([`archive/README.md`](archive/README.md)) |
