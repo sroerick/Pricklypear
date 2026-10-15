@@ -475,9 +475,38 @@ and eval_define
   | Some { name; body; doc = _ } ->
       assert_bindable_name env name;
       let v =
-        match body with
-        | Lambda (params, b) -> VLambda (params, b, env)
-        | other -> eval ~budget ~prims env other
+          match body with
+          | Lambda (params, b) -> VLambda (params, b, env)
+          | App (Var "__macro__", [ params_expr; body_expr ]) ->
+              (* Stored defmacro shape (persist_fn): (define name
+                 (__macro__ params body)). The kernel env loader binds
+                 these eagerly (session.ml lazy-env-load); bind the
+                 VMacro here too, so bare evaluators that read stored
+                 trees without that loader in front - glochid boot-load
+                 (runtime.ml load_source), load-library re-evals - get
+                 a macro instead of an unbound __macro__ application
+                 (filmstrip-glochid seam map 1b). *)
+              let params =
+                match params_expr with
+                | Lit VNil -> []
+                | App (Var p, rest) ->
+                    p
+                    :: List.map
+                         (function
+                          | Var s -> s
+                          | _ ->
+                              raise
+                                (Interp_error
+                                   (User_error
+                                      ("macro param not a symbol", "bad-args"))))
+                         rest
+                | _ ->
+                    raise
+                      (Interp_error
+                         (User_error ("malformed macro params", "bad-args")))
+              in
+              VMacro (params, body_expr, env)
+          | other -> eval ~budget ~prims env other
       in
       Env.define env name v;
       Done v
