@@ -54,7 +54,7 @@ delivered body parses as JSON and raises if tuna answered {error: ...}
 (define tuna/headers
   (lambda (cfg)
     "Headers JSON for bearer-authed tuna calls."
-    (string-append "{\"Content-Type\": \"application/json\", \"Authorization\": \"Bearer \""
+    (string-append "{\"Content-Type\": \"application/json\", \"Authorization\": \"Bearer "
                    (json-escape (dict-get cfg "bearer"))
                    "\"}")))
 
