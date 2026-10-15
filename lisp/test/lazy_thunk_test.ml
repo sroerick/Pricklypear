@@ -92,6 +92,69 @@ let budget_failure_is_retryable () =
   ignore (eval_str env "recipe");
   Alcotest.(check int) "success memoized (no third run)" 2 !count
 
+(* card 4c6d3e9f (2026-10-15): the budget carve-out generalizes. A
+   Prim_error "denied" is SEAT-DEPENDENT (delegation tier, ws writes) -
+   the same body forces fine as admin or after a tier change, so
+   memoizing it pinned the filmstrip library for delegated seats
+   (2026-10-14 load-library abort). Must stay retryable. *)
+let denied_failure_is_retryable () =
+  let env = Env.create () in
+  let count = ref 0 in
+  let mode = ref `fail in
+  let gated_eval (_env : env) (_expr : expr) : value =
+    incr count;
+    match !mode with
+    | `fail ->
+        raise
+          (Interp_error
+             (Prim_error ("reseed-package", "denied for delegated sessions", "denied")))
+    | `ok -> VStr "seeded"
+  in
+  Env.define_thunk env "seed" ~force:gated_eval
+    (App (Lambda ([ "x" ], Var "x"), [ Lit (VInt 1L) ]));
+  let raised_first =
+    try ignore (eval_str env "seed"); false
+    with Interp_error (Prim_error (_, _, "denied")) -> true
+  in
+  Alcotest.(check bool) "first force raised denied" true raised_first;
+  mode := `ok;
+  let v = eval_str env "seed" in
+  Alcotest.(check string) "second touch retries and succeeds" "\"seeded\""
+    (Reader.pp_value v);
+  ignore (eval_str env "seed");
+  Alcotest.(check int) "success memoized (no third run)" 2 !count
+
+(* card 4c6d3e9f: a thunk referencing a name that registers LATER (a
+   package loading in order) forces Unbound_var when first touched
+   mid-load; memoizing that poisons the binding even after the load
+   completes. Must stay retryable - after the name registers, the next
+   touch succeeds and memoizes. *)
+let unbound_failure_is_retryable () =
+  let env = Env.create () in
+  let count = ref 0 in
+  let registered = ref false in
+  let gated_eval (e : env) (expr : expr) : value =
+    incr count;
+    if not !registered then raise (Interp_error (Unbound_var "later-form"))
+    else
+      Eval.eval ~budget:(Eval.make_budget ()) ~prims:Eval.empty_prims e expr
+  in
+  Env.define_thunk env "late-ref" ~force:gated_eval
+    (App (Var "later-form", [ Lit (VInt 1L) ]));
+  let raised_first =
+    try ignore (eval_str env "late-ref"); false
+    with Interp_error (Unbound_var "later-form") -> true
+  in
+  Alcotest.(check bool) "first force raised unbound" true raised_first;
+  (* the package finishes loading: the name registers *)
+  ignore (eval_str env "(define (later-form x) (* 2 x))");
+  registered := true;
+  let v = eval_str env "late-ref" in
+  Alcotest.(check string) "second touch retries and succeeds" "2"
+    (Reader.pp_value v);
+  ignore (eval_str env "late-ref");
+  Alcotest.(check int) "success memoized (no third run)" 3 !count
+
 let cyclic_force_raises () =
   let env = Env.create () in
   (* self refers to itself: forcing marks Forcing, the inner lookup
@@ -124,6 +187,8 @@ let tests = [
   ("force runs body once, memoizes", `Quick, force_runs_body_once_memoizes);
   ("failure is memoized", `Quick, failure_is_memoized);
   ("budget failure is retryable (not memoized)", `Quick, budget_failure_is_retryable);
+  ("denied failure is retryable (not memoized)", `Quick, denied_failure_is_retryable);
+  ("unbound failure is retryable (not memoized)", `Quick, unbound_failure_is_retryable);
   ("cyclic force raises", `Quick, cyclic_force_raises);
   ("forcing sees fully linked env", `Quick, forcing_resolves_through_fully_linked_env);
 ]
