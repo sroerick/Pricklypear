@@ -572,6 +572,45 @@ between strip and rail).")
                 (glochid/tg "blue" "#2a6fdb"))
               "--pp-btn-hi" (guard (lambda (e) "#3b5bdb")
                 (glochid/tg "accent" "#3b5bdb"))
+                ;; ui/css component tokens the v5 raw rules don't restyle:
+                ;; status pills, table stripes, modal cards (notes uses
+                ;; var(--card,#fff)), link colors. Override the light
+                ;; values so pane CONTENT is dark, not just pane chrome
+                ;; (2026-10-14 pane theming).
+                "--bg" (guard (lambda (e) "#0f1117")
+                  (glochid/tg "darker_background" "#0f1117"))
+                "--link" (guard (lambda (e) "#7aa2f7")
+                  (glochid/tg "accent" "#7aa2f7"))
+                "--visited" (guard (lambda (e) "#bb9af7")
+                  (glochid/tg "magenta" "#bb9af7"))
+                "--err" (guard (lambda (e) "#f7768e")
+                  (glochid/tg "bright_red" "#f7768e"))
+                "--ok" (guard (lambda (e) "#9ece6a")
+                  (glochid/tg "green" "#9ece6a"))
+                "--row-alt" "#1f2335"
+                "--shadow" "#05070c"
+                "--pending-bg" "#33290f"
+                "--pending-ink" (guard (lambda (e) "#e0af68")
+                  (glochid/tg "yellow" "#e0af68"))
+                "--pending-border" "#8a6d3b"
+                "--done-bg" "#1e3329"
+                "--done-ink" (guard (lambda (e) "#9ece6a")
+                  (glochid/tg "green" "#9ece6a"))
+                "--done-muted" "#5f7a52"
+                "--waiting-bg" "#1f2b45"
+                "--archived-bg" "#23262e"
+                "--archived-ink" "#8b93a7"
+                "--archived-border" "#3b4252"
+                "--cancelled-bg" "#2e2226"
+                "--today-bg" "#24324d"
+                "--banner-bg" "#33290f"
+                "--banner-border" (guard (lambda (e) "#e0af68")
+                  (glochid/tg "yellow" "#e0af68"))
+                "--banner-ink" (guard (lambda (e) "#e8c47c")
+                  (glochid/tg "orange" "#e8c47c"))
+                "--badge-bg" "#2a3140"
+                "--badge-border" "#7aa2f7"
+                "--card" "#1b1f2a"
               ))
         (css/rule
           ".fs-shell"
@@ -832,6 +871,10 @@ between strip and rail).")
           ;; these rules APPLY it (dark shell, sidebar row layout, rail
           ;; box, start menu, lookbook + CM pane chrome).
           (css/raw "html,body{height:100%}body{background:var(--pp-bg);color:var(--ink);font-family:ui-monospace,Menlo,monospace;margin:0;padding:1rem;box-sizing:border-box}a{color:var(--sel-accent);text-decoration:none}a:hover{text-decoration:underline}.muted{color:var(--muted)}h1{margin:.25rem 0 .75rem 0;font-size:1.1rem}table{border-collapse:collapse;width:100%;max-width:60rem}td,th{padding:.35rem .6rem;border-bottom:1px solid var(--border);text-align:left;white-space:nowrap}pre{background:var(--chrome);padding:1rem;border-radius:6px;overflow:auto}input{background:var(--panel);color:var(--ink);border:1px solid var(--border);border-radius:6px;padding:.5rem}select{background:var(--panel);color:var(--ink);border:1px solid var(--border);border-radius:4px}label{color:var(--muted)}button{background:var(--pp-btn);color:#fff;border:0;border-radius:6px;padding:.5rem 1rem;cursor:pointer}")
+            ;; render-html wraps every page in <main> and ui/css caps it
+            ;; at 52rem centered: a window-manager strip owns the viewport
+            ;; width (2026-10-14 pane theming).
+            (css/raw "main{max-width:none;margin:0;padding:0}")
           (css/raw ".fs-shell{height:calc(100vh - 2rem)}.fs-shell:has(#fs-axis.col){flex-direction:row}.fs-shell:has(#fs-axis.col) .fs-content{order:0;flex:1 1 auto;min-height:0;min-width:0}#fs-surface{display:contents}#fs-rail{display:contents}.fs-shell:has(#fs-axis.col) #fs-rail{order:-3;display:flex;flex-direction:column;flex:0 0 20rem;max-width:20rem;min-width:0;min-height:0;overflow-y:auto;overflow-x:hidden;gap:.25rem;padding:.25rem .25rem .25rem 0}")
           (css/raw ".fs-shell:not(:has(#fs-axis.col)) .fs-pane[data-region=\\\"rail\\\"]{flex:0 0 auto;max-height:20rem;min-width:20rem;min-height:0;overflow:hidden}.fs-shell:not(:has(#fs-axis.col)) .fs-pane[data-region=\\\"rail\\\"] .fs-body{display:block;flex:1 1 auto;min-height:0;overflow:auto}.fs-shell:has(#fs-axis.col) .fs-pane[data-region=\\\"rail\\\"]{flex:1 1 auto;width:100%;min-height:0}.fs-shell:has(#fs-axis.col) .fs-pane[data-region=\\\"rail\\\"] .fs-body{display:block;flex:1 1 auto;min-height:0;overflow:auto}.fs-shell:has(#fs-axis.col) .chatpage{height:100%}")
           (css/raw ".bubble{background:var(--panel);border-radius:6px;padding:.5rem .75rem;margin:.5rem 0;white-space:pre-wrap}.bubble.user{color:var(--pp-ok)}.bubble.llm{color:var(--ink)}.bubble.repl{color:var(--pp-repl)}.trace{color:var(--muted);font-size:.85em;white-space:pre-wrap}.think{color:var(--muted);font-size:.9em;margin:.4rem 0}.think summary{cursor:pointer}.think>div{white-space:pre-wrap}.reason{color:var(--muted);font-style:italic}.think .tk,.think .tool{margin:.25rem 0 .25rem .25rem}.think .tk>summary,.think .tool>summary{color:var(--muted)}.think .tk>div,.think .tool>div{margin-left:.9rem;padding-left:.5rem;border-left:1px solid var(--border)}.think:not(:has(.reason,.trace)){display:none}.chatpage{display:flex;flex-direction:column;height:calc(100vh - 6rem)}.chatpage #log{flex:1;min-height:0;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:.75rem;margin-bottom:.75rem}.chatpage form{display:flex;gap:.5rem;flex-shrink:0}.chatpage #msg{flex:1}.chatpage form button{flex-shrink:0}")
