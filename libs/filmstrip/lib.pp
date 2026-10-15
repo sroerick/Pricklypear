@@ -3102,7 +3102,7 @@ mutated rows now survives mutations, which is the truer v4 story.")
 ;; knows which nodes are open.
   (define filmstrip/tree-roots
     (lambda ()
-      (list (list "windows" "windows" filmstrip/windows-tree))))
+      (list (list "windows" "windows" filmstrip/windows-tree)))
     "Host seam: list of (id title levelfn). A levelfn takes a node path
   string (\"\" = the root level) and answers a list of node dicts:
   (label kind node open verbs kids) -- kind dir|leaf, node the lazy-kids
