@@ -269,14 +269,24 @@
         (filmstrip/app-routes (cdr apps)))))
   "The route-leaf targets of the app list ((label target) entries whose\ntarget starts with /).")
 
-(define filmstrip/apps
-  (lambda
-    ()
-    (list
-      (list "todos" "todo")
-      (list "notes" "notes")
-      (list "calendar" "calendar")))
-  "Column 0: the app chooser. Entries are (label . target); target is the\npackage key that names the browse below.")
+  (define filmstrip/apps
+    (lambda
+      ()
+      (list
+        (list "todos" "/todos")
+        (list "notes" "/notes")
+        (list "calendar" "/calendar")
+        (list "dabar" "/dabar")
+        (list "strongs" "/strongs")
+        (list "flashcards" "/flashcards")
+        (list "contacts" "/contacts")
+        (list "chat" "/chat")
+        (list "weather" "/weather")
+        (list "agent" "/agent")
+        (list "calories" "/cal")
+        (list "bookmarks" "/bookmarks")
+        (list "plans" "/plans")))
+    "The surfaces the start menu opens. Entries are (label . target); target is a ROUTE (starts with /) posted verbatim to /filmstrip/open -- a pane is any route dispatched in partial mode. The cascade (/filmstrip/browse, lib contract) translates targets back to package keys via filmstrip/pkg-of-route; glochid redefines this list (host seam 2).")
 
 (define filmstrip/axis-sentinel
   (lambda (axis ?oob)
@@ -319,6 +329,17 @@ empty set, never a parse error).")
             (filmstrip/boxrows-has root (cdr rows)))))
   "Membership probe for the MRU set (string-eq, order-irrelevant).")
 
+  (define filmstrip/pkg-of-route
+    (lambda (t)
+      (let
+        ((k (if (string-starts-with? t "/")
+                (substring t 1 (- (string-length t) 1))
+                t)))
+        (if (string-eq k "todos") "todo" k)))
+    "Route target -> package key for the cascade browse (todos -> todo:
+  the shell's routes are plural, the package key singular). Unknown
+  keys pass through; pkg-browse gives one empty column for unknown
+  packages.")
 (define filmstrip/browse
   (lambda
     (path)
@@ -327,11 +348,13 @@ empty set, never a parse error).")
       (if
         (null? path)
         (cons (list apps) #f)
-        (let
-          ((r
-            (filmstrip/pkg-browse (as-str (car path)) (cdr path))))
-          (cons (cons apps (car r)) (cdr r))))))
-  "Shell cascade: column 0 is the app chooser; deeper columns come from\nthe selected package's browse. Returns (columns . leaf?).")
+          (let
+            ((r
+              (filmstrip/pkg-browse
+                (filmstrip/pkg-of-route (as-str (car path)))
+                (cdr path))))
+            (cons (cons apps (car r)) (cdr r))))))
+  "Shell cascade: column 0 is the app chooser; deeper columns come from\nthe selected package's browse (route targets translate to package\nkeys via filmstrip/pkg-of-route). Returns (columns . leaf?).")
 
 (define filmstrip/browse-walk
   (lambda
@@ -3077,18 +3100,23 @@ mutated rows now survives mutations, which is the truer v4 story.")
 ;; threshold is host policy, never lib state); expansion state is
 ;; NATIVE <details> DOM state -- splice never swap; the server never
 ;; knows which nodes are open.
-(define filmstrip/tree-roots
-  (lambda () (list))
-  "Host seam: list of (id title levelfn). A levelfn takes a node path
-string (\"\" = the root level) and answers a list of node dicts:
-(label kind node open verbs kids) -- kind dir|leaf, node the lazy-kids
-key, open a route string or empty (label verb, open-or-focus), verbs a
-list of (word route vals-json) mutation words, kids an OPTIONAL JSON
-string of a pre-walked child level (eager dir: fold pulls nothing),
-expand the OPTIONAL default-open seed (\"true\" renders the <details>
-open -- pair it WITH kids: a parsed-open dir never fires its
-\"toggle once\" pull).
-Hosts redefine; default empty (a rootless shell renders no rail trees).")
+  (define filmstrip/tree-roots
+    (lambda ()
+      (list (list "windows" "windows" filmstrip/windows-tree))))
+    "Host seam: list of (id title levelfn). A levelfn takes a node path
+  string (\"\" = the root level) and answers a list of node dicts:
+  (label kind node open verbs kids) -- kind dir|leaf, node the lazy-kids
+  key, open a route string or empty (label verb, open-or-focus), verbs a
+  list of (word route vals-json) mutation words, kids an OPTIONAL JSON
+  string of a pre-walked child level (eager dir: fold pulls nothing),
+  expand the OPTIONAL default-open seed (\"true\" renders the <details>
+  open -- pair it WITH kids: a parsed-open dir never fires its
+  \"toggle once\" pull).
+  DEFAULT: the windows tree (desktops 0..2 default-open with switch
+  verbs + the shelf) -- the one rail tree every host gets for free, so
+  a bare habitat shell opens with glochid's windows box. Hosts redefine
+  (glochid appends code/prims/ui); an empty list still renders a
+  rootless shell.")
 
 (define filmstrip/tree-stub
   (lambda (root)
