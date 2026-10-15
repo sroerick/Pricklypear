@@ -838,6 +838,32 @@ between strip and rail).")
           (css/raw "*{scrollbar-width:thin;scrollbar-color:var(--sel-bg) transparent}::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--sel-bg);border-radius:6px}::-webkit-scrollbar-thumb:hover{background:var(--muted)}::-webkit-scrollbar-corner{background:transparent}.fs-applink{background:none;border:0;color:var(--sel-accent);padding:0;margin:0;font:inherit;cursor:pointer;text-decoration:none}.fs-applink:hover{text-decoration:underline}.fs-modelsel{font-size:.6em;padding:.1rem .3rem}")
           (css/raw ".lb-btn{font:inherit;padding:.25rem .7rem;border:1px solid var(--border);border-radius:4px;background:var(--panel);color:inherit;cursor:pointer}.lb-btn-primary{background:var(--pp-btn-hi);border-color:var(--pp-btn-hi);color:#fff}.lb-btn-danger{background:var(--pp-danger);border-color:var(--pp-danger);color:#fff}.lb-badge{display:inline-block;font-size:.72em;padding:.05rem .45rem;border-radius:999px;border:1px solid var(--border);color:var(--muted)}.lb-badge-ok{color:var(--pp-ok);border-color:var(--pp-ok)}.lb-badge-warn{color:var(--pp-warn);border-color:var(--pp-warn)}.lb-card{border:1px solid var(--border);border-radius:6px;padding:.75rem;background:var(--panel)}.lb-card h3{margin:0 0 .5rem;display:flex;gap:.5rem;align-items:center}.lb-card p{margin:.25rem 0 0}.lb-stage{border:1px dashed var(--border);padding:.9rem;border-radius:6px;display:flex;gap:.6rem;align-items:center;flex-wrap:wrap}.lb-form{display:flex;gap:.4rem;flex-wrap:wrap;align-items:center;margin:.6rem 0}.lb-form input{font:inherit;padding:.2rem .4rem;background:var(--panel);color:inherit;border:1px solid var(--border);border-radius:4px}.lb-form label{color:var(--muted,#9aa3b2);font-size:.85em}.lb-folds{margin-top:.6rem}.lb-folds details{margin:.3rem 0}.lb-folds summary{cursor:pointer;color:var(--muted,#9aa3b2)}.lb-folds pre{overflow:auto;font-size:.85em;background:var(--panel);padding:.5rem;border-radius:4px;border:1px solid var(--border)}.lb-vtabs{display:flex;gap:.3rem;flex-wrap:wrap;margin:.4rem 0}.lb-vtab{cursor:pointer}.lb-vtab.fs-sel{outline:1px solid var(--sel-accent)}.lb-swatch{display:inline-flex;align-items:center;gap:.4rem;padding:.15rem .55rem;border:1px solid var(--border);border-radius:4px;font-size:.85em}.lb-swatch b{width:.95em;height:.95em;display:inline-block;border-radius:3px;border:1px solid var(--border)}.lb-palette{display:flex;gap:.35rem;flex-wrap:wrap}.lb-palette .lb-swatch{border:none;padding-left:0}.lb-palette .lb-swatch b{width:1.6em;height:1.6em}.lb-palette .lb-swatch span{color:var(--muted)}")
           (css/raw ".fs-railtabs{display:flex;gap:.3rem;align-items:center;border:1px solid var(--border);background:var(--panel);padding:.3rem .35rem}.fs-start{position:relative;flex:0 0 auto}.fs-start-word{cursor:pointer;list-style:none;font-weight:700}.fs-start-word::-webkit-details-marker{display:none}.fs-start-menu{position:absolute;left:0;top:100%;z-index:30;display:flex;flex-direction:column;min-width:10rem;background:var(--panel);border:1px solid var(--border);box-shadow:0 4px 14px rgba(0,0,0,.5);padding:.25rem}.fs-start-entry{width:100%;text-align:left;padding:.3rem .5rem;white-space:nowrap}.fs-start-entry:hover{background:var(--sel-bg)}.fs-railtab.fs-btn{background:none;border:1px solid transparent;color:var(--sel-accent)}.fs-keys{margin-left:auto;color:var(--muted,#6b7080);cursor:help;font-size:1.1em;user-select:none}")
+        ;; rail-trees-v4 chrome (RECOVERED: these rules were dropped from
+        ;; the css in the p2 splice -- the renderer kept emitting the
+        ;; classes, so the habitat tree rendered as a bare list; the
+        ;; running glochid binary still embedded them, which is why the
+        ;; two shells disagreed).
+        (css/rule ".fs-tr-root" (list "list-style" "none" "margin" "0" "padding" "0"))
+        (css/rule ".fs-tr-kids" (list "list-style" "none" "margin" "0" "padding" "0 0 0 .8rem" "border-left" "1px solid var(--border)"))
+        (css/rule ".fs-tr-item" (list "min-height" "1.4rem"))
+        (css/rule ".fs-tr-row" (list "display" "flex" "gap" ".3rem" "align-items" "center" "min-height" "1.4rem" "cursor" "pointer" "list-style" "none"))
+        (css/rule ".fs-tr-row::-webkit-details-marker" (list "display" "none"))
+        (css/rule ".fs-tr-fold" (list "flex" "0 0 1rem" "width" "1rem" "text-align" "center" "color" "var(--muted)" "display" "inline-block" "transition" "transform .08s"))
+        (css/rule "details[open] > .fs-tr-row .fs-tr-fold" (list "transform" "rotate(90deg)"))
+        (css/rule ".fs-tr-open" (list "flex" "1 1 auto" "overflow" "hidden" "text-overflow" "ellipsis" "white-space" "nowrap" "text-align" "left"))
+        (css/rule ".fs-tr-verb" (list "flex" "0 0 auto"))
+        (css/rule ".fs-act" (list "padding" ".06rem .34rem" "font-size" ".9rem" "line-height" "1.1" "min-width" "1.5rem"))
+        (css/rule ".fs-tr-acts-ul" (list "list-style" "none" "margin" "0" "padding" ".1rem 0 .15rem 1.3rem"))
+        ;; The actions fold is NARROW-ONLY: at rail width the row reads
+        ;; as fold + label + glyphs; past the breakpoint the glyphs
+        ;; demote into the fold (responsive = depth, not a new widget --
+        ;; the fold IS the menu). Never both at once.
+        (css/rule ".fs-tr-node > .fs-tr-acts-ul" (list "display" "none"))
+        (css/media
+          "max-width:40rem"
+          (list
+            (css/rule ".fs-tr-verb" (list "display" "none"))
+            (css/rule ".fs-tr-node[open] > .fs-tr-acts-ul" (list "display" "block"))))
           (css/raw ".pp-cm-host .CodeMirror{height:80vh;font-size:13px;line-height:1.4;background:var(--chrome);color:var(--ink)}.pp-cm-host .CodeMirror-gutters{background:var(--chrome);border-right:1px solid var(--border)}.pp-cm-host .CodeMirror-linenumber{color:var(--muted)}.pp-cm-host .CodeMirror-cursor{border-left:1px solid var(--sel-accent)}.pp-cm-bar{display:flex;gap:.6rem;align-items:center;margin:.35rem 0}.pp-cm-save{cursor:pointer}.pp-cm-status::after{content:none}"))))
   "Strip + pane + launcher stylesheet (~50 lines of rules). Widths are\nthe three presets only; .focused is the server-owned ring.")
 
