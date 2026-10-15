@@ -1302,7 +1302,7 @@ lazy (empty string, no kids field).")
         0)))
   "One fs level as node-dict rows (JSON strings): the same hidden-dot
 rule as the old cascade walk; dir children self-report their eager
-threshold. glochid/keep-nodes drops the hidden markers in place.")
+threshold. filmstrip/keep-nodes drops the hidden markers in place.")
 
 (define glochid/code-tree
   (lambda (path)
@@ -1391,7 +1391,7 @@ message (falsifiable inventory, never source sniffing).")
 (define filmstrip/tree-roots
   (lambda ()
     (list
-      (list "windows" "windows" glochid/windows-tree)
+        (list "windows" "windows" filmstrip/windows-tree)
       (list "code" "code" glochid/code-tree)
       (list "prims" "prims" glochid/prims-tree)
       (list "ui" "ui" glochid/ui-tree)))
