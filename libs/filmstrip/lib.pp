@@ -18,47 +18,6 @@
     filmstrip/launcher-hint
 ))
 
-;; filmstrip-ws workspace row type: declared up top because the kernel's
-;; typed-boundary rule rejects writes to an undeclared datum type
-;; (crud.check_type_fields) and returns that rejection as a plain string
-;; VALUE which ws-save silently discards -- an undeclared type made every
-;; pane open fail to persist across reload (prod 10-12, UI gate da8e0223:
-;; GET /filmstrip rendered fs-content empty after every open).
-;; Guarded like todo/comments-init!. Zero fields = the declared
-;; schemaless case (crud.ml: [Some []] vs [None] are distinct): the row
-;; body is lib-managed JSON that gains keys across versions and is also
-;; written by the habitat shell's deskt wrapper, so the type stays
-;; free-form. The toplevel call seeds the declaration at boot/reseed
-;; (boot-admin context); delegated sessions no-op by design (the
-;; denial lands as the value, not an error).
-
-(define filmstrip/ws-init!
-  (lambda
-      ()
-      (if
-        (null? (type-fields (quote filmstrip-ws)))
-        (deftype (quote filmstrip-ws))
-        "filmstrip-ws ok"))
-  "Declare the filmstrip-ws workspace row type (guarded, idempotent). A
-zero-field type reports (type-fields) as null, so the guard re-fires on
-every load/reseed and the re-declare lands as an ON CONFLICT upsert. A
-delegated session no-ops by design: the deftype denial lands as this
-call's return value, not an error.")
-
-;; Load/reseed-time declaration: the boot seed/reseed evals toplevel
-;; forms once (todo/comments-init! seam). Deliberately NOT called from
-;; the render/write path (workstreams/projects-init! lesson: a delegated
-;; render would abort on the deftype denial) -- the declaration is what
-;; the typed-boundary kernel needs before any filmstrip-ws tree/upsert
-;; can persist.
-;; 1b boot-coupling (seam map 5497b76): the APP prim set does not ship
-;; the kernel's type-fields/deftype prims, so a bare toplevel call
-;; crashed every non-kernel host boot (boot-load: unbound: type-fields,
-;; repro hollis). Presence-guarded: the kernel boot/reseed still seeds
-;; (both prims bound there); an app whose prim set lacks them lands
-;; the guard value ("host cannot seed") and boots.
-(guard (lambda (e) "filmstrip-ws seed deferred: host cannot seed") (filmstrip/ws-init!))
-
 (define calendar/browse
   (lambda
     (path)
@@ -310,15 +269,77 @@ call's return value, not an error.")
         (filmstrip/app-routes (cdr apps)))))
   "The route-leaf targets of the app list ((label target) entries whose\ntarget starts with /).")
 
-(define filmstrip/apps
-  (lambda
-    ()
-    (list
-      (list "todos" "todo")
-      (list "notes" "notes")
-      (list "calendar" "calendar")))
-  "Column 0: the app chooser. Entries are (label . target); target is the\npackage key that names the browse below.")
+  (define filmstrip/apps
+    (lambda
+      ()
+      (list
+        (list "todos" "/todos")
+        (list "notes" "/notes")
+        (list "calendar" "/calendar")
+        (list "dabar" "/dabar")
+        (list "strongs" "/strongs")
+        (list "flashcards" "/flashcards")
+        (list "contacts" "/contacts")
+        (list "chat" "/chat")
+        (list "weather" "/weather")
+        (list "agent" "/agent")
+        (list "calories" "/cal")
+        (list "bookmarks" "/bookmarks")
+        (list "plans" "/plans")))
+    "The surfaces the start menu opens. Entries are (label . target); target is a ROUTE (starts with /) posted verbatim to /filmstrip/open -- a pane is any route dispatched in partial mode. The cascade (/filmstrip/browse, lib contract) translates targets back to package keys via filmstrip/pkg-of-route; glochid redefines this list (host seam 2).")
 
+(define filmstrip/axis-sentinel
+  (lambda (axis ?oob)
+    (html/tag
+      "div"
+      (html/attrs
+        (append
+          (list
+            (html/attr "id" "fs-axis")
+            (html/attr "class" (string-append "fs-sh-axis " axis)))
+          (if ?oob
+              (list (html/attr "hx-swap-oob" "outerHTML:#fs-axis"))
+              (list))))
+      ""))
+  "Inert axis sentinel (axis PINNED col -- BORGE-1789879934); CSS
+:has(#fs-axis.col) lays the shell out as the left-rail sidebar; no OOB
+mutator remains for it.")
+
+;; ---- v5 shell furniture (ported from the glochid app surface, 10-14:
+;; the desktops/rail-mode back-migration moved the DEFS; this completes
+;; the COMPOSITION + theme so the framework shell IS the v5 shell --
+;; sidebar-only (BORGE-1789879934), start menu on the railtabs row) ----
+
+(define filmstrip/boxrows
+  (lambda ()
+    (let ((v (dict-get (filmstrip/ws-fields) "boxrows")))
+      (if
+        (if (null? v) #t (string-eq (as-str v) ""))
+        (list)
+        (json-parse (as-str v)))))
+  "Visited-rail-box MRU: JSON array of root ids, newest first (ws field
+boxrows; absent/empty = none visited this session lineage -- save-all
+carries the field as \"\" when unset, so the empty string answers the
+empty set, never a parse error).")
+
+(define filmstrip/boxrows-has
+  (lambda (root rows)
+    (if (null? rows) #f
+        (if (string-eq (as-str (car rows)) root) #t
+            (filmstrip/boxrows-has root (cdr rows)))))
+  "Membership probe for the MRU set (string-eq, order-irrelevant).")
+
+  (define filmstrip/pkg-of-route
+    (lambda (t)
+      (let
+        ((k (if (string-starts-with? t "/")
+                (substring t 1 (- (string-length t) 1))
+                t)))
+        (if (string-eq k "todos") "todo" k)))
+    "Route target -> package key for the cascade browse (todos -> todo:
+  the shell's routes are plural, the package key singular). Unknown
+  keys pass through; pkg-browse gives one empty column for unknown
+  packages.")
 (define filmstrip/browse
   (lambda
     (path)
@@ -327,11 +348,13 @@ call's return value, not an error.")
       (if
         (null? path)
         (cons (list apps) #f)
-        (let
-          ((r
-            (filmstrip/pkg-browse (as-str (car path)) (cdr path))))
-          (cons (cons apps (car r)) (cdr r))))))
-  "Shell cascade: column 0 is the app chooser; deeper columns come from\nthe selected package's browse. Returns (columns . leaf?).")
+          (let
+            ((r
+              (filmstrip/pkg-browse
+                (filmstrip/pkg-of-route (as-str (car path)))
+                (cdr path))))
+            (cons (cons apps (car r)) (cdr r))))))
+  "Shell cascade: column 0 is the app chooser; deeper columns come from\nthe selected package's browse (route targets translate to package\nkeys via filmstrip/pkg-of-route). Returns (columns . leaf?).")
 
 (define filmstrip/browse-walk
   (lambda
@@ -482,6 +505,30 @@ call's return value, not an error.")
         #t
         (filmstrip/col-leaf? (cdr col)))))
   "A column is a leaf column when any entry targets a route.")
+
+(define filmstrip/content-area
+  (lambda (panes focus)
+    (html/tag
+      "div"
+      (html/attrs
+        (list
+          (html/attr "id" "fs-surface")
+          (html/attr "class" "fs-surface")))
+      (html/join
+        (list
+          (html/tag
+            "div"
+            (html/attrs
+              (list
+                (html/attr "id" "fs-content")
+                (html/attr "class" "fs-content")))
+            (html/join (filmstrip/panes-region panes focus "main")))
+          (filmstrip/rail-box panes focus)))))
+  "The surface area (v5): the main strip FIRST, then the rail box.
+Wrapping both under #fs-surface gives the region-move OOB ONE swap
+target (filmstrip/oob-content-strip re-renders this wrapper; every
+pane body is an hx-preserve placeholder, so live DOM survives the move
+between strip and rail).")
 
 (define filmstrip/css
   (lambda
@@ -791,6 +838,32 @@ call's return value, not an error.")
           (css/raw "*{scrollbar-width:thin;scrollbar-color:var(--sel-bg) transparent}::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--sel-bg);border-radius:6px}::-webkit-scrollbar-thumb:hover{background:var(--muted)}::-webkit-scrollbar-corner{background:transparent}.fs-applink{background:none;border:0;color:var(--sel-accent);padding:0;margin:0;font:inherit;cursor:pointer;text-decoration:none}.fs-applink:hover{text-decoration:underline}.fs-modelsel{font-size:.6em;padding:.1rem .3rem}")
           (css/raw ".lb-btn{font:inherit;padding:.25rem .7rem;border:1px solid var(--border);border-radius:4px;background:var(--panel);color:inherit;cursor:pointer}.lb-btn-primary{background:var(--pp-btn-hi);border-color:var(--pp-btn-hi);color:#fff}.lb-btn-danger{background:var(--pp-danger);border-color:var(--pp-danger);color:#fff}.lb-badge{display:inline-block;font-size:.72em;padding:.05rem .45rem;border-radius:999px;border:1px solid var(--border);color:var(--muted)}.lb-badge-ok{color:var(--pp-ok);border-color:var(--pp-ok)}.lb-badge-warn{color:var(--pp-warn);border-color:var(--pp-warn)}.lb-card{border:1px solid var(--border);border-radius:6px;padding:.75rem;background:var(--panel)}.lb-card h3{margin:0 0 .5rem;display:flex;gap:.5rem;align-items:center}.lb-card p{margin:.25rem 0 0}.lb-stage{border:1px dashed var(--border);padding:.9rem;border-radius:6px;display:flex;gap:.6rem;align-items:center;flex-wrap:wrap}.lb-form{display:flex;gap:.4rem;flex-wrap:wrap;align-items:center;margin:.6rem 0}.lb-form input{font:inherit;padding:.2rem .4rem;background:var(--panel);color:inherit;border:1px solid var(--border);border-radius:4px}.lb-form label{color:var(--muted,#9aa3b2);font-size:.85em}.lb-folds{margin-top:.6rem}.lb-folds details{margin:.3rem 0}.lb-folds summary{cursor:pointer;color:var(--muted,#9aa3b2)}.lb-folds pre{overflow:auto;font-size:.85em;background:var(--panel);padding:.5rem;border-radius:4px;border:1px solid var(--border)}.lb-vtabs{display:flex;gap:.3rem;flex-wrap:wrap;margin:.4rem 0}.lb-vtab{cursor:pointer}.lb-vtab.fs-sel{outline:1px solid var(--sel-accent)}.lb-swatch{display:inline-flex;align-items:center;gap:.4rem;padding:.15rem .55rem;border:1px solid var(--border);border-radius:4px;font-size:.85em}.lb-swatch b{width:.95em;height:.95em;display:inline-block;border-radius:3px;border:1px solid var(--border)}.lb-palette{display:flex;gap:.35rem;flex-wrap:wrap}.lb-palette .lb-swatch{border:none;padding-left:0}.lb-palette .lb-swatch b{width:1.6em;height:1.6em}.lb-palette .lb-swatch span{color:var(--muted)}")
           (css/raw ".fs-railtabs{display:flex;gap:.3rem;align-items:center;border:1px solid var(--border);background:var(--panel);padding:.3rem .35rem}.fs-start{position:relative;flex:0 0 auto}.fs-start-word{cursor:pointer;list-style:none;font-weight:700}.fs-start-word::-webkit-details-marker{display:none}.fs-start-menu{position:absolute;left:0;top:100%;z-index:30;display:flex;flex-direction:column;min-width:10rem;background:var(--panel);border:1px solid var(--border);box-shadow:0 4px 14px rgba(0,0,0,.5);padding:.25rem}.fs-start-entry{width:100%;text-align:left;padding:.3rem .5rem;white-space:nowrap}.fs-start-entry:hover{background:var(--sel-bg)}.fs-railtab.fs-btn{background:none;border:1px solid transparent;color:var(--sel-accent)}.fs-keys{margin-left:auto;color:var(--muted,#6b7080);cursor:help;font-size:1.1em;user-select:none}")
+        ;; rail-trees-v4 chrome (RECOVERED: these rules were dropped from
+        ;; the css in the p2 splice -- the renderer kept emitting the
+        ;; classes, so the habitat tree rendered as a bare list; the
+        ;; running glochid binary still embedded them, which is why the
+        ;; two shells disagreed).
+        (css/rule ".fs-tr-root" (list "list-style" "none" "margin" "0" "padding" "0"))
+        (css/rule ".fs-tr-kids" (list "list-style" "none" "margin" "0" "padding" "0 0 0 .8rem" "border-left" "1px solid var(--border)"))
+        (css/rule ".fs-tr-item" (list "min-height" "1.4rem"))
+        (css/rule ".fs-tr-row" (list "display" "flex" "gap" ".3rem" "align-items" "center" "min-height" "1.4rem" "cursor" "pointer" "list-style" "none"))
+        (css/rule ".fs-tr-row::-webkit-details-marker" (list "display" "none"))
+        (css/rule ".fs-tr-fold" (list "flex" "0 0 1rem" "width" "1rem" "text-align" "center" "color" "var(--muted)" "display" "inline-block" "transition" "transform .08s"))
+        (css/rule "details[open] > .fs-tr-row .fs-tr-fold" (list "transform" "rotate(90deg)"))
+        (css/rule ".fs-tr-open" (list "flex" "1 1 auto" "overflow" "hidden" "text-overflow" "ellipsis" "white-space" "nowrap" "text-align" "left"))
+        (css/rule ".fs-tr-verb" (list "flex" "0 0 auto"))
+        (css/rule ".fs-act" (list "padding" ".06rem .34rem" "font-size" ".9rem" "line-height" "1.1" "min-width" "1.5rem"))
+        (css/rule ".fs-tr-acts-ul" (list "list-style" "none" "margin" "0" "padding" ".1rem 0 .15rem 1.3rem"))
+        ;; The actions fold is NARROW-ONLY: at rail width the row reads
+        ;; as fold + label + glyphs; past the breakpoint the glyphs
+        ;; demote into the fold (responsive = depth, not a new widget --
+        ;; the fold IS the menu). Never both at once.
+        (css/rule ".fs-tr-node > .fs-tr-acts-ul" (list "display" "none"))
+        (css/media
+          "max-width:40rem"
+          (list
+            (css/rule ".fs-tr-verb" (list "display" "none"))
+            (css/rule ".fs-tr-node[open] > .fs-tr-acts-ul" (list "display" "block"))))
           (css/raw ".pp-cm-host .CodeMirror{height:80vh;font-size:13px;line-height:1.4;background:var(--chrome);color:var(--ink)}.pp-cm-host .CodeMirror-gutters{background:var(--chrome);border-right:1px solid var(--border)}.pp-cm-host .CodeMirror-linenumber{color:var(--muted)}.pp-cm-host .CodeMirror-cursor{border-left:1px solid var(--sel-accent)}.pp-cm-bar{display:flex;gap:.6rem;align-items:center;margin:.35rem 0}.pp-cm-save{cursor:pointer}.pp-cm-status::after{content:none}"))))
   "Strip + pane + launcher stylesheet (~50 lines of rules). Widths are\nthe three presets only; .focused is the server-owned ring.")
 
@@ -799,6 +872,73 @@ call's return value, not an error.")
 
 (define filmstrip/desk-count 3
   "Desktops the pane-head move verb CYCLES (0 .. N-1, wraps). Glochid\ndeclares three (the windows tree's desk/0..2 rows); a host modeling a\nbigger ring redefines this. The :has CSS may cover 0..9 -- the cycle\nwalks the DECLARED ring, not the CSS ceiling.")
+
+;; ---- 2d. DESKTOPS (back-migrated from the glochid embedded copy,
+;; phase 2 of the cut-over; the app copies retire) ----
+;; The ws row carries "desktop":N (0 default) and each pane record a
+;; "desktop" field. An inert #ws-desk sentinel beside #fs-axis carries
+;; the current desktop to CSS (:has hides the other desktops' panes --
+;; ten pairs in filmstrip/css, no JS); the windows tree's desktop rows
+;; carry the switch verb. Focus heals onto the first live pane of the
+;; target desktop when the focused pane lives elsewhere (a live MAIN
+;; pane is preferred -- the lift; a rail pane satisfies I1 when no
+;; main exists). The desktop READ was already framework-side
+;; (filmstrip/ws-desktop); these are the shell pieces that lived only
+;; in the copy.
+(define filmstrip/desk-sentinel
+  (lambda
+    (d ?oob)
+    (html/tag
+      "div"
+      (html/attrs
+        (append
+          (list
+            (html/attr "id" "ws-desk")
+            (html/attr "class" (string-append "fs-sh-axis dsk-" (as-str d))))
+          (if
+            ?oob
+            (list (html/attr "hx-swap-oob" "outerHTML:#ws-desk"))
+            (list))))
+      ""))
+  "Inert desktop sentinel beside the axis one; CSS :has(#ws-desk.dsk-N)
+hides the other desktops' panes. ?oob renders it as an OOB outerHTML
+swap (the desktop response).")
+
+(define filmstrip/desktop-set
+  (lambda
+    ()
+    (let*
+      ((dv (request-param "d"))
+        (d (if (null? dv) 0 (parse-int (as-str dv))))
+        (row (filmstrip/row))
+        (cascade (nth row 0))
+        (panes (nth row 1))
+        (focus (nth row 2))
+        (focus2
+          (if
+            (and
+              (>= focus 0)
+              (= (filmstrip/pane-desk (filmstrip/pane-at panes focus)) d))
+            focus
+            (let
+              ((f (filmstrip/first-on-desk panes d 0)))
+              (if (< f 0) focus f)))))
+      (seq
+        (filmstrip/ws-save
+          (dict-set* (filmstrip/ws-fields) (list "desktop" (as-str d))))
+        (filmstrip/save-all cascade panes focus2)
+        (render-html
+          (html/join
+            (list
+              (filmstrip/oob-msg "")
+              (filmstrip/desk-sentinel d #t)
+              (filmstrip/oob-content-strip panes focus2)))))))
+  "POST /filmstrip/desktop: d param -> set + persist the shell desktop;
+heal focus onto the first live pane of that desktop when the focused
+pane lives elsewhere; answer with OOB swaps of the desk sentinel + a
+re-render of the content strip (panes of the new desktop keep their
+live DOM via hx-preserve; panes of the others re-render inert -- the
+workspace row keeps every record, only the swapped DOM shrinks).")
 
 (define filmstrip/destroy
   (lambda
@@ -900,6 +1040,17 @@ call's return value, not an error.")
     (filmstrip/find-index filmstrip/pane-live? panes 0))
   "Index of the first live (not shelved) pane, else -1.")
 
+(define filmstrip/first-on-desk
+  (lambda
+    (panes d i)
+    (let
+      ((m (filmstrip/first-region-on-desk panes d i "main")))
+      (if (< m 0) (filmstrip/first-region-on-desk panes d i "rail") m)))
+  "Index of the first LIVE pane on desktop d, else -1 (v3 heal
+discipline: a live MAIN pane is preferred -- it takes the lift; rail
+panes are valid focus targets too and satisfy I1 when the desktop has
+no live main pane. Never a shelved pane: pane-live? gates both passes.")
+
 (define filmstrip/first-region-live
   (lambda (panes i region d)
     (if
@@ -936,17 +1087,6 @@ check is skipped). Never a shelved pane.")
         i
         (filmstrip/first-region-on-desk (cdr panes) d (+ i 1) region))))
   "Index of the first LIVE pane of one REGION on desktop d, else -1.")
-
-(define filmstrip/first-on-desk
-  (lambda
-    (panes d i)
-    (let
-      ((m (filmstrip/first-region-on-desk panes d i "main")))
-      (if (< m 0) (filmstrip/first-region-on-desk panes d i "rail") m)))
-  "Index of the first LIVE pane on desktop d, else -1 (v3 heal
-discipline: a live MAIN pane is preferred -- it takes the lift; rail
-panes are valid focus targets too and satisfy I1 when the desktop has
-no live main pane. Never a shelved pane: pane-live? gates both passes.")
 (define filmstrip/focus
   (lambda
     ()
@@ -1019,6 +1159,29 @@ no live main pane. Never a shelved pane: pane-live? gates both passes.")
         (if (< j 0) 0 (if (>= j n) (- n 1) j)))))
   "Next focus index for dir (left/right): clamped to the pane count, no\nwrap (niri discipline). An unset/out-of-range focus heals to pane 0 on\nright, none on left.")
 
+(define filmstrip/heal-focus
+  (lambda
+    (panes focus)
+    (if
+      (if
+        (< focus 0)
+        #t
+        (string-eq
+          (filmstrip/pane-state (filmstrip/pane-at panes focus))
+          "shelved"))
+      (let
+        ((f (filmstrip/first-on-desk panes (filmstrip/ws-desktop) 0)))
+        (if (< f 0) (filmstrip/first-live-index panes) f))
+      focus))
+  "Focus that always has a live pane behind it: unset (-1) and
+shelved-pointing both heal to the first live pane on the CURRENT
+desktop -- v3: a live MAIN pane first (the lift), the first live RAIL
+pane as the fallback (a focused rail pane in the rail satisfies I1
+when the desktop has no live main pane); -1 only when the desktop has
+no live pane at all (falls back to the first live pane anywhere).
+Never a shelved pane (I2). Not persisted -- alt+right heals it for
+real on the next focus step.")
+
 (define filmstrip/hint-routes
   (lambda ()
     (let
@@ -1031,6 +1194,37 @@ no live main pane. Never a shelved pane: pane-live? gates both passes.")
         rs)))
   "Route names the launcher may honestly suggest: the apps' route-leaf\ntargets when the host has them (glochid: /chat /code /sessions\n/settings), else /+label for package-key apps (habitat: /todos\n/notes /calendar). Env late binding picks up host redefinitions of\nfilmstrip/apps — no host seam needed.")
 
+(define filmstrip/json-arr
+  (lambda
+    (xs)
+    (if
+      (null? xs)
+      "[]"
+      (string-append "[" (filmstrip/json-arr-tail xs) "]")))
+  "Join already-encoded JSON object strings into one array literal.")
+
+(define filmstrip/json-arr-tail
+  (lambda
+    (xs)
+    (if
+      (null? (cdr xs))
+      (car xs)
+      (string-append (car xs) "," (filmstrip/json-arr-tail (cdr xs)))))
+  "Comma join (filmstrip/json-arr's inner walk).")
+
+(define filmstrip/keep-nodes
+  (lambda
+    (nodes)
+    (if
+      (null? nodes)
+      (list)
+      (if
+        (string-eq (car nodes) "")
+        (filmstrip/keep-nodes (cdr nodes))
+        (cons (car nodes) (filmstrip/keep-nodes (cdr nodes))))))
+  "Drop the empty-string markers map-indexed leaves in place (the tree
+renderer takes only real node dicts).")
+
 (define filmstrip/key-rows
   (list
     (list "/filmstrip/focus" "{\"dir\":\"left\"}" "keydown[altKey&&!shiftKey&&key=='ArrowLeft'] from:body")
@@ -1041,15 +1235,6 @@ no live main pane. Never a shelved pane: pane-live? gates both passes.")
 alt+arrow defaults. Host apps APPEND extra rows at boot through
 filmstrip/register-keys! instead of copying this registry.")
 
-;; register-keys! is the setter half of the keyboard registry. The
-;; expansion lands as a top-level define in the caller's env, so the
-;; host's boot-time append rides the same env-late-binding surface the
-;; old wholesale redefinitions rode -- the framework registry stays
-;; the one truth; nothing gets copied or redefined wholesale.
-(defmacro filmstrip/register-keys! (rows)
-  `(seq
-    (define filmstrip/key-rows (append filmstrip/key-rows ,rows))))
-
 (define filmstrip/key-sentinels
   (lambda
     ()
@@ -1059,6 +1244,21 @@ filmstrip/register-keys! instead of copying this registry.")
           (filmstrip/sentinel (car row) (car (cdr row)) (car (cdr (cdr row)))))
         filmstrip/key-rows)))
   "alt+arrows move focus; alt+shift+arrows move pane order. The server\nowns focus and answers with OOB class swaps (borge pane-protocol).\nSentinels render from the keyboard registry (filmstrip/key-rows):\nframework defaults, then host-appended rows.")
+
+(define filmstrip/keys-hint
+  (lambda ()
+    (html/span
+      (html/attrs
+        (list
+          (html/attr "class" "fs-keys")
+          (html/attr "title"
+            (string-append
+              "alt+←/→ focus · alt+shift+←/→ move "
+              "· alt+1/2/3 desktop · alt+n new session "
+              "· alt+w close · alt+p pin · alt+s single"))))
+      (html/text "⌨")))
+  "The keyboard map as a muted glyph in the rail tabs row: the map is
+the title tooltip (hover affordance), zero JS.")
 
 (define filmstrip/last-col
   (lambda
@@ -1149,206 +1349,6 @@ pane owns the fixed lift). A focused rail pane is a ring, not a window
         (fn (car xs) i)
         (filmstrip/map-indexed fn (cdr xs) (+ i 1)))))
   "Map fn over xs with a 0-based index.")
-
-;; ---- 2b2. THE WINDOWS TREE (back-migrated with the desktops, phase 2
-;; rail-trees-v4: ONE tree root renders the DECLARED ws state --
-;; rail-trees-v4: ONE tree root renders the DECLARED ws state --
-;; desktops 0..2 as dirs (DEFAULT-OPEN: eager kids + the switch verb;
-;; the lazy level pull stays for the shelf) + a shelf subtree of shelved
-;; panes. Pane rows carry focus/pin/width/close or restore/destroy and
-;; acme-explicit to<N> move words. Declared state only -- no DOM
-;; scraping.
-(define filmstrip/pane-verb
-  (lambda
-    (word route vals)
-    (list word route
-      (string-append "{" (list/foldl
-        (lambda
-          (acc kv)
-          (string-append acc
-            (if (string-eq acc "") "" ",")
-            "\"" (car kv) "\":\"" (filmstrip/url-enc (car (cdr kv))) "\""))
-        "" vals)
-        "}")
-      ;; 4th element = the GLYPH. Rows carry it explicitly (the renderer
-      ;; falls back to the word when it is empty), so a host edit or a
-      ;; lib table change cannot silently re-label the rail.
-      (filmstrip/act-glyph word)))
-  "One tree verb row spec: (word route vals-json glyph) from (key val)
-pairs; values ride filmstrip/url-enc (route/path vals carry ?&). The
-glyph is filmstrip/act-glyph's answer for the word.")
-
-(define filmstrip/keep-nodes
-  (lambda
-    (nodes)
-    (if
-      (null? nodes)
-      (list)
-      (if
-        (string-eq (car nodes) "")
-        (filmstrip/keep-nodes (cdr nodes))
-        (cons (car nodes) (filmstrip/keep-nodes (cdr nodes))))))
-  "Drop the empty-string markers map-indexed leaves in place (the tree
-renderer takes only real node dicts).")
-
-(define filmstrip/json-arr-tail
-  (lambda
-    (xs)
-    (if
-      (null? (cdr xs))
-      (car xs)
-      (string-append (car xs) "," (filmstrip/json-arr-tail (cdr xs)))))
-  "Comma join (filmstrip/json-arr's inner walk).")
-
-(define filmstrip/json-arr
-  (lambda
-    (xs)
-    (if
-      (null? xs)
-      "[]"
-      (string-append "[" (filmstrip/json-arr-tail xs) "]")))
-  "Join already-encoded JSON object strings into one array literal.")
-
-(define filmstrip/windows-pane-node
-  (lambda
-    (p shelved?)
-    (let*
-      ((id (filmstrip/pane-id p))
-        (route (filmstrip/pane-route p))
-        (v-verbs
-          (lambda
-            (pairs)
-            (list/map
-              (lambda
-                (pr)
-                (filmstrip/pane-verb (car pr) (car (cdr pr))
-                  (list (list "id" id))))
-              pairs)))
-        (live-verbs
-          (v-verbs
-            (list
-              (list "focus" "/filmstrip/focus-id")
-              (if
-                (string-eq (filmstrip/pane-region p) "rail")
-                (list "unpin" "/filmstrip/pin")
-                (list "pin" "/filmstrip/pin"))
-              (list "width" "/filmstrip/width")
-              (list "single" "/filmstrip/single")
-              (list "close" "/filmstrip/close"))))
-        (desk (as-str (filmstrip/pane-desk p)))
-        ;; cross-desktop MOVE words: an explicit destination verb per
-        ;; desktop EXCEPT the pane's current one (rail panes carry none
-        ;; -- dock semantics mean nothing to move). The pane-head move
-        ;; glyph cycles; the tree row words are acme-explicit.
-        (m-verbs
-          (if
-            (string-eq (filmstrip/pane-region p) "rail")
-            (list)
-            (list/map
-              (lambda
-                (d)
-                (filmstrip/pane-verb
-                  (string-append "to" d)
-                  "/filmstrip/move-to"
-                  (list (list "id" id) (list "d" d))))
-              (list/filter
-                (lambda
-                  (d)
-                  (not (string-eq d desk)))
-                (list "0" "1" "2")))))
-        (live-verbs2 (append live-verbs m-verbs))
-        (shelved-verbs
-          (v-verbs
-            (list
-              (list "restore" "/filmstrip/restore")
-              (list "destroy" "/filmstrip/destroy")))))
-      (dict-set*
-        "{}"
-        (list
-          "label" route
-          "kind" "leaf"
-          "node" (string-append "pane/" id)
-          "open" route
-          "verbs" (json-emit (if shelved? shelved-verbs live-verbs2))))))
-  "One pane row: label = route (open-or-focus, acme Get on a shelved
-row), verbs by CURRENT state (live: focus/pin/width/close + to<N>
-move words for every OTHER desktop; shelved: restore/destroy). Rail
-panes carry no move words (dock semantics -- desktop-global). Declared
-state only -- no DOM scraping.")
-
-(define filmstrip/windows-tree
-  (lambda
-    (path)
-    (let*
-      ((panes (nth (filmstrip/row) 1))
-        (live-on-desk
-          (lambda
-            (d)
-            (filmstrip/keep-nodes
-             (filmstrip/map-indexed
-                (lambda
-                  (p i)
-                  (if
-                    (if
-                      (string-eq (filmstrip/pane-state p) "shelved")
-                      #f
-                      (string-eq (as-str (filmstrip/pane-desk p)) d))
-                    (filmstrip/windows-pane-node p #f)
-                    ""))
-                panes 0))))
-        (desk-dir
-          (lambda
-            (d)
-            ;; DEFAULT-OPEN (rail-trees-v4 expand seed + operator note:
-            ;; the desktop tree reads expanded): eager kids (this
-            ;; desktop's live panes, pre-walked -- a parsed-open details
-            ;; never fires its toggle-once pull, so expand RIDES kids)
-            ;; + the switch verb. The windows subtree is tiny, so the
-            ;; eager head cost is host-trivial (the budget gate is the
-            ;; FS tree, not this one).
-            (dict-set*
-              "{}"
-              (list
-                "label" (string-append "desktop " d)
-                "kind" "dir"
-                "node" (string-append "desk/" d)
-                "open" ""
-                "verbs"
-                (json-emit
-                  (list
-                    (list "switch" "/filmstrip/desktop"
-                      (string-append "{\"d\":\"" d "\"}"))))
-                "kids" (filmstrip/json-arr (live-on-desk d))
-                "expand" "true"))))
-        (shelf-dir
-          (dict-set*
-            "{}"
-            (list
-              "label" "shelf"
-              "kind" "dir"
-              "node" "shelf"
-              "open" ""
-              "verbs" ""))))
-      (if
-        (string-eq path "")
-        (list (desk-dir "0") (desk-dir "1") (desk-dir "2") shelf-dir)
-        (if
-          (string-eq path "shelf")
-          (filmstrip/keep-nodes
-            (filmstrip/map-indexed
-              (lambda
-                (p i)
-                (if
-                  (string-eq (filmstrip/pane-state p) "shelved")
-                  (filmstrip/windows-pane-node p #t)
-                  ""))
-              panes 0))
-          (live-on-desk (substring path 5 (string-length path)))))))
-  "levelfn for the windows tree (node 'desk/<n>' -> that desktop's
-panes; 'shelf' -> the shelved panes): DESKTOP-GLOBAL data from the
-one workspace row, never from live DOM. Desk dirs 0..2 render
-DEFAULT-OPEN: their level answer pre-walks the pane rows as eager
-kids + the expand seed (the lazy level pull stays for the shelf).")
 (define filmstrip/move
   (lambda
     ()
@@ -1976,6 +1976,34 @@ unstaging (dict-set … #f) really turns it off (as-str #f = \"false\").")
   (lambda (p) (as-str (dict-get p "state")))
   "Pane record state: live | shelved (v2 shelf). Empty = live — records\nfrom before the state field exist and stay live.")
 
+;; ---- 2b2. THE WINDOWS TREE (back-migrated with the desktops, phase 2
+;; rail-trees-v4: ONE tree root renders the DECLARED ws state --
+;; rail-trees-v4: ONE tree root renders the DECLARED ws state --
+;; desktops 0..2 as dirs (DEFAULT-OPEN: eager kids + the switch verb;
+;; the lazy level pull stays for the shelf) + a shelf subtree of shelved
+;; panes. Pane rows carry focus/pin/width/close or restore/destroy and
+;; acme-explicit to<N> move words. Declared state only -- no DOM
+;; scraping.
+(define filmstrip/pane-verb
+  (lambda
+    (word route vals)
+    (list word route
+      (string-append "{" (list/foldl
+        (lambda
+          (acc kv)
+          (string-append acc
+            (if (string-eq acc "") "" ",")
+            "\"" (car kv) "\":\"" (filmstrip/url-enc (car (cdr kv))) "\""))
+        "" vals)
+        "}")
+      ;; 4th element = the GLYPH. Rows carry it explicitly (the renderer
+      ;; falls back to the word when it is empty), so a host edit or a
+      ;; lib table change cannot silently re-label the rail.
+      (filmstrip/act-glyph word)))
+  "One tree verb row spec: (word route vals-json glyph) from (key val)
+pairs; values ride filmstrip/url-enc (route/path vals carry ?&). The
+glyph is filmstrip/act-glyph's answer for the word.")
+
 (define filmstrip/pane-view
   (lambda (p) (as-str (dict-get p "view")))
   "Pane record's river window key (empty for habitat panes).")
@@ -2007,6 +2035,20 @@ unstaging (dict-set … #f) really turns it off (as-str #f = \"false\").")
       panes
       0))
   "Every pane section with its in-process dispatched content; the focused\nindex wears .focused.")
+
+(define filmstrip/panes-region
+  (lambda (panes focus region)
+    (filmstrip/map-indexed
+      (lambda (p i)
+        (if (string-eq (filmstrip/pane-region p) region)
+            (filmstrip/pane-html p (= i focus)
+              (filmstrip/pane-content (filmstrip/pane-route p)))
+            ""))
+      panes 0))
+  "Pane sections of ONE region only (v5 split): main panes render into
+the #fs-content strip and rail (pinned) panes into #fs-rail -- the
+strip is the reading surface, the rail box the dock. Empty strings for
+the other region keep map-indexed's shape (html/join skips them).")
 
 (define filmstrip/parse-pairs
   (lambda
@@ -2070,6 +2112,25 @@ unstaging (dict-set … #f) really turns it off (as-str #f = \"false\").")
           (cons (list (list)) #f)))))
   "Dispatch the package browse; unknown packages get one empty column.")
 
+(define filmstrip/rail-box
+  (lambda (panes focus)
+    (html/tag
+      "div"
+      (html/attrs
+        (list
+          (html/attr "id" "fs-rail")
+          (html/attr "class" "fs-rail")))
+      (html/join
+        (append
+          (filmstrip/panes-region panes focus "rail")
+          (list
+            (filmstrip/railtabs-html)
+            (html/join (filmstrip/tree-boxes)))))))
+  "The rail BOX (v5): docked panes + railtabs + tree boxes in one
+flex-column side panel. Row-axis CSS turns #fs-rail into
+display:contents (the furniture flows into the shell column as
+before); col-axis CSS makes it a real 20rem left panel.")
+
 (define filmstrip/rail-focus-onto
   (lambda
     (panes old new)
@@ -2093,6 +2154,86 @@ OOB ring moves onto the rail pane); when no live main pane is lifted,
 the rail pane becomes the persisted focus itself — a focused rail pane
 visible in the rail satisfies I1 (no forced main pane). Main-region
 targets behave exactly as before (take the focus).")
+
+;; ---- 2d2. RAIL MODE (back-migrated, 1a ledger) ----
+;; One #fs-railmode sentinel over data-rmode windows/code/prims/ui (the
+;; SAME :has hiding trick desktops use). rm-* classes ride fs-sh-axis;
+;; a mode flip is the host's POST /filmstrip/railmode handler OOBing the
+;; sentinel through filmstrip/railmode-sentinel.
+(define filmstrip/railmode
+  (lambda
+    ()
+    (let
+      ((m (as-str (dict-get (filmstrip/ws-fields) "railmode"))))
+      (if (string-eq m "") "windows" m)))
+  "Rail mode read (ws fields; empty = the first root, never an error).")
+
+(define filmstrip/railmode-sentinel
+  (lambda
+    (m ?oob)
+    (html/tag
+      "div"
+      (html/attrs
+        (append
+          (list
+            (html/attr "id" "fs-railmode")
+            (html/attr "class" (string-append "fs-sh-axis rm-" m)))
+          (if
+            ?oob
+            (list (html/attr "hx-swap-oob" "outerHTML:#fs-railmode"))
+            (list))))
+      ""))
+  "Inert rail-mode sentinel (like the axis/desk ones); CSS
+:has(#fs-railmode.rm-<id>) hides every other tree box.")
+
+(define filmstrip/railtabs
+  (lambda ()
+    (list/map
+      (lambda (r)
+        (lookbook/html (ui/railtab (as-str (car r)))))
+      (filmstrip/tree-roots)))
+  "The rail mode tabs: one word per tree root (mode names are CONTENT
+labels, not verbs -- they stay words, like the cascade's app names).
+POST /filmstrip/railmode flips the #fs-railmode sentinel -- the SAME
+:has hiding desktops use, so mode flips keep every tree's expansion
+DOM alive.")
+
+(define filmstrip/railtabs-html
+  (lambda ()
+    (html/tag
+      "div"
+      (html/attrs
+        (list
+          (html/attr "id" "fs-railtabs")
+          (html/attr "class" "fs-cbox fs-railtabs")
+          (html/attr "data-cbox" "railtabs")))
+      (html/join
+        (append
+          (list (filmstrip/start-menu))
+          (list (html/span (html/attr "class" "fs-title") (html/text "rail")))
+          (filmstrip/railtabs)
+          (list (filmstrip/keys-hint))))))
+  "The rail mode controlbox (one word per tree root, per
+filmstrip.borg sidebar-main-dichotomy -- the axis toggle word was
+retired, BORGE-1789879934: sidebar-only shell) + the keyboard-hint
+glyph (the shortcut map is the glyph's title tooltip).")
+
+(define filmstrip/register-keys!
+  (__macro__
+    (rows)
+    (quasiquote
+      (seq
+        (define
+          filmstrip/key-rows
+          (append filmstrip/key-rows (unquote rows)))))))
+
+(define filmstrip/register-store!
+  (__macro__
+    (read write)
+    (quasiquote
+      (seq
+        (define filmstrip/store-read (unquote read))
+        (define filmstrip/store-write (unquote write))))))
 
 (define filmstrip/remove-at
   (lambda
@@ -2489,260 +2630,6 @@ retires; this framework body is the one residence).")
   (lambda () "")
   "OOB payload re-rendering the shelf controlbox after\nclose/restore/destroy. Default empty -- the plain habitat shell has\nno shelf rail yet; glochid redefines it to swap its #fs-shelf rows.")
 
-;; ---- v5 shell furniture (ported from the glochid app surface, 10-14:
-;; the desktops/rail-mode back-migration moved the DEFS; this completes
-;; the COMPOSITION + theme so the framework shell IS the v5 shell --
-;; sidebar-only (BORGE-1789879934), start menu on the railtabs row) ----
-
-(define filmstrip/boxrows
-  (lambda ()
-    (let ((v (dict-get (filmstrip/ws-fields) "boxrows")))
-      (if
-        (if (null? v) #t (string-eq (as-str v) ""))
-        (list)
-        (json-parse (as-str v)))))
-  "Visited-rail-box MRU: JSON array of root ids, newest first (ws field
-boxrows; absent/empty = none visited this session lineage -- save-all
-carries the field as \"\" when unset, so the empty string answers the
-empty set, never a parse error).")
-
-(define filmstrip/boxrows-has
-  (lambda (root rows)
-    (if (null? rows) #f
-        (if (string-eq (as-str (car rows)) root) #t
-            (filmstrip/boxrows-has root (cdr rows)))))
-  "Membership probe for the MRU set (string-eq, order-irrelevant).")
-
-(define filmstrip/tree-stub
-  (lambda (root)
-    (let*
-      ((id (as-str (car root)))
-        (title (as-str (car (cdr root)))))
-      (html/tag
-        "div"
-        (html/attrs
-          (list
-            (html/attr "id" (string-append "fs-tree-" id))
-            (html/attr "class" "fs-cbox fs-rmode")
-            (html/attr "data-rmode" id)))
-        (html/join
-          (list
-            (html/span (html/attr "class" "fs-title") (html/text title))
-            (html/tag
-              "ul"
-              (html/attrs
-                (list
-                  (html/attr "id" (string-append "fs-tree-" id "-root"))
-                  (html/attr "class" "fs-tr-kids fs-tr-root")))
-              ""))))))
-  "Lazy-first-reveal stub (BORGE-1789950734): the rail box chrome with
-an EMPTY level-0 UL -- no rows materialized while the box is hidden.
-The UL id is the mutation OOB seam, so a first-visit flip fills it in
-place.")
-
-(define filmstrip/tree-boxes
-  (lambda ()
-    (let*
-      ((active (filmstrip/railmode))
-        (visited (filmstrip/boxrows)))
-      (list/map
-        (lambda (r)
-          (let ((id (as-str (car r))))
-            (if
-              (if (string-eq id active) #t
-                  (filmstrip/boxrows-has id visited))
-              (filmstrip/tree-box r)
-              (filmstrip/tree-stub r))))
-        (filmstrip/tree-roots))))
-  "Lazy-first-reveal (BORGE-1789950734): only the ACTIVE railmode's box
-(+ the MRU-2 recently visited ones) materializes rows on a doc render;
-the remaining hidden boxes answer empty chrome. The sentinel :has
-hiding is unchanged -- the mode flip OOB fills stubs in place.")
-
-(define filmstrip/axis-sentinel
-  (lambda (axis ?oob)
-    (html/tag
-      "div"
-      (html/attrs
-        (append
-          (list
-            (html/attr "id" "fs-axis")
-            (html/attr "class" (string-append "fs-sh-axis " axis)))
-          (if ?oob
-              (list (html/attr "hx-swap-oob" "outerHTML:#fs-axis"))
-              (list))))
-      ""))
-  "Inert axis sentinel (axis PINNED col -- BORGE-1789879934); CSS
-:has(#fs-axis.col) lays the shell out as the left-rail sidebar; no OOB
-mutator remains for it.")
-
-(define ui/railtab
-  (lambda (label)
-    (ui/elm
-      "button"
-      (list
-        "class" "fs-btn fs-railtab"
-        "title" (string-append "show the " label " tree")
-        "hx-post" "/filmstrip/railmode"
-        "hx-vals" (string-append "{\"root\":\"" label "\"}")
-        "hx-target" "#fs-sink"
-        "hx-swap" "innerHTML")
-      (list (ui/text label))))
-  "One rail mode tab: POSTs /filmstrip/railmode with this root (the
-sentinel :has flip -- expansion DOM stays alive). Declared behavior
-data: the hx-* verbs ride attrs verbatim through the projection.")
-
-(define ui/start-entry
-  (lambda (label route)
-    (ui/elm
-      "button"
-      (list
-        "class" "fs-btn fs-start-entry"
-        "title" (string-append "open " label)
-        "hx-post" "/filmstrip/open"
-        "hx-vals" (string-append "{\"route\":\"" route "\"}")
-        "hx-target" "#fs-sink"
-        "hx-swap" "innerHTML")
-      (list (ui/text label))))
-  "One start-menu entry: opens `route` as a pane via /filmstrip/open.")
-
-(define filmstrip/railtabs
-  (lambda ()
-    (list/map
-      (lambda (r)
-        (lookbook/html (ui/railtab (as-str (car r)))))
-      (filmstrip/tree-roots)))
-  "The rail mode tabs: one word per tree root (mode names are CONTENT
-labels, not verbs -- they stay words, like the cascade's app names).
-POST /filmstrip/railmode flips the #fs-railmode sentinel -- the SAME
-:has hiding desktops use, so mode flips keep every tree's expansion
-DOM alive.")
-
-(define filmstrip/start-menu
-  (lambda ()
-    (html/tag
-      "details"
-      (html/attrs
-        (list
-          (html/attr "id" "fs-start")
-          (html/attr "class" "fs-start")))
-      (html/join
-        (list
-          (html/tag
-            "summary"
-            (html/attrs
-              (list
-                (html/attr "class" "fs-btn fs-start-word")
-                (html/attr "title" "start: open one of the surfaces")
-                (html/attr "aria-label" "start menu")))
-            (html/text "start"))
-          (html/tag
-            "div"
-            (html/attrs
-              (list (html/attr "class" "fs-start-menu")))
-            (html/join
-              (list/map
-                (lambda (app)
-                  (lookbook/html
-                    (ui/start-entry (car app) (car (cdr app)))))
-                  (filmstrip/apps))))))))
-  "The start menu lives on the rail (B: replaced the cascade/launchbar
-column, 2026-09-20 operator decision). A zero-JS <details> fold; the
-cascade column is gone from the shell; /filmstrip/cascade stays routed
-for the lib contract, filmstrip/apps stays HOST SEAM 2.")
-
-(define filmstrip/keys-hint
-  (lambda ()
-    (html/span
-      (html/attrs
-        (list
-          (html/attr "class" "fs-keys")
-          (html/attr "title"
-            (string-append
-              "alt+←/→ focus · alt+shift+←/→ move "
-              "· alt+1/2/3 desktop · alt+n new session "
-              "· alt+w close · alt+p pin · alt+s single"))))
-      (html/text "⌨")))
-  "The keyboard map as a muted glyph in the rail tabs row: the map is
-the title tooltip (hover affordance), zero JS.")
-
-(define filmstrip/railtabs-html
-  (lambda ()
-    (html/tag
-      "div"
-      (html/attrs
-        (list
-          (html/attr "id" "fs-railtabs")
-          (html/attr "class" "fs-cbox fs-railtabs")
-          (html/attr "data-cbox" "railtabs")))
-      (html/join
-        (append
-          (list (filmstrip/start-menu))
-          (list (html/span (html/attr "class" "fs-title") (html/text "rail")))
-          (filmstrip/railtabs)
-          (list (filmstrip/keys-hint))))))
-  "The rail mode controlbox (one word per tree root, per
-filmstrip.borg sidebar-main-dichotomy -- the axis toggle word was
-retired, BORGE-1789879934: sidebar-only shell) + the keyboard-hint
-glyph (the shortcut map is the glyph's title tooltip).")
-
-(define filmstrip/panes-region
-  (lambda (panes focus region)
-    (filmstrip/map-indexed
-      (lambda (p i)
-        (if (string-eq (filmstrip/pane-region p) region)
-            (filmstrip/pane-html p (= i focus)
-              (filmstrip/pane-content (filmstrip/pane-route p)))
-            ""))
-      panes 0))
-  "Pane sections of ONE region only (v5 split): main panes render into
-the #fs-content strip and rail (pinned) panes into #fs-rail -- the
-strip is the reading surface, the rail box the dock. Empty strings for
-the other region keep map-indexed's shape (html/join skips them).")
-
-(define filmstrip/rail-box
-  (lambda (panes focus)
-    (html/tag
-      "div"
-      (html/attrs
-        (list
-          (html/attr "id" "fs-rail")
-          (html/attr "class" "fs-rail")))
-      (html/join
-        (append
-          (filmstrip/panes-region panes focus "rail")
-          (list
-            (filmstrip/railtabs-html)
-            (html/join (filmstrip/tree-boxes)))))))
-  "The rail BOX (v5): docked panes + railtabs + tree boxes in one
-flex-column side panel. Row-axis CSS turns #fs-rail into
-display:contents (the furniture flows into the shell column as
-before); col-axis CSS makes it a real 20rem left panel.")
-
-(define filmstrip/content-area
-  (lambda (panes focus)
-    (html/tag
-      "div"
-      (html/attrs
-        (list
-          (html/attr "id" "fs-surface")
-          (html/attr "class" "fs-surface")))
-      (html/join
-        (list
-          (html/tag
-            "div"
-            (html/attrs
-              (list
-                (html/attr "id" "fs-content")
-                (html/attr "class" "fs-content")))
-            (html/join (filmstrip/panes-region panes focus "main")))
-          (filmstrip/rail-box panes focus)))))
-  "The surface area (v5): the main strip FIRST, then the rail box.
-Wrapping both under #fs-surface gives the region-move OOB ONE swap
-target (filmstrip/oob-content-strip re-renders this wrapper; every
-pane body is an hx-preserve placeholder, so live DOM survives the move
-between strip and rail).")
-
 (define filmstrip/shell-html
   (lambda
     (cascade panes focus)
@@ -2830,6 +2717,77 @@ row (niri singling as declared state).")
           (if (string-eq rest "") (list) (string-split rest "&"))))))
   "Split a route string into (path . params) where params is an alist of\nDOTTED (k . v) pairs -- the shape route/dispatch's assoc_of accepts (2-element\nlists are silently dropped, which would lose the query).")
 
+(define filmstrip/start-menu
+  (lambda ()
+    (html/tag
+      "details"
+      (html/attrs
+        (list
+          (html/attr "id" "fs-start")
+          (html/attr "class" "fs-start")))
+      (html/join
+        (list
+          (html/tag
+            "summary"
+            (html/attrs
+              (list
+                (html/attr "class" "fs-btn fs-start-word")
+                (html/attr "title" "start: open one of the surfaces")
+                (html/attr "aria-label" "start menu")))
+            (html/text "start"))
+          (html/tag
+            "div"
+            (html/attrs
+              (list (html/attr "class" "fs-start-menu")))
+            (html/join
+              (list/map
+                (lambda (app)
+                  (lookbook/html
+                    (ui/start-entry (car app) (car (cdr app)))))
+                  (filmstrip/apps))))))))
+  "The start menu lives on the rail (B: replaced the cascade/launchbar
+column, 2026-09-20 operator decision). A zero-JS <details> fold; the
+cascade column is gone from the shell; /filmstrip/cascade stays routed
+for the lib contract, filmstrip/apps stays HOST SEAM 2.")
+
+(define filmstrip/store-backend
+  (lambda
+    ()
+    (list filmstrip/store-read filmstrip/store-write))
+  "GET the knob: the currently registered (read write) storage pair.
+The names late-bind and register-store! rebinds them at host boot;
+every ws verb routes through the pair.")
+
+;; filmstrip/store-backend: the storage knob -- the ONE store seam
+;; (seam-map section 3). GET = (filmstrip/store-backend); SET = the
+;; filmstrip/register-store! macro. Default read/write = the habitat
+;; floor (tree prims under the user's stable node id), so the habitat
+;; works byte-for-byte unchanged; a host app registers its own pair
+;; once at boot through the setter (glochid: the local fs pair) and
+;; the three ws verbs route through it -- no verb body ever copied.
+
+(define filmstrip/store-read
+  (lambda
+    ()
+    (tree/get (node-path filmstrip/ws-type (whoami))))
+  "Store-backend default read (habitat floor): this user's workspace
+node, or () when never saved. Swappable per boot through
+filmstrip/register-store! -- never by copying a verb body.")
+
+(define filmstrip/store-write
+  (lambda
+    (fields)
+    (seq
+      (tree/upsert
+        (node-path filmstrip/ws-type (whoami))
+        "datum"
+        filmstrip/ws-type
+        fields)
+      fields))
+  "Store-backend default write (habitat floor): one workspace row
+upsert under the user's stable id; returns fields. Swappable through
+filmstrip/register-store!.")
+
 (define filmstrip/swap-at
   (lambda
     (xs i)
@@ -2910,6 +2868,25 @@ row (niri singling as declared state).")
   "One rail tree controlbox: title + collapse-all word + level 0. All
 geometry from classes; the level-0 UL id (fs-tree-<id>-root) is the
 mutation OOB seam -- the head never changes, so only rows re-render.")
+
+(define filmstrip/tree-boxes
+  (lambda ()
+    (let*
+      ((active (filmstrip/railmode))
+        (visited (filmstrip/boxrows)))
+      (list/map
+        (lambda (r)
+          (let ((id (as-str (car r))))
+            (if
+              (if (string-eq id active) #t
+                  (filmstrip/boxrows-has id visited))
+              (filmstrip/tree-box r)
+              (filmstrip/tree-stub r))))
+        (filmstrip/tree-roots))))
+  "Lazy-first-reveal (BORGE-1789950734): only the ACTIVE railmode's box
+(+ the MRU-2 recently visited ones) materializes rows on a doc render;
+the remaining hidden boxes answer empty chrome. The sentinel :has
+hiding is unchanged -- the mode flip OOB fills stubs in place.")
 
 (define filmstrip/tree-closed
   (lambda (nodes)
@@ -3149,18 +3126,50 @@ mutated rows now survives mutations, which is the truer v4 story.")
 ;; threshold is host policy, never lib state); expansion state is
 ;; NATIVE <details> DOM state -- splice never swap; the server never
 ;; knows which nodes are open.
-(define filmstrip/tree-roots
-  (lambda () (list))
-  "Host seam: list of (id title levelfn). A levelfn takes a node path
-string (\"\" = the root level) and answers a list of node dicts:
-(label kind node open verbs kids) -- kind dir|leaf, node the lazy-kids
-key, open a route string or empty (label verb, open-or-focus), verbs a
-list of (word route vals-json) mutation words, kids an OPTIONAL JSON
-string of a pre-walked child level (eager dir: fold pulls nothing),
-expand the OPTIONAL default-open seed (\"true\" renders the <details>
-open -- pair it WITH kids: a parsed-open dir never fires its
-\"toggle once\" pull).
-Hosts redefine; default empty (a rootless shell renders no rail trees).")
+  (define filmstrip/tree-roots
+    (lambda ()
+      (list (list "windows" "windows" filmstrip/windows-tree)))
+    "Host seam: list of (id title levelfn). A levelfn takes a node path
+  string (\"\" = the root level) and answers a list of node dicts:
+  (label kind node open verbs kids) -- kind dir|leaf, node the lazy-kids
+  key, open a route string or empty (label verb, open-or-focus), verbs a
+  list of (word route vals-json) mutation words, kids an OPTIONAL JSON
+  string of a pre-walked child level (eager dir: fold pulls nothing),
+  expand the OPTIONAL default-open seed (\"true\" renders the <details>
+  open -- pair it WITH kids: a parsed-open dir never fires its
+  \"toggle once\" pull).
+  DEFAULT: the windows tree (desktops 0..2 default-open with switch
+  verbs + the shelf) -- the one rail tree every host gets for free, so
+  a bare habitat shell opens with glochid's windows box. Hosts redefine
+  (glochid appends code/prims/ui); an empty list still renders a
+  rootless shell.")
+
+(define filmstrip/tree-stub
+  (lambda (root)
+    (let*
+      ((id (as-str (car root)))
+        (title (as-str (car (cdr root)))))
+      (html/tag
+        "div"
+        (html/attrs
+          (list
+            (html/attr "id" (string-append "fs-tree-" id))
+            (html/attr "class" "fs-cbox fs-rmode")
+            (html/attr "data-rmode" id)))
+        (html/join
+          (list
+            (html/span (html/attr "class" "fs-title") (html/text title))
+            (html/tag
+              "ul"
+              (html/attrs
+                (list
+                  (html/attr "id" (string-append "fs-tree-" id "-root"))
+                  (html/attr "class" "fs-tr-kids fs-tr-root")))
+              ""))))))
+  "Lazy-first-reveal stub (BORGE-1789950734): the rail box chrome with
+an EMPTY level-0 UL -- no rows materialized while the box is hidden.
+The UL id is the mutation OOB seam, so a first-visit flip fills it in
+place.")
 
 (define filmstrip/url-dec
   (lambda (s)
@@ -3316,6 +3325,147 @@ the walk only runs when an escapee is present.")
   (lambda () "")
   "OOB payload re-rendering the windows controlbox after\nclose/restore/destroy (a pane leaving or rejoining the live set\nchanges its rows). Default empty -- the plain habitat shell has no\nwindows rail yet; glochid redefines it to swap its #fs-winbox rows.")
 
+(define filmstrip/windows-pane-node
+  (lambda
+    (p shelved?)
+    (let*
+      ((id (filmstrip/pane-id p))
+        (route (filmstrip/pane-route p))
+        (v-verbs
+          (lambda
+            (pairs)
+            (list/map
+              (lambda
+                (pr)
+                (filmstrip/pane-verb (car pr) (car (cdr pr))
+                  (list (list "id" id))))
+              pairs)))
+        (live-verbs
+          (v-verbs
+            (list
+              (list "focus" "/filmstrip/focus-id")
+              (if
+                (string-eq (filmstrip/pane-region p) "rail")
+                (list "unpin" "/filmstrip/pin")
+                (list "pin" "/filmstrip/pin"))
+              (list "width" "/filmstrip/width")
+              (list "single" "/filmstrip/single")
+              (list "close" "/filmstrip/close"))))
+        (desk (as-str (filmstrip/pane-desk p)))
+        ;; cross-desktop MOVE words: an explicit destination verb per
+        ;; desktop EXCEPT the pane's current one (rail panes carry none
+        ;; -- dock semantics mean nothing to move). The pane-head move
+        ;; glyph cycles; the tree row words are acme-explicit.
+        (m-verbs
+          (if
+            (string-eq (filmstrip/pane-region p) "rail")
+            (list)
+            (list/map
+              (lambda
+                (d)
+                (filmstrip/pane-verb
+                  (string-append "to" d)
+                  "/filmstrip/move-to"
+                  (list (list "id" id) (list "d" d))))
+              (list/filter
+                (lambda
+                  (d)
+                  (not (string-eq d desk)))
+                (list "0" "1" "2")))))
+        (live-verbs2 (append live-verbs m-verbs))
+        (shelved-verbs
+          (v-verbs
+            (list
+              (list "restore" "/filmstrip/restore")
+              (list "destroy" "/filmstrip/destroy")))))
+      (dict-set*
+        "{}"
+        (list
+          "label" route
+          "kind" "leaf"
+          "node" (string-append "pane/" id)
+          "open" route
+          "verbs" (json-emit (if shelved? shelved-verbs live-verbs2))))))
+  "One pane row: label = route (open-or-focus, acme Get on a shelved
+row), verbs by CURRENT state (live: focus/pin/width/close + to<N>
+move words for every OTHER desktop; shelved: restore/destroy). Rail
+panes carry no move words (dock semantics -- desktop-global). Declared
+state only -- no DOM scraping.")
+
+(define filmstrip/windows-tree
+  (lambda
+    (path)
+    (let*
+      ((panes (nth (filmstrip/row) 1))
+        (live-on-desk
+          (lambda
+            (d)
+            (filmstrip/keep-nodes
+             (filmstrip/map-indexed
+                (lambda
+                  (p i)
+                  (if
+                    (if
+                      (string-eq (filmstrip/pane-state p) "shelved")
+                      #f
+                      (string-eq (as-str (filmstrip/pane-desk p)) d))
+                    (filmstrip/windows-pane-node p #f)
+                    ""))
+                panes 0))))
+        (desk-dir
+          (lambda
+            (d)
+            ;; DEFAULT-OPEN (rail-trees-v4 expand seed + operator note:
+            ;; the desktop tree reads expanded): eager kids (this
+            ;; desktop's live panes, pre-walked -- a parsed-open details
+            ;; never fires its toggle-once pull, so expand RIDES kids)
+            ;; + the switch verb. The windows subtree is tiny, so the
+            ;; eager head cost is host-trivial (the budget gate is the
+            ;; FS tree, not this one).
+            (dict-set*
+              "{}"
+              (list
+                "label" (string-append "desktop " d)
+                "kind" "dir"
+                "node" (string-append "desk/" d)
+                "open" ""
+                "verbs"
+                (json-emit
+                  (list
+                    (list "switch" "/filmstrip/desktop"
+                      (string-append "{\"d\":\"" d "\"}"))))
+                "kids" (filmstrip/json-arr (live-on-desk d))
+                "expand" "true"))))
+        (shelf-dir
+          (dict-set*
+            "{}"
+            (list
+              "label" "shelf"
+              "kind" "dir"
+              "node" "shelf"
+              "open" ""
+              "verbs" ""))))
+      (if
+        (string-eq path "")
+        (list (desk-dir "0") (desk-dir "1") (desk-dir "2") shelf-dir)
+        (if
+          (string-eq path "shelf")
+          (filmstrip/keep-nodes
+            (filmstrip/map-indexed
+              (lambda
+                (p i)
+                (if
+                  (string-eq (filmstrip/pane-state p) "shelved")
+                  (filmstrip/windows-pane-node p #t)
+                  ""))
+              panes 0))
+          (live-on-desk (substring path 5 (string-length path)))))))
+  "levelfn for the windows tree (node 'desk/<n>' -> that desktop's
+panes; 'shelf' -> the shelved panes): DESKTOP-GLOBAL data from the
+one workspace row, never from live DOM. Desk dirs 0..2 render
+DEFAULT-OPEN: their level answer pre-walks the pane rows as eager
+kids + the expand seed (the lazy level pull stays for the shelf).")
+
 (define filmstrip/ws-cascade
   (lambda
     (fields)
@@ -3352,127 +3502,6 @@ the walk only runs when an escapee is present.")
 unset — hosts that don't model desktops ride 0). Read through THIS
 lib's own ws-fields seam, the same read the habitat shell's deskt
 wrapper does; the lib never touches host pane-row fields.")
-
-;; ---- 2d. DESKTOPS (back-migrated from the glochid embedded copy,
-;; phase 2 of the cut-over; the app copies retire) ----
-;; The ws row carries "desktop":N (0 default) and each pane record a
-;; "desktop" field. An inert #ws-desk sentinel beside #fs-axis carries
-;; the current desktop to CSS (:has hides the other desktops' panes --
-;; ten pairs in filmstrip/css, no JS); the windows tree's desktop rows
-;; carry the switch verb. Focus heals onto the first live pane of the
-;; target desktop when the focused pane lives elsewhere (a live MAIN
-;; pane is preferred -- the lift; a rail pane satisfies I1 when no
-;; main exists). The desktop READ was already framework-side
-;; (filmstrip/ws-desktop); these are the shell pieces that lived only
-;; in the copy.
-(define filmstrip/desk-sentinel
-  (lambda
-    (d ?oob)
-    (html/tag
-      "div"
-      (html/attrs
-        (append
-          (list
-            (html/attr "id" "ws-desk")
-            (html/attr "class" (string-append "fs-sh-axis dsk-" (as-str d))))
-          (if
-            ?oob
-            (list (html/attr "hx-swap-oob" "outerHTML:#ws-desk"))
-            (list))))
-      ""))
-  "Inert desktop sentinel beside the axis one; CSS :has(#ws-desk.dsk-N)
-hides the other desktops' panes. ?oob renders it as an OOB outerHTML
-swap (the desktop response).")
-
-(define filmstrip/desktop-set
-  (lambda
-    ()
-    (let*
-      ((dv (request-param "d"))
-        (d (if (null? dv) 0 (parse-int (as-str dv))))
-        (row (filmstrip/row))
-        (cascade (nth row 0))
-        (panes (nth row 1))
-        (focus (nth row 2))
-        (focus2
-          (if
-            (and
-              (>= focus 0)
-              (= (filmstrip/pane-desk (filmstrip/pane-at panes focus)) d))
-            focus
-            (let
-              ((f (filmstrip/first-on-desk panes d 0)))
-              (if (< f 0) focus f)))))
-      (seq
-        (filmstrip/ws-save
-          (dict-set* (filmstrip/ws-fields) (list "desktop" (as-str d))))
-        (filmstrip/save-all cascade panes focus2)
-        (render-html
-          (html/join
-            (list
-              (filmstrip/oob-msg "")
-              (filmstrip/desk-sentinel d #t)
-              (filmstrip/oob-content-strip panes focus2)))))))
-  "POST /filmstrip/desktop: d param -> set + persist the shell desktop;
-heal focus onto the first live pane of that desktop when the focused
-pane lives elsewhere; answer with OOB swaps of the desk sentinel + a
-re-render of the content strip (panes of the new desktop keep their
-live DOM via hx-preserve; panes of the others re-render inert -- the
-workspace row keeps every record, only the swapped DOM shrinks).")
-
-(define filmstrip/heal-focus
-  (lambda
-    (panes focus)
-    (if
-      (if
-        (< focus 0)
-        #t
-        (string-eq
-          (filmstrip/pane-state (filmstrip/pane-at panes focus))
-          "shelved"))
-      (let
-        ((f (filmstrip/first-on-desk panes (filmstrip/ws-desktop) 0)))
-        (if (< f 0) (filmstrip/first-live-index panes) f))
-      focus))
-  "Focus that always has a live pane behind it: unset (-1) and
-shelved-pointing both heal to the first live pane on the CURRENT
-desktop -- v3: a live MAIN pane first (the lift), the first live RAIL
-pane as the fallback (a focused rail pane in the rail satisfies I1
-when the desktop has no live main pane); -1 only when the desktop has
-no live pane at all (falls back to the first live pane anywhere).
-Never a shelved pane (I2). Not persisted -- alt+right heals it for
-real on the next focus step.")
-
-;; ---- 2d2. RAIL MODE (back-migrated, 1a ledger) ----
-;; One #fs-railmode sentinel over data-rmode windows/code/prims/ui (the
-;; SAME :has hiding trick desktops use). rm-* classes ride fs-sh-axis;
-;; a mode flip is the host's POST /filmstrip/railmode handler OOBing the
-;; sentinel through filmstrip/railmode-sentinel.
-(define filmstrip/railmode
-  (lambda
-    ()
-    (let
-      ((m (as-str (dict-get (filmstrip/ws-fields) "railmode"))))
-      (if (string-eq m "") "windows" m)))
-  "Rail mode read (ws fields; empty = the first root, never an error).")
-
-(define filmstrip/railmode-sentinel
-  (lambda
-    (m ?oob)
-    (html/tag
-      "div"
-      (html/attrs
-        (append
-          (list
-            (html/attr "id" "fs-railmode")
-            (html/attr "class" (string-append "fs-sh-axis rm-" m)))
-          (if
-            ?oob
-            (list (html/attr "hx-swap-oob" "outerHTML:#fs-railmode"))
-            (list))))
-      ""))
-  "Inert rail-mode sentinel (like the axis/desk ones); CSS
-:has(#fs-railmode.rm-<id>) hides every other tree box.")
 (define filmstrip/ws-fields
   (lambda
     ()
@@ -3493,48 +3522,32 @@ real on the next focus step.")
       (if (< n 9) -1 (parse-int (substring v 8 n)))))
   "Focused content index from the row's focus value (content:N); -1 = none.")
 
-;; filmstrip/store-backend: the storage knob -- the ONE store seam
-;; (seam-map section 3). GET = (filmstrip/store-backend); SET = the
-;; filmstrip/register-store! macro. Default read/write = the habitat
-;; floor (tree prims under the user's stable node id), so the habitat
-;; works byte-for-byte unchanged; a host app registers its own pair
-;; once at boot through the setter (glochid: the local fs pair) and
-;; the three ws verbs route through it -- no verb body ever copied.
+;; filmstrip-ws workspace row type: declared up top because the kernel's
+;; typed-boundary rule rejects writes to an undeclared datum type
+;; (crud.check_type_fields) and returns that rejection as a plain string
+;; VALUE which ws-save silently discards -- an undeclared type made every
+;; pane open fail to persist across reload (prod 10-12, UI gate da8e0223:
+;; GET /filmstrip rendered fs-content empty after every open).
+;; Guarded like todo/comments-init!. Zero fields = the declared
+;; schemaless case (crud.ml: [Some []] vs [None] are distinct): the row
+;; body is lib-managed JSON that gains keys across versions and is also
+;; written by the habitat shell's deskt wrapper, so the type stays
+;; free-form. The toplevel call seeds the declaration at boot/reseed
+;; (boot-admin context); delegated sessions no-op by design (the
+;; denial lands as the value, not an error).
 
-(define filmstrip/store-read
+(define filmstrip/ws-init!
   (lambda
-    ()
-    (tree/get (node-path filmstrip/ws-type (whoami))))
-  "Store-backend default read (habitat floor): this user's workspace
-node, or () when never saved. Swappable per boot through
-filmstrip/register-store! -- never by copying a verb body.")
-
-(define filmstrip/store-write
-  (lambda
-    (fields)
-    (seq
-      (tree/upsert
-        (node-path filmstrip/ws-type (whoami))
-        "datum"
-        filmstrip/ws-type
-        fields)
-      fields))
-  "Store-backend default write (habitat floor): one workspace row
-upsert under the user's stable id; returns fields. Swappable through
-filmstrip/register-store!.")
-
-(define filmstrip/store-backend
-  (lambda
-    ()
-    (list filmstrip/store-read filmstrip/store-write))
-  "GET the knob: the currently registered (read write) storage pair.
-The names late-bind and register-store! rebinds them at host boot;
-every ws verb routes through the pair.")
-
-(defmacro filmstrip/register-store! (read write)
-  `(seq
-    (define filmstrip/store-read ,read)
-    (define filmstrip/store-write ,write)))
+      ()
+      (if
+        (null? (type-fields (quote filmstrip-ws)))
+        (deftype (quote filmstrip-ws))
+        "filmstrip-ws ok"))
+  "Declare the filmstrip-ws workspace row type (guarded, idempotent). A
+zero-field type reports (type-fields) as null, so the guard re-fires on
+every load/reseed and the re-declare lands as an ON CONFLICT upsert. A
+delegated session no-ops by design: the deftype denial lands as this
+call's return value, not an error.")
 
 (define filmstrip/ws-node
   (lambda
@@ -3640,3 +3653,33 @@ through the store-backend knob's current write (filmstrip/store-write).")
           (list (as-str (dict-get f "title")) (as-str (car row)))))
       (todo/list/all)))
   "Column of todo lists: (title . list-id).")
+
+(define ui/railtab
+  (lambda (label)
+    (ui/elm
+      "button"
+      (list
+        "class" "fs-btn fs-railtab"
+        "title" (string-append "show the " label " tree")
+        "hx-post" "/filmstrip/railmode"
+        "hx-vals" (string-append "{\"root\":\"" label "\"}")
+        "hx-target" "#fs-sink"
+        "hx-swap" "innerHTML")
+      (list (ui/text label))))
+  "One rail mode tab: POSTs /filmstrip/railmode with this root (the
+sentinel :has flip -- expansion DOM stays alive). Declared behavior
+data: the hx-* verbs ride attrs verbatim through the projection.")
+
+(define ui/start-entry
+  (lambda (label route)
+    (ui/elm
+      "button"
+      (list
+        "class" "fs-btn fs-start-entry"
+        "title" (string-append "open " label)
+        "hx-post" "/filmstrip/open"
+        "hx-vals" (string-append "{\"route\":\"" route "\"}")
+        "hx-target" "#fs-sink"
+        "hx-swap" "innerHTML")
+      (list (ui/text label))))
+  "One start-menu entry: opens `route` as a pane via /filmstrip/open.")
