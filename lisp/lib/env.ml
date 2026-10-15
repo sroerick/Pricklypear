@@ -41,6 +41,31 @@ let lookup_hook : (string -> unit) option ref = ref None
     and on [Unforced] runs the payload's OWN evaluator (which is how
     the image forces under its prim rim without the pure kernel
     learning about I/O). Values other than VThunk pass through. *)
+(** [retryable_thunk_exn exn] - failures that are functions of the
+    CALLING CONTEXT, not of the body's own semantics (card 4c6d3e9f,
+    generalizing the 2026-10-05 budget carve-out of d101502). These are
+    memoization-poisoners: a body that would force fine under a fresh
+    budget / a fully-loaded package / a seat with the right tier must
+    not be pinned Failed by the request that happened to touch it
+    first. Classes:
+      - Budget_exceeded: the classic (see audit-2026-10-05).
+      - Prim_error "denied": seat/delegation-tier denies (reseed,
+        deftype, ws writes) - the same body forces fine as admin or
+        after tier changes; memoizing pinned the filmstrip library for
+        delegated seats (2026-10-14 load-library abort at ws-init!).
+      - Unbound_var: a package registering forms in order leaves later
+        names unbound while a mid-package thunk is first forced;
+        memoizing that poisons the binding even after the load
+        completes. Deterministic typos merely retry (cheap, and the
+        error stays visible on every touch - which for a typo is what
+        you want anyway). *)
+let retryable_thunk_exn (exn : exn) : bool =
+  match exn with
+  | Interp_error Budget_exceeded -> true
+  | Interp_error (Prim_error (_, _, "denied")) -> true
+  | Interp_error (Unbound_var _) -> true
+  | _ -> false
+
 let rec force_value (v : value) : value =
   match v with
   | VThunk cell ->
@@ -72,7 +97,7 @@ let rec force_value (v : value) : value =
                    budget until rehydrate). Leave the cell Unforced so a
                    later lookup retries; everything else replays. *)
                 (match exn with
-                 | Interp_error Budget_exceeded -> cell := Unforced payload
+                 | _ when retryable_thunk_exn exn -> cell := Unforced payload
                  | _ -> cell := Failed exn);
                 raise exn))
   | v -> v
