@@ -5,6 +5,7 @@
  (* agent note (|2026-09-04 MAKE (filmstrip v1, branch filmstrip-v1): shell shipped stringly per the handoff plan (archive/plans/filmstrip-v1.md). Dialect notes for the next agent: let* is a SINGLE-BODY macro — multi-step handlers wrap their tail in (seq ...); cons builds VPair chains which count rejects (length accepts both). browse lives as <pkg>/browse defs inside libs/filmstrip until promotion into todo/notes/calendar. Routes are exact-match, so /filmstrip/width/<id> became /filmstrip/<action> routes with id/dir/d/t params — same semantics, different spelling than this chapter's prose. Smoke: scripts/smoke_filmstrip.py (11 checks incl. zero-JS + round-trip).|) *)
  (* agent note (|2026-10-01 NOMENCLATURE (discussion, roerick) — the words had drifted: 'glochid' was born the local agent harness (glochid.borg) but was being used loosely for the window-manager interface. LOCKED: FILMSTRIP = the window-manager interface / shell (cascade + pane strips, workspace state, rail/strip modes) — ONE vocabulary, TWO residences: the habitat (libs/filmstrip, /filmstrip, workspace rows in Postgres) and inside glochid (workspace persisted to a local file). GLOCHID = strictly the local agent HARNESS (laptop binary: chat + agent loop + browsers + lens). The harness's SCREEN is a filmstrip: shared shell verbs are filmstrip/* and the harness consumes them, while glochid/* names are harness-local (theme, chat surfaces). Consequence: 'make glochid the main interface on pricklypear' means 'make the filmstrip shell the default habitat view' — harness and habitat become two windows into one interface. Colloquial 'glochid' for the window manager is retired; say filmstrip.|) *)
  (* agent note (|2026-10-01 WIRED AS DEFAULT (roerick: filmstrip becomes the default habitat view — the 2026-10-01 nomenclature session). TWO gaps closed: (1) KERNEL: / redirects authenticated users to /filmstrip (anonymous still goes to /welcome via require_login_redirect), and a post-login with no next= lands at /filmstrip directly (image/lib/http_pages.ml home_page + http_core post_login; ui/home stays bound, rollback = the one redirect line). (2) VAULT: libs/filmstrip/lib.pp gained a route-bindings footer — the shell routes were LIVE-ONLY pins on system/main (registered by an pp-sync push, never in the vault), so a fresh habitat booting from seed could not serve the shell at all; now (route ...) forms ride the lib and boot seed is self-sufficient. VERIFIED on the local dev stack: fresh user shell-cold-test: post-login -> 303 /filmstrip; GET / -> 303 /filmstrip; GET /filmstrip -> 200 with cascade (todos/notes/calendar) + empty strip; pane open persists across reload.|) *)
+   (* agent note (|2026-10-16 VAULT GAPS FOUND+FIXED (during the narrow-shell make; reproduced on scripts/dev.sh clean boots, both halves of habitat issue 02e92aa1): (1) ROUTES -- the route-bindings footer the 2026-10-01 WIRED-AS-DEFAULT note promised was GONE from libs/filmstrip/lib.pp at HEAD; the 4381766 pp-sync pull (vault==main) silently dropped all 14 (route ...) forms because route rows are store content the vault mirror does not carry; a fresh boot 404'd /filmstrip. Restored the footer (+ /filmstrip/destroy and /filmstrip/desktop, the two verbs added since 7ca1f53) with a CAUTION comment in the footer: future pp-sync snapshots must preserve load-time forms or the gap returns. The railmode POST stays host-side (no lib def; glochid implements its own). (2) STD MACROS -- the same vault snapshot dropped std's let*/when/unless defmacros (6eddd82 added them 2026-07-27; the image gets let* from libs/std per the hostkit/host_seam.ml boot_stdlib docstring), so fresh boots 500'd every shell handler with unbound: let*. Restored all three to libs/std; the quasiquote spelling from 6eddd82 WEDGED evals on the current build (expansion loop), so the restored forms use the host boot_stdlib's car/cdr expansion verbatim -- the proven form (glochid + remote load it verbatim). VERIFIED on a clean boot: let*/when/unless all bind, GET /filmstrip 200 with the new shell. (3) STILL OPEN (the filmstrip-ws half of 02e92aa1, kernel/store-side): on a fresh boot a pane opens in-session but the workspace row does not persist -- POST /filmstrip/open answers a real fs-pane fragment, then (filmstrip/ws-fields) reads back empty; panes vanish on reload. Same family: no app lib (todo/notes/calendar) carries route forms in the vault, so fresh boots have no /todos etc. to open -- a per-package route-footer sweep is its own card.|) *)
  (convention ocaml-dune)
 
  (section filmstrip-shell
@@ -274,6 +275,55 @@
    (status implemented)
   )
 
+  (subsection narrow-shell
+   (doc "PHONE COLLAPSE (2026-10-16, operator direction: mobile-first,
+        'every app should be collapsible into a phone width format; the
+        phone interface should collapse the rail into an overlay, and
+        you should be able to scroll left/right across apps'). ONE
+        breakpoint, max-width: 48rem, carries the whole narrow story
+        (the tree-verb demotion moves here from 40rem, so there is
+        exactly one narrow width). CSS only: zero JS, zero inline
+        styles, zero new server state.
+        - MAIN PANES GO ONE-UP: every main pane is flex 0 0 100%
+          (third/half/full collapse to the same width, width stays a
+          desktop verb), min-width drops, scroll-margin peeks go to 0,
+          and the strip gains scroll-snap (x mandatory, center, stop
+          always) so swiping apps lands page-wise. Focus-as-scroll and
+          the v5 strip invariants are unchanged in kind.
+        - THE RAIL BECOMES AN OVERLAY: #fs-rail trades the 20rem
+          sidebar for a fixed sheet (inset above the bottom bar,
+          opaque, bordered, own scroll); the railtabs row becomes a
+          fixed bottom bar. Open/close is a zero-JS checkbox
+          disclosure: a hidden input#fs-railsheet in the railtabs row,
+          the 'rail' title word becomes its <label>;
+          :has(#fs-railsheet:checked) reveals the sheet, the unchecked
+          default hides it (visibility, not display, so htmx keeps
+          OOB-updating the tree inside the closed sheet). The railtab
+          mode words hide while the sheet is closed (the bar reads
+          start | rail); the start menu opens upward from the bottom
+          bar; the keys-hint glyph is hidden (no keyboard). Pinned
+          rail panes ride the same sheet, stacked under the active
+          tree box: dock semantics survive, the sheet IS the dock.
+        - TOUCH FLOORS: tree rows, verb glyphs, pane-head buttons and
+          railtab words grow to ~2rem hit targets; the shell drops its
+          28rem min-height and sizes to 100dvh (fallback: the desktop
+          100vh rule) so mobile browser chrome never clips the strip;
+          body padding tightens.
+        - TREE-BOX CHROME (habitat): .fs-rmode boxes get their box at
+          last, a grid (title + collapse-all glyph on row one, the
+          tree ul spanning row two, scrolling internally); the habitat
+          tree had been rendering with no box styling at all. GLOCHID
+          SEAM: surface.ml carries its own copy of the shell css, so
+          the phone block lands in the harness separately; this
+          stanza governs the habitat stylesheet (libs/filmstrip).")
+   (verify
+    (smoke "at phone width every main pane is a full-width column; the strip snaps page-wise; scrolling walks apps left/right; focus lands the focused pane on-stage; zero JS")
+    (smoke "at phone width the rail is a bottom bar (start | rail); tapping 'rail' opens the overlay sheet with the active tree box; tapping again closes it; mode words appear only while open; zero JS, zero inline styles, zero server state")
+    (smoke "pinned rail panes render inside the open sheet (dock semantics), never as strip columns; tree OOB updates still land while the sheet is closed")
+    (smoke "tree rows and verb glyphs meet ~2rem touch floors at phone width; the shell sizes to 100dvh and never overflows under mobile browser chrome")
+    (smoke "past 48rem nothing changed but the tree-box chrome: sidebar shell, preset column widths, scroll-margin peeks, inline glyphs (the tree-verb demotion now lives at the 48rem query)"))
+   (status implemented)
+  )
   (subsection action-glyphs
    (doc "THE UI VOCABULARY IS GLYPHS, and the word is metadata. An
        action button renders a GLYPH; the verb WORD survives on it as

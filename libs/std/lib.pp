@@ -180,6 +180,36 @@
     (list "use" sheet))
   "Include another sheet node by reference.")
 
+;; --- binding/control macros ---
+;; Unhygienic defmacro + quasiquote (language-roadmap decision default).
+;; Single-body only: defmacro params do not support dotted rest args.
+;; RESTORED 2026-10-16: the 7ab3cd5 vault snapshot dropped these (along
+;; with the filmstrip route footer) and fresh boots 500'd the shell with
+;; "unbound: let*" -- the image gets let* from libs/std; the hosts embed
+;; their own verbatim copy at boot (hostkit/host_seam.ml boot_stdlib).
+;; EXPANSION SPELLING: written with car/cdr + list, exactly the host
+;; boot_stdlib form -- the quasiquote spelling from 6eddd82 wedged evals
+;; (expansion loop) on the current build; the host copy is the proven
+;; form (glochid + remote load it verbatim and their let* code runs).
+
+;; (let* ((a 1) (b (+ a 1))) body) — sequential bindings; each value
+;; sees earlier names. Expands to nested parallel let.
+(defmacro let* (bindings body)
+  (if (null? bindings)
+      (list (quote let) (list) body)
+      (list (quote let)
+            (list (list (car (car bindings)) (car (cdr (car bindings)))))
+            (list (quote let*) (cdr bindings) body))))
+
+;; (when test body) — evaluate body only when test is truthy; else ().
+(defmacro when (test body)
+  (list (quote if) test body (quote ())))
+
+;; (unless test body) — evaluate body only when test is falsey.
+(defmacro unless (test body)
+  (list (quote if) test (quote ()) body))
+
+
 ;; --- data/ ---
 
 (define data/get-field
