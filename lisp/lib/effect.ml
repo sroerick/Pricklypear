@@ -196,7 +196,7 @@ let read_db_prims = [
   "export-package";
   "route-visibility";
   "branch/status";  (* branch-ops status row: read-only fold of Store.branch_status *)
-  "branch/cp-list"; "branch/cp-diff"; "branch/log";  (* branching.checkpoints reads: cp listing, cp diff, the oplog fold *)
+  "branch/cp-list"; "branch/cp-diff"; "branch/log"; "branch/defs";  (* file-bridge: own fn pins (name, body, hash) + head_gen *)  (* branching.checkpoints reads: cp listing, cp diff, the oplog fold *)
   "list-usernames"; "list-ssh-keys";
   "llm-key-status";
   "log-tail"; "ops/summary"; "ops/incidents"; "ops/activity";
