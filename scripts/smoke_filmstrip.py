@@ -4,8 +4,8 @@
 Proves the two-strip shell against a running dev image:
 
   1. boot check (/health)
-  2. shell renders: cascade strip + launcher + content strip + key
-     sentinels, ZERO <script> tags (D3)
+    2. shell renders: surface + strip + railtabs row (start menu, column
+       picker) + key sentinels, ZERO <script> tags (D3)
   3. launcher open /todos -> pane appears with dispatched todo fragment,
      .focused, width third; workspace row persisted
   4. open /notes -> second pane appended, focused
@@ -103,9 +103,9 @@ def main():
 
     # 2. shell renders (fragment mode)
     shell = http("GET", "/filmstrip")
-    must('id="fs-cascade"' in shell and 'class="fs-col"' in shell, "shell cascade strip")
-    must('id="fs-launch"' in shell and 'name="route"' in shell, "shell launcher row")
-    must('id="fs-content"' in shell, "shell content strip")
+    must('id="fs-shell"' in shell and 'id="fs-content"' in shell, "shell surface + strip")
+    must('id="fs-railtabs"' in shell and 'id="fs-start"' in shell, "railtabs row + start menu")
+    must('id="fs-coltabs"' in shell, "column picker row")
     must("keydown[altKey" in shell and 'hx-trigger' in shell, "key sentinels (alt+arrows)")
     must("<script" not in shell, "zero-JS shell (no <script>)")
 
@@ -177,7 +177,9 @@ def main():
     must('fs-pane fs-half focused' in shell, "reload -> /todos pane half + focused")
     must('fs-entry fs-sel' in shell, "reload -> cascade selection rendered")
     must('fs-title">/todos' in shell and 'fs-title">/notes' in shell,
-         "reload -> both panes dispatched")
+         "reload -> both pane heads render")
+    must('hx-get="/todos"' in shell and 'hx-trigger="revealed"' in shell,
+         "reload -> lazy pane bodies (hx-get + revealed, no inline dispatch)")
     must("filmstrip: no route for" not in shell, "reload -> no dispatch errors")
 
     # 11. close the /notes pane -> OOB delete + row updated + focus hand-off

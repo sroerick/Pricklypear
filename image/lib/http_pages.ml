@@ -294,10 +294,17 @@ let home_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
   (* PP_HOME_URL (sourced into the runtime env by the rc.d unit) points the
      authenticated home at the shared glochid harness URL once that
      service runs on this box; unset (or empty) keeps the filmstrip
-     shell the default. Rollback: unset the env, or this one line. *)
+     shell the default — served AT / (shell-pass 2, 2026-10-16: the
+     / -> /filmstrip redirect is gone; ui/home stays as the
+     filmstrip-missing fallback below). *)
   (match Sys.getenv_opt "PP_HOME_URL" with
    | Some url when String.trim url <> "" -> redirect_response reqd url
-   | _ -> redirect_response reqd "/filmstrip")
+   | _ ->
+       (match try_ui_fn session "filmstrip/page" with
+        | Some html when String.trim html <> "" ->
+            let body = chrome ~session ~title:"" [ txt ~raw:true "%s" html ] in
+            html_response reqd ~session body
+        | _ -> redirect_response reqd "/filmstrip"))
 
 let _home_page_legacy (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
   (* Nav comes from Session.ui_nav_html (refreshed in request launch). *)
