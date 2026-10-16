@@ -470,6 +470,33 @@ type known_fn_lookup = string -> effect_set option
 (** Default [effect_set] resolution for prim names — [effects_for_prim]. *)
 let default_prim_lookup = effects_for_prim
 
+(** Param names bound by a lambda params expr (d71ef274 shadowing mask).
+    Recognizes the empty list (Lit VNil), a single bare Var, flat plain
+    lists (App (Var head, [Var..])), optional-with-default sugar elements
+    (App (Var p, [_]) -> p), and dotted/rest (the rest Var is a binding).
+    Returns None for unrecognized shapes - the caller falls back to the
+    unmasked walk (over-approximation, safe): masking a name that is not
+    actually bound would hide effects from the capability gates. *)
+let lambda_param_names (p : expr) : string list option =
+  let element = function
+    | Var n -> Some [ n ]
+    | App (Var n, [ _default ]) -> Some [ n ]
+    | _ -> None
+  in
+  match p with
+  | Lit VNil -> Some []
+  | Var n -> Some [ n ]
+  | App (Var n, rest) ->
+      let rests = List.map element rest in
+      if List.for_all (fun x -> x <> None) rests then
+        Some
+          (n
+           :: List.concat_map
+                (fun x -> match x with Some l -> l | None -> [])
+                rests)
+      else None
+  | _ -> None
+
 (** Build a [known_fn] lookup from visible bindings [(name, body)].
     Memoized; cycles break by treating the in-progress name as pure so
     mutual recursion does not diverge. Used by badges, AI install gate,
@@ -496,94 +523,122 @@ let rec known_fn_of_bindings (bindings : (string * expr) list) : known_fn_lookup
              Some s)
   in
   lookup
-
 (** Conservative AST effect inference.
     [known_fn] resolves user function names when known; unknown globals
     contribute no extra effects (overapprox only on prims). Higher-order
     unknown application does not explode to top — callers may wrap. *)
-and infer
-    ?(prims = default_prim_lookup)
-    ?(known_fn : known_fn_lookup = fun _ -> None)
-    (e : expr) : effect_set =
-  let go = infer ~prims ~known_fn in
-  match e with
-  | Var name ->
-      (match known_fn name with
-       | Some s -> s
-       | None ->
-           (* bare var might be a prim bound in env *)
-           if List.mem name pure_prims
-              || List.mem name read_db_prims
-              || List.mem name write_db_prims
-              || List.mem name branch_prims
-              || List.mem name publish_prims
-              || List.mem name html_prims
-              || List.mem name ai_prims
-              || List.mem name net_prims
-           then prims name
-           else EffSet.empty)
-  | Lit _ -> EffSet.empty
-  | Quote _ -> EffSet.empty
-  | Lambda (_params, body) -> go body
-  | If (t, a, b) -> EffSet.unions [ go t; go a; go b ]
-  | Let (_n, v, body) -> EffSet.union (go v) (go body)
-  | Letrec (bindings, body) ->
-      let bs = List.map (fun (_, e') -> go e') bindings in
-      EffSet.unions (go body :: bs)
-  | Seq (a, b) -> EffSet.union (go a) (go b)
-  | Define (_n, v) -> go v
-  | Prim (name, args) ->
-      EffSet.union (prims name) (EffSet.unions (List.map go args))
-  | App (head, args) ->
-      (match head with
-       | Var name when name = "let" || name = "letrec" ->
-           (* let/letrec arrive as App nodes: the reader encodes the
-              binding list as App (first_pair, [rest pairs]) where each
-              pair is App (Var name, [val]) — parse_binding_pairs' exact
-              shape. The pair heads are BINDING NAMES (syntax), not
-              calls: strict prim lookups on them denied every
-              multi-binding-let public handler (prod /guestbook,
-              2026-09-11). Walk the VALUE exprs and the body — and ONLY
-              those: the generic tail below re-walks args verbatim,
-              which would hit the pair heads a second time. *)
-           (match args with
-            | [ App (App (Var _, [ v ]), rest_pairs); body ] ->
-                let pair_val p =
-                  match p with App (Var _, [ v ]) -> go v | x -> go x
-                in
-                EffSet.unions (go v :: List.map pair_val rest_pairs @ [ go body ])
-            | _ -> EffSet.unions (List.map go args))
-       | _ ->
-           let head_fx =
-             match head with
-             | Var name when List.mem name special_form_heads ->
-                 (* Mirror eval's App dispatch: special forms never reach
-                    prim dispatch, so do not consult [prims] (strict
-                    would raise, default would drop the body).
-                    Capabilities these forms carry themselves:
-                    with-transaction holds the txn; with-step writes a
-                    checkpoint (composes with Txn). Everything else is
-                    pure dispatch — the args carry the effects. *)
-                 let extra =
-                   if name = "with-transaction" then EffSet.singleton Txn
-                   else if name = "with-step" then
-                     EffSet.unions [ EffSet.singleton Txn;
-                                     EffSet.singleton WriteDb ]
-                   else EffSet.empty
-                 in
-                 EffSet.unions (extra :: List.map go args)
-             | Var name ->
-                 (match known_fn name with
-                  | Some s -> s
-                  | None -> prims name)
-             | _ -> go head
-           in
-           let special =
-             match head with
-             | Var "with-transaction" -> EffSet.singleton Txn
-             | _ -> EffSet.empty
-           in
-           EffSet.unions (head_fx :: special :: List.map go args))
+  and infer
+      ?(prims = default_prim_lookup)
+      ?(known_fn : known_fn_lookup = fun _ -> None)
+      ?(bound : string list = [])
+      (e : expr) : effect_set =
+    let go = infer ~prims ~known_fn ~bound in
+    let go_bound names = infer ~prims ~known_fn ~bound:(names @ bound) in
+    match e with
+    | Var name ->
+        if List.mem name bound then EffSet.empty
+        else
+          (match known_fn name with
+           | Some s -> s
+           | None ->
+               (* bare var might be a prim bound in env *)
+               if List.mem name pure_prims
+                  || List.mem name read_db_prims
+                  || List.mem name write_db_prims
+                  || List.mem name branch_prims
+                  || List.mem name publish_prims
+                  || List.mem name html_prims
+                  || List.mem name ai_prims
+                  || List.mem name net_prims
+               then prims name
+               else EffSet.empty)
+    | Lit _ -> EffSet.empty
+    | Quote _ -> EffSet.empty
+    (* d71ef274: lambda params and let/letrec bindings shadow globals —
+       infer the body with those names masked, or a stray global sharing a
+       param/binding name (prod: a global `p` on admin/personal) contributes
+       its effects to every function that binds the same name. The Var case
+       checks [bound] BEFORE consulting [known_fn], so the recursive
+       known_fn memo is never consulted for lexically bound names. *)
+    | Lambda (params, body) -> go_bound params body
+    | If (t, a, b) -> EffSet.unions [ go t; go a; go b ]
+    | Let (n, v, body) -> EffSet.union (go v) (go_bound [ n ] body)
+    | Letrec (bindings, body) ->
+        let bs = List.map (fun (_, e') -> go e') bindings in
+        EffSet.unions (go_bound (List.map fst bindings) body :: bs)
+    | Seq (a, b) -> EffSet.union (go a) (go b)
+    | Define (_n, v) -> go v
+    | Prim (name, args) ->
+        EffSet.union (prims name) (EffSet.unions (List.map go args))
+    | App (head, args) ->
+        (match head with
+           | Var name when name = "let" || name = "letrec" || name = "lambda" ->
+               (* let/letrec arrive as App nodes: the reader encodes the
+                  binding list as App (first_pair, [rest pairs]) where each
+                  pair is App (Var name, [val]) — parse_binding_pairs' exact
+                  shape. The pair heads are BINDING NAMES (syntax), not
+                  calls: strict prim lookups on them denied every
+                  multi-binding-let public handler (prod /guestbook,
+                  2026-09-11). Walk the VALUE exprs and the body — and ONLY
+                  those: the generic tail below re-walks args verbatim,
+                  which would hit the pair heads a second time. Values are
+                  NOT masked (let values evaluate outside the bindings);
+                  the body IS masked (d71ef274).
+                  lambda arrives as App (Var "lambda", [params_expr;
+                  body]) — the params expr is syntax (the param names);
+                  the body is walked with the params masked (d71ef274). *)
+               (match name, args with
+                | ("let" | "letrec"),
+                  [ App (App (Var n0, [ v ]), rest_pairs); body ] ->
+                    let names =
+                      n0
+                      :: List.filter_map
+                           (fun p ->
+                              match p with App (Var n, [ _ ]) -> Some n | _ -> None)
+                           rest_pairs
+                    in
+                    let pair_val p =
+                      match p with App (Var _, [ v ]) -> go v | x -> go x
+                    in
+                    EffSet.unions
+                      (go v :: List.map pair_val rest_pairs
+                       @ [ go_bound names body ])
+                | "lambda", [ params_expr; body ] ->
+                    (match lambda_param_names params_expr with
+                     | Some names -> EffSet.unions [ go_bound names body ]
+                     | None -> EffSet.unions (List.map go args))
+                | _, args -> EffSet.unions (List.map go args))
+         | _ ->
+             let head_fx =
+               match head with
+               | Var name when List.mem name special_form_heads ->
+                   (* Mirror eval's App dispatch: special forms never reach
+                      prim dispatch, so do not consult [prims] (strict
+                      would raise, default would drop the body).
+                      Capabilities these forms carry themselves:
+                      with-transaction holds the txn; with-step writes a
+                      checkpoint (composes with Txn). Everything else is
+                      pure dispatch — the args carry the effects. *)
+                   let extra =
+                     if name = "with-transaction" then EffSet.singleton Txn
+                     else if name = "with-step" then
+                       EffSet.unions [ EffSet.singleton Txn;
+                                       EffSet.singleton WriteDb ]
+                     else EffSet.empty
+                   in
+                   EffSet.unions (extra :: List.map go args)
+               | Var name ->
+                   (match known_fn name with
+                    | Some s -> s
+                    | None -> prims name)
+               | _ -> go head
+             in
+             let special =
+               match head with
+               | Var "with-transaction" -> EffSet.singleton Txn
+               | _ -> EffSet.empty
+             in
+             EffSet.unions (head_fx :: special :: List.map go args))
 
 (** Default AI allowlist for generated code (install_function bodies).
 
