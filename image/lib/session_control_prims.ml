@@ -1163,7 +1163,7 @@ let register ~(hooks : hooks) (t : t) (tbl : Primitives.t) : unit =
               (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("branch/cp-restore", "bad args (need 1 checkpoint name + optional names)", "bad-args")))));
 
     (* (branch/log [owner/branch] ["cp-name"]) -> VStr JSON {branch,
-       windowed_by, entries:[{kind,name,op,author,gen,changed_at}]} — the
+         windowed_by, entries:[{kind,name,op,author,gen,changed_at,origin,origin_detail}]} — the
        oplog: newest-first write timeline from the version trail (op =
        create|update|delete; code_history is the recovery substrate the restore
        path consumes). Windowed by a cp name = writes since that checkpoint
@@ -1191,14 +1191,18 @@ let register ~(hooks : hooks) (t : t) (tbl : Primitives.t) : unit =
                 let entries =
                   Store.checkpoint_log t.store ~branch_id ~since_gen:w
                 in
-                let e_json (e : Store.cp_log_row) : Yojson.Safe.t =
-                  `Assoc
-                    [ ("kind", `String e.Store.l_kind)
-                    ; ("name", `String e.Store.l_name)
-                    ; ("op", `String e.Store.l_op)
-                    ; ("author", `String e.Store.l_author)
-                    ; ("gen", `Int (Int64.to_int e.Store.l_gen))
-                    ; ("changed_at", `String e.Store.l_changed_at) ]
+                  let e_json (e : Store.cp_log_row) : Yojson.Safe.t =
+                    `Assoc
+                      [ ("kind", `String e.Store.l_kind)
+                      ; ("name", `String e.Store.l_name)
+                      ; ("op", `String e.Store.l_op)
+                      ; ("author", `String e.Store.l_author)
+                      ; ("gen", `Int (Int64.to_int e.Store.l_gen))
+                      ; ("changed_at", `String e.Store.l_changed_at)
+                      ; ("origin", `String e.Store.l_origin)
+                      ; ( "origin_detail",
+                          if e.Store.l_origin_detail = "" then `Null
+                          else `String e.Store.l_origin_detail) ]
                 in
                 Pricklypear_lisp.Ast.VStr
                   (Yojson.Safe.to_string
@@ -1234,6 +1238,203 @@ let register ~(hooks : hooks) (t : t) (tbl : Primitives.t) : unit =
           | _ ->
               (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("branch/log", "bad args (optional branch ref + optional cp name)", "bad-args")))));
 
+    (* (branch/pick target-ref name... ['at "cp"] ['gen N] ['force]) ->
+       VStr JSON {branch, source, at, landed:[{kind,name}], auto:[{kind,name}],
+       skipped:[{kind,name,reason}]} | raise.
+
+       branching.op-transplant (2026-10-16, spec 3f4d6d1): the OP-LEVEL
+       CURSOR over branch/log — named writes transplant from the CURRENT
+       branch (at head / checkpoint / gen) onto the target ref as NEW WRITES
+       (Branch_pick: restore-is-a-write, clobber guard vs the target's own
+       pins, push_closure FIRST, landing tx stamped origin=pick, 042).
+
+       AUTH (branch/push discipline + the spec's system carve-out): the
+       target ref's owner human, the parent-linked agent under
+       allow_agent_promote, or admin; targets under system/* are ADMIN-ONLY
+       (promote-to-main stays the gated main path). Not gated on
+       agent_branch_lock (same class as promote). Server-only. *)
+    Primitives.register_server_only tbl "branch/pick"
+      (fun args ->
+        if t.manifest.username = "anonymous" then
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("branch/pick", "denied for anonymous", "denied"))))
+        else
+          match args with
+          | Pricklypear_lisp.Ast.VStr target_ref :: rest ->
+              let bad_args () =
+                raise
+                  (Pricklypear_lisp.Ast.Interp_error
+                     (Pricklypear_lisp.Ast.Prim_error
+                        ( "branch/pick",
+                          "bad args (need target ref + names, optional at cp / gen N / force)",
+                          "bad-args" )))
+              in
+              let names_of_list xs =
+                List.filter_map
+                  (function
+                    | Pricklypear_lisp.Ast.VStr s -> Some s
+                    | Pricklypear_lisp.Ast.VSymbol s -> Some s
+                    | _ -> None)
+                  xs
+              in
+              let rec walk names at force = function
+                | [] -> (List.rev names, at, force)
+                | Pricklypear_lisp.Ast.VSymbol "force" :: rest ->
+                    walk names at true rest
+                | Pricklypear_lisp.Ast.VSymbol "at"
+                  :: Pricklypear_lisp.Ast.VStr cp :: rest ->
+                    walk names (Some (Branch_pick.Pick_cp cp)) force rest
+                | Pricklypear_lisp.Ast.VSymbol "gen"
+                  :: Pricklypear_lisp.Ast.VInt g :: rest ->
+                    walk names (Some (Branch_pick.Pick_gen g)) force rest
+                | Pricklypear_lisp.Ast.VSymbol "gen"
+                  :: Pricklypear_lisp.Ast.VStr s :: rest -> (
+                    match Int64.of_string_opt s with
+                    | Some g ->
+                        walk names (Some (Branch_pick.Pick_gen g)) force rest
+                    | None -> bad_args ())
+                | Pricklypear_lisp.Ast.VStr s :: rest ->
+                    walk (s :: names) at force rest
+                | Pricklypear_lisp.Ast.VSymbol s :: rest ->
+                    walk (s :: names) at force rest
+                | Pricklypear_lisp.Ast.VList xs :: rest ->
+                    walk (List.rev_append (names_of_list xs) names) at force rest
+                | _ -> bad_args ()
+              in
+              let names, at, force = walk [] None false rest in
+              let owner, short = split_branch_ref target_ref in
+              let u = Prims_db_common.caller_username ~t () in
+              let ledger ~ok =
+                ignore
+                  (Activity_ledger.push ~actor:u ~cls:"pick.attempt"
+                     ~target:
+                       (Activity_ledger.path_target
+                          (Printf.sprintf "pick->%s" target_ref))
+                     ~outcome:(if ok then "ok" else "denied")
+                     ())
+              in
+              let deny why =
+                ledger ~ok:false;
+                (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("branch/pick", why, "denied"))))
+              in
+              let failed why =
+                ledger ~ok:false;
+                (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("branch/pick", why, "failed"))))
+              in
+              (if owner = "system" then
+                 (* spec: system/* targets are ADMIN-ONLY; promote-to-main
+                    stays the gated main path for whole sets *)
+                 if u = "admin" || Prims_db_common.is_verified_admin ~t () then
+                   ()
+                 else deny "system/* targets are admin-only"
+               else
+                 (* authorization BEFORE any branch lookup (fork rule: a
+                    denial never leaks whether the ref exists) *)
+                 match Auth_store.get_user_by_username t.store u with
+                 | Some caller when caller.Auth_store.user_type = "agent" -> (
+                     match caller.Auth_store.parent_user_id with
+                     | None -> deny "agent has no parent"
+                     | Some pid -> (
+                         match Auth_store.get_user_by_id t.store pid with
+                         | None -> deny "parent user not found"
+                         | Some parent ->
+                             if parent.Auth_store.username <> owner then
+                               deny
+                                 (Printf.sprintf
+                                    "denied: branch %s is owned by %s"
+                                    target_ref owner)
+                             else if
+                               not
+                                 (Auth_store.get_allow_agent_promote
+                                    t.store
+                                    ~user_id:parent.Auth_store.id)
+                             then deny "agent promote disabled by parent"
+                             else ()))
+                 | Some _ ->
+                     (* human caller: own garden or verified admin —
+                        branch_owner_authorized covers both plus the
+                        documented admin bootstrap valve *)
+                     if not (branch_owner_authorized t owner) then
+                       deny
+                         (Printf.sprintf "denied: branch %s is owned by %s"
+                            target_ref owner)
+                     else ()
+                 | None ->
+                     (* no users row (bootstrap image): the admin textual
+                        valve only, the same fallback the family keeps *)
+                     if
+                       u <> "admin"
+                       && not (Prims_db_common.is_verified_admin ~t ())
+                     then
+                       deny
+                         (Printf.sprintf "denied: branch %s is owned by %s"
+                            target_ref owner)
+                     else ());
+              let source_id = Store.current_branch_id t.store in
+              (match
+                 Store.lookup_branch_id_by_name t.store ~owner ~name:short
+               with
+               | None -> failed ("no such branch: " ^ target_ref)
+               | Some target_id -> (
+                   match
+                     Branch_pick.pick t.store ~source_id ~target_id ~names
+                        ~at:(match at with
+                             | Some a -> a
+                             | None -> Branch_pick.Pick_head) ~force
+                       ~kernel:(List.map fst t.kernel_catalog)
+                       ~author:u ~source_ref:source_id
+                   with
+                   | Branch_pick.Pick_ok { landed; auto; skipped } ->
+                       ledger ~ok:(landed <> []);
+                       let () =
+                         if
+                           landed <> []
+                           && Store.current_branch_id t.store = target_id
+                         then (hooks.rehydrate) t
+                         else ()
+                       in
+                       let row_json (r : Branch_pick.pick_row) :
+                           Yojson.Safe.t =
+                         `Assoc
+                           [ ("kind", `String r.Branch_pick.pr_kind)
+                           ; ("name", `String r.Branch_pick.pr_name) ]
+                       in
+                       let skip_json (s : Branch_pick.skip_row) :
+                           Yojson.Safe.t =
+                         `Assoc
+                           [ ("kind", `String s.Branch_pick.sk_kind)
+                           ; ("name", `String s.Branch_pick.sk_name)
+                           ; ("reason", `String s.Branch_pick.sk_reason) ]
+                       in
+                       Pricklypear_lisp.Ast.VStr
+                         (Yojson.Safe.to_string
+                            (`Assoc
+                              [ ("branch", `String target_ref)
+                              ; ("source", `String source_id)
+                                ; ( "at",
+                                    `String (Branch_pick.source_at_s
+                                               (match at with
+                                                | Some a -> a
+                                                | None ->
+                                                  Branch_pick.Pick_head)) )
+                              ; ("landed", `List (List.map row_json landed))
+                              ; ( "auto",
+                                  `List
+                                    (List.map
+                                       (fun n ->
+                                          `Assoc
+                                            [ ("kind", `String "fn")
+                                            ; ("name", `String n) ])
+                                       auto) )
+                              ; ( "skipped",
+                                  `List (List.map skip_json skipped) )
+                              ]))
+                   | Branch_pick.Pick_holes holes ->
+                       failed
+                         ("refused, unresolved deps: "
+                         ^ Branch_pick.holes_msg holes)
+                     | Branch_pick.Pick_refused why -> failed why))
+          | _ ->
+              (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("branch/pick", "bad args (need a target branch ref)", "bad-args")))));
   (* (bench expr-string [n]) -> VFloat average microseconds per iteration.
      Parses once, warms up once, runs n times (default 1000) under a max
      budget so the bench loop itself never hits Budget_exceeded. Uses the

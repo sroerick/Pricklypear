@@ -240,6 +240,11 @@
   (libraries pricklypear-image pricklypear-lisp alcotest eio_main yojson pgx unix))
 
 (test
+  (name op_transplant_test)
+  (modules op_transplant_test)
+  (libraries pricklypear-image pricklypear-lisp alcotest eio_main yojson pgx unix))
+
+(test
   (name face_hosts_test)
   (modules face_hosts_test)
   (libraries pricklypear-image alcotest unix))
