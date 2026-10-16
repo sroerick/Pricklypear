@@ -299,6 +299,7 @@ let write_db_prims = [
     "branch/cp";  (* branch-ops checkpoint: name a point on the gen stream (store write) *)
     "branch/cp-restore";  (* branch-ops checkpoint restore: re-land captured bodies as new writes (store writes) *)
     "branch/pick";  (* branch-ops pick row: op-level transplant of named writes onto a target branch (store writes) *)
+  "branch/ingest";  (* branch-ops ingest row: file-bridge — one call lands a projection file's def-op batch (store writes) *)
   (* retention writes *)
   "retention-delete-policy"; "retention-policy-set"; "retention-run";
   (* auth writes *)

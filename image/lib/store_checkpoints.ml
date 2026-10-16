@@ -335,6 +335,52 @@ let pins_at_gen (t : Store_db.t) ~(branch_id : string) ~(cutoff : Int64.t) :
               | _ -> None)
            rows
        with exn -> Store_db.reraise ~op:"pins_at_gen" exn)
+(* ---- file-bridge ingest reads (branching.file-bridge, 2026-10-16) ----
+   The ingest server call classifies incoming file ops against the target's
+   own pins BEFORE any landing: these are the two reads it needs. Opaque
+   jsonb only — the AST codec + closure live in Branch_pick. *)
+
+(* The store's pin hash for a fn body jsonb text: digest of the
+   jsonb-NORMALIZED text — the same domain tree_nodes.hash uses
+   (upsert_fn's SQL digest), so an incoming file body compares equal to a
+   landed pin iff the two are jsonb-equal (key order/whitespace of the
+   client text is irrelevant). *)
+let body_hash (t : Store_db.t) ~(body_json : string) : (string, string) result =
+  match t.conn with
+  | None -> Error "no database"
+  | Some conn ->
+      (try
+         let rows =
+           Store_db.exec conn
+             ~params:[ Pgx.Value.of_string body_json ]
+             "SELECT encode(digest($1::jsonb::text,'sha256'),'hex')" in
+         (match rows with
+          | [ [ h ] ] -> (
+              match Pgx.Value.to_string h with
+              | Some s -> Ok s
+              | None -> Error "no hash returned")
+          | _ -> Error "no hash returned")
+       with exn -> Store_db.reraise ~op:"body_hash" exn)
+
+(* The branch's OWN head generation counter (branch_generations; the same
+   coordinate branch/cp captures). Read outside any write tx holding pins —
+   the cp-capture discipline. *)
+let branch_head_gen (t : Store_db.t) ~(branch_id : string) : Int64.t =
+  match t.conn with
+  | None -> 0L
+  | Some conn ->
+      (try
+         let rows =
+           Store_db.exec conn
+             ~params:[ Pgx.Value.of_string branch_id ]
+             "SELECT COALESCE((SELECT generation FROM branch_generations WHERE branch_id = $1::uuid), 0)::bigint" in
+         (match rows with
+          | [ [ g ] ] -> (
+              match Pgx.Value.to_int64 g with
+              | Some v -> v
+              | None -> 0L)
+          | _ -> 0L)
+       with exn -> Store_db.reraise ~op:"branch_head_gen" exn)
 (* JSON payload helpers. The captured tree payload is the FULL node envelope
    ('v','kind','path','type','body','author','doc','hash'); 'body' is the
    kind's natural content: raw fn body jsonb, type fields jsonb, or the route

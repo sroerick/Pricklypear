@@ -300,3 +300,262 @@ let holes_msg = Branch_push.holes_msg
                      "SELECT set_config('pp.origin_detail', '', true)"
                  in
                  ()))
+
+(* ---- file-bridge P2 ingest (branching.file-bridge, spec commit 3f4d6d1,
+   2026-10-16) ---- One server call lands a projection file's def-op batch.
+   The CLIENT parses the file (File_projection, lisp/lib) and emits ops; the
+   server validates base-gen freshness, runs the clobber guard + closure
+   (op-transplant's rules, same code), and lands through the tree write
+   helpers inside ONE transaction stamped origin='file'.
+
+   CONFLICT RULE (the spec's): a name whose target head hash differs from
+   BOTH the incoming body and the manifest's base body is DIVERGED — the
+   server cannot see the manifest's base bodies, so the client sends each
+   op's base_hash (the hash of the base body the file was authored against,
+   as read from the target before editing). Target head = base_hash -> clean
+   redefine; target head differs from both -> diverged-target skip unless
+   ~force; no target pin -> create. JSONB-LEVEL body equality (never text):
+   body_hash digests the jsonb-NORMALIZED text, so client formatting is
+   irrelevant. *)
+
+type ingest_op = {
+  io_op : string;               (* "define" | "unbind" *)
+  io_name : string;
+  io_body : string;             (* fn body jsonb; define only *)
+  io_doc : string option;
+  io_base_hash : string option; (* base body hash the file was authored against *)
+}
+
+type ingest_result =
+  | Ingest_ok of {
+      i_landed : string list;  (* defines + unbinds actually written *)
+      i_skipped : skip_row list;
+    }
+  | Ingest_holes of (string * string list) list
+  | Ingest_refused of string
+
+(* Land the classified batch inside ONE tx stamped origin='file' (042);
+   rider-safe reset in a finally, the same discipline as the pick landing. *)
+let land_ingest ~(store : Store.t) ~(detail : string) ~(target_id : string)
+    ~(author : string)
+    (defines : (string * string * string option) list)
+    (unbinds : string list) : (string * string option) list =
+  if defines = [] && unbinds = [] then []
+  else
+    Store.with_transaction store (fun conn ->
+        match conn with
+        | None ->
+            List.map (fun (n, _, _) -> (n, Some "no database")) defines
+            @ List.map (fun n -> (n, Some "no database")) unbinds
+        | Some conn ->
+            Fun.protect
+              (fun () ->
+                 let (_ : Pgx.Value.t list list) =
+                   Store.exec conn ~params:[]
+                     "SELECT set_config('pp.origin', 'file', true)"
+                 in
+                 let (_ : Pgx.Value.t list list) =
+                   Store.exec conn
+                     ~params:[ Pgx.Value.of_string detail ]
+                     "SELECT set_config('pp.origin_detail', $1, true)"
+                 in
+                 let d_res =
+                   List.map
+                     (fun (n, b, d) ->
+                        ( n,
+                          match
+                            Tree_store.upsert_fn conn ~branch_id:target_id
+                              ~name:n ~body_json:b ~author ~doc:d
+                          with
+                          | Ok _ -> None
+                          | Error why -> Some why ))
+                     defines
+                 in
+                 let u_res =
+                   List.map
+                     (fun n ->
+                        ( n,
+                          match
+                            Tree_store.delete_fn conn ~branch_id:target_id
+                              ~name:n
+                          with
+                          | Ok _ -> None
+                          | Error why -> Some why ))
+                     unbinds
+                 in
+                 d_res @ u_res)
+              ~finally:(fun () ->
+                 (* rider-safe reset: an ingest joining an ambient transaction
+                    must not stamp the ambient body's later writes *)
+                 let (_ : Pgx.Value.t list list) =
+                   Store.exec conn ~params:[]
+                     "SELECT set_config('pp.origin', 'eval', true)"
+                 in
+                 let (_ : Pgx.Value.t list list) =
+                   Store.exec conn ~params:[]
+                     "SELECT set_config('pp.origin_detail', '', true)"
+                 in
+                 ()))
+
+let ingest (store : Store.t) ~(target_id : string) ~(ops : ingest_op list)
+    ~(base_gen : Int64.t) ~(force : bool) ~(kernel : string list)
+    ~(author : string) ~(file_name : string) : ingest_result =
+  if ops = [] then Ingest_refused "no ops in the batch"
+  else
+    (* freshness sanity: a manifest authored against a future branch *)
+    let head_gen = Store.branch_head_gen store ~branch_id:target_id in
+    if head_gen < base_gen then
+      Ingest_refused
+        (Printf.sprintf "manifest base-gen %Ld is ahead of the branch head %Ld"
+           base_gen head_gen)
+    else
+      let tgt = Store.pins_at_head store ~branch_id:target_id in
+      let tgt_hash n =
+        match
+          List.find_opt
+            (fun (p : Store.pin_row) -> String.equal p.Store.p_name n)
+            tgt
+        with
+        | Some p -> Some p.Store.p_hash
+        | None -> None
+      in
+      let classify_define (op : ingest_op) : [ `Land | `Skip of string ] =
+        match Store.body_hash store ~body_json:op.io_body with
+        | Error why -> `Skip ("hash failed: " ^ why)
+        | Ok ih -> (
+            match tgt_hash op.io_name with
+            | None -> `Land
+            | Some th when String.equal th ih -> `Skip "unchanged on target"
+            | Some th -> (
+                match op.io_base_hash with
+                | Some bh when String.equal bh th -> `Land
+                | _ ->
+                    if force then `Land
+                    else
+                      `Skip
+                        (Printf.sprintf "diverged-target: target %s vs file %s"
+                           th ih)))
+      in
+      let classify_unbind (op : ingest_op) : [ `Land | `Skip of string ] =
+        match tgt_hash op.io_name with
+        | None -> `Skip "already absent"
+        | Some th -> (
+            match op.io_base_hash with
+            | Some bh when String.equal bh th -> `Land
+            | _ ->
+                if force then `Land
+                else `Skip (Printf.sprintf "diverged-target: target %s" th))
+      in
+      let classify_defs (oplist : ingest_op list) :
+          ingest_op list * skip_row list =
+        List.fold_left
+            (fun (ok_rows, skip) (op : ingest_op) ->
+               match classify_define op with
+               | `Land -> (op :: ok_rows, skip)
+               | `Skip why ->
+                   ( ok_rows,
+                     { sk_kind = "fn"; sk_name = op.io_name; sk_reason = why }
+                     :: skip ))
+          ([], []) oplist
+      in
+      let defines_all =
+        List.filter (fun (o : ingest_op) -> String.equal o.io_op "define") ops in
+      let unbinds_all =
+        List.filter (fun (o : ingest_op) -> String.equal o.io_op "unbind") ops in
+      let other_skips =
+        List.map
+          (fun (o : ingest_op) ->
+             {
+               sk_kind = "op";
+               sk_name = o.io_name;
+               sk_reason = "unknown op: " ^ o.io_op;
+             })
+          (List.filter
+             (fun (o : ingest_op) ->
+               not (String.equal o.io_op "define")
+               && not (String.equal o.io_op "unbind"))
+             ops)
+      in
+      let defs_land0, skips1 = classify_defs defines_all in
+      let unbinds_land, skips2 =
+        List.fold_left
+            (fun (ok_rows, skip) (op : ingest_op) ->
+               match classify_unbind op with
+               | `Land -> (op.io_name :: ok_rows, skip)
+               | `Skip why ->
+                   ( ok_rows,
+                     { sk_kind = "fn"; sk_name = op.io_name; sk_reason = why }
+                     :: skip ))
+          ([], []) unbinds_all
+      in
+      (* closure over the landed defines: refs bound on the target chain are
+         free; a dep defined by the incoming batch auto-includes (and passes
+         the same conflict guard); a ref bound nowhere holes the ingest WHOLE *)
+      let run_closure () =
+        let land_names = List.map (fun (o : ingest_op) -> o.io_name) defs_land0 in
+        if land_names = [] then Ok (defs_land0, [], skips1 @ skips2 @ other_skips)
+        else
+          let src_defs =
+            List.filter_map
+              (fun (o : ingest_op) ->
+                 match Pricklypear_lisp.Ast.expr_of_body_json o.io_body with
+                 | Some e -> Some (o.io_name, e)
+                 | None -> None)
+              defines_all
+          in
+          let tgt_visible =
+            List.map (fun (n, _, _, _) -> n)
+              (Store.list_function_names_meta_at store ~branch_id:target_id)
+          in
+          match
+            Call_graph.push_closure ~requested:land_names ~src_defs
+              ~tgt_visible ~kernel
+          with
+          | Error holes -> Error holes
+          | Ok (_pushed, auto) ->
+              let auto_ops =
+                List.filter_map
+                  (fun n ->
+                     List.find_opt
+                       (fun (o : ingest_op) -> String.equal o.io_name n)
+                       defines_all)
+                  auto
+              in
+              let auto_land, auto_skip = classify_defs auto_ops in
+              Ok
+                ( defs_land0 @ auto_land,
+                  List.map (fun (o : ingest_op) -> o.io_name) auto_land,
+                  skips1 @ skips2 @ auto_skip @ other_skips )
+      in
+      match run_closure () with
+      | Error holes -> Ingest_holes holes
+      | Ok (defs_land, auto, skipped) ->
+          let detail =
+            Printf.sprintf "file:%s@gen:%Ld" file_name base_gen in
+          let outcomes =
+            land_ingest ~store ~detail ~target_id ~author
+              (List.map
+                 (fun (o : ingest_op) -> (o.io_name, o.io_body, o.io_doc))
+                 defs_land)
+              unbinds_land
+          in
+          let landed, land_skipped =
+            List.fold_left
+              (fun (ok, bad) (n, err) ->
+                 match err with
+                 | None -> (n :: ok, bad)
+                 | Some why ->
+                     ( ok,
+                       {
+                         sk_kind = "fn";
+                         sk_name = n;
+                         sk_reason = "landing failed: " ^ why;
+                       }
+                       :: bad ))
+              ([], skipped) outcomes
+          in
+          Ingest_ok
+            {
+              i_landed = List.rev landed;
+              i_skipped = land_skipped;
+            }

@@ -245,6 +245,11 @@
   (libraries pricklypear-image pricklypear-lisp alcotest eio_main yojson pgx unix))
 
 (test
+  (name file_bridge_test)
+  (modules file_bridge_test)
+  (libraries pricklypear-image pricklypear-lisp alcotest eio_main yojson pgx unix))
+
+(test
   (name face_hosts_test)
   (modules face_hosts_test)
   (libraries pricklypear-image alcotest unix))
