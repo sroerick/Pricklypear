@@ -330,18 +330,63 @@ let launch (env : route_env) (page_fn : Session.t -> unit) : unit =
                          short-circuits to a bare 429 BEFORE analytics,
                          shell eval, or DB work. Admins + the mainframe
                          (no profile) are never throttled. *)
-                      let mutating =
-                        match env.meth with
-                        | `POST | `PUT | `DELETE -> true
-                        | _ -> false
-                      in
-                      let uname_gate = Session.username session in
-                      let page_fn =
-                        if (not mutating)
-                           || not (Session.restricted session)
-                           || uname_gate = "anonymous"
-                           || uname_gate = ""
-                        then page_fn
+                        let mutating =
+                          match env.meth with
+                          | `POST | `PUT | `DELETE -> true
+                          | _ -> false
+                        in
+                        (* security.origin-authenticated-verbs (the
+                           PP_BASE_DOMAIN prod gate): every subdomain shares
+                           the Domain=.base session cookie, so a mutating
+                           request that RIDES the cookie must be same-origin.
+                           Browsers send Origin on every POST; absence on a
+                           cookie-bearing mutating request means a
+                           non-browser client riding the widened cookie.
+                           Bearer/Basic API clients carry no session cookie;
+                           anonymous POSTs (signup, guestbook) carry no
+                           privilege and stay open. *)
+                        let origin_violation =
+                          mutating
+                          && (match cookie_value headers cookie_name with
+                             | Some _ -> true
+                             | None -> false)
+                          && not (same_origin_ok headers)
+                        in
+                        let uname_gate = Session.username session in
+                        let page_fn =
+                          if origin_violation then fun _s ->
+                            ignore
+                              (Ops_log.info ~component:"http"
+                                 ~context:
+                                   [ ("path", path)
+                                   ; ("host",
+                                      (match List.assoc_opt "host" headers with
+                                      | Some h -> h
+                                      | None -> ""))
+                                   ; ("origin",
+                                      (match List.assoc_opt "origin" headers with
+                                      | Some o -> o
+                                      | None -> "")) ]
+                                 "cross-origin mutating request rejected (403)");
+                            let body = "cross-origin request rejected" in
+                            let resp_headers =
+                              Httpun.Headers.of_list
+                                ([ ("content-type", "text/plain")
+                                 ; ("content-length",
+                                    string_of_int (String.length body)) ]
+                                @ Timing.timing_header ()
+                                @ security_headers ())
+                            in
+                            let resp =
+                              Httpun.Response.create ~headers:resp_headers
+                                `Forbidden
+                            in
+                            safe_respond_with_string reqd resp body
+                          else if (not mutating)
+                             || not (Session.restricted session)
+                             || uname_gate = "anonymous"
+                             || uname_gate = ""
+                          then page_fn
                          else if
                            (match Profile.tenant_limits () with
                             | None -> true (* no limits configured: allow *)

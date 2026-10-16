@@ -614,6 +614,40 @@
       (smoke "shared cookie: logged-in alice is alice on alice.base and on agent.alice.base")
       (smoke "?at=<cp-name> renders the branch as of the checkpoint, differing from head where later writes exist"))
     )
+    (subsection origin-authenticated-verbs
+      (doc "security.origin-authenticated-verbs — the PP_BASE_DOMAIN prod gate: with the session cookie Domain widened to .base, every subdomain shares every session, so a mutating request that RIDES the cookie must be same-origin. POST/PUT/DELETE + pp_session cookie + Origin/Referer host != request Host (or neither header present) => 403 before analytics/shell/DB work. Browsers send Origin on every POST; Bearer/Basic API clients carry no cookie; anonymous POSTs (signup, guestbook) carry no privilege and stay open. Host_legacy never changes.")
+        (status implemented)
+      (implements image/lib/http_core.ml image/lib/http.ml
+       image/test/face_hosts_test.ml)
+      (verify
+        (build "dune build image")
+        (smoke "same-origin POST with cookie passes (Origin host == Host)")
+        (smoke "cross-origin POST with cookie is 403")
+        (smoke "cookie POST with no Origin/Referer is 403")
+        (smoke "cookie POST with same-host Referer fallback passes")
+        (smoke "POST without a session cookie is unaffected"))
+      (details
+        (doc (|
+           WHY: the 2026-10-12 agent note gates the flip: PROD STAYS DARK
+           until security.origin-authenticated-verbs lands. SameSite=Lax
+           already blocks cross-site POST cookies in modern browsers, but
+           the server must not depend on client-side cookie policy — it
+           verifies the verb's origin itself.
+
+           HOW: one pure predicate in http_core (same_origin_ok: Host vs
+           Origin/Referer authority, case-insensitive, port-stripped,
+           IPv6-bracket aware) + one short-circuit in http's request gate
+           (origin_violation => 403 before tier limiting), logged via
+           Ops_log. /api/eval cookie requests are covered by the same
+           mutating-verb gate.
+
+           RESIDUAL (accepted v1): a PUBLIC page's own same-origin script
+           can still ride a VISITOR's cookie same-origin; public-route
+           scripts are governed by route-visibility, not widened here.
+           Per-user wildcard SANs/DNS stay on demand
+           (pp-wild-cert-renew.sh -d list).
+        |)))
+    (subsection user-llm-keys
   (subsection user-llm-keys
    (doc "Per-user LLM provider keys; session AI uses user key with env fallback")
    (status implemented)
