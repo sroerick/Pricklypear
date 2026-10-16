@@ -1,13 +1,13 @@
-;; DRAFT - not registered in pricklypear.borg yet. Gregor reviews before any code exists.
+;; DRAFT v2 - gregor review 2026-10-16: RATIFY (decisions folded below). Not yet registered in pricklypear.borg; phase 1 registration lands TOGETHER with the workstreams obituary supersession, in one commit.
 ;; Deliverable D2 of the 2026-10-16 recon handoff (roerick -> gregor).
 
 (project pricklypear-run-primitive
   (doc "Pricklypear book chapter (DRAFT 2026-10-16): the run primitive - durable, chunked, resumable execution rows for the PP orchestrator. One run = one attempt to advance one card one gate, executed by a SUPERVISED SIDECAR RUNNER outside the PP runtime process, with state cheap enough to abandon and expensive enough to resume. The supervisor (a glochid app) owns claims, budgets, transitions, and evidence; PP rows are the queue; the LLM loop never runs inside the PP runtime process.")
   (status planned)
-  (* agent note (|PROVENANCE: drafted 2026-10-16 from the recon handoff (docs/handoffs/orchestrator-recon-D1-findings.md) for gregor's architecture review; the review leads with the failure paths in resume-semantics. OBITUARY TO RATIFY (D4 Q2): the 2026-09-26 sessions-as-runs pass rejected a separate run datum ("no data.u.<user>.run.* rows ever exist", borge/workstreams.borg) because glochid sessions WERE the run record. The 10-16 architecture moves the executor OUT of process (supervised sidecars, after one wedged in-image loop fatal'd tuna on 10-04), so durable resumable state must live PP-side in a run row; the session stays the TRANSCRIPT record (local JSONL, never tree rows). This chapter supersedes that stance FOR SIDECAR RUNS ONLY; card-feed milestones + terminal markers remain the human-facing record.|) *)
+    (* agent note (|PROVENANCE: drafted 2026-10-16 from the recon handoff (docs/handoffs/orchestrator-recon-D1-findings.md). GREGOR REVIEW 2026-10-16: RATIFY - decisions folded below; review points map onto the sections. OBITUARY RULE (review point 1, binding): the 2026-09-26 sessions-as-runs note in borge/workstreams.borg ('no data.u.<user>.run.* rows ever exist') MUST be superseded for sidecar runs IN THE SAME COMMIT that registers this chapter - never ratified later; until then the book contradicts itself and a future obedient agent sides with the stale line (the silent-fail class). The session stays the TRANSCRIPT record (local JSONL, never tree rows); card-feed milestones + terminal markers remain the human-facing record; this supersedes the 09-26 stance FOR SIDECAR RUNS ONLY. ALSO RATIFIED (review points 2-4): storage = shared-space datum + single supervisor + ONE CAS on the claim transition; usage from executor terminal output is a SELF-REPORT - the budget gate is ADVISORY until provider-structured usage lands; POLICY-2 backoff = the jobs shape (2^n cap 60s); POLICY-3 keeps the NO-VERDICT fail-safe verbatim; concurrency default 2 until the overnight soak passes.|) *)
 
   (section run-row
-    (doc "STORAGE (D4 Q1, to ratify): a typed datum in a SHARED space (data.s.run.*) keyed by run id - every identity can read the queue, no branch lens can fork it. A dedicated kernel table (the jobs shape, migrations/015_jobs.sql) is the alternative and buys SKIP LOCKED claim atomicity; a single leased supervisor does not need it (claim = guarded set-field; jobs.borg:64-91 records when the kernel-table trade IS right). Write-cost discipline: few bounded rows, text fields capped, transcripts NEVER in rows (2026-09-08 incident). CHEAP LEASE, EXPENSIVE STATE: a runner that dies on wall-clock timeout leaves resumable state in its row.
+      (doc "STORAGE (RATIFIED, gregor review 2026-10-16): a typed datum in a SHARED space (data.s.run.*) keyed by run id - every identity can read the queue, no branch lens can fork it. A dedicated kernel table (the jobs shape, migrations/015_jobs.sql) stays the recorded alternative (jobs.borg:64-91 records when that trade IS right). CLAIM ATOMICITY (review point 2, one line now, not when a second supervisor class appears): the queued -> claimed transition is a COMPARE-AND-SET guarded set - flip only a row still queued with no live claim; the reap-takeover in resume-semantics 3 is ALREADY a two-supervisor moment (a booting supervisor racing one that is stalled, not dead). Write-cost discipline: few bounded rows, text fields capped, transcripts NEVER in rows (2026-09-08 incident). CHEAP LEASE, EXPENSIVE STATE: a runner that dies on wall-clock timeout leaves resumable state in its row.
 
 FIELDS (the contract gregor reviews):
   id          uuid. The run's identity everywhere (evidence, logs, archives).
@@ -17,7 +17,7 @@ FIELDS (the contract gregor reviews):
   dest_state  The column this gate advances to (validated against the card's real columns, pp-flow.sh:406-415; empty = one-column advance).
   brief_hash  Hash of the rendered todo/flow-brief at claim time (reproducibility; re-render only on explicit re-brief).
   state       queued | claimed | running | succeeded | failed | timed_out | canceled | dead | parked
-  claim       {supervisor_id, lease_ts, heartbeat_at, ttl_s}. ONE supervisor holds it; heartbeat_at bumps every tick while a child lives. Reap rule: heartbeat older than ttl means the supervisor died mid-run; a booting supervisor TAKES THE ROW OVER (the reap_dead pattern, image/lib/jobs.ml:335-347).
+    claim       {supervisor_id, lease_ts, heartbeat_at, ttl_s}. ONE supervisor holds it; heartbeat_at bumps every tick while a child lives. Reap rule: heartbeat older than ttl means the supervisor died mid-run; a booting supervisor TAKES THE ROW OVER (the reap_dead pattern, image/lib/jobs.ml:335-347). The queued -> claimed flip is a guarded set (CAS): state must still be queued with no live claim at write time (review point 2).
   runner      {kind: pp-flow | native, instance_id, identity}. instance_id distinguishes sidecar processes; identity is the runner's OWN identity, never roerick's.
   steps       Ordered list. Each: {name, kind: provider | prim | hand, state: pending | running | done | failed | timed_out | skipped, attempts, max_attempts, wall_budget_s, usage: {requests, input_tokens, cached_tokens, output_tokens, wall_s}, evidence_ref, error}.
   budget      {max_total_tokens, max_provider_requests, max_run_wall_s}. Per-step wall lives in each step.
@@ -49,9 +49,9 @@ RULES:
 
 2. RUNNER HANGS: wall budget per step enforced at SPAWN (the Io_eio.sh_capture pattern - child killed on timeout, image/lib/io_eio.ml:55-57); kill -> timed_out. TWO-LEVEL TIMEOUT SEMANTICS, deliberate: adapter-level :TIMED-OUT is terminal for THAT ATTEMPT (pp-flow-autolith.sh:147-148 - 'retrying it immediately is the same coin flip for the same cost'); the supervisor may still start a FRESH attempt later with a fresh wall, bounded by POLICY-2. RATIFY: max attempts per step, and whether supervisor-level timed_out is retryable.
 
-3. MAYOR RESTARTS MID-PLAN: state lives in the row, not the mayor's memory (cheap lease, expensive state). A booting supervisor heartbeats its own lease, reaps rows whose claim.heartbeat_at expired (TAKES OVER, does not restart), and continues from the step pointer. Nothing replays from scratch. RATIFY: supervisor lease TTL vs tick interval.
+3. MAYOR RESTARTS MID-PLAN: state lives in the row, not the mayor's memory (cheap lease, expensive state). A booting supervisor heartbeats its own lease, reaps rows whose claim.heartbeat_at expired (TAKES OVER, does not restart), and continues from the step pointer. Nothing replays from scratch. This takeover is exactly the two-supervisor moment the claim CAS guards (review point 2). RATIFY: supervisor lease TTL vs tick interval.
 
-4. BUDGET EXHAUSTION: before dispatching any step the supervisor checks remaining budget vs the step's estimate; exhaustion -> failed(budget) + a card comment + parked. Visible, never silent (the no-verdict lesson generalized, pp-flow.sh:649-671). Usage accumulates ONLY from executor terminal summaries. RATIFY: default budgets (needs pp-bench FINDINGS numbers - D4 Q7).
+4. BUDGET EXHAUSTION: before dispatching any step the supervisor checks remaining budget vs the step's estimate; exhaustion -> failed(budget) + a card comment + parked. Visible, never silent (the no-verdict lesson generalized, pp-flow.sh:649-671). Usage accumulates ONLY from executor terminal summaries - a SELF-REPORT, so the budget gate is ADVISORY until provider-structured usage lands (review point 3: a crashed or lying executor reports zero). RATIFY: default budgets (needs pp-bench FINDINGS numbers - D4 Q7).
 
 5. LEASE EXPIRY vs LONG STEPS: claim.heartbeat_at bumps every tick while the child process lives; ttl_s > max step wall_budget + tick interval + slack. A step that needs longer gets a bigger wall_budget - the lease rule is never ignored. Card-level visibility: the card's assignee mirrors the run claim (a run:<run-id> shape per the session-lease amendment, workstreams.borg:309-323) so humans see the claim on the board.
 
@@ -71,7 +71,7 @@ The sidecar contract stays WHAT EXISTS at first: the supervisor invokes scripts/
     (status planned))
 
   (section budget-accounting
-    (doc "Budgets live on the run row (max_total_tokens, max_provider_requests, max_run_wall_s) and per step (wall_budget_s). Usage accumulates ONLY from executor terminal summaries - today that is the adapter's :usage parse (pp-flow-autolith.sh:223-226); phase 3's native runner reports prim/step counts. PP-side usage_events (docs/monitoring-spec.md:20-29) has NO token kinds and is unbuilt; if P1 lands, run-scoped kinds become a rollup target, not the enforcement source (D4 Q4). Enforcement is the supervisor's pre-dispatch check - no executor self-polices.")
+      (doc "Budgets live on the run row (max_total_tokens, max_provider_requests, max_run_wall_s) and per step (wall_budget_s). Usage accumulates ONLY from executor terminal summaries - today that is the adapter's :usage parse (pp-flow-autolith.sh:223-226); phase 3's native runner reports prim/step counts. USAGE IS A SELF-REPORT (review point 3): a crashed or lying executor reports zero and the pre-dispatch check sails through - the budget gate is ADVISORY until provider-structured usage lands (Autolith already holds the real token counts in the provider response and drops them at the boundary). PP-side usage_events (docs/monitoring-spec.md:20-29) has NO token kinds and is unbuilt; if P1 lands, run-scoped kinds become a rollup target, not the enforcement source (D4 Q4). Enforcement is the supervisor's pre-dispatch check - no executor self-polices.")
     (status planned))
 
   (section evidence
@@ -83,13 +83,13 @@ The sidecar contract stays WHAT EXISTS at first: the supervisor invokes scripts/
     (status planned))
 
   (section policy-todos
-    (doc "NAMED POLICY DECISIONS RESERVED FOR ARCHITECTURE REVIEW - this draft deliberately does not set them:
-  POLICY-1 WORKER-LIFETIME: default per-step wall_budget_s and per-run max_run_wall_s.
-  POLICY-2 RETRY-COUNTS: per-step max_attempts and backoff shape (candidates: jobs 2^n cap 60s, image/lib/jobs.ml:274-290; adapter 10s doubling cap 300, pp-flow-autolith.sh:149-152, 257-261).
-  POLICY-3 REVIEW-GATES: which columns auto-run a review vs stop for a human; the NO-VERDICT fail-safe toward the human survives verbatim (pp-flow.sh:649-671).
-  POLICY-4 CONCURRENCY-CAPS: max parallel runs per supervisor, per workstream, per identity.
-  POLICY-5 IDENTITY-POLICY: per-runner vs per-run identities; rotation cadence; allowlist contents.
-  POLICY-6 PRIORITY: the mayor's rights over todo/item/queue order (reorder? propose-only?). The queue ORDER prim is already Nopales; the mayor's policy layer is the ONLY place ordering may be touched.")
+      (doc "NAMED POLICY DECISIONS - gregor review 2026-10-16 set three; the rest are roerick's at architecture review:
+    POLICY-1 WORKER-LIFETIME: OPEN (roerick) - default per-step wall_budget_s and per-run max_run_wall_s.
+    POLICY-2 RETRY-COUNTS: SET (gregor) - backoff = the jobs shape, 2^n capped 60s (image/lib/jobs.ml:274-290); per-step max_attempts still needs a number at make time.
+    POLICY-3 REVIEW-GATES: SET (gregor) - the NO-VERDICT fail-safe toward the human survives VERBATIM (pp-flow.sh:649-671); which columns auto-run a review vs stop for a human stays roerick's call per stream.
+    POLICY-4 CONCURRENCY-CAPS: default 2 parallel runs until the overnight soak passes (gregor, D4 Q9); per-workstream/per-identity caps roerick's.
+    POLICY-5 IDENTITY-POLICY: OPEN (roerick) - per-runner vs per-run identities; rotation cadence; allowlist contents (tuna-as.sh = ~/bin/tuna-as.sh on vultr; rotation procedure on tuna-deriv/club).
+    POLICY-6 PRIORITY: OPEN (roerick) - the mayor's rights over todo/item/queue order (reorder? propose-only?). The queue ORDER prim is already Nopales; the mayor's policy layer is the ONLY place ordering may be touched.")
     (status planned))
 
   (verify

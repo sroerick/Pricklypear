@@ -132,7 +132,7 @@ Debts the port fixes: runs ledger off-PP; usage dropped at the PP boundary; a ki
 - Delegation producer (borge/auth.borg:1302+; smoke 1465-1466): owner mints a delegated token; the agent Bearer-writes; the row lands data.u.<owner>.* with author=<owner>, (whoami)=<owner>, (current-actor)=<agent>; "delegated (define) does NOT persist; after image restart (or fresh session) the name is unbound."
 - Revocable per-user token precedent (glochid/lib/habitat.ml:15-20): `(issue-token "glochid")` replaces user/pass - "the laptop then holds a revocable credential, never the operator's password."
 - Bot precedent (agent-native.borg:5, 11): token file mode 600, never committed; provisioning/rotation/tool-namespace MISSING.
-- **tuna-as.sh is not in this repo** (0 hits) - it lives in the tuna-deriv repo on club, outside this recon's scope. Per-run identity cost: unknown -> D4 Q5.
+- **tuna-as.sh is not in this repo** (0 hits). RESOLVED by gregor review 2026-10-16: it lives at `~/bin/tuna-as.sh` on vultr; the rotation procedure lives in tuna-deriv/club. Per-run identity cost: still unknown -> D4 Q5.
 - Ground truth retained: allowlists default deny-all, parity identity-mapped (verified live 2026-10-15 on club, per the brief).
 
 ## Prod probes performed (all read-only)
@@ -140,4 +140,4 @@ Debts the port fixes: runs ledger off-PP; usage dropped at the PP boundary; a ki
 - `(whoami)` via Bearer pp.token -> admin (corridor works; PP_URL=https://pricklypear.rocks).
 - `(list/map car (todo/item/all))` -> card ids are full UUIDs (todo/item/get needs the full UUID, not the 8-char prefix).
 - `(todo/item/get "f526bace-f035-4755-a549-312a1df2ca6c")` -> full card text captured (Q2 above).
-- `(schedules)` -> [] on town as admin (Q1/D4 Q8).
+- `(schedules)` -> [] on town as admin (Q1/D4 Q8). RESOLVED by gregor review 2026-10-16: obsd-sec is NOT retired - it is gregor's schedule running in the .rocks image; the probe hit town (wrong instance), hence [].

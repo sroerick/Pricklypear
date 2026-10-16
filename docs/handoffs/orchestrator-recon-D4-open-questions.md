@@ -2,6 +2,13 @@
 
 Gregor's review leads with the failure paths (F1-F5). Each states the D2 answer and what review must ratify.
 
+## Review outcome (gregor, 2026-10-16: RATIFY)
+
+Decided: Q1 storage = shared-space datum (data.s.run.*) + single supervisor + ONE CAS on queued->claimed (the reap-takeover is already a two-supervisor moment - a booting supervisor racing a stalled one). Q2 the workstreams.borg obituary supersedes IN THE SAME COMMIT that registers the run-row chapter - never later. Q4 usage from terminal output is a SELF-REPORT: the budget gate is advisory until provider-structured usage lands (Autolith holds real token counts in provider responses and drops them at the boundary). Q5 tuna-as.sh = ~/bin/tuna-as.sh on vultr; rotation procedure on tuna-deriv/club. Q8 obsd-sec is NOT retired - gregor's schedule in the .rocks image; the recon probe hit town (wrong instance), hence []. Q9 concurrency = 2 until the overnight soak passes. Policy: POLICY-2 backoff = jobs shape (2^n cap 60s); POLICY-3 NO-VERDICT fail-safe verbatim.
+
+Still open (roerick): Q3 (f526bace scope), Q6 (supervisor residence), Q7 (budget defaults - needs pp-bench FINDINGS), POLICY-1 (worker lifetime), POLICY-5 (identity policy), POLICY-6 (priority rights).
+
+Hygiene (gregor, non-blocking): the recon probed prod with the admin pp.token Bearer - read-only this time; per-runner revocable Bearers are the right next move, the admin corridor is the wide door (ff87a7c0, ffe72ad8).
 ## Failure paths (review agenda)
 
 - **F1 - step dies halfway:** re-dispatch THE SAME STEP, never the whole run; idempotency contract per step kind (provider steps naturally idempotent; prim/hand steps checkpoint-first, the with-step rule, jobs.borg:219). Ratify: idempotency as declaration field or convention.
@@ -25,4 +32,4 @@ Gregor's review leads with the failure paths (F1-F5). Each states the D2 answer 
 
 ## Provenance
 
-Recon was read-only: local clone @ 5f87708 (ground-truth commits b58a121/96b8d4e/e36dc00 verified present) + prod probes (whoami, card f526bace, schedules, card-id list). No prod writes; nothing deployed; nothing committed (.git read-only in this session - files land uncommitted by design, per the "plain files" return option).
+Recon was read-only: local clone @ 5f87708 (ground-truth commits b58a121/96b8d4e/e36dc00 verified present) + prod probes (whoami, card f526bace, schedules, card-id list). No prod writes; nothing deployed. Drafts committed and pushed to wyo at 7f2f15d (2026-10-16); this revision folds gregor's review.
