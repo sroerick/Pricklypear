@@ -298,6 +298,7 @@ let write_db_prims = [
     "branch/push";  (* branch-ops push row: dep-closure promote of own pins onto the owner's personal (store writes) *)
     "branch/cp";  (* branch-ops checkpoint: name a point on the gen stream (store write) *)
     "branch/cp-restore";  (* branch-ops checkpoint restore: re-land captured bodies as new writes (store writes) *)
+    "branch/pick";  (* branch-ops pick row: op-level transplant of named writes onto a target branch (store writes) *)
   (* retention writes *)
   "retention-delete-policy"; "retention-policy-set"; "retention-run";
   (* auth writes *)

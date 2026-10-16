@@ -55,6 +55,8 @@ type cp_log_row = {
   l_author : string;
   l_gen : Int64.t;
   l_changed_at : string;
+  l_origin : string;        (* eval | pick | file (042) *)
+  l_origin_detail : string; (* "" when unset *)
 }
 
 type cp_restore_outcome = {
@@ -247,6 +249,92 @@ let checkpoint_diff (t : Store_db.t) ~(branch_id : string) ~(cp_gen : Int64.t) :
            rows
        with exn -> Store_db.reraise ~op:"checkpoint_diff" exn)
 
+(* ---- op-transplant source resolution (branching.op-transplant,
+   2026-10-16) ---- The same windowed version-trail read cp-diff uses, minus
+   the classification: for branch/pick the source branch's pin bodies resolve
+   at a coordinate (head / cp gen / explicit gen) as opaque jsonb payloads.
+   Opaque bodies only — no Lisp interpreter references (store-split
+   contract); the AST codec + closure live in branch_pick.ml at the
+   eval-boundary layer. *)
+
+type pin_row = {
+  p_kind : string;    (* "fn" | "type" | "route" *)
+  p_name : string;    (* decoded def name / route path *)
+  p_hash : string;    (* payload hash — comparable across write paths *)
+  p_payload : string; (* full node payload jsonb *)
+}
+
+(* The branch's OWN live pins: tree_nodes rows under the branch prefix (the
+   `own` CTE of checkpoint_diff). *)
+let pins_at_head (t : Store_db.t) ~(branch_id : string) : pin_row list =
+  match t.conn with
+  | None -> []
+  | Some conn ->
+      (try
+         let sql =
+           "SELECT (string_to_array(path::text,'.'))[3], "^
+           "  tree_dec_label((string_to_array(path::text,'.'))[4]), "^
+           "  hash, payload::text "^
+           "FROM tree_nodes "^
+           "WHERE path <@ ('b.' || replace($1::text, '-', ''))::ltree "^
+           "  AND (string_to_array(path::text,'.'))[3] IN ('fn','type','route')" in
+         let rows =
+           Store_db.exec conn ~params:[ Pgx.Value.of_string branch_id ] sql in
+         List.filter_map
+           (fun row ->
+              match row with
+              | [ kind_c; name_c; hash_c; payload_c ] ->
+                  (match
+                     Pgx.Value.to_string kind_c, Pgx.Value.to_string name_c,
+                     Pgx.Value.to_string hash_c, Pgx.Value.to_string payload_c
+                   with
+                  | Some k, Some n, Some h, Some p ->
+                      Some { p_kind = k; p_name = n; p_hash = h; p_payload = p }
+                  | _ -> None)
+              | _ -> None)
+           rows
+       with exn -> Store_db.reraise ~op:"pins_at_head" exn)
+
+(* Latest non-tombstone version row per pin at gen <= cutoff (the cp_state
+   discipline of checkpoint_diff). A pin absent — or tombstoned — at the
+   cutoff simply has no row here: ABSENT is a value, not an error. *)
+let pins_at_gen (t : Store_db.t) ~(branch_id : string) ~(cutoff : Int64.t) :
+    pin_row list =
+  match t.conn with
+  | None -> []
+  | Some conn ->
+      (try
+         let sql =
+           "SELECT (string_to_array(path::text,'.'))[3], "^
+           "  tree_dec_label((string_to_array(path::text,'.'))[4]), "^
+           "  hash, body::text "^
+           "FROM ( "^
+           "  SELECT DISTINCT ON (path) path, hash, body "^
+           "  FROM tree_versions "^
+           "  WHERE branch_id = $1::uuid AND gen <= $2::bigint "^
+           "    AND kind IN ('fn','type','route') "^
+           "  ORDER BY path, gen DESC "^
+           ") s WHERE (body->>'_tombstone') IS NULL" in
+         let rows =
+           Store_db.exec conn
+             ~params:[
+               Pgx.Value.of_string branch_id;
+               Pgx.Value.of_int64 cutoff ]
+             sql in
+         List.filter_map
+           (fun row ->
+              match row with
+              | [ kind_c; name_c; hash_c; payload_c ] ->
+                  (match
+                     Pgx.Value.to_string kind_c, Pgx.Value.to_string name_c,
+                     Pgx.Value.to_string hash_c, Pgx.Value.to_string payload_c
+                   with
+                  | Some k, Some n, Some h, Some p ->
+                      Some { p_kind = k; p_name = n; p_hash = h; p_payload = p }
+                  | _ -> None)
+              | _ -> None)
+           rows
+       with exn -> Store_db.reraise ~op:"pins_at_gen" exn)
 (* JSON payload helpers. The captured tree payload is the FULL node envelope
    ('v','kind','path','type','body','author','doc','hash'); 'body' is the
    kind's natural content: raw fn body jsonb, type fields jsonb, or the route
@@ -344,13 +432,15 @@ let checkpoint_log (t : Store_db.t) ~(branch_id : string)
   | Some conn ->
       (try
          let sql =
-           "SELECT kind, name, op, author, gen, changed_at FROM ( "^
+           "SELECT kind, name, op, author, gen, changed_at, origin, "^
+           "  origin_detail FROM ( "^
            "  SELECT kind, "^
            "    tree_dec_label((string_to_array(path::text,'.'))[4]) AS name, "^
            "    CASE WHEN body->>'_tombstone' IS NOT NULL THEN 'delete' "^
            "         WHEN ROW_NUMBER() OVER (PARTITION BY path ORDER BY gen) = 1 "^
            "         THEN 'create' ELSE 'update' END AS op, "^
-           "    author, gen, created_at AS changed_at "^
+           "    author, gen, created_at AS changed_at, "^
+           "    origin, COALESCE(origin_detail, '') AS origin_detail "^
            "  FROM tree_versions "^
            "  WHERE branch_id = $1::uuid AND kind IN ('fn','type','route') "^
            ") v WHERE ($2::bigint IS NULL OR gen > $2::bigint) "^
@@ -365,26 +455,34 @@ let checkpoint_log (t : Store_db.t) ~(branch_id : string)
          List.filter_map
            (fun row ->
               match row with
-              | [ kind_c; name_c; op_c; author_c; gen_c; at_c ] ->
+              | [ kind_c; name_c; op_c; author_c; gen_c; at_c; origin_c; detail_c ] ->
                   (match
                      Pgx.Value.to_string kind_c, Pgx.Value.to_string name_c,
                      Pgx.Value.to_string op_c, Pgx.Value.to_string author_c,
                      Pgx.Value.to_int64 gen_c
                    with
-                   | Some k, Some n, Some o, Some a, Some g ->
-                       Some
-                         {
-                           l_kind = k;
-                           l_name = n;
-                           l_op = o;
-                           l_author = a;
-                           l_gen = g;
-                           l_changed_at =
-                             (match Pgx.Value.to_string at_c with
-                              | Some s -> s
-                              | None -> "");
-                         }
-                   | _ -> None)
+                  | Some k, Some n, Some o, Some a, Some g ->
+                      Some
+                        {
+                          l_kind = k;
+                          l_name = n;
+                          l_op = o;
+                          l_author = a;
+                          l_gen = g;
+                          l_changed_at =
+                            (match Pgx.Value.to_string at_c with
+                             | Some s -> s
+                             | None -> "");
+                          l_origin =
+                            (match Pgx.Value.to_string origin_c with
+                             | Some s -> s
+                             | None -> "eval");
+                          l_origin_detail =
+                            (match Pgx.Value.to_string detail_c with
+                             | Some s -> s
+                             | None -> "");
+                        }
+                  | _ -> None)
               | _ -> None)
            rows
        with exn -> Store_db.reraise ~op:"checkpoint_log" exn)
