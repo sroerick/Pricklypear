@@ -793,3 +793,357 @@
      the pulse row machinery whole. Same single-pass model: one item
      scan, one list scan, one indexed project scan; grouped by
      list.project_id. A stream joins a project with one field write.")
+
+;; ------------------------------------------------------------------
+;; run rows — the run primitive storage layer (D3 phase 2)
+;; ------------------------------------------------------------------
+;; spec: borge/run-primitive.borg (registered 2026-10-16, commit c4ea7a1).
+;; The workstreams obituary in that same commit supersedes the 09-26
+;; no-run-datum stance FOR SIDECAR RUNS: durable run rows live in the
+;; SHARED space data.s.run.* (the 034 row-level space field routes the
+;; insert; kernel path data.s.<space>.<type>.<uuid-label>) — and NEVER
+;; in a garden: the data.u.<user>.run.* ban itself stands, so every
+;; writer here stamps space "run" and there is deliberately NO garden
+;; fallback (the todo/item/add-space register pattern).
+;;
+;; STATE MACHINE (run-primitive.borg lifecycle): queued -> claimed ->
+;; running -> succeeded | failed | timed_out | canceled | dead | parked.
+;; Transitions are owner-confined: only the holding supervisor writes
+;; state; everyone else reads. The queued->claimed CAS is a GUARDED SET
+;; checked in the same eval (state must still be queued with no live
+;; claim); under the ratified single-supervisor design that guard is
+;; the whole contract today — a kernel-level compare-and-set stays the
+;; recorded alternative (run-row section; D4 Q10 accepts guarded writes
+;; under the single-supervisor lease).
+;;
+;; TIME: the prim set has no seconds arithmetic, so the SUPERVISOR
+;; computes deadline ISO strings (now + ttl) and passes them in; these
+;; helpers store and string-compare them (ISO 8601 UTC sorts
+;; lexicographically — the same trick as the stale-date compare).
+;;
+;; STEPS + USAGE: steps ride steps_json (opaque here, supervisor-
+;; serialized); usage totals are written whole by the supervisor — it
+;; owns the parse of the adapter's :INPUT-TOKENS / :OUTPUT-TOKENS /
+;; :PROVIDER-REQUESTS (pp-flow-autolith.sh:223-226), the counts pp-flow
+;; drops today.
+
+(define workstreams/runs-init!
+  (lambda ()
+    "Declare the run datum type (guarded: a re-load is safe). Seed once
+     as admin on main — a delegated supervisor session cannot deftype
+     (the projects-init! pattern; boot seeds types onto system/main)."
+    (if
+      (null? (type-fields (quote run)))
+      (deftype
+        (quote run)
+        (quote card_id)
+        (quote list_id)
+        (quote from_state)
+        (quote dest_state)
+        (quote brief_hash)
+        (quote state)
+        (quote claim_supervisor_id)
+        (quote claim_lease_ts)
+        (quote claim_heartbeat_at)
+        (quote claim_ttl_s)
+        (quote claim_deadline)
+        (quote runner_kind)
+        (quote runner_instance)
+        (quote runner_identity)
+        (quote steps_json)
+        (quote budget_max_tokens)
+        (quote budget_max_requests)
+        (quote budget_max_wall_s)
+        (quote usage_requests)
+        (quote usage_input_tokens)
+        (quote usage_cached_tokens)
+        (quote usage_output_tokens)
+        (quote usage_wall_s)
+        (quote result_status)
+        (quote result_category)
+        (quote result_message)
+        (quote trace_id)
+        (quote error_class)
+        (quote error_message)
+        (quote created_at)
+        (quote claimed_at)
+        (quote started_at)
+        (quote ended_at))
+      "run ok")))
+
+(define workstreams/run-new
+  (lambda
+    (card-id list-id from-state dest-state brief-hash
+     budget-max-tokens budget-max-requests budget-max-wall-s steps-json)
+    "Create a QUEUED run row in the shared run space; returns the run id
+     (dashed). space \"run\" routes the row into data.s.run.* — no garden
+     fallback, by the obituary. Declares the type on first use."
+    (seq
+      (workstreams/runs-init!)
+      (todo/tree/create
+        "run"
+        (dict-set*
+          "{}"
+          (list
+            "space" "run"
+            "card_id" (as-str card-id)
+            "list_id" (as-str list-id)
+            "from_state" (as-str from-state)
+            "dest_state" (as-str dest-state)
+            "brief_hash" (as-str brief-hash)
+            "state" "queued"
+            "claim_supervisor_id" ""
+            "claim_lease_ts" ""
+            "claim_heartbeat_at" ""
+            "claim_ttl_s" ""
+            "claim_deadline" ""
+            "runner_kind" "pp-flow"
+            "runner_instance" ""
+            "runner_identity" ""
+            "steps_json" (as-str steps-json)
+            "budget_max_tokens" (as-str budget-max-tokens)
+            "budget_max_requests" (as-str budget-max-requests)
+            "budget_max_wall_s" (as-str budget-max-wall-s)
+            "usage_requests" "0"
+            "usage_input_tokens" "0"
+            "usage_cached_tokens" "0"
+            "usage_output_tokens" "0"
+            "usage_wall_s" "0"
+            "result_status" ""
+            "result_category" ""
+            "result_message" ""
+            "trace_id" ""
+            "error_class" ""
+            "error_message" ""
+            "created_at" (now-iso)
+            "claimed_at" ""
+            "started_at" ""
+            "ended_at" ""))))))
+
+(define workstreams/run-get
+  (lambda (run-id)
+    "The run row body dict, or () for an empty/missing id. node-path
+     resolves the shared location via the row's space field."
+    (if
+      (string-eq (as-str run-id) "")
+      ()
+      (todo/tree/get "run" run-id))))
+
+(define workstreams/run-save
+  (lambda (run-id fields)
+    "Write the whole row body back (owner-confined: the holding
+     supervisor). Returns the run id."
+    (todo/tree/save "run" run-id fields)))
+
+(define workstreams/run-patch
+  (lambda (run-id updates)
+    "Read-modify-write one row: updates is a flat (k v k v ...) list.
+     Returns the new body, or () when the row is gone. The read and the
+     write land in ONE eval — the phase-2 CAS contract point."
+    (let
+      ((cur (workstreams/run-get run-id)))
+      (if
+        (null? cur)
+        ()
+        (workstreams/run-save run-id (dict-set* cur updates))))))
+
+(define workstreams/run-state
+  (lambda (row)
+    "The row's state string (queued/claimed/running/...)."
+    (as-str (dict-get row "state"))))
+
+(define workstreams/run-terminal?
+  (lambda (row)
+    "Terminal run? succeeded | failed | timed_out | canceled | dead.
+     Terminal runs never auto-retry (resume-semantics: attempts
+     exhausted -> dead)."
+    (let
+      ((s (workstreams/run-state row)))
+      (or
+        (string-eq s "succeeded")
+        (string-eq s "failed")
+        (string-eq s "timed_out")
+        (string-eq s "canceled")
+        (string-eq s "dead")))))
+
+(define workstreams/run-claim
+  (lambda (run-id supervisor-id instance-id identity ttl-s deadline-iso)
+    "CAS queued -> claimed: flips the row ONLY while it is still queued
+     (the guarded set; run-primitive.borg run-row). claim = supervisor id
+     + lease/heartbeat ts + ttl + deadline ISO (the supervisor computes
+     the deadline; the prim set has no seconds math). Returns the
+     claimed row, or () when the row is gone, not queued, or already
+     claimed."
+    (let
+      ((cur (workstreams/run-get run-id)))
+      (if
+        (null? cur)
+        ()
+        (if
+          (string-eq (workstreams/run-state cur) "queued")
+          (workstreams/run-save
+            run-id
+            (dict-set*
+              cur
+              (list
+                "state" "claimed"
+                "claim_supervisor_id" (as-str supervisor-id)
+                "claim_lease_ts" (now-iso)
+                "claim_heartbeat_at" (now-iso)
+                "claim_ttl_s" (as-str ttl-s)
+                "claim_deadline" (as-str deadline-iso)
+                "runner_instance" (as-str instance-id)
+                "runner_identity" (as-str identity)
+                "claimed_at" (now-iso))))
+          ())))))
+
+(define workstreams/run-heartbeat
+  (lambda (run-id deadline-iso)
+    "Bump the claim's heartbeat (the supervisor tick while a child
+     lives) and extend the expiry deadline. Returns the row, or ()
+     when the row is missing."
+    (let
+      ((cur (workstreams/run-get run-id)))
+      (if
+        (null? cur)
+        ()
+        (workstreams/run-save
+          run-id
+          (dict-set*
+            cur
+            (list
+              "claim_heartbeat_at" (now-iso)
+              "claim_deadline" (as-str deadline-iso))))))))
+
+(define workstreams/run-start
+  (lambda (run-id)
+    "claimed -> running (the first sidecar spawned). Returns the row,
+     or () when the row is missing or not claimed."
+    (let
+      ((cur (workstreams/run-get run-id)))
+      (if
+        (null? cur)
+        ()
+        (if
+          (string-eq (workstreams/run-state cur) "claimed")
+          (workstreams/run-save
+            run-id
+            (dict-set* cur (list "state" "running" "started_at" (now-iso))))
+          ())))))
+
+(define workstreams/run-step-set
+  (lambda (run-id steps-json)
+    "Store the supervisor's serialized step list (opaque to this layer).
+     Returns the new body, or () when the row is gone."
+    (workstreams/run-patch run-id (list "steps_json" (as-str steps-json)))))
+
+(define workstreams/run-usage-set
+  (lambda (run-id requests in-toks cached-toks out-toks wall-s)
+    "Store accumulated usage totals. The supervisor owns the math — it
+     parses the adapter's terminal :usage; this row is where the counts
+     finally land instead of being dropped (run-primitive.borg
+     budget-accounting)."
+    (workstreams/run-patch
+      run-id
+      (list
+        "usage_requests" (as-str requests)
+        "usage_input_tokens" (as-str in-toks)
+        "usage_cached_tokens" (as-str cached-toks)
+        "usage_output_tokens" (as-str out-toks)
+        "usage_wall_s" (as-str wall-s)))))
+
+(define workstreams/run-result
+  (lambda (run-id status category message trace-id)
+    "Store the sidecar's terminal-output fields (:STATUS / :CATEGORY /
+     :MESSAGE / :TRACE-ID) — machine-readable evidence on the row.
+     Returns the new body, or () when the row is gone."
+    (workstreams/run-patch
+      run-id
+      (list
+        "result_status" (as-str status)
+        "result_category" (as-str category)
+        "result_message" (as-str message)
+        "trace_id" (as-str trace-id)))))
+
+(define workstreams/run-finish
+  (lambda (run-id final-state error-class error-message)
+    "Move a live run to a terminal state (succeeded | failed |
+     timed_out | canceled | dead) or park it. Guarded: only claimed or
+     running rows transition. Returns the row, or () when the guard
+     fails (already terminal / missing)."
+    (let
+      ((cur (workstreams/run-get run-id)))
+      (if
+        (null? cur)
+        ()
+        (let
+          ((s (workstreams/run-state cur)))
+          (if
+            (or (string-eq s "claimed") (string-eq s "running"))
+            (workstreams/run-save
+              run-id
+              (dict-set*
+                cur
+                (list
+                  "state" (as-str final-state)
+                  "error_class" (as-str error-class)
+                  "error_message" (as-str error-message)
+                  "ended_at" (now-iso))))
+            ()))))))
+
+(define workstreams/run-expired?
+  (lambda (row)
+    "Live claim expired? The supervisor's heartbeat deadline has passed
+     (ISO 8601 UTC strings compare lexicographically). Rows without a
+     deadline never expire here."
+    (let
+      ((d (as-str (dict-get row "claim_deadline"))))
+      (if
+        (string-eq d "")
+        #f
+        (string<? d (now-iso))))))
+
+(define workstreams/run-reap
+  (lambda ()
+    "Rows whose live claim expired (a supervisor died mid-run): the
+     booting supervisor TAKES THESE OVER from the step pointer — never
+     a restart from scratch (resume-semantics 3). Returns (id . body)
+     pairs for claimed/running rows past their deadline."
+    (list/filter
+      (lambda (row)
+        (and
+          (workstreams/run-expired? (cdr row))
+          (let
+            ((s (workstreams/run-state (cdr row))))
+            (or
+              (string-eq s "claimed")
+              (string-eq s "running")))))
+      (workstreams/run-all))))
+
+(define workstreams/run-all
+  (lambda ()
+    "Every run row in the shared run space as (id . body) pairs, id
+     dashed. ONE scan of the run subtree (rows sit two levels below
+     the data.s.run root: data.s.run.run.<uuid-label>)."
+    (list/map
+      todo/tree/node->pair
+      (tree/list "data.s.run" 2 2000))))
+
+(define workstreams/run-open
+  (lambda ()
+    "Non-terminal run rows — the queue the supervisor works from."
+    (list/filter
+      (lambda (row) (not (workstreams/run-terminal? (cdr row))))
+      (workstreams/run-all))))
+
+(define workstreams/run-open-for-card
+  (lambda (card-id)
+    "Open run rows for one card: the queue-fill eligibility filter — a
+     card with an open run row is not dispatchable again
+     (supervisor-tick 4)."
+    (list/filter
+      (lambda (row)
+        (string-eq
+          (as-str (dict-get (cdr row) "card_id"))
+          (as-str card-id)))
+      (workstreams/run-open))))
