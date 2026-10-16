@@ -580,7 +580,7 @@ let test_node_path_pk_fallback () =
                ~fields_json:(Printf.sprintf "{\"n\":9,\"space\":\"%s\"}" sp)
                ~caller:"alice" with
        | Ast.VStr _ -> ()
-       | _ -> Alcotest.fail "update-guarded failed on shared-space row (a1ce59db)"));
+         | _ -> Alcotest.fail "update-guarded failed on shared-space row (a1ce59db)");
       let sql =
         "SELECT fields->>'n'::text FROM tree_data_rows \
          WHERE id = $1::uuid"
@@ -624,7 +624,7 @@ let () =
           Alcotest.test_case "row-routed datum reachable + update lands" `Quick
             test_node_path_pk_fallback;
         ] );
-      ( "row-level space routing (034)"
+        ( "row-level space routing (034)",
         [
           Alcotest.test_case "body space routes; open write; id survives" `Quick
             test_row_level_routing;
