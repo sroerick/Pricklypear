@@ -4,6 +4,11 @@
  (libraries pricklypear-lisp alcotest yojson))
 
 (test
+ (name file_projection_test)
+ (modules file_projection_test)
+ (libraries pricklypear-lisp alcotest))
+
+(test
  (name effect_test)
  (modules effect_test)
  (libraries pricklypear-lisp alcotest))
