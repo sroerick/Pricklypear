@@ -147,6 +147,7 @@ let emergency_css : string =
    .emergency-home{border:2px solid #8b0000;background:#fff3cd;padding:.75rem}\n\
    a{color:#000080}\n\
    header{border-bottom:2px solid #000;padding:.5rem;background:#fff}\n\
+   .brand-logo{height:1.6rem;display:block}\n\
    main{padding:.75rem}\n\
    .card{border:2px solid #000;background:#fff;padding:.75rem;margin:.5rem 0}\n\
    .err{color:#8b0000;font-weight:700}\n\
@@ -872,32 +873,35 @@ let fragment_response (reqd : Httpun.Reqd.t) ?(status = `OK) (html : string)
 let chrome ?nav_html ~(session : Session.t)
     ?(manifest = Session.manifest session) ~(title : string)
     (content : Pure_html.node list) : Pure_html.node =
-  let nav_html =
-    match nav_html with
-    | Some _ as s -> s
-    | None -> Session.ui_nav_html session
-  in
+  (* Legacy nav RETIRED (shell-pass 2, 2026-10-16, roerick): the
+     home|capture|apps|system menu moved into the filmstrip start menu
+     and the header bar ate a screen row for it. The chrome header is
+     the cactus mark + session meta; an explicit [nav_html] argument
+     still renders for callers that pass one. *)
   let nav =
     match nav_html with
     | Some html when String.trim html <> "" ->
-        HTML.nav [] [txt ~raw:true "%s" html]
-    | _ -> HTML.nav [HTML.class_ "emergency-nav"] (emergency_nav_nodes ())
+        [ HTML.nav [] [txt ~raw:true "%s" html] ]
+    | _ -> []
   in
   (* Metadata reads the SNAPSHOT manifest when callers pass one
      (image.per-request-context), so a concurrent attach_anonymous
      cannot paint "user=anonymous" on an authed page's header. Callers
      outside the HTTP gate fall back to the live session manifest. *)
   HTML.div [] [
-    HTML.header [] [
-      HTML.span [HTML.class_ "brand"] [txt "Pricklypear"];
-      HTML.span [HTML.class_ "meta"] [
-        txt "user=%s  branch=%s  up=%ds"
-          manifest.username
-          manifest.branch_name
-          (Session.uptime_seconds session);
-      ];
-      nav;
-    ];
+    HTML.header [] (
+      [ HTML.a [HTML.href "/"] [
+          HTML.img [ HTML.class_ "brand-logo"; HTML.src "/assets/pplogo.png";
+                     HTML.alt "Pricklypear" ] ];
+        HTML.span [HTML.class_ "meta"] [
+          txt "user=%s  branch=%s  up=%ds"
+            manifest.username
+            manifest.branch_name
+            (Session.uptime_seconds session);
+        ];
+      ]
+      @ nav
+    );
     HTML.main [] (
       (if String.trim title = "" then content
        else HTML.h1 [] [txt "%s" title] :: content)
@@ -906,8 +910,7 @@ let chrome ?nav_html ~(session : Session.t)
 
 let chrome_lwt ~(session : Session.t) ~(title : string)
     (content : Pure_html.node list) : Pure_html.node =
-  let nav_html = try_ui_fn session "ui/nav" in
-  (chrome ?nav_html ~session ~title content)
+  (chrome ~session ~title content)
 
 (* Request-body cap: read_body accumulates the whole body in memory, so
    an unbounded read lets a client exhaust memory. Cap at PP_MAX_BODY_BYTES
@@ -1253,13 +1256,13 @@ let post_login (session : Session.t) ?source_ip (reqd : Httpun.Reqd.t) : unit =
                         let headers = header_list (Httpun.Reqd.request reqd) in
                         (match classify_host headers with
                          | Host_garden g when g = user.Auth_store.username ->
-                             "/filmstrip"
+                             "/"
                          | _ ->
                              (* garden_url is https — never bounce a fresh
                                 session cookie over plain http. *)
                              garden_url ~username:user.Auth_store.username
-                               ~path:"/filmstrip")
-                    | None -> "/filmstrip")
+                               ~path:"/")
+                      | None -> "/")
              in
              redirect_with_cookie reqd ~location
                ~set_cookie:

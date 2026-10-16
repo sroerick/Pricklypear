@@ -451,6 +451,7 @@ empty set, never a parse error).")
                 (list
                   (filmstrip/oob-msg "")
                   (filmstrip/oob-delete-pane id)
+                    (filmstrip/oob-coltabs)
                   (if
                     (if (>= focus2 0) (not (= focus2 focus)) #f)
                     (filmstrip/oob-section
@@ -797,19 +798,21 @@ between strip and rail).")
             "700"
             "font-size"
             ".85rem"))
-        (css/rule
-          ".fs-btn"
-          (list
-            "width"
-            "auto"
-            "min-width"
-            "0"
-            "padding"
-            ".08rem .4rem"
-            "font-size"
-            ".8rem"
-            "flex"
-            "0 0 auto"))
+          (css/rule
+            ".fs-btn"
+            (list
+              "width"
+              "auto"
+              "min-width"
+              "0"
+              "padding"
+              ".3rem .55rem"
+              "font-size"
+              ".85rem"
+              "min-height"
+              "2.2rem"
+              "flex"
+              "0 0 auto"))
         (css/rule
           ".fs-body"
           (list
@@ -880,7 +883,7 @@ between strip and rail).")
           (css/raw ".bubble{background:var(--panel);border-radius:6px;padding:.5rem .75rem;margin:.5rem 0;white-space:pre-wrap}.bubble.user{color:var(--pp-ok)}.bubble.llm{color:var(--ink)}.bubble.repl{color:var(--pp-repl)}.trace{color:var(--muted);font-size:.85em;white-space:pre-wrap}.think{color:var(--muted);font-size:.9em;margin:.4rem 0}.think summary{cursor:pointer}.think>div{white-space:pre-wrap}.reason{color:var(--muted);font-style:italic}.think .tk,.think .tool{margin:.25rem 0 .25rem .25rem}.think .tk>summary,.think .tool>summary{color:var(--muted)}.think .tk>div,.think .tool>div{margin-left:.9rem;padding-left:.5rem;border-left:1px solid var(--border)}.think:not(:has(.reason,.trace)){display:none}.chatpage{display:flex;flex-direction:column;height:calc(100vh - 6rem)}.chatpage #log{flex:1;min-height:0;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:.75rem;margin-bottom:.75rem}.chatpage form{display:flex;gap:.5rem;flex-shrink:0}.chatpage #msg{flex:1}.chatpage form button{flex-shrink:0}")
           (css/raw "*{scrollbar-width:thin;scrollbar-color:var(--sel-bg) transparent}::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--sel-bg);border-radius:6px}::-webkit-scrollbar-thumb:hover{background:var(--muted)}::-webkit-scrollbar-corner{background:transparent}.fs-applink{background:none;border:0;color:var(--sel-accent);padding:0;margin:0;font:inherit;cursor:pointer;text-decoration:none}.fs-applink:hover{text-decoration:underline}.fs-modelsel{font-size:.6em;padding:.1rem .3rem}")
           (css/raw ".lb-btn{font:inherit;padding:.25rem .7rem;border:1px solid var(--border);border-radius:4px;background:var(--panel);color:inherit;cursor:pointer}.lb-btn-primary{background:var(--pp-btn-hi);border-color:var(--pp-btn-hi);color:#fff}.lb-btn-danger{background:var(--pp-danger);border-color:var(--pp-danger);color:#fff}.lb-badge{display:inline-block;font-size:.72em;padding:.05rem .45rem;border-radius:999px;border:1px solid var(--border);color:var(--muted)}.lb-badge-ok{color:var(--pp-ok);border-color:var(--pp-ok)}.lb-badge-warn{color:var(--pp-warn);border-color:var(--pp-warn)}.lb-card{border:1px solid var(--border);border-radius:6px;padding:.75rem;background:var(--panel)}.lb-card h3{margin:0 0 .5rem;display:flex;gap:.5rem;align-items:center}.lb-card p{margin:.25rem 0 0}.lb-stage{border:1px dashed var(--border);padding:.9rem;border-radius:6px;display:flex;gap:.6rem;align-items:center;flex-wrap:wrap}.lb-form{display:flex;gap:.4rem;flex-wrap:wrap;align-items:center;margin:.6rem 0}.lb-form input{font:inherit;padding:.2rem .4rem;background:var(--panel);color:inherit;border:1px solid var(--border);border-radius:4px}.lb-form label{color:var(--muted,#9aa3b2);font-size:.85em}.lb-folds{margin-top:.6rem}.lb-folds details{margin:.3rem 0}.lb-folds summary{cursor:pointer;color:var(--muted,#9aa3b2)}.lb-folds pre{overflow:auto;font-size:.85em;background:var(--panel);padding:.5rem;border-radius:4px;border:1px solid var(--border)}.lb-vtabs{display:flex;gap:.3rem;flex-wrap:wrap;margin:.4rem 0}.lb-vtab{cursor:pointer}.lb-vtab.fs-sel{outline:1px solid var(--sel-accent)}.lb-swatch{display:inline-flex;align-items:center;gap:.4rem;padding:.15rem .55rem;border:1px solid var(--border);border-radius:4px;font-size:.85em}.lb-swatch b{width:.95em;height:.95em;display:inline-block;border-radius:3px;border:1px solid var(--border)}.lb-palette{display:flex;gap:.35rem;flex-wrap:wrap}.lb-palette .lb-swatch{border:none;padding-left:0}.lb-palette .lb-swatch b{width:1.6em;height:1.6em}.lb-palette .lb-swatch span{color:var(--muted)}")
-          (css/raw ".fs-railtabs{display:flex;gap:.3rem;align-items:center;border:1px solid var(--border);background:var(--panel);padding:.3rem .35rem}.fs-start{position:relative;flex:0 0 auto}.fs-start-word{cursor:pointer;list-style:none;font-weight:700}.fs-start-word::-webkit-details-marker{display:none}.fs-start-menu{position:absolute;left:0;top:100%;z-index:30;display:flex;flex-direction:column;min-width:10rem;background:var(--panel);border:1px solid var(--border);box-shadow:0 4px 14px rgba(0,0,0,.5);padding:.25rem}.fs-start-entry{width:100%;text-align:left;padding:.3rem .5rem;white-space:nowrap}.fs-start-entry:hover{background:var(--sel-bg)}.fs-railtab.fs-btn{background:none;border:1px solid transparent;color:var(--sel-accent)}.fs-keys{margin-left:auto;color:var(--muted,#6b7080);cursor:help;font-size:1.1em;user-select:none}")
+            (css/raw ".fs-railtabs{display:flex;gap:.4rem;align-items:center;border:1px solid var(--border);background:var(--panel);padding:.45rem .5rem}.fs-start{position:relative;flex:0 0 auto}.fs-start-word{cursor:pointer;list-style:none;font-weight:700}.fs-start-word::-webkit-details-marker{display:none}.fs-start-menu{position:absolute;left:0;top:100%;z-index:30;display:flex;flex-direction:column;min-width:10rem;background:var(--panel);border:1px solid var(--border);box-shadow:0 4px 14px rgba(0,0,0,.5);padding:.25rem}.fs-start-entry{width:100%;text-align:left;padding:.55rem .6rem;white-space:nowrap}.fs-start-entry:hover{background:var(--sel-bg)}.fs-railtab.fs-btn{background:none;border:1px solid transparent;color:var(--sel-accent)}.fs-keys{margin-left:auto;color:var(--muted,#6b7080);cursor:help;font-size:1.1em;user-select:none}")
         ;; rail-trees-v4 chrome (RECOVERED: these rules were dropped from
         ;; the css in the p2 splice -- the renderer kept emitting the
         ;; classes, so the habitat tree rendered as a bare list; the
@@ -897,6 +900,16 @@ between strip and rail).")
         (css/rule ".fs-tr-verb" (list "flex" "0 0 auto"))
         (css/rule ".fs-act" (list "padding" ".06rem .34rem" "font-size" ".9rem" "line-height" "1.1" "min-width" "1.5rem"))
         (css/rule ".fs-tr-acts-ul" (list "list-style" "none" "margin" "0" "padding" ".1rem 0 .15rem 1.3rem"))
+          ;; shell-pass 2 (2026-10-16): the mark, the column picker, and
+          ;; the shelved/title affordances -- the legacy nav's screenspace
+          ;; now serves the niri column overview; the page-title h1 was
+          ;; redundant with the logo + pane titles.
+          (css/rule ".fs-logo" (list "height" "1.7rem" "width" "auto" "display" "block" "flex" "0 0 auto"))
+          (css/rule ".fs-pane.shelved" (list "display" "none"))
+          (css/rule "main > h1" (list "display" "none"))
+          (css/rule ".fs-coltabs" (list "display" "flex" "gap" ".3rem" "align-items" "center" "flex" "1 1 auto" "min-width" "0" "overflow-x" "auto" "overflow-y" "hidden"))
+          (css/rule ".fs-coltab" (list "max-width" "9rem" "overflow" "hidden" "text-overflow" "ellipsis" "white-space" "nowrap" "background" "var(--chrome)" "border" "1px solid var(--border)" "color" "var(--ink)"))
+          (css/rule ".fs-coltab.fs-sel" (list "background" "var(--sel-accent)" "color" "#fff" "border-color" "var(--sel-accent)"))
         ;; The actions fold is NARROW-ONLY: at rail width the row reads
         ;; as fold + label + glyphs; past the breakpoint the glyphs
         ;; demote into the fold (responsive = depth, not a new widget --
@@ -981,7 +994,7 @@ between strip and rail).")
               (css/rule ".fs-pane.fs-full" (list "flex-basis" "100%"))
               ;; touch floors (~2rem hit targets: rows, glyphs, heads)
               (css/rule ".fs-head" (list "padding" ".35rem .5rem"))
-              (css/rule ".fs-btn" (list "padding" ".3rem .55rem" "min-height" "2rem"))
+                (css/rule ".fs-btn" (list "padding" ".35rem .6rem" "min-height" "2.5rem"))
               (css/rule
                 ".fs-act"
                 (list "padding" ".3rem .55rem" "min-width" "2rem" "min-height" "2rem"))
@@ -1006,7 +1019,7 @@ between strip and rail).")
                   "top"
                   ".4rem"
                   "bottom"
-                  "3.4rem"
+                    "4rem"
                   "z-index"
                   "40"
                   "flex"
@@ -1127,7 +1140,8 @@ swap (the desktop response).")
             (list
               (filmstrip/oob-msg "")
               (filmstrip/desk-sentinel d #t)
-              (filmstrip/oob-content-strip panes focus2)))))))
+                (filmstrip/oob-content-strip panes focus2)
+                (filmstrip/oob-coltabs)))))))
   "POST /filmstrip/desktop: d param -> set + persist the shell desktop;
 heal focus onto the first live pane of that desktop when the focused
 pane lives elsewhere; answer with OOB swaps of the desk sentinel + a
@@ -1161,6 +1175,7 @@ workspace row keeps every record, only the swapped DOM shrinks).")
                   (filmstrip/shelf-oob)
                   (filmstrip/winbox-oob)
                   (filmstrip/oob-delete-pane id)
+                    (filmstrip/oob-coltabs)
                   (if
                     (if (>= focus2 0) (not (= focus2 focus)) #f)
                     (filmstrip/oob-section
@@ -1304,9 +1319,10 @@ check is skipped). Never a shelved pane.")
                 (filmstrip/oob-section
                   (filmstrip/pane-at panes focus)
                   #f)
-                (filmstrip/oob-section
-                  (filmstrip/pane-at panes focus2)
-                  #t))))))))
+                  (filmstrip/oob-section
+                    (filmstrip/pane-at panes focus2)
+                    #t)
+                  (filmstrip/oob-coltabs))))))))
   "POST /filmstrip/focus: dir param -> move .focused one pane over\n(clamped, no wrap); OOB class swap on exactly two panes (old, new).")
 
 (define filmstrip/focus-id
@@ -1314,6 +1330,7 @@ check is skipped). Never a shelved pane.")
     ()
     (let*
       ((id (as-str (request-param "id")))
+        (pick (string-eq (as-str (request-param "pick")) "1"))
         (row (filmstrip/row))
         (cascade (nth row 0))
         (panes (nth row 1))
@@ -1323,25 +1340,35 @@ check is skipped). Never a shelved pane.")
         (if (< i 0) #t (not (filmstrip/pane-live? (filmstrip/pane-at panes i))))
         (render-html (filmstrip/oob-msg "filmstrip: no such live pane"))
         (if (= i focus)
-            (render-html (filmstrip/oob-msg ""))
-            (let
-              ((focus2 (filmstrip/rail-focus-onto panes focus i)))
-              (seq
-                (filmstrip/save-all cascade panes focus2)
-                (render-html
-                  (html/join
-                    (list
-                      (filmstrip/oob-msg "")
-                      (if
-                        (if (>= focus 0) (not (= focus focus2)) #f)
-                        (filmstrip/oob-section
-                          (filmstrip/pane-at panes focus)
-                          #f)
-                        "")
+          (render-html
+            (if pick
+              (filmstrip/pane-lazy-html (filmstrip/pane-at panes i) #t)
+              (filmstrip/oob-msg "")))
+          (let
+            ((focus2 (filmstrip/rail-focus-onto panes focus i)))
+            (seq
+              (filmstrip/save-all cascade panes focus2)
+              (render-html
+                (html/join
+                  (list
+                    (filmstrip/oob-msg "")
+                    (if
+                      (if (>= focus 0) (not (= focus focus2)) #f)
+                      (filmstrip/oob-section
+                        (filmstrip/pane-at panes focus)
+                        #f)
+                      "")
+                    ;; pick=1 (column picker): the focused pane rides as the
+                    ;; SWAP TARGET fragment -- the chip targets the pane
+                    ;; section with hx-swap="outerHTML show:top", so htmx
+                    ;; focuses AND scrolls it on stage (bodies preserved).
+                    (if pick
+                      (filmstrip/pane-lazy-html (filmstrip/pane-at panes i) #t)
                       (filmstrip/oob-section
                         (filmstrip/pane-at panes i)
-                        #t))))))))))
-  "POST /filmstrip/focus-id: id param -> point .focused at that pane's\nindex (persisted + same OOB two-section class swap as focus).\nShelved/unknown ids answer the status line only; an already-focused\nid answers empty. v3: a rail-region target never takes the lift — a\nlifted live main pane keeps focus and only the ring lands in the rail.")
+                        #t))
+                    (filmstrip/oob-coltabs))))))))))
+  "POST /filmstrip/focus-id: id param -> point .focused at that pane's\nindex (persisted + same OOB two-section class swap as focus).\nShelved/unknown ids answer the status line only. pick=1 (column picker,\nshell-pass 2): the focused pane section comes back as the MAIN swap\nfragment so the caller's outerHTML show:top scroll lands on it; an\nalready-focused pick answers the section (scroll only, no row write).\nv3: a rail-region target never takes the lift -- a lifted live main\npane keeps focus and only the ring lands in the rail. Coltabs OOB\nrefreshes the picker chips (the selection ring moved).")
 
 (define filmstrip/focus-step
   (lambda
@@ -1569,7 +1596,8 @@ pane owns the fixed lift). A focused rail pane is a ring, not a window
               (html/join
                 (list
                   (filmstrip/oob-msg "")
-                  (filmstrip/oob-content-strip panes2 j)))))))))
+                    (filmstrip/oob-content-strip panes2 j)
+                    (filmstrip/oob-coltabs)))))))))
   "POST /filmstrip/move: dir param -> adjacent-transpose the focused pane\nwith its neighbor; focus follows the pane. OOB re-render of the whole\ncontent strip (bodies preserved).")
 
 (define filmstrip/move-to
@@ -1628,7 +1656,8 @@ pane owns the fixed lift). A focused rail pane is a ring, not a window
                   ;; current desktop must SHOW the pane (data-desktop
                   ;; attr refresh), a leave must refresh the focus
                   ;; classes onto the healed pane. Bodies preserved.
-                  (filmstrip/oob-content-strip panes2 focus2))))))))))
+                    (filmstrip/oob-content-strip panes2 focus2)
+                    (filmstrip/oob-coltabs))))))))))
   "POST /filmstrip/move-to: id + OPTIONAL d params -> move a pane to\nanother desktop. Without d the pane-head verb's semantics: cycle to\nthe next desktop in the declared ring (filmstrip/desk-count, wraps).\nRail-region panes refuse (dock semantics: they are desktop-global --\nnothing to move). A FOCUSED pane leaving the current desktop heals\nfocus first (close-heal's nearest-visible rule -- the moved pane is\nnow :has-hidden, and a hidden pane can never hold the ring, I1). The\nanswer is the windows-tree OOB (the row moved desk subtrees) + the\nwhole strip OOB (show on arrival / refresh focus classes on leave),\nbodies preserved -- the pin grammar.")
 
 (define filmstrip/native-close
@@ -1877,8 +1906,10 @@ pane owns the fixed lift). A focused rail pane is a ring, not a window
                 (filmstrip/pane-width p)
                 (if focused? " focused" "")))
             (html/attr "id" (string-append "fs-pane-" id))
-            (html/attr "data-pane" id)
-            (html/attr "hx-swap-oob" "true")))
+              (html/attr "data-pane" id)
+              (html/attr "data-region" (filmstrip/pane-region p))
+              (html/attr "data-desktop" (as-str (filmstrip/pane-desk p)))
+              (html/attr "hx-swap-oob" "true")))
         (html/join
           (list
             (filmstrip/pane-head p)
@@ -1926,7 +1957,8 @@ pane owns the fixed lift). A focused rail pane is a ring, not a window
                   (html/join
                     (list
                       (filmstrip/oob-msg "")
-                      (filmstrip/open-response panes2 focus focus2 appended?)))))))))))
+                        (filmstrip/open-response panes2 focus focus2 appended?)
+                        (filmstrip/oob-coltabs)))))))))))
   "POST /filmstrip/open: launcher route param -> open-or-focus a pane.\nBad/missing routes answer with the launcher status line only; valid ones\npersist the row and answer with OOB pane swaps.")
 
 (define filmstrip/open-apply
@@ -2082,7 +2114,9 @@ desktop 0).")
                 (filmstrip/pane-width p)
                 (if focused? " focused" "")))
             (html/attr "id" (string-append "fs-pane-" id))
-            (html/attr "data-pane" id)))
+              (html/attr "data-pane" id)
+              (html/attr "data-region" (filmstrip/pane-region p))
+              (html/attr "data-desktop" (as-str (filmstrip/pane-desk p)))))
         (html/join
           (list
             (filmstrip/pane-head p)
@@ -2096,6 +2130,54 @@ desktop 0).")
               content))))))
   "One pane section. content is the dispatched fragment (full page) or an\nempty hx-preserve placeholder (OOB class/width swaps keep the live DOM).")
 
+(define filmstrip/pane-body-lazy
+  (lambda
+    (p)
+    (let*
+      ((id (filmstrip/pane-id p))
+        (route (filmstrip/pane-route p))
+        (path (car (filmstrip/split-query route)))
+        (live? (not (null? (route/lookup path))))
+        (attrs
+          (append
+            (list
+              (html/attr "class" "fs-body")
+              (html/attr "id" (string-append "fs-body-" id))
+              (html/attr "hx-preserve" "true"))
+            (if live?
+              (list
+                (html/attr "hx-get" route)
+                (html/attr "hx-trigger" "revealed")
+                (html/attr "hx-target" "this")
+                (html/attr "hx-swap" "innerHTML"))
+              (list)))))
+      (if live?
+        (html/tag "div" (html/attrs attrs) "")
+        (html/tag "div" (html/attrs attrs)
+          (html/p*
+            (html/attr "class" "muted")
+            (string-append "filmstrip: no route for " path))))))
+  "The LAZY pane body (shell-pass 2, 2026-10-16): the shell GET stops\ndispatching every open pane's route inline -- a live pane body is an\nempty hx-preserve placeholder that hx-gets its own fragment when\nscrolled on stage (hx-trigger=revealed; htmx, zero JS). Unknown routes\nkeep the muted note inline without dispatching. Open still dispatches\nsynchronously (filmstrip/oob-append-pane); OOB class/width swaps\npreserve the live DOM as before.")
+
+(define filmstrip/pane-lazy-html
+  (lambda
+    (p focused?)
+    (let
+      ((id (filmstrip/pane-id p)))
+      (html/tag
+        "section"
+        (html/attrs
+          (list
+            (html/attr "class" (filmstrip/pane-sclass p focused?))
+            (html/attr "id" (string-append "fs-pane-" id))
+            (html/attr "data-pane" id)
+            (html/attr "data-region" (filmstrip/pane-region p))
+            (html/attr "data-desktop" (as-str (filmstrip/pane-desk p)))))
+        (html/join
+          (list
+            (filmstrip/pane-head p)
+            (filmstrip/pane-body-lazy p))))))
+  "One pane section with the LAZY body (the shell render path, shell-pass\n2). Same section shape as filmstrip/pane-html; class rides\nfilmstrip/pane-sclass (the declared ONE assembly -- the natural render\nnow wears fs-single/shelved too, so a reload keeps one-up and shelf\nstate) and the section carries data-region/data-desktop for the :has\ndesktop CSS.")
 (define filmstrip/pane-id
   (lambda (p) (as-str (dict-get p "id")))
   "Pane record id.")
@@ -2236,14 +2318,17 @@ glyph is filmstrip/act-glyph's answer for the word.")
     (filmstrip/map-indexed
       (lambda (p i)
         (if (string-eq (filmstrip/pane-region p) region)
-            (filmstrip/pane-html p (= i focus)
-              (filmstrip/pane-content (filmstrip/pane-route p)))
+              (filmstrip/pane-lazy-html p (= i focus))
             ""))
       panes 0))
   "Pane sections of ONE region only (v5 split): main panes render into
 the #fs-content strip and rail (pinned) panes into #fs-rail -- the
-strip is the reading surface, the rail box the dock. Empty strings for
-the other region keep map-indexed's shape (html/join skips them).")
+strip is the reading surface, the rail box the dock. Bodies are LAZY
+(shell-pass 2): the shell GET no longer dispatches every open pane's
+route inline -- each body hx-gets its own fragment on reveal, so the
+shell answers in row-read + chrome time and panes stream in parallel.
+Empty strings for the other region keep map-indexed's shape (html/join
+skips them).")
 
 (define filmstrip/parse-pairs
   (lambda
@@ -2289,7 +2374,8 @@ the other region keep map-indexed's shape (html/join skips them).")
                   (filmstrip/oob-msg "")
                   (filmstrip/shelf-oob)
                   (filmstrip/winbox-oob)
-                  (filmstrip/oob-section p2 (= i focus))))))))))
+                    (filmstrip/oob-section p2 (= i focus))
+                    (filmstrip/oob-coltabs)))))))))
   "POST /filmstrip/pin: id param -> trade the pane's region (main/rail\nv3 pin). Rail = dock semantics: the body stays LIVE inside the rail\n(glochid CSS shows [data-region=rail] bodies) beside the focused main\npane. Same grammar as filmstrip/width: OOB section swap (body DOM\npreserved via hx-preserve), plus winbox/shelf OOB refreshes (the win\nrow's pin word re-labels by region).")
 
 (define filmstrip/pkg-browse
@@ -2319,7 +2405,7 @@ the other region keep map-indexed's shape (html/join skips them).")
         (append
           (filmstrip/panes-region panes focus "rail")
           (list
-            (filmstrip/railtabs-html)
+              (filmstrip/railtabs-html panes focus)
             (html/join (filmstrip/tree-boxes)))))))
   "The rail BOX (v5): docked panes + railtabs + tree boxes in one
 flex-column side panel. Row-axis CSS turns #fs-rail into
@@ -2393,8 +2479,75 @@ POST /filmstrip/railmode flips the #fs-railmode sentinel -- the SAME
 :has hiding desktops use, so mode flips keep every tree's expansion
 DOM alive.")
 
-(define filmstrip/railtabs-html
+(define filmstrip/coltabs-children
+  (lambda
+    (panes focus)
+    (let
+      ((desk (filmstrip/ws-desktop)))
+      (filmstrip/map-indexed
+        (lambda
+          (p i)
+          (if
+            (if
+              (string-eq (filmstrip/pane-region p) "main")
+              (if (filmstrip/pane-live? p)
+                  (= (filmstrip/pane-desk p) desk)
+                  #f)
+              #f)
+            (let
+              ((id (filmstrip/pane-id p)))
+              (html/tag
+                "button"
+                (html/attrs
+                  (list
+                    (html/attr
+                      "class"
+                      (string-append
+                        "fs-btn fs-coltab"
+                        (if (= i focus) " fs-sel" "")))
+                    (html/attr "title" (filmstrip/pane-route p))
+                    (html/attr "hx-post" "/filmstrip/focus-id")
+                    (html/attr
+                      "hx-vals"
+                      (string-append "{\"id\":\"" id "\",\"pick\":\"1\"}"))
+                    (html/attr
+                      "hx-target"
+                      (string-append "#fs-pane-" id))
+                    (html/attr "hx-swap" "outerHTML show:top")))
+                (html/text (filmstrip/pane-route p))))
+            ""))
+        panes 0)))
+  "Column-picker chips (shell-pass 2, 2026-10-16): one per live MAIN pane\non the CURRENT desktop, in strip order -- the niri column overview in\nthe space the retired legacy nav menu used to eat. A chip posts\nfocus-id pick=1 targeted at its pane section (outerHTML show:top):\nfocus + scroll the column on stage. Multiple windows per desktop stay;\nthis is the fast thumb path between them.")
+
+(define filmstrip/coltabs-html
+  (lambda (panes focus)
+    (html/tag
+      "div"
+      (html/attrs
+        (list
+          (html/attr "id" "fs-coltabs")
+          (html/attr "class" "fs-coltabs")))
+      (html/join (filmstrip/coltabs-children panes focus))))
+  "The column picker row (inside the railtabs strip).")
+
+(define filmstrip/oob-coltabs
   (lambda ()
+    (let*
+      ((row (filmstrip/row))
+        (panes (nth row 1))
+        (focus (nth row 2)))
+      (html/tag
+        "div"
+        (html/attrs
+          (list
+            (html/attr "id" "fs-coltabs")
+            (html/attr "class" "fs-coltabs")
+            (html/attr "hx-swap-oob" "true")))
+        (html/join (filmstrip/coltabs-children panes focus)))))
+  "OOB re-render of the column picker -- appended to every response that\nchanges the pane set, order, desktop or focus ring (open/close/destroy/\nrestore/pin/move/move-to/desktop/focus/focus-id), so the chips never\ndrift from the strip.")
+
+(define filmstrip/railtabs-html
+  (lambda (panes focus)
     (html/tag
       "div"
       (html/attrs
@@ -2402,36 +2555,49 @@ DOM alive.")
           (html/attr "id" "fs-railtabs")
           (html/attr "class" "fs-cbox fs-railtabs")
           (html/attr "data-cbox" "railtabs")))
-        (html/join
-          (append
-            (list (filmstrip/start-menu))
-            ;; narrow-shell (phone) disclosure: an invisible checkbox; the
-            ;; 'rail' word below is its <label>. Tapping the word toggles
-            ;; the overlay sheet via CSS :has -- zero JS, zero server state
-            ;; (borge filmstrip.borg narrow-shell).
-            (list
-              (html/tag
-                "input"
-                (html/attrs
-                  (list
-                    (html/attr "type" "checkbox")
-                    (html/attr "id" "fs-railsheet")
-                    (html/attr "class" "fs-railsheet-box")))
-                ""))
-            (list
-              (html/tag
-                "label"
-                (html/attrs
-                  (list
-                    (html/attr "class" "fs-title fs-railsheet-word")
-                    (html/attr "for" "fs-railsheet")))
-                (html/text "rail")))
-            (filmstrip/railtabs)
-            (list (filmstrip/keys-hint))))))
-    "The rail mode controlbox (one word per tree root, per
+      (html/join
+        (append
+          ;; the mark (shell-pass 2): the cactus logo IS the wordmark --
+          ;; no more redundant 'Pricklypear' + '/filmstrip' title text.
+          (list
+            (html/void
+              "img"
+              (html/attrs
+                (list
+                  (html/attr "class" "fs-logo")
+                  (html/attr "src" "/assets/pplogo.png")
+                  (html/attr "alt" "Pricklypear")
+                  (html/attr "title" "Pricklypear")))))
+          (list (filmstrip/start-menu))
+          ;; narrow-shell (phone) disclosure: an invisible checkbox; the
+          ;; 'rail' word below is its <label>. Tapping the word toggles
+          ;; the overlay sheet via CSS :has -- zero JS, zero server state
+          ;; (borge filmstrip.borg narrow-shell).
+          (list
+            (html/tag
+              "input"
+              (html/attrs
+                (list
+                  (html/attr "type" "checkbox")
+                  (html/attr "id" "fs-railsheet")
+                  (html/attr "class" "fs-railsheet-box")))
+              ""))
+          (list
+            (html/tag
+              "label"
+              (html/attrs
+                (list
+                  (html/attr "class" "fs-title fs-railsheet-word")
+                  (html/attr "for" "fs-railsheet")))
+              (html/text "rail")))
+          (filmstrip/railtabs)
+          (list (filmstrip/coltabs-html panes focus))
+          (list (filmstrip/keys-hint))))))
+  "The rail mode controlbox (one word per tree root, per
 filmstrip.borg sidebar-main-dichotomy -- the axis toggle word was
-retired, BORGE-1789879934: sidebar-only shell) + the keyboard-hint
-glyph (the shortcut map is the glyph's title tooltip). The 'rail'
+retired, BORGE-1789879934: sidebar-only shell) + the cactus logo mark,
+the column picker (#fs-coltabs), and the keyboard-hint glyph (the
+shortcut map is the glyph's title tooltip). The 'rail'
 title word doubles as the narrow-shell disclosure label: it toggles
 the phone rail sheet through its checkbox + CSS :has (zero JS).")
 
@@ -2513,6 +2679,7 @@ the phone rail sheet through its checkbox + CSS :has (zero JS).")
                   (filmstrip/shelf-oob)
                   (filmstrip/winbox-oob)
                   (filmstrip/oob-section p2 (= i focus2))
+                    (filmstrip/oob-coltabs)
                   (if
                     (if (>= focus 0) (not (= focus2 focus)) #f)
                     (filmstrip/oob-section
