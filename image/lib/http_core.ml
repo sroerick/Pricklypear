@@ -584,6 +584,65 @@ let cookie_value (headers : (string * string) list) (name : string)
   : string option =
   List.assoc_opt name (parse_cookies headers)
 
+(* security.origin-authenticated-verbs: the bare host of a Host-header
+   value — port stripped, IPv6 brackets handled. *)
+let host_only (h : string) : string =
+  let h = String.trim h in
+  if String.length h > 0 && h.[0] = '[' then
+    match String.index_opt h ']' with
+    | Some k -> String.sub h 1 (k - 1)
+    | None -> h
+  else
+    match String.rindex_opt h ':' with
+    | Some k when k > 0 ->
+        let port = String.sub h (k + 1) (String.length h - k - 1) in
+        let all_digits =
+          String.length port > 0
+          && String.for_all (fun c -> c >= '0' && c <= '9') port
+        in
+        if all_digits then String.sub h 0 k else h
+    | _ -> h
+
+(* security.origin-authenticated-verbs: the authority host of an
+   Origin/Referer URL ("scheme://host[:port]/..."). *)
+let url_authority_host (u : string) : string option =
+  match String.index_opt u ':' with
+  | None -> None
+  | Some i ->
+      if String.length u < i + 3 || u.[i + 1] <> '/' || u.[i + 2] <> '/'
+      then None
+      else
+        let rest = String.sub u (i + 3) (String.length u - i - 3) in
+        let stop =
+          match String.index_opt rest '/' with
+          | Some j -> j
+          | None -> String.length rest
+        in
+        Some (host_only (String.sub rest 0 stop))
+
+(* security.origin-authenticated-verbs: a mutating request may ride the
+   session cookie only when it is same-origin. Browsers send Origin on
+   every POST (Referer fallback for the rare client that drops it); a
+   cookie-bearing POST with NEITHER header is a non-browser client riding
+   the Domain=.base cookie the subdomain flip widened, and is rejected.
+   Basic/Bearer API clients carry no session cookie and are unaffected. *)
+let same_origin_ok (headers : (string * string) list) : bool =
+  match List.assoc_opt "host" headers with
+  | None -> true
+  | Some host ->
+      let req_host = String.lowercase_ascii (host_only host) in
+      let origin =
+        match List.assoc_opt "origin" headers with
+        | Some o -> Some o
+        | None -> List.assoc_opt "referer" headers
+      in
+      match origin with
+      | None -> false
+      | Some o -> (
+          match url_authority_host (String.trim o) with
+          | Some h -> String.equal (String.lowercase_ascii h) req_host
+          | None -> false)
+
 let b64_decode_opt (s : string) : string option =
   match Base64.decode ~pad:true s with
   | Ok raw -> Some raw

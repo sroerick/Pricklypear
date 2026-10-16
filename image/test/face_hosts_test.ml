@@ -62,6 +62,29 @@ let test_grammar () =
          | H.Host_legacy -> true
          | _ -> false))
 
+let test_same_origin () =
+  let check name expect hdrs =
+    Alcotest.(check bool) name expect (H.same_origin_ok hdrs)
+  in
+  check "same-origin passes" true
+    [ ("host", "agent.alice.example.com");
+      ("origin", "https://agent.alice.example.com") ];
+  check "cross-origin rejected" false
+    [ ("host", "agent.alice.example.com"); ("origin", "https://evil.example") ];
+  check "no origin and no referer rejected" false
+    [ ("host", "agent.alice.example.com") ];
+  check "referer fallback same-host passes" true
+    [ ("host", "agent.alice.example.com");
+      ("referer", "https://agent.alice.example.com/page") ];
+  check "port stripped both sides" true
+    [ ("host", "127.0.0.1:18080"); ("origin", "http://127.0.0.1:18080") ];
+  check "host case-insensitive" true
+    [ ("host", "Agent.Alice.Example.com");
+      ("origin", "https://agent.alice.example.com") ];
+  check "null origin rejected" false
+    [ ("host", "agent.alice.example.com"); ("origin", "null") ]
+
 let () =
   Alcotest.run "face-hosts"
-    [ ("grammar", [ Alcotest.test_case "reserved-label grammar" `Quick test_grammar ]) ]
+    [ ("grammar", [ Alcotest.test_case "reserved-label grammar" `Quick test_grammar ])
+    ; ("origin", [ Alcotest.test_case "origin-authenticated verbs" `Quick test_same_origin ]) ]
