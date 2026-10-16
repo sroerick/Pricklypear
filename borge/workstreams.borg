@@ -30,6 +30,18 @@
     lens-backed row is the deferred unification), so glochid posts card
     comments THROUGH THE BRIDGE (/api/eval); transcripts stay local
     (.agent/sessions/), never tree rows (2026-09-08 write-cost incident).|) *)
+   (* agent note (|OBITUARY / SUPERSESSION (2026-10-16; lands in the SAME
+      commit that registers borge/run-primitive.borg - gregor review point 1,
+      binding: never ratified later): the 09-26 stance above - 'the session
+      IS the run record'; 'no data.u.<user>.run.* rows ever exist' - is
+      SUPERSEDED FOR SIDECAR RUNS. Durable run rows DO exist now, in the
+      SHARED space data.s.run.* (the run-primitive chapter): the unattended
+      drain needs state that is durable, resumable, and visible from any
+      device (cheap lease, expensive state) - more than a laptop-local
+      session JSONL can give. THE SESSION REMAINS the transcript record
+      (local JSONL, never tree rows); the card feed REMAINS the human-facing
+      record; the USER-scoped data.u.<user>.run.* ban itself STANDS. RATIFIED
+      by gregor's review 2026-10-16 (D4 Q1/Q2).|) *)
 
  ;; ---------------------------------------------------------------------------
  ;; RELATIONSHIPS (what it is / isn't)
@@ -273,9 +285,13 @@
    /api/eval under the executor's identity); the native in-image agent
    (agent-native.borg) posts them directly. The transcript stays wherever
    the loop ran (laptop .agent/sessions/ or the native store) — never tree
-   rows. No data.u.<user>.run.* rows ever exist: no tree-write churn on
-   prod, nothing to prune, no sync story to reason about (comments already
-   replicate). The division of labour: comments are the human-readable
+     rows. No data.u.<user>.run.* rows ever exist: no tree-write churn on
+     prod, nothing to prune, no sync story to reason about (comments already
+     replicate). SCOPE AMENDED (2026-10-16): the blanket no-run-datum
+     conclusion no longer holds for SIDEcar runs - borge/run-primitive.borg
+     (registered in the same commit) stores durable run rows in the SHARED
+     space data.s.run.*, never under data.u.*; the transcript + card-feed
+     division of labour survives unchanged: comments are the human-readable
    progress NARRATIVE, todo-events are column transitions, the session is
    the machine-readable RUN — and 'session' means the same thing on the
    laptop and in the image.")
@@ -285,7 +301,7 @@
   (verify
    (test "a run's session header carries its card id and the session tail carries a terminal status marker"
          "the claim lease is glochid:<session-id>@<ts> and reclaim triggers on feed inactivity, not a pid probe"
-         "no run datum type exists; the card feed is the habitat-side record")))
+          "under this model no run datum type exists (superseded 2026-10-16 for SIDEcar runs: shared-space data.s.run.* rows per borge/run-primitive.borg); the card feed is the habitat-side record")))
 
  (section claim-brief-protocol
   (doc "THE local executor contract (laptop pi, NOT the image):

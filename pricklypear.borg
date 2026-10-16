@@ -537,6 +537,18 @@
         from borge/workstreams.borg.")
   (inline borge/workstreams.borg)
  )
+   (section run-primitive
+    (doc "Book chapter — the run primitive: durable, chunked, resumable
+          execution rows (data.s.run.*) for the orchestrator; one run = one
+          attempt to advance one card one gate by a supervised sidecar
+          runner OUTSIDE the PP runtime process; the supervisor owns
+          claims, budgets, transitions, and evidence; PP rows are the
+          queue; the LLM loop never runs inside the PP runtime process.
+          Orchestration phase 1 (2026-10-16); supersedes workstreams.borg's
+          09-26 no-run-datum stance for sidecar runs in this same commit.
+          Full text inlined from borge/run-primitive.borg.")
+    (inline borge/run-primitive.borg)
+   )
  (section security
   (doc "Book chapter — security doctrine across three horizons:
         LOW (the concrete capability/auth/data boundaries and the
