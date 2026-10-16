@@ -1516,8 +1516,28 @@
         |))))
   (subsection unified-todos
    (doc "Basecamp lists + org node todos; unified /todos with smart views")
-   (status implemented)
+   (status partial)
    (implements libs/todo/lib.pp libs/outline/lib.pp libs/notes/lib.pp)
+   (* agent note (|2026-10-01 RECONCILE (todo-shared-spaces audit). The
+      'implemented' status was WRONG: the note half never landed. What
+      shipped is a ONE-WAY, PER-USER scrape — the 'from-notes' view walks
+      notes/all-todos and renders nodes; there is no link between a note
+      node and a card, no state synchronization, and note nodes live at
+      data.note.u.<user>.* so no other identity or executor agent can see
+      them. The stanza's own line 'No dual-copy of note todos until
+      promote (later)' was the right refusal (an unspecified copy would
+      have been an unreconcilable duplicate) but it was never revisited,
+      so the org-mode promise (mark a node, work the item) is unmet.
+
+      AUTHORITATIVE SPEC MOVED: the note-todo contract now lives in
+      borge/workstreams.borg section note-todos (promotion verb, the
+      origin_ref reconciliation key, card-authoritative state with node
+      write-back, board-shows-it-once, and the privacy boundary that
+      publishes the work item without publishing the note). The /todos
+      and card details below remain accurate for the CARD side.
+
+      The/'todo-shared-spaces loop' adopts this subsection's verify lines
+      as its acceptance for the note half.|) *)
    (details
     (doc (|
          Real lists: todo-list + todo-item (list_id, title, notes,
@@ -1525,7 +1545,10 @@
          Note todos: outline node.todo; scrape + write-back.
          Smart views: everything, from-notes, default Inbox.
          /todos nav + body; cycle state; create list; add item.
-         No dual-copy of note todos until promote (later).
+         No dual-copy of note todos until promote (later) — SEE THE
+         2026-10-01 AGENT NOTE ABOVE: 'later' arrives as
+         workstreams.borg section note-todos (promotion bridge with an
+         origin_ref link), not as an unlinked copy.
 
          DEFAULT-LIST RESOLUTION; EMPTY list-id NEVER REACHES
          node-path (2026-09-26). todo/list/get with an empty
