@@ -566,6 +566,36 @@ let test_shared_bookkeeping_keeps_acted_by () =
       Alcotest.(check string) "bookkeeping does not clear acted_by"
         "gregor" (stamp conn))
 
+(* f3c85ba9 regression: a bookkeeping write with NO stamp on a row that has
+   NEVER been stamped must still LAND. update_datum's acted_by stamp once
+   built to_jsonb(COALESCE($4, payload->>'acted_by')) = SQL NULL for this
+   shape, and jsonb_set with a SQL NULL new_value returns NULL, so SET
+   payload = NULL hit the not-null constraint: ERROR 23502 on tree_nodes.
+   Prod broke 2026-10-11 (~15:00) with 5eb8fcd: EVERY non-delegated update
+   of a fresh row failed (workout/session-complete, state-put, note edits).
+   The test above missed it because its unstamped write follows a stamped
+   one, so COALESCE found the existing stamp. *)
+let test_bookkeeping_on_unstamped_row () =
+  with_s2 (fun store ~sp:_ ~ty ->
+      let conn = Option.get (S.conn_of store) in
+      let id = insert conn ~type_name:ty ~author:"alice" in
+      (match
+         TS.update_datum ~type_name:ty ~id ~fields_json:"{\"n\":2}"
+           ~acted_by:None conn
+       with
+       | Ok _ -> ()
+       | Error e ->
+           Alcotest.fail
+             ("unstamped update of never-stamped row failed: " ^ e));
+      let proj =
+        q_string conn ~params:[ s id ]
+          "SELECT fields->>'n' FROM tree_data_rows WHERE id = $1::uuid"
+      in
+      Alcotest.(check string) "update lands in projection" "2" proj;
+      Alcotest.(check string) "no stamp minted by bookkeeping write" ""
+        (q_string conn ~params:[ s id ]
+           "SELECT COALESCE(acted_by,'') FROM data_rows WHERE id = $1::uuid"))
+
 let test_node_path_pk_fallback () =
   with_s2 (fun store ~sp ~ty ->
       let conn = Option.get (S.conn_of store) in
@@ -630,12 +660,14 @@ let () =
             test_row_level_routing;
         ] );
       ( "by returned-and-stamped writes (a1ce59db)",
-        [
-          Alcotest.test_case "shared field update lands" `Quick
-            test_shared_field_update_lands;
-          Alcotest.test_case "bookkeeping keeps acted_by" `Quick
-            test_shared_bookkeeping_keeps_acted_by;
-        ] );
+          [
+            Alcotest.test_case "shared field update lands" `Quick
+              test_shared_field_update_lands;
+            Alcotest.test_case "bookkeeping keeps acted_by" `Quick
+              test_shared_bookkeeping_keeps_acted_by;
+            Alcotest.test_case "bookkeeping on never-stamped row lands (f3c85ba9)" `Quick
+              test_bookkeeping_on_unstamped_row;
+          ] );
       ( "open spaces",
         [
           Alcotest.test_case "implicit membership, anonymous excluded" `Quick

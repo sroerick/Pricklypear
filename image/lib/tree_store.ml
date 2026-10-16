@@ -399,8 +399,8 @@ let update_datum ?(acted_by : string option = None) (conn : Store_db.conn)
   let sql =
       "UPDATE tree_nodes SET " ^
       "  payload = jsonb_set(jsonb_set(jsonb_set(payload,'{body}',$2::jsonb),'{hash}', " ^
-      "    to_jsonb(encode(digest($2::jsonb::text,'sha256'),'hex'))),'{acted_by}', " ^
-      "    to_jsonb(COALESCE($4::text, payload->>'acted_by'))), " ^
+        "    to_jsonb(encode(digest($2::jsonb::text,'sha256'),'hex'))),'{acted_by}', " ^
+        "    COALESCE(to_jsonb($4::text), payload->'acted_by', 'null'::jsonb)), " ^
       "  hash = encode(digest($2::jsonb::text,'sha256'),'hex'), updated_at = now() " ^
     "WHERE kind='datum' AND tree_datum_id(path) = $1::uuid " ^
     "  AND (type_name = $3 OR type_name IS NULL) " ^
