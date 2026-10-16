@@ -2193,4 +2193,215 @@
       (test "image/test/branch_push_test.ml — push_closure: target-visible/kernel/special-form refs are free; an unbound ref auto-includes from the source (discovery order, mutual recursion safe) or holes its carrier; holes refuse the push all-or-nothing with a complete report; an explicit dep lands in pushed, never auto")
       (test "image/test/branch_push_test.ml — store push: a pierced set (entry + broken->absent) refuses WHOLE and the target stays untouched; a clean push lands entry + auto deps verbatim; a name inherited by both sides stays a chain view on the target, never an own row; an inherited-only name refuses fork-first; the default set is depth-0 own code")
       (smoke "(branch/push \"gregor/agent\" entry) by gregor (or the parent-linked agent when allow_agent_promote) lands entry + auto-included callees on gregor/personal via promote_functions (routes travel); a push with a dep unbound everywhere is refused with the exact hole list — no partial landing"))))
+   (subsection op-transplant
+    (doc "Op-level transplant: pick named writes out of a branch's gen stream and land them on another branch as new writes — cherry-pick over the log")
+    (status planned)
+    (* agent note (|2026-10-16 spec'd in plan phase (roerick + AL VC-reinvention conversation). The dig showed capture is DONE (tree_versions append-only + code_history before-images + branch/log + the checkpoint family, 2026-10-12) and merge/promote/push are whole-branch or dep-closure granularity. The missing primitive is the OP-LEVEL CURSOR: branch/log is a fold, not a worklist you can act on across branches. This subsection is that cursor. Sibling: file-bridge (files as projections). ast-nodes P3 (subtree pick) stays deferred.|) *)
+    (details
+     (doc (|
+            ==========================================================
+            WHY
+            ==========================================================
+            An agent hot-defines six fns on admin/personal from a
+            phone; the operator wants three of them on system/main
+            tonight. Today's surfaces: promote (whole set), branch/push
+            (dep closure to the owner's personal), merge (whole
+            branch), cp-restore (SAME branch only). Nothing moves
+            NAMED OPS across branches. cp-diff already computes the
+            worklist shape (per-pin classify between a captured gen
+            and head); this subsection makes the worklist ACTIONABLE
+            cross-branch.
+
+            ==========================================================
+            NOPALES SURFACE (server-only, ref-addressed,
+            anonymous-denied — the checkpoint family's rules)
+            ==========================================================
+              (branch/pick target-ref name...)          -- source =
+                 CURRENT branch, bodies at source head
+              (branch/pick target-ref name... 'at "cp") -- bodies as
+                 captured at the source checkpoint
+              (branch/pick target-ref name... 'gen N)   -- bodies as
+                 of gen N (the code_history before-image walk)
+            Result is DATA: landed / skipped(name reason) / clobbers —
+            never a silent partial.
+
+            ==========================================================
+            SEMANTICS
+            ==========================================================
+            RESTORE-IS-A-WRITE (checkpoints discipline, unchanged):
+            picked bodies land through the tree write helpers at the
+            TARGET head gen — version trail + code_history
+            before-images fire for free, gen only moves forward,
+            target base_gen untouched. The pick is itself a log entry
+            on the target (op = pick, source ref recorded — the origin
+            column below), so a bad pick is undone by picking the
+            before-image back; no special revert path.
+
+            CLOBBER GUARD: a target own pin whose hash differs from
+            the picked body is DIVERGED. Divergence is never silently
+            overwritten (branching.merge philosophy): by default the
+            name lands in skipped with reason diverged-target + both
+            hashes; 'force lands it (before-image in code_history, and
+            the log entry naming the source satisfies the obituary
+            rule).
+
+            CLOSURE FIRST (branch/push discipline; the 2026-10-05
+            pulse-row-from class): Call_graph.push_closure runs over
+            the picked set against the target chain; an unbound ref
+            auto-includes from the source's OWN rows or refuses the
+            pick WHOLE with the complete hole report. Never a partial
+            landing.
+
+            AUTH (branch/push discipline): the target ref's owner
+            human, the parent-linked agent under allow_agent_promote,
+            or admin. Targets under system/* are ADMIN-ONLY
+            (promote-to-main stays the gated main path). The source
+            ref must be caller-readable (branch/status's rule).
+
+            SOURCE RESOLUTION for 'at/'gen: the name's own pin at that
+            gen (tree_versions window), else the code_history
+            before-image walk, else ABSENT — ABSENT is a value, not an
+            error: a pick of a name absent at the cp is an unbind
+            request and REFUSES by default (unbind is a separate
+            explicit op).
+
+            LOG ORIGIN (one additive migration serves this subsection
+            and file-bridge): the version trail gains an origin column
+            (default 'eval'; 'pick', 'file', 'restore' as those paths
+            land) + a detail text (source ref / file name). branch/log
+            renders it.
+
+            ==========================================================
+            NON-GOALS
+            ==========================================================
+            - Range/revset algebra (cp window + explicit names only)
+            - Subtree-level pick (ast-nodes P3, deferred)
+            - Datum rows (branches are CODE, not data)
+            - Rename following (name = identity; ast-merge's
+              hash-equal rename detection is a later reuse)
+|))
+    )
+    (verify
+     (build "dune build image")
+     (test "image/test/op_transplant_test.ml — pick lands bodies as new writes at target head gen; one code_history before-image per clobbered target pin; target base_gen untouched; the pick itself appears in branch/log with the source ref recorded")
+     (test "image/test/op_transplant_test.ml — diverged target pin: default skips with diverged-target + both hashes; 'force lands and reports; absent-at-cp refuses (unbind stays explicit)")
+     (test "image/test/op_transplant_test.ml — closure: a picked body referencing a name unbound on the target chain refuses WHOLE with the complete hole report; auto-include lands entry + dep verbatim")
+     (smoke "agent defines a b c on personal; (branch/cp \"one\"); defines d e; admin (branch/pick \"system/main\" \"a\" \"b\" 'at \"one\") lands exactly a b; (branch/log \"system/main\") shows the two picks with the source ref recorded")))
+   (subsection file-bridge
+    (doc "Files as PROJECTIONS of the def store: a local file is a manifest of defs + raw spans; editing it and eval'ing in-image are the same op stream")
+    (status planned)
+    (* agent note (|2026-10-16 spec'd in plan phase (roerick + AL VC-reinvention conversation). THE INVENTION in that conversation: everything else sketched already exists (log/checkpoints/merge3/pin-hygiene/op-transplant). A file stops being a mirror with sync semantics and becomes a VIEW of the branch: parse -> def-level ops through the same write helpers eval uses; materialize -> regenerate with raw spans preserved. The pp-local lens is the transport (server stays write authority — the local-first framing is unchanged). VAULT DEMOTION below is a DECISION CANDIDATE flagged for roerick: vault-authority (2026-10-02) is locked and this subsection amends it.|) *)
+    (details
+     (doc (|
+            ==========================================================
+            WHY
+            ==========================================================
+            branching.vault-authority made libs/*.pp a generated
+            MIRROR and killed hand-editing as a deploy path — correct,
+            but it left local development with no first-class story:
+            eval-over-HTTP per form, or edit a file that is dead text
+            to the habitat. The bridge closes that: the file is a
+            PROJECTION of the branch, so a local edit and an in-image
+            define are the same event type — a def-level op through
+            the tree write helpers. One op stream, two doors.
+
+            ==========================================================
+            PROJECTION FORMAT (one file per package, the libs/*.pp
+            shape)
+            ==========================================================
+            Header manifest, a leading comment block the parser owns:
+              ;;; branch: admin/dev   base-gen: 412   projection: v1
+            Then per def, in manifest order:
+            - the canonical body (printed pp_expr form)
+            - zero or more RAW SPANS attached to that def's slot:
+              comments, reader conditionals, non-def top-level forms.
+              Raw spans are OWNED BY THE FILE: the image never
+              generates them, the projection never drops them.
+
+            ROUND-TRIP PROPERTIES (property-tested):
+              parse(materialize(branch)) = branch def set, spans empty
+              materialize(parse(file))   = the file, spans byte-equal
+
+            ==========================================================
+            MECHANISM
+            ==========================================================
+            FILE-TO-IMAGE (ingest): parse locally; diff the def set
+            against the manifest's recorded base (per-name hash
+            equality, ABSENT as its own value — the branch/status
+            decision discipline); emit define / redefine / unbind ops.
+            ONE server call lands the batch (candidate prim name
+            branch/ingest; the make phase fixes the name): it
+            validates base-gen freshness, runs the clobber guard and
+            closure (op-transplant's rules, same code), then writes
+            through the tree write helpers — version trail +
+            code_history fire, log entries record origin=file + the
+            file name. Head moved past base-gen: the conflict set is
+            the names whose head hash differs from BOTH the file body
+            and the base body — reported + skipped, the rest land;
+            'force lands all with before-images.
+
+            IMAGE-TO-FILE (materialize): regenerate canonical bodies;
+            re-attach raw spans by slot identity (name); spans of
+            since-unbound defs stay as tombstone comments until an
+            explicit 'prune-spans.
+
+            TRANSPORT: the pp-local lens (borge/local-first.borg).
+            The server stays index + write authority exactly as in
+            data sync; ingest is the one eval call carrying the op
+            batch, never a per-define HTTP loop.
+
+            ==========================================================
+            VAULT DEMOTION (DECISION CANDIDATE — needs roerick; amends
+            the locked branching.vault-authority 2026-10-02)
+            ==========================================================
+            When P2 lands: libs/*.pp becomes EXPORT-ONLY (pp-sync
+            snapshot unchanged); pp-sync land retires into the
+            branch/land REPL op (the branch-ops scope amendment); the
+            additive boot seed shrinks to cold-start-of-empty-habitat.
+            UNTIL RATIFIED: the bridge targets personal/dev branches
+            only and the vault keeps its current semantics — the two
+            never write the same branch in one workflow.
+
+            ==========================================================
+            TRADEOFFS NAMED (so nobody fixes them later)
+            ==========================================================
+            - Bodies print CANONICALLY. Author formatting is not
+              preserved; comments and reader gunk survive only as raw
+              spans. The pin-hygiene hash domain is canonical-sexp —
+              the file cannot carry a second formatting domain without
+              breaking body-equality reasoning everywhere.
+            - Name = identity. Renames are delete+add in the op stream
+              (ast-merge's hash-equal rename detection is a later
+              reuse).
+
+            ==========================================================
+            NON-GOALS
+            ==========================================================
+            - Non-Lisp languages (blob-tier; the OCaml kernel stays
+              git — two node tiers, one store is a later STORAGE
+              story, not this subsection)
+            - A bidirectional watcher daemon (v1 is explicit
+              ingest/materialize; a watcher is glochid-side
+              convenience later)
+            - Subtree-granular file diffs (the pin stays the unit;
+              ast-nodes P3 deferred)
+
+            ==========================================================
+            PHASES
+            ==========================================================
+              P1: projection format + materialize + round-trip
+                  properties — pure, lisp/lib, dune runtest lisp, no
+                  Postgres.
+              P2: ingest server call + conflict report + origin=file
+                  log entries (image/lib, rides store_history; shares
+                  the origin-column migration with op-transplant).
+              P3: vault demotion (blocked on the roerick decision).
+|))
+    )
+    (verify
+     (build "dune build")
+     (test "lisp/test/file_projection_test.ml — round-trip: materialize(parse(file)) preserves every raw span byte-identically and the def set in manifest order; parse(materialize(branch)) yields exactly the branch def set")
+     (test "image/test/file_bridge_test.ml — ingest lands one op per changed def through the tree write helpers (version trail + code_history rows exist, origin=file); unchanged file against an unmoved base = zero ops")
+     (test "image/test/file_bridge_test.ml — head moved past base-gen: diverged names report with hashes and skip; the rest land; 'force lands all with before-images")
+     (smoke "materialize admin/dev to a file; edit two bodies + add a comment locally; ingest: (branch/log \"admin/dev\") shows exactly two origin=file ops; re-materialize and the comment survives")))
 )
