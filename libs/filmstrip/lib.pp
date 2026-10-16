@@ -902,11 +902,163 @@ between strip and rail).")
         ;; demote into the fold (responsive = depth, not a new widget --
         ;; the fold IS the menu). Never both at once.
         (css/rule ".fs-tr-node > .fs-tr-acts-ul" (list "display" "none"))
-        (css/media
-          "max-width:40rem"
-          (list
-            (css/rule ".fs-tr-verb" (list "display" "none"))
-            (css/rule ".fs-tr-node[open] > .fs-tr-acts-ul" (list "display" "block"))))
+          ;; narrow-shell (phone) plumbing: the tree-box chrome the habitat
+          ;; was missing (grid: title + collapse-all glyph on one row, the
+          ;; tree ul spanning and scrolling under them) + the zero-JS
+          ;; disclosure checkbox for the phone rail sheet (the 'rail' title
+          ;; word is its label; CSS :has reveals the sheet when checked --
+          ;; borge filmstrip.borg narrow-shell).
+          (css/rule ".fs-railsheet-box" (list "display" "none"))
+          (css/rule
+            ".fs-rmode"
+            (list
+              "display"
+              "grid"
+              "grid-template-columns"
+              "1fr auto"
+              "grid-template-rows"
+              "auto minmax(0,1fr)"
+              "gap"
+              ".25rem .4rem"
+              "align-items"
+              "center"
+              "border"
+              "1px solid var(--border)"
+              "background"
+              "var(--panel)"
+              "border-radius"
+              "6px"
+              "padding"
+              ".3rem"
+              "min-height"
+              "0"
+              "overflow"
+              "hidden"))
+          (css/rule
+            ".fs-rmode > .fs-tr-root"
+            (list
+              "grid-column"
+              "1/-1"
+              "grid-row"
+              "2"
+              "align-self"
+              "stretch"
+              "min-height"
+              "0"
+              "overflow-y"
+              "auto"))
+          (css/rule ".fs-shell:has(#fs-axis.col) .fs-rmode" (list "flex" "1 1 auto"))
+          (css/media
+            "max-width:48rem"
+            (list
+              ;; ONE narrow breakpoint: the whole phone story lives here
+              ;; (the tree-verb demotion moved with it from 40rem).
+              (css/rule ".fs-tr-verb" (list "display" "none"))
+              (css/rule ".fs-tr-node[open] > .fs-tr-acts-ul" (list "display" "block"))
+              ;; dynamic viewport + no 28rem floor: browser chrome never
+              ;; clips the strip (no dvh = the desktop 100vh rule survives).
+              (css/rule ".fs-shell" (list "min-height" "0" "height" "calc(100dvh - 2rem)"))
+              (css/rule "body" (list "padding" ".5rem"))
+              ;; apps go one-up: full-width pages; swiping = scrolling the
+              ;; strip left/right (snap keeps it page-wise). The width
+              ;; presets stay verbs; they all collapse to 100% here.
+              (css/rule ".fs-content" (list "scroll-snap-type" "x mandatory"))
+              (css/rule
+                ".fs-pane"
+                (list
+                  "flex"
+                  "0 0 100%"
+                  "min-width"
+                  "0"
+                  "scroll-margin-inline"
+                  "0"
+                  "scroll-snap-align"
+                  "center"
+                  "scroll-snap-stop"
+                  "always"))
+              (css/rule ".fs-pane.fs-third" (list "flex-basis" "100%"))
+              (css/rule ".fs-pane.fs-half" (list "flex-basis" "100%"))
+              (css/rule ".fs-pane.fs-full" (list "flex-basis" "100%"))
+              ;; touch floors (~2rem hit targets: rows, glyphs, heads)
+              (css/rule ".fs-head" (list "padding" ".35rem .5rem"))
+              (css/rule ".fs-btn" (list "padding" ".3rem .55rem" "min-height" "2rem"))
+              (css/rule
+                ".fs-act"
+                (list "padding" ".3rem .55rem" "min-width" "2rem" "min-height" "2rem"))
+              (css/rule ".fs-tr-row" (list "min-height" "2.2rem"))
+              (css/rule ".fs-tr-item" (list "min-height" "2.2rem"))
+              ;; THE RAIL IS AN OVERLAY: the sidebar box becomes a fixed
+              ;; sheet, hidden until the railtabs disclosure is checked
+              ;; (visibility, not display, so htmx keeps OOB-updating the
+              ;; tree inside the closed sheet); the railtabs row becomes the
+              ;; fixed bottom bar; mode words hide while the sheet is
+              ;; closed; the start menu opens upward; pinned rail panes
+              ;; ride the same sheet (the sheet IS the dock).
+              (css/rule
+                ".fs-shell:has(#fs-axis.col) #fs-rail"
+                (list
+                  "position"
+                  "fixed"
+                  "left"
+                  ".4rem"
+                  "right"
+                  ".4rem"
+                  "top"
+                  ".4rem"
+                  "bottom"
+                  "3.4rem"
+                  "z-index"
+                  "40"
+                  "flex"
+                  "none"
+                  "width"
+                  "auto"
+                  "max-width"
+                  "none"
+                  "overflow-y"
+                  "auto"
+                  "overflow-x"
+                  "hidden"
+                  "padding"
+                  ".4rem"
+                  "gap"
+                  ".3rem"
+                  "background"
+                  "var(--pp-bg)"
+                  "border"
+                  "1px solid var(--border)"
+                  "border-radius"
+                  "6px"
+                  "box-shadow"
+                  "0 6px 24px rgba(0,0,0,.5)"
+                  "visibility"
+                  "hidden"))
+              (css/rule
+                ".fs-shell:has(#fs-axis.col) #fs-rail:has(#fs-railsheet:checked)"
+                (list "visibility" "visible"))
+              (css/rule
+                ".fs-railtabs"
+                (list
+                  "position"
+                  "fixed"
+                  "left"
+                  "0"
+                  "right"
+                  "0"
+                  "bottom"
+                  "0"
+                  "z-index"
+                  "41"
+                  "visibility"
+                  "visible"
+                  "border-radius"
+                  "0"))
+              (css/rule "#fs-rail:not(:has(#fs-railsheet:checked)) .fs-railtab"
+                (list "display" "none"))
+              (css/rule ".fs-railsheet-word" (list "cursor" "pointer"))
+              (css/rule ".fs-start-menu"
+                (list "top" "auto" "bottom" "100%" "max-height" "60vh" "overflow-y" "auto"))
+              (css/rule ".fs-keys" (list "display" "none"))))
           (css/raw ".pp-cm-host .CodeMirror{height:80vh;font-size:13px;line-height:1.4;background:var(--chrome);color:var(--ink)}.pp-cm-host .CodeMirror-gutters{background:var(--chrome);border-right:1px solid var(--border)}.pp-cm-host .CodeMirror-linenumber{color:var(--muted)}.pp-cm-host .CodeMirror-cursor{border-left:1px solid var(--sel-accent)}.pp-cm-bar{display:flex;gap:.6rem;align-items:center;margin:.35rem 0}.pp-cm-save{cursor:pointer}.pp-cm-status::after{content:none}"))))
   "Strip + pane + launcher stylesheet (~50 lines of rules). Widths are\nthe three presets only; .focused is the server-owned ring.")
 
@@ -2250,16 +2402,38 @@ DOM alive.")
           (html/attr "id" "fs-railtabs")
           (html/attr "class" "fs-cbox fs-railtabs")
           (html/attr "data-cbox" "railtabs")))
-      (html/join
-        (append
-          (list (filmstrip/start-menu))
-          (list (html/span (html/attr "class" "fs-title") (html/text "rail")))
-          (filmstrip/railtabs)
-          (list (filmstrip/keys-hint))))))
-  "The rail mode controlbox (one word per tree root, per
+        (html/join
+          (append
+            (list (filmstrip/start-menu))
+            ;; narrow-shell (phone) disclosure: an invisible checkbox; the
+            ;; 'rail' word below is its <label>. Tapping the word toggles
+            ;; the overlay sheet via CSS :has -- zero JS, zero server state
+            ;; (borge filmstrip.borg narrow-shell).
+            (list
+              (html/tag
+                "input"
+                (html/attrs
+                  (list
+                    (html/attr "type" "checkbox")
+                    (html/attr "id" "fs-railsheet")
+                    (html/attr "class" "fs-railsheet-box")))
+                ""))
+            (list
+              (html/tag
+                "label"
+                (html/attrs
+                  (list
+                    (html/attr "class" "fs-title fs-railsheet-word")
+                    (html/attr "for" "fs-railsheet")))
+                (html/text "rail")))
+            (filmstrip/railtabs)
+            (list (filmstrip/keys-hint))))))
+    "The rail mode controlbox (one word per tree root, per
 filmstrip.borg sidebar-main-dichotomy -- the axis toggle word was
 retired, BORGE-1789879934: sidebar-only shell) + the keyboard-hint
-glyph (the shortcut map is the glyph's title tooltip).")
+glyph (the shortcut map is the glyph's title tooltip). The 'rail'
+title word doubles as the narrow-shell disclosure label: it toggles
+the phone rail sheet through its checkbox + CSS :has (zero JS).")
 
 (define filmstrip/register-keys!
   (__macro__
@@ -3726,3 +3900,34 @@ data: the hx-* verbs ride attrs verbatim through the projection.")
         "hx-swap" "innerHTML")
       (list (ui/text label))))
   "One start-menu entry: opens `route` as a pane via /filmstrip/open.")
+
+;; ---- route bindings (vault, additive at load/boot-seed) ----
+;; filmstrip.borg filmstrip-shell: the shell is the DEFAULT habitat
+;; view, so a fresh habitat (boot seed loads libs/filmstrip onto
+;; system/main additively) must come up with its routes live -- no
+;; live-only route pins. Handlers stay PRIVATE (login required): the
+;; shell is never an anonymous surface.
+;; CAUTION (2026-10-16): pp-sync pull/snapshot mirrors STORE content
+;; only, so a vault sync silently drops these load-time forms (the
+;; 4381766 wipe -- fresh boots 404'd /filmstrip until this footer was
+;; restored). Keep the footer in any future snapshot.
+;; /filmstrip/railmode stays a HOST gap: the v4 spec assigns its POST
+;; handler to the host and the lib has no def for it (glochid
+;; implements its own); the habitat's single-root railtabs render the
+;; word but the habitat itself never needed the flip.
+(route "/filmstrip" "filmstrip/page")
+(route "/filmstrip/open" "filmstrip/open")
+(route "/filmstrip/close" "filmstrip/close")
+(route "/filmstrip/cascade" "filmstrip/cascade")
+(route "/filmstrip/focus" "filmstrip/focus")
+(route "/filmstrip/focus-id" "filmstrip/focus-id")
+(route "/filmstrip/move" "filmstrip/move")
+(route "/filmstrip/move-to" "filmstrip/move-to")
+(route "/filmstrip/width" "filmstrip/width")
+(route "/filmstrip/pin" "filmstrip/pin")
+(route "/filmstrip/restore" "filmstrip/restore")
+(route "/filmstrip/single" "filmstrip/single")
+(route "/filmstrip/tree" "filmstrip/tree")
+(route "/filmstrip/tree/collapse" "filmstrip/tree-collapse")
+(route "/filmstrip/destroy" "filmstrip/destroy")
+(route "/filmstrip/desktop" "filmstrip/desktop-set")
