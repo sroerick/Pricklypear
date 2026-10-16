@@ -5,7 +5,7 @@ Each phase independently shippable. Sizes are rough agent-days (executor cadence
 ## Phase 1 - Run primitive spec (book chapter)
 
 - Input: D1 findings + D2 draft + gregor's review (failure paths F1-F5 first).
-- Work: ratify storage (shared-space datum vs kernel table, D4 Q1); ratify the sessions-as-runs obituary for sidecar runs (D4 Q2); finalize field contracts + the six POLICY decisions; register the chapter in pricklypear.borg (inline order, after workstreams).
+- Work (RATIFIED by gregor review 2026-10-16): storage = shared-space datum (data.s.run.*) + single supervisor + CAS on queued->claimed (review point 2); land the workstreams.borg obituary supersession IN THE SAME COMMIT as chapter registration (review point 1 - never ratified later); finalize remaining field contracts + POLICY-1/5/6; register the chapter in pricklypear.borg (inline order, after workstreams).
 - Ships: a merged spec chapter. No code.
 - Size: small - 1-2 agent-days including one review round.
 
@@ -17,17 +17,18 @@ Each phase independently shippable. Sizes are rough agent-days (executor cadence
   - The supervisor spawns `scripts/pp-flow.sh --run <card>` UNCHANGED as the sidecar (proven executor); the adapter stays verbatim; pp-flow's driver logic (claim/brief/write-back/ledger) migrates INTO the supervisor.
   - Usage parsing from adapter terminal output (:INPUT-TOKENS/:OUTPUT-TOKENS/:PROVIDER-REQUESTS, pp-flow-autolith.sh:223-226) into run rows - the counts stop being dropped.
   - Lease/heartbeat/reap; failure-archive pointers into rows; runs.jsonl kept during transition as a derived artifact.
+    - Concurrency starts at 2 parallel runs until the overnight soak passes (gregor, D4 Q9).
 - Ship behind a flag; dogfood overnight on cheap cards before ANY default flips (workstreams.borg:508-509: "Do NOT flip the default until the loop has survived real overnight cards").
 - Size: medium - 3-5 agent-days + an overnight dogfood.
 
 ## Phase 3 - Native dumb runner for PP-native work (last)
 
-- Work: habitat-domain cards (branch_kind = habitat) execute steps as prim-only job fns via the EXISTING jobs runner (in-image, no LLM - the constraint holds, and jobs.borg:246-253 already requires long/LLM work out-of-process); with-step checkpoints give exactly-once (jobs.borg:199-229); evidence lands claim-kinded (f526bace tier-2 verb when it exists); one-way-door cards stay human-gated.
+- Work: habitat-domain cards (branch_kind = habitat) execute steps as prim-only job fns via the EXISTING jobs runner (in-image, no LLM - the constraint holds, and jobs.borg:246-253 already requires long/LLM work out-of-process); with-step checkpoints give exactly-once (jobs.borg:199-229); evidence lands claim-kinded (f526bace tier-2 verb when it exists); one-way-door cards stay human-gated. The rule is ABSOLUTE (gregor review point 5): no LLM in the runtime process, ever - including the native runner.
 - Size: small-medium - 2-3 agent-days after phase 2 hardens.
 
 ## Cross-phase invariants
 
-- The LLM loop NEVER runs inside the PP runtime process (sidecars only; tuna 10-04 precedent).
+- The LLM loop NEVER runs inside the PP runtime process - ABSOLUTE (gregor review point 5), including the native runner; sidecars only (tuna 10-04 precedent).
 - Transcripts never in tree rows; the card feed keeps milestones + terminal marker.
 - PP rows are the queue - no broker, no new service.
 - One identity per runner, deny-all allowlists; acted_by per 039 PINNED semantics.
@@ -35,4 +36,4 @@ Each phase independently shippable. Sizes are rough agent-days (executor cadence
 
 ## Return
 
-Plain files in docs/handoffs/ (roerick's "plain files" option): orchestrator-recon-D1-findings.md, orchestrator-recon-D2-run-primitive.draft.borg, orchestrator-recon-D3-phased-plan.md, orchestrator-recon-D4-open-questions.md. Uncommitted by design (.git read-only in this session); roerick routes to gregor.
+Committed and pushed to wyo (7f2f15d, 2026-10-16); this revision folds gregor's ratified review. Roerick routes to gregor.
