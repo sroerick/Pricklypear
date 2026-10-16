@@ -497,19 +497,49 @@
              RETAINED (dedup + accident recovery). Blob GC is a
              non-goal until measured.
 
-         NON-GOALS (v0 — deliberately)
-         -----------------------------
-         - Chunked / resumable upload: >64 MiB files are out of scope
-           until the chunk endpoint exists. Never /api/eval (64 KiB).
-         - Blob GC / quotas (media non-goals inherit).
-         - Live watching (inotify) — push/pull/status are commands;
-           a watcher is a cron/systemd unit around the same verbs.
-         - Symlinks, exec bits, hardlinks: regular files only. Git
-           tracks content, not mode metadata — same contract here.
-         - End-to-end encryption, public sharing links, folders-as-
-           rows. The path field IS the folder structure.
-         - Multi-machine REAL-TIME (dropbox instant sync). The habitat
-           is sync-on-demand; sync-loop wrappers can tighten it.
+           SCALE GOALS (2026-10-11, roerick: "those are no longer
+           non-goals; I want to upload everything")
+           ------------------------------------------------------
+           The v0 fence above was scope, not a design limit. It is
+           retired: the filespace holds the user's WHOLE local
+           filesystem, not a curated subtree. Ordered by dependency
+           (files-at-scale):
+
+           - CHUNKED / RESUMABLE UPLOAD is the gating item. The 64 MiB
+             ceiling is the proxy's request cap, not storage's. Every
+             file chunks; a killed transfer resumes from its manifest.
+           - CONTENT-ADDRESSED CHUNK STORE: chunk bytes keyed by sha256,
+             one row per chunk, files reassembled from a chunk manifest.
+             Dedup and delta upload fall out (an edited 4 GiB image
+             ships only its changed chunks). This is the piece that
+             makes "everything" affordable, and the physical home the
+             by-sha256 dedup probe only approximated.
+           - LIVE WATCHING: an inotify/fsevents debounced watcher around
+             the sync verbs, journal-backed so a restart does not rescan
+             the world. Sync becomes continuous, not invoked.
+           - SCALE: a datum row per file and the 500-row read cap do not
+             survive 10^5-10^6 files. The manifest exchange needs a
+             paged, purpose-built file-manifest prim, not the generic
+             tree walk.
+           - METADATA FIDELITY: mode bits, mtime, and symlink target are
+             part of "my filesystem"; the envelope grows a mode/type
+             field and materialization honors it.
+           - TOMBSTONES, BLOB GC, QUOTAS: a row delete is not a
+             tombstone, so deletes must propagate. Orphaned chunks need a
+             retention + GC policy; per-user byte accounting becomes
+             real at TB scale.
+           - REAL-TIME MULTI-MACHINE: the watcher plus the existing
+             generation-negotiated sync round is the substrate; latency
+             is tuning, not new design.
+           - END-TO-END ENCRYPTION / SHARING: the client owns keys and
+             the image stores opaque chunks; the path index stays
+             plaintext (an encrypted-name index lands with the crypto
+             work).
+
+           STILL OUT (files-at-scale non-goals): hardlink identity, inode
+           numbers, cross-machine advisory locking, and POSIX special
+           files (fifos/devices/sockets). Content and common metadata,
+           not POSIX emulation.
    |))
    )
    (verify
@@ -522,5 +552,90 @@
     (smoke "delete a local file + push: the server row is gone (apply), the blob id remains listable (retention non-goal documented)"))
 
   )
+    (subsection files-at-scale
+     (doc "Make workstream: retire the file-lens v0 limits. Chunked/resumable upload + content-addressed chunk store, live watcher, metadata fidelity, tombstones + GC, paged manifest at 10^5-10^6 files")
+     (status planned)
+     (implements image/lib/media.ml image/lib/http_media.ml scripts/pp_files.py)
+     (details
+      (doc (|
+           THE COMMITMENT: the user's whole local filesystem syncs to the
+           habitat. The v0 mechanics (a blob per file, a datum row per
+           path, whole-blob upload, invoked sync) are correct in shape and
+           wrong in scale. This is the delta, not a rewrite: the two-layer
+           model (bytes in a blob store, paths as rows over the replication
+           unit) survives; what changes is the physical chunk layer, the
+           client transport, and the metadata the envelope carries.
+
+           MAKE ORDER (each a shippable step):
+             M1 chunk store + chunk endpoint (server): a media_chunks
+                table (sha256 key, bytes) plus a chunk-manifest format;
+                media_blobs stays for whole blobs under the ceiling and
+                for legacy rows.
+             M2 resumable client transport: chunk PUT + manifest commit;
+                pp_files.py pushes changed chunks only.
+             M3 watcher: a files-watch daemon around the sync verbs,
+                debounced and journaled; systemd/launchd unit shipped.
+             M4 metadata fidelity: mode/type/target in the envelope;
+                materialize and pull honor it.
+             M5 tombstones + GC + quota: delete propagates as a tombstone
+                row; chunk reachability GC; per-author byte accounting
+                and a configurable ceiling.
+             M6 scale: a paged file-manifest prim replacing the generic
+                tree walk for the filespace; batched row upserts.
+
+           OPEN DESIGN DECISIONS (settle before M1, do not guess):
+             - chunk size and the chunking algorithm (fixed 1-4 MiB vs
+               content-defined chunking for delta quality).
+             - manifest shape: one file row carrying its chunk list, vs a
+               content-addressed manifest object the row points at.
+             - chunk GC policy: reachability scan vs a refcount column.
+               The 2026-09-08 rule stands: bookkeeping is not content, and
+               no per-row tree deletes on prod.
+             - the blob backend, see files-backend.
+      |)))
+     (verify
+      (smoke "push a >64 MiB file: chunks upload, a killed transfer resumes from its manifest, the reassembled sha256 matches")
+      (smoke "edit one region of a large file and push: only changed chunks cross the wire")
+      (smoke "the watcher reflects a saved file within seconds without a manual sync verb"))
+    )
+    (subsection files-backend
+     (doc "Where the bytes physically live once 'everything' is TB-scale: image-local bytea vs an S3-compatible object store, with rsync.net as the offsite mirror. Decision open")
+     (status planned)
+     (details
+      (doc (|
+           THE FORCING QUESTION: media_blobs stores bytes as bytea in the
+           same Postgres the image runs on. That is right for a music
+           library and wrong for a whole filesystem: PG backups, dump
+           times, and instance disk all scale with the bytes, and the prod
+           runtime is a ~1 GB / 1 CPU Vultr box.
+
+           TWO SHAPES:
+             1. STAY IMAGE-LOCAL: bytes in PG bytea (or large objects) on
+                a bigger box with a data volume. One store, one backup
+                story; the database is the durability boundary and the
+                instance disk is the cost.
+             2. HOIST THE BYTES: chunks in an S3-compatible object store;
+                Postgres keeps the path index, chunk manifests, and
+                reachability metadata only. The image becomes a metadata
+                authority plus a serving/caching tier; Range/206
+                redirects or proxies to presigned URLs.
+
+           The chapter does not pick. The hoist is where the "upload
+           everything" commitment points, but it is a kernel change (a
+           second store and a seam), so it gets its own decision with
+           measured numbers.
+
+           CANDIDATES (checked 2026-10-11; prices drift, treat as a
+           snapshot): Vultr Object Storage (S3, same provider as prod,
+           $18/TB/mo standard, $6/TB/mo archival, 1 TB egress included);
+           Hetzner Object Storage (S3, EUR 6.49/mo base incl. 1 TB + 1 TB
+           egress, then ~EUR 6.26/TB, 64 KiB minimum billable object,
+           which matters at chunk granularity); Hetzner Storage Box (not
+           S3: SFTP/WebDAV/Samba/rsync/borg, ~EUR 3.81/TB, cheap bulk but
+           awkward as a chunk API); rsync.net (SSH/ZFS, 1.5 cents/GB/mo =
+           $15/TB, 800 GB minimum, snapshots), already in use, best as the
+           OFFSITE MIRROR of the store rather than the live chunk API.
+      |)))
+    )
  )
 )
