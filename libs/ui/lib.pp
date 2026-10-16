@@ -1153,6 +1153,15 @@
             "margin-right"
             ".75rem"))
         (css/rule
+          "header .brand-logo"
+          (list
+            "height"
+            "1.7rem"
+            "width"
+            "auto"
+            "display"
+            "block"))
+        (css/rule
           "header .meta"
           (list
             "display"
