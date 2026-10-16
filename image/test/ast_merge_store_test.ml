@@ -211,27 +211,48 @@ let test_same_subtree_conflicts () =
       in
       Alcotest.(check bool) "target body unchanged" true
         (hash_of target_body = hash_of (theirs_conflict ()));
-      (* Source still holds ours' body (own pin intact). The row itself
-         re-classifies AHEAD after the merge: base_gen advances to the
-         parent's true head even on a conflicted merge (the pre-existing
-         post-commit advance), so p = a and the unapplied own pin reads
-         ahead — re-define + re-merge is the resolution path. *)
-      let src_body =
-        match fetch_fn_body conn ~branch_id:child_id ~name:fname with
-        | Some b -> b
-        | None -> Alcotest.fail "source body missing"
-      in
-      Alcotest.(check bool) "source keeps ours' body" true
-        (hash_of src_body = hash_of (ours_conflict ()));
-      let rows = S.branch_status store ~branch_id:child_id in
-      let row =
-        match find_status_row rows fname with
-        | Some row -> row
-        | None -> Alcotest.fail "status row missing"
-      in
-      Alcotest.(check bool) "row reclassifies ahead + own (base advanced)" true
-        (S.st_status_s row.S.st_status = "ahead" && row.S.st_own);
-      cleanup store ~child_id ~fname)
+        (* Source still holds ours' body (own pin intact). 6998a14e: an
+           UNRESOLVED merge must NOT advance the fork-point base - the row
+           STAYS diverged, so the next merge re-reports the conflict instead
+           of silently landing the source body through the ahead-copy loop
+           (jj/git semantics: the merge base moves only on a resolved
+           merge). *)
+        let src_body =
+          match fetch_fn_body conn ~branch_id:child_id ~name:fname with
+          | Some b -> b
+          | None -> Alcotest.fail "source body missing"
+        in
+        Alcotest.(check bool) "source keeps ours' body" true
+          (hash_of src_body = hash_of (ours_conflict ()));
+        let rows = S.branch_status store ~branch_id:child_id in
+        let row =
+          match find_status_row rows fname with
+          | Some row -> row
+          | None -> Alcotest.fail "status row missing"
+        in
+        Alcotest.(check bool) "row stays diverged (base NOT advanced)" true
+          (S.st_status_s row.S.st_status = "diverged" && row.S.st_own);
+        (* The card's two-merge repro: re-merge with NO new edits must
+           re-report the conflict, not silently land the source body. *)
+        let res2 =
+          match
+            S.merge_branch store ~source_id:child_id ~target_id:main_id
+              ~merge3:SCP.merge3_hook
+          with
+          | Some res2 -> res2
+          | None -> Alcotest.fail "re-merge failed"
+        in
+        Alcotest.(check int) "re-merge applies nothing" 0 res2.count;
+        Alcotest.(check int) "re-merge re-reports the conflict" 1
+          (List.length res2.conflicts);
+        let target_body2 =
+          match fetch_fn_body conn ~branch_id:main_id ~name:fname with
+          | Some b -> b
+          | None -> Alcotest.fail "target body missing"
+        in
+        Alcotest.(check bool) "target body still theirs (no silent land)" true
+          (hash_of target_body2 = hash_of (theirs_conflict ()));
+        cleanup store ~child_id ~fname)
 
 (* ---- 2b. same LIST, different elements: v1 conflicts (granularity pin) ----
    arg[0] vs arg[1] are different elements of the same args list; the
