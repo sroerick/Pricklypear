@@ -7,7 +7,6 @@
     todo/add
     todo/adopt-stranded
     todo/archive
-    todo/browse
     todo/comment/add
     todo/comment/list
     todo/comments-init!
@@ -24,6 +23,7 @@
     todo/item/acceptance
     todo/item/active
     todo/item/add
+    todo/item/add-space
     todo/item/all
     todo/item/archive
     todo/item/assign
@@ -42,7 +42,6 @@
     todo/item/set-branch
     todo/item/set-branch-kind
     todo/item/set-kind
-    todo/item/set-origin
     todo/item/set-state
     todo/item/set-target
     todo/item/state
@@ -54,9 +53,10 @@
     todo/list/delete
     todo/list/ensure-inbox
     todo/list/find-by-title
+    todo/list/merge
     todo/list/set-columns
+    todo/list/space-of
     todo/node/back-link
-    todo/node/cycle
     todo/node/find-card
     todo/node/mirror
     todo/node/mirror-notice
@@ -64,7 +64,6 @@
     todo/node/parse-ref
     todo/node/promote-form
     todo/node/seed-state
-    todo/node/sync-card
     todo/node/unpromoted
     todo/page
     todo/promote-handler
@@ -87,9 +86,13 @@
     todo/state/options-for-item
     todo/state/pipeline-for-item
     todo/tree/create
+    todo/tree/get
+    todo/tree/node->pair
     todo/tree/prefix
     todo/tree/redash
+    todo/tree/rows
     todo/tree/save
+    todo/tree/shared-prefix
     todo/tree/tail
     todo/ui/handle-post
     todo/item/unassign
