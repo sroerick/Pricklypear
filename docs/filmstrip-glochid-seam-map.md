@@ -197,3 +197,37 @@ structurally impossible.
   **per-verb habitat e2e on each redef retirement** (main-strip-v5
   gate style — verbs enumerated in section 1's table, one pass per
   retirement, recorded in the journal like 2026-10-13's regate).
+
+---
+
+## 6. Deprecation gate (the fork is dead when)
+
+"Deprecate the embedded copy" is DONE when all five hold; until then it
+is in managed retreat, not deprecated:
+
+1. GREP GATE: zero `(define (filmstrip/...` in glochid's embedded
+   source (surface.ml + the embedded boot source), except the three
+   promoted seams expressed as app-supplied handlers (register-app!,
+   browse content, tree-roots content).
+2. REFUSAL GUARD LIVE (§3a): filmstrip/register-app! refuses until
+   every framework verb it knows is bound, so a shadowing redef is
+   structurally impossible rather than merely deleted.
+3. SAME-BODY RENDER: habitat /filmstrip and harness GET / render from
+   the SAME embedded libs/filmstrip/lib.pp at the same git rev. The
+   build-time embed (llm/embed_rules.dune.inc) is the version pin:
+   framework updates propagate through pull/build/sync, never through
+   hand re-landings. Divergent code is replaced by a pinned version.
+4. BOOT GATE (§1b closed): the standalone glochid bin boots from
+   master with no kernel-only prim in the filmstrip lib path — the
+   ws-init! toplevel peeled to kernel boot or presence-gated. THIS IS
+   THE PREREQUISITE: until it lands, nobody can run the shared
+   framework on the laptop at all.
+5. §4 BUG CLASS DEAD: a habitat filmstrip fix requires exactly zero
+   edits in glochid/ (the 2026-10-12..14 year-shape re-land is the
+   standing regression test for this claim).
+
+With this gate, board cards citing "two residences" or "migrate pp chat
+in (chat UI surface lives in glochid)" retire: the framework owns the
+shared UI components (ui/bubble, ui/turn-open, ui/tool-open — already
+in its ui tree); the app owns the TRANSPORT (agent loop, keys, lens
+sync), never the interface.
