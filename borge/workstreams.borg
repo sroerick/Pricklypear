@@ -70,17 +70,78 @@
  ;; ---------------------------------------------------------------------------
  ;; THE DATA MODEL (all Nopales, no kernel changes)
  ;; ---------------------------------------------------------------------------
+ (section shared-store
+  (doc "DECIDED 2026-10-01 (roerick): the todo store is a SHARED OPEN
+   SPACE. The board, its lists, and its cards are collaboration furniture —
+   humans and their agent identities work the SAME board, see each other's
+   cards, and read each other's comments. Per-user gardens are the WRONG
+   home and their persistence is the root of the drift this chapter
+   inherited (two boards, gregor's 147 cards invisible to admin, admin's
+   83 invisible to gregor, and an agent that cannot see the human's
+   backlog).
+
+   MECHANISM (substrate already shipped, no new kernel type):
+   `data.s.<space>.<type>.<id>` from branching.shared-data-spaces, with
+   OPEN spaces (migration 030) giving every authenticated identity implicit
+   membership (the 'anonymous' sentinel explicitly excluded — guests keep
+   per-user data). The chat lobby is the precedent; todos are the second
+   consumer.
+
+   ADMITTED TYPES (type-level routing, v1 per the spaces spec):
+     todo-list, todo-item, todo-comment, todo-event
+   These four are admitted to ONE open space (name `todo`, owner =
+   whoever seeds first). Admission routes FUTURE writes; it is a
+   type-level home, not a per-row flag.
+
+   CONSEQUENCE — EVERY todo IS NOW SHARED BY DEFAULT. That is intended:
+   this is a team board, not a personal to-do app. Personal/intimate
+   checklists had no home before and still have none; if that need
+   appears, it is a NEW type (or row-granular sharing, the spaces v2
+   deferral), never a silent per-user fallback.
+
+   STRANDED ROWS ARE MIGRATED, NOT ABANDONED. Pre-admission rows keep
+   their `data.u.<user>.*` paths forever (admission is future-writes
+   only), so the declared 'stranded rows stay' stance of spaces S1 is
+   OVERRIDDEN HERE for these four types: the adoption migration moves
+   every `data.u.*.<todo-type>.*` node into the space, preserving id,
+   body, author, and created_at. A user's private pre-adoption backlog is
+   thereby PUBLISHED TO THE TEAM — deliberate, recorded, and the reason
+   the migration ships behind an explicit one-time verb rather than
+   silently at boot.
+
+   NOTE-TODO IDENTITY: `todo-list`/`todo-item` are the CARD datum. A
+   note's outline node with a non-empty `todo` field is a DIFFERENT
+   storage shape (kind='heading' under data.note.u.<user>.*, shared by NO
+   one). Unifying the two is section note-todos, and it is the org-mode
+   promise this chapter must keep.")
+  (implements "migrations/029_data_spaces.sql" "migrations/030_open_spaces.sql"
+              "libs/todo/lib.pp (space adoption + ensure)")
+  (status implemented-live)
+  (verify
+   (test "todo-list/todo-item/todo-comment/todo-event are admitted to the open `todo` space"
+         "two distinct identities each see every card and every list the other created"
+         "a non-member ('anonymous') cannot read the shared board"
+         "the adoption migration moves pre-existing data.u.* todo rows into the space with id/body/author/created_at preserved"
+         "after adoption no todo datum remains under data.u.<user>.*")))
+
  (section workstream-lists
   (doc "A workstream is a todo-list with title = stream name (glochid, saguaro,
    town, …) and the shared column taxonomy via its `columns` field (set with
    kanban/columns-set; todo/state/columns-for-list already reads it). The
-   shared `Board` list (0b21ffaa) is the cross-stream overview. New intake
-   lands in the workstream's TODO column; the triage pass or the owner places
-   it.")
-  (status implemented-live)  ;; lists created: glochid (fa93a1af), Board (0b21ffaa)
+   shared `Board` list is the cross-stream overview. New intake lands in the
+   workstream's TODO column; the triage pass or the owner places it.
+
+   'SHARED' IS NOW LITERAL (section shared-store): the lists and their
+   cards live in the open `todo` space, so 'shared' is a property of the
+   STORE, not of which garden a reader happens to be in. Cross-garden
+   identity is dropped as a concept here — there is one board. The named
+   list ids in this chapter (Board, glochid, the AUTO lane) therefore
+   refer to rows in the space and resolve for every identity.")
+  (status implemented-live)  ;; lists exist; relocated to the space by shared-store
   (verify
    (test "each workstream list carries the same column set as Board"
-         "every open board card sits in a named column")))
+         "every open board card sits in a named column"
+         "a workstream list created by one identity is visible to another identity")))
 
  (section shared-register
   (doc "The issues register is a BOX surface, not the operator's garden. The Board list moves into a shared space so every authenticated user on the box can read the register and file cards into it, while pipeline/column transitions stay operator/worker-side. Single object per issue (the 09-28 convergence) is preserved — the card IS the issue; no ledger twin comes back.
@@ -159,7 +220,163 @@
   (verify
    (test "a faces-stream card, a kernel-stream card, and an auto-stream card resolve DIFFERENT effective pipelines from their lists' columns fields"
          "the triage pass places a new intake card in the stream its kind calls for"
-         "an AUTO LOGIC-REVIEW PASS moves the card to DONE, not HUMAN-REVIEW (DESTINATION honored by pp-flow)")))
+         "an AUTO LOGIC-REVIEW PASS moves the card to DONE, not HUMAN-REVIEW (DESTINATION honored by pp-flow)"
+         "the AUTO list's stored columns contain no HUMAN-REVIEW column"
+         "a LOGIC-REVIEW PASS on an AUTO card with an empty DESTINATION advances to DONE, never HUMAN-REVIEW")))
+
+ (section default-pipeline
+  (doc "The GLOBAL DEFAULT pipeline is the ENGINEERING taxonomy, not the
+   legacy checklist. borge/workstreams.borg pipeline-model resolves an
+   item's effective pipeline as own override > list columns > global
+   default; the global default is `todo/state/list`, which was still the
+   original 5-state checklist ("" TODO DONE WAITING CANCELLED).
+   CONSEQUENCE (audited live 2026-10-01): every list WITHOUT a `columns`
+   field — all of Launch, PP Development, Secondary, the 13 unused AUTO
+   lists, gregor's 36 ws-flow-smoke lists — resolves to a 5-state machine
+   that shares only TODO/DONE with the engineering vocabulary. A card
+   moved to SPEC, PARKED, or HUMAN-REVIEW on such a list renders OUTSIDE
+   its own pipeline (the trailing 'other' bucket), and a cycle can jump
+   into WAITING, a state no workstream ever uses.
+
+   DECISION: the global default becomes the canonical engineering
+   sequence, ordered so a bare `todo/cycle` is a SAFE, MEANINGFUL
+   advance:
+
+     todo/state/list = ("" TODO SPEC CODE LOGIC-REVIEW UI-REVIEW
+                         HUMAN-REVIEW DONE PARKED)
+
+   RATIONALE: this is the same ordered-list-of-state-names the pipeline
+   model already treats as data (no kernel type, no enum — a pipeline is
+   a list of strings). Making the DEFAULT equal the work-triage taxonomy
+   means a list that never configures `columns` still behaves sanely:
+   every work-triage state is a first-class position rather than an
+   'other bucket' orphan, and no list can drive a card into a state the
+   board cannot render.
+
+   THE LEGACY CHECKLIST IS NOT DELETED, it is DERIVED: WAITING and
+   CANCELLED remain reachable states for lists that want them, expressed
+   as that list's own `columns` value (pipeline-model resolution (b)). A
+   personal checklist list sets columns explicitly; the DEFAULT is
+   engineering. `todo/state/list` stays a Nopales list (data), so
+   re-deciding this is editing one list, never a migration.
+
+   REJECTED ALTERNATIVE: keep the 5-state default and make every list
+   declare columns. Rejected because the default is the value a NEW list
+   gets by omission — the safe default must be the one that cannot strand
+   a card outside its own pipeline, and requiring discipline at list-creation
+   time is exactly the drift that produced 13 empty AUTO lists and 36
+   smoke lists with no columns at all.
+
+   CYCLE ORDER IS LOAD-BEARING: TODO -> SPEC -> CODE -> LOGIC-REVIEW ->
+   UI-REVIEW -> HUMAN-REVIEW -> DONE -> PARKED -> TODO. `todo/cycle` on
+   a fresh card therefore advances TODO -> SPEC (the honest next step for
+   unspecified work), not TODO -> DONE. Lists that want a different
+   forward motion set `columns`.")
+  (implements "libs/todo/lib.pp todo/state/list"
+              "libs/todo/lib.pp todo/state/todo-next-in (cycle order)")
+  (status implemented-live)
+  (verify
+   (test "todo/state/list equals TODO SPEC CODE LOGIC-REVIEW UI-REVIEW HUMAN-REVIEW DONE PARKED"
+         "a card on a columns-less list can be set to every work-triage state and stays in that list's pipeline (no other-bucket)"
+         "todo/cycle on a TODO card of a columns-less list lands on SPEC"
+         "a list with explicit legacy columns (WAITING/CANCELLED) still cycles only its own set")))
+
+ (section note-todos
+  (doc "THE ORG-MODE PROMISE, and the piece this chapter inherited broken.
+   Inspiration is org-mode: a TODO is a MARK ON A NODE, not a separate
+   object you go somewhere else to create. You type a keyword on a heading
+   in the document you are already writing, and the item shows up in the
+   agenda. Everything else — the board, the pipeline, the executor — is a
+   view over that.
+
+   THE FAILURE THIS CORRECTS. `unified-todos` (notes.borg) shipped only
+   a ONE-WAY SCRAPE: `todo/items-html`'s 'from-notes' view walks
+   `notes/all-todos` and renders note nodes read-only-ish. Three defects
+   made that promise hollow, all verified live 2026-10-01:
+     (1) ONE-WAY. A node's todo state and a card's state are separate
+         storage with no link; a board card moved to CODE does not move
+         the note node, and vice versa. The user sees a note item that
+         'isn't the same thing' as the board item.
+     (2) PER-USER AND INVISIBLE. Note nodes live at
+         `data.note.u.<user>.<slug>.h.<nid>` — a per-user path, NOT a
+         datum, and NOT admitted to any space. A note todo in one
+         identity's garden is therefore invisible to every other identity
+         and to every executor agent. Since the board is now shared
+         (section shared-store), a note todo was the ONE work item that
+         could not be worked by a team.
+     (3) NO LINKAGE FIELD. Nothing on a todo-item recorded which note node
+         produced it (no source_ref), so even a deliberate copy could not
+         be reconciled, reopened, or closed-out once made. This is why the
+         old spec parked it as 'no dual-copy until promote (later)' — it
+         was RIGHT to refuse the unspecified copy, and the missing piece
+         was the link, not the copy.
+
+   THE CONTRACT (what 'make a node a todo' now means):
+
+   1. MARK IN PLACE IS FREE AND PRIVATE. Setting a node's `todo` field
+      (the existing `outline/set-todo` / `notes/cycle-node-todo` path)
+      stays exactly what it is: a one-field write on a heading node, no
+      card, no space, no round trip to the board. Personal notes keep
+      working offline and unmigrated. Marking a node does NOT publish it.
+
+   2. PROMOTION CREATES THE SHARED WORK ITEM. A new verb —
+      `todo/promote-node` (slug, nid [, list-id]) — takes a note node and
+      creates a `todo-item` in the shared `todo` space, carrying an
+      explicit LINK back to its origin. The card's fields derive from the
+      node: title from the node title, notes from the node body, `state`
+      seeded from the node's todo keyword through the pipeline speaker
+      (a node keyword SPEC maps to the SPEC column). The link is two
+      fields on the card body:
+        origin_kind = "note"
+        origin_ref  = "<slug>#<nid>"
+      `origin_ref` is the reconciliation key. It is what makes the copy
+      SAFE where the old spec rightly refused one: the pair can always be
+      found, compared, and re-joined.
+
+   3. IDENTITY IS BIDIRECTIONAL AND STATE IS AUTHORITATIVE IN ONE PLACE.
+      The CARD owns the pipeline state (section pipeline-model — the card
+      machine is canonical). The NODE mirrors it for display: when a card
+      with an `origin_ref` transitions, the node's `todo` field is written
+      to the same state in the SAME transaction (the same single-owner
+      discipline as issue cards, notes/issues/card-sync-ledger). A node
+      whose keyword changes while it has a linked card updates the CARD
+      (promotion is idempotent on origin_ref — re-promoting returns the
+      existing card, never a duplicate).
+
+   4. THE BOARD SHOWS IT ONCE. `/todos` and `/kanban` render the CARD, not
+      a second scraped copy of the node: the 'from-notes' view becomes a
+      filter over cards whose `origin_kind = "note"`, with a back-link to
+      the note. The old scattergun `notes/all-todos` walk stays only as the
+      source for UNPROMOTED nodes in the 'notes (unpromoted)' section, so
+      a user can see what is in their notes and not yet on the board.
+
+   5. SHARING FOLLOWS THE CARD, NOT THE NOTE. A promoted card is shared
+      because the card is (section shared-store). The NOTE remains in the
+      owner's garden: an agent working the card sees the node body through
+      the card's `notes` (copied at promotion, refreshed on node-body
+      change), and can write back a completion comment without ever being
+      granted read access to the private note tree. This is the deliberate
+      privacy boundary: publish the WORK ITEM, never the notebook page.
+
+   WHAT THIS IS NOT: not a claim that note nodes are work items. An
+   UNPROMOTED node is not on the board and has no pipeline position. The
+   pipeline-model sentence 'a note-todo item is any tree node whose
+   effective pipeline resolves' describes the converged end state; the
+   tractable v1 is this PROMOTION BRIDGE, which delivers the org-mode feel
+   (mark in the note, work on the board) without moving the note tree into
+   a shared compartment or inventing a second status machine for nodes.")
+  (implements "libs/todo/lib.pp todo/promote-node + origin_ref reconciliation"
+              "libs/todo/lib.pp todo/item/set-state (origin write-back)"
+              "libs/notes/lib.pp (unpromoted section + back-links)"
+              "libs/kanban/lib.pp ('from-notes' as a card filter)")
+  (status implemented-live)
+  (verify
+   (test "setting a node's todo keyword writes only that node (no card, no space row) and does not publish it"
+         "todo/promote-node creates ONE shared card whose origin_ref is <slug>#<nid>, and re-promoting returns that same card"
+         "a card transition writes the linked node's todo field in the same transaction"
+         "changing a linked node's keyword updates the card's state"
+         "a second identity sees the promoted card on the board and can move it without read access to the note"
+         "an unpromoted node appears in the notes (unpromoted) section and NOWHERE on the board")))
 
  (section card-comments
   (doc "Two new datum types, seeded by the todo lib (deftype on load):
@@ -493,6 +710,62 @@
           "a persistent transient fault exhausts the budget and still exits non-zero"
           "a deterministic failure (:PROCESS-FAILURE, or a 401/403/404) is attempted EXACTLY once"
           "a :PROCESS-FAILURE diagnostic names the category and message, not `unknown`")))
+
+ (section lib-hygiene
+  (doc "One generation of todo code, not two. The 2026-10-01 audit found
+   `libs/todo/lib.pp` carrying a LEGACY layer beside the v2 card layer:
+   ~130 defines outside the 41-name `(package todo (export …))` manifest,
+   including two complete UI generations and two complete data-access
+   generations.
+
+   MEASURED (live 2026-10-01):
+     LIVE v2          | DEAD twin
+     todo/ui/{main,detail,nav,handle-post} | todo/{main-html,detail-html,
+                                               nav-html,items-html,handle-post}
+     todo/item/list-li, todo/item/html     | todo/list-item-li, todo/item-li
+     todo/state/options*, todo/state/*     | todo/state-options*,
+                                               todo/state-options-from, todo/states
+     todo/tree/* (all data access)         | todo/db/* (rows, create, update,
+                                               get, insert-by-created, node-row,
+                                               path-id, prefix, sort-by-created,
+                                               delete, update-field) — ZERO callers
+   Plus 19 alias pairs with identical bodies: todo/open? == todo/state/open?;
+   todo/list == todo/list/all == todo/lists; todo/item-state == todo/item/state;
+   todo/item-list-id == todo/item/list-id; todo/create-list == todo/list/create;
+   todo/delete == todo/item/delete; todo/item-due == todo/item/due;
+   todo/state-options-from == todo/state/options-from;
+   todo/nav-link == todo/ui/nav-link; todo/ui/view == todo/view; and others.
+
+   LATENT BUG IN THE DEAD PATH: `todo/item-li` posts `action=toggle`, but
+   the live `todo/ui/handle-post` has NO toggle case — it falls through its
+   `else` to `todo/item/add`, so re-wiring the legacy UI would CREATE A CARD
+   on every toggle click. It is dead today and a loaded trap tomorrow.
+   `todo/partial` is exported but bound to no route.
+
+   DECISION: the legacy layer is DELETED, not deprecated-but-kept. The v2
+   layer is the only one with events, comments, pipelines, and recipes —
+   keeping a second data-access path is exactly how two storage models grow
+   back. The `(package todo (export …))` manifest is synced to reality in
+   the same pass: every live cross-package symbol is exported, deleted
+   symbols leave the manifest, and a bookkeeping check
+   (scripts/verify_libs_layout.sh's sibling for exports) fails loudly when
+   a lib calls an unexported todo symbol.
+
+   NAMING NOTE (why this is safe now but was not before): the dead layer
+   was reachable only through `todo/main-html`/`todo/partial`, neither of
+   which any route or package binds (verified by an exhaustive caller
+   sweep). Deletion is therefore a pure subtraction — no product behavior
+   changes, which the loop proves by diffing `/todos`, `/kanban`, and
+   `/workstreams` renders before and after.")
+  (implements "libs/todo/lib.pp (legacy layer removal + export manifest sync)"
+              scripts/verify_todo_exports.sh)
+  (status implemented-live)  ;; T4 lib-hygiene (2026-10-01): 41 legacy defines deleted, export manifest synced 64->88, scripts/verify_todo_exports.sh guards it
+  (verify
+   (test "no define named todo/db/* or todo/main-html|detail-html|nav-html|items-html|handle-post|list-item-li|item-li|partial remains"
+         "no duplicate-alias pairs remain (one canonical name per body)"
+         "the export manifest equals the set of todo symbols called from outside the package"
+         "scripts/verify_libs_layout.sh (or its export check) fails when a lib calls an unexported todo symbol"
+         "/todos, /kanban, /workstreams render byte-identical content before and after the deletion")))
 
  (section glochid-runner
   (doc "The TARGET executor residence: runs move from fire-and-forget

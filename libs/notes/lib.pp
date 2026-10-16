@@ -2256,10 +2256,12 @@
 (define notes/issues/page
   (lambda
     ()
-    (if
-      (string-eq (request-method) "POST")
-      (notes/issues/handle-post)
-      (html/page (list (notes/issues/body))))))
+    (seq
+      (todo/ensure-space)
+      (if
+        (string-eq (request-method) "POST")
+        (notes/issues/handle-post)
+        (html/page (list (notes/issues/body)))))))
 
 (define notes/issues/register-html
   (lambda
