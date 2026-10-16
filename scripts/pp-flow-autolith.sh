@@ -224,6 +224,18 @@ attempt() {
   intok="$(tr -d '\n' < "$WORK.out" 2>/dev/null | sed -n 's/.*:INPUT-TOKENS[[:space:]]*\([0-9]*\).*/\1/p')"
   outtok="$(tr -d '\n' < "$WORK.out" 2>/dev/null | sed -n 's/.*:OUTPUT-TOKENS[[:space:]]*\([0-9]*\).*/\1/p')"
   reqs="$(tr -d '\n' < "$WORK.out" 2>/dev/null | sed -n 's/.*:PROVIDER-REQUESTS[[:space:]]*\([0-9]*\).*/\1/p')"
+  # Fleet analytics (autolith-analytics M3): one run-step event per attempt,
+  # best-effort append; a failed write never affects the job outcome.
+  ANALYTICS_EVENTS_DIR="${ANALYTICS_EVENTS_DIR:-$HOME/dev/wyo.tech/autolith-analytics/events}"
+  ANALYTICS_ACTOR="${ANALYTICS_ACTOR:-${USER:-unknown}}"
+  if mkdir -p "$ANALYTICS_EVENTS_DIR" 2>/dev/null; then
+    printf '{"ts":"%s","schema_v":1,"source":"pp-flow","kind":"run-step","actor":"%s","run_id":"%s","requests":%s,"tokens_in":%s,"tokens_out":%s,"wall_s":%s}\n' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      "$(printf '%s' "$ANALYTICS_ACTOR" | tr -d '"\\')" \
+      "$(printf '%s' "$JOB_ID" | tr -d '"\\')" \
+      "${reqs:-0}" "${intok:-0}" "${outtok:-0}" "${ELAPSED:-0}" \
+      >> "$ANALYTICS_EVENTS_DIR/pp-flow.jsonl" 2>/dev/null || :
+  fi
 }
 
 # Is the LAST attempt worth retrying? Echo "yes"/"no".
