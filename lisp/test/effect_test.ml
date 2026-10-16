@@ -384,7 +384,48 @@ let checks = [
     let src = "(list " ^ String.concat " " parts ^ ")" in
     let ws = Effect.verify_route_warnings (Reader.read_one src) in
     Alcotest.(check int) "no warnings" 0 (List.length ws));
-]
+  ("param shadows global (d71ef274)", `Quick, fun () ->
+    (* a WriteDb-effect GLOBAL named p must not taint a lambda that binds
+       p as a parameter - infer had no shadowing set, so every fn whose
+       param matched a stray global's name inherited its effects
+       (prod: list/filter's (lambda (p xs) ..) went db-write on
+       admin/personal, which carries a global (hyper/visit ..) as p). *)
+    let known_fn name =
+      if name = "p" then Some (Effect.EffSet.singleton Effect.WriteDb) else None
+    in
+    let e = Reader.read_one "(lambda (p) (+ p 1))" in
+    (match e with
+     | App (Var "lambda", [ params_expr; body ]) ->
+         let lpn = Effect.lambda_param_names params_expr in
+         let shape = match params_expr with
+           | Var n -> "Var " ^ n
+           | App (Var n, args) -> Printf.sprintf "App(Var %s) args=%d" n (List.length args)
+           | Lit _ -> "Lit"
+           | Quote _ -> "Quote"
+           | Lambda _ -> "Lambda"
+           | _ -> "other"
+         in
+         Printf.printf "[dbg] shape=%s lpn=%s\n%!" shape
+           (match lpn with Some l -> "[" ^ String.concat "," l ^ "]" | None -> "None");
+         let fx = Effect.infer ~known_fn e in
+         Alcotest.(check bool) "param masks global" true (Effect.EffSet.is_pure fx)
+     | _ -> Alcotest.fail "lambda not App-encoded"));
+  ("let shadows global (d71ef274)", `Quick, fun () ->
+    let known_fn name =
+      if name = "p" then Some (Effect.EffSet.singleton Effect.WriteDb) else None
+    in
+    let fx = Effect.infer ~known_fn (Reader.read_one "(let ((p (list 1 2))) (car p))") in
+    Alcotest.(check bool) "let binding masks global" true (Effect.EffSet.is_pure fx));
+  ("let value still sees global", `Quick, fun () ->
+    (* the VALUE expr evaluates outside the new binding - the mask must
+       apply to the body only. *)
+    let known_fn name =
+      if name = "p" then Some (Effect.EffSet.singleton Effect.WriteDb) else None
+    in
+    let fx = Effect.infer ~known_fn (Reader.read_one "(let ((q (p))) q)") in
+    Alcotest.(check bool) "value scope unmasked" true
+      (Effect.EffSet.mem Effect.WriteDb fx));
+  ]
 
 let () =
   Alcotest.run "pricklypear-lisp-effects" [ "effects", checks ]
