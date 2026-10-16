@@ -1435,6 +1435,197 @@ let register ~(hooks : hooks) (t : t) (tbl : Primitives.t) : unit =
                      | Branch_pick.Pick_refused why -> failed why))
           | _ ->
               (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("branch/pick", "bad args (need a target branch ref)", "bad-args")))));
+    (* (branch/ingest target-ref file-name base-gen ops-json ['force]) ->
+       VStr JSON {branch, file, landed:[name], skipped:[{name,reason}]} | raise.
+
+       branching.file-bridge P2 (2026-10-16, spec 3f4d6d1): ONE server call
+       lands a projection file's def-op batch. The client parses the file
+       (File_projection, lisp/lib) and emits ops; the server validates
+       base-gen freshness, runs the clobber guard + closure
+       (Branch_pick.ingest — op-transplant's rules, same code), and lands
+       through the tree write helpers inside ONE tx stamped origin=file (042).
+
+       ops-json: [{"op":"define","name":...,"body":<fn body jsonb>,
+       "doc":...,"base_hash":...} | {"op":"unbind","name":...,
+       "base_hash":...}]. base_hash = the hash of the base body the file was
+       authored against (the client reads it from the target before editing);
+       a target head hash differing from BOTH the incoming body and the base
+       hash is DIVERGED — skipped unless 'force.
+
+       AUTH (branch/pick's rules): the target ref's owner human, the
+       parent-linked agent under allow_agent_promote, or admin; targets under
+       system/* are ADMIN-ONLY. Not gated on agent_branch_lock. Server-only. *)
+    Primitives.register_server_only tbl "branch/ingest"
+      (fun args ->
+        if t.manifest.username = "anonymous" then
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("branch/ingest", "denied for anonymous", "denied"))))
+        else
+          match args with
+          | Pricklypear_lisp.Ast.VStr target_ref
+            :: Pricklypear_lisp.Ast.VStr file_name
+            :: Pricklypear_lisp.Ast.VInt base_gen
+            :: Pricklypear_lisp.Ast.VStr ops_json :: rest ->
+              let force =
+                match rest with
+                | [] -> false
+                | [ Pricklypear_lisp.Ast.VSymbol "force" ] -> true
+                | _ ->
+                    raise
+                      (Pricklypear_lisp.Ast.Interp_error
+                         (Pricklypear_lisp.Ast.Prim_error
+                            ( "branch/ingest",
+                              "bad args (need ref + file + base-gen + ops json, optional force)",
+                              "bad-args" )))
+              in
+              let parse_ops (json : string) :
+                  (Branch_pick.ingest_op list, string) result =
+                let one (j : Yojson.Safe.t) :
+                    (Branch_pick.ingest_op, string) result =
+                  match j with
+                  | `Assoc kv ->
+                      let str k =
+                        match List.assoc_opt k kv with
+                        | Some (`String s) -> Some s
+                        | _ -> None in
+                      (match (str "op", str "name") with
+                       | Some op, Some name ->
+                           Ok
+                             {
+                               Branch_pick.io_op = op;
+                               Branch_pick.io_name = name;
+                               Branch_pick.io_body =
+                                 (match str "body" with
+                                  | Some s -> s
+                                  | None -> "");
+                               Branch_pick.io_doc = str "doc";
+                               Branch_pick.io_base_hash = str "base_hash";
+                             }
+                       | _ -> Error "each op needs op + name")
+                  | _ -> Error "ops must be JSON objects"
+                in
+                match Yojson.Safe.from_string json with
+                | `List items ->
+                    (match
+                       List.fold_left
+                         (fun acc j ->
+                            match (acc, one j) with
+                            | Ok l, Ok o -> Ok (o :: l)
+                            | Error e, _ -> Error e
+                            | _, Error e -> Error e)
+                         (Ok []) items
+                     with
+                     | Ok l -> Ok (List.rev l)
+                     | Error e -> Error e)
+                | _ -> Error "ops must be a JSON array"
+                | exception Yojson.Json_error e -> Error e
+              in
+              let owner, short = split_branch_ref target_ref in
+              let u = Prims_db_common.caller_username ~t () in
+              let ledger ~ok =
+                ignore
+                  (Activity_ledger.push ~actor:u ~cls:"ingest.attempt"
+                     ~target:
+                       (Activity_ledger.path_target
+                          (Printf.sprintf "ingest->%s (%s)" target_ref file_name))
+                     ~outcome:(if ok then "ok" else "denied")
+                     ())
+              in
+              let deny why =
+                ledger ~ok:false;
+                (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("branch/ingest", why, "denied"))))
+              in
+              let failed why =
+                ledger ~ok:false;
+                (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("branch/ingest", why, "failed"))))
+              in
+              (if owner = "system" then
+                 if u = "admin" || Prims_db_common.is_verified_admin ~t () then
+                   ()
+                 else deny "system/* targets are admin-only"
+               else
+                 match Auth_store.get_user_by_username t.store u with
+                 | Some caller when caller.Auth_store.user_type = "agent" -> (
+                     match caller.Auth_store.parent_user_id with
+                     | None -> deny "agent has no parent"
+                     | Some pid -> (
+                         match Auth_store.get_user_by_id t.store pid with
+                         | None -> deny "parent user not found"
+                         | Some parent ->
+                             if parent.Auth_store.username <> owner then
+                               deny
+                                 (Printf.sprintf
+                                    "denied: branch %s is owned by %s"
+                                    target_ref owner)
+                             else if
+                               not
+                                 (Auth_store.get_allow_agent_promote
+                                    t.store
+                                    ~user_id:parent.Auth_store.id)
+                             then deny "agent promote disabled by parent"
+                             else ()))
+                 | Some _ ->
+                     if not (branch_owner_authorized t owner) then
+                       deny
+                         (Printf.sprintf "denied: branch %s is owned by %s"
+                            target_ref owner)
+                     else ()
+                 | None ->
+                     if
+                       u <> "admin"
+                       && not (Prims_db_common.is_verified_admin ~t ())
+                     then
+                       deny
+                         (Printf.sprintf "denied: branch %s is owned by %s"
+                            target_ref owner)
+                     else ());
+              (match parse_ops ops_json with
+               | Error why -> failed ("bad ops: " ^ why)
+               | Ok ops -> (
+                   match
+                     Store.lookup_branch_id_by_name t.store ~owner ~name:short
+                   with
+                   | None -> failed ("no such branch: " ^ target_ref)
+                   | Some target_id -> (
+                       match
+                         Branch_pick.ingest t.store ~target_id ~ops ~base_gen
+                           ~force ~kernel:(List.map fst t.kernel_catalog)
+                           ~author:u ~file_name
+                       with
+                       | Branch_pick.Ingest_ok { i_landed; i_skipped } ->
+                           ledger ~ok:(i_landed <> []);
+                           let () =
+                             if
+                               i_landed <> []
+                               && Store.current_branch_id t.store = target_id
+                             then (hooks.rehydrate) t
+                             else ()
+                           in
+                           let skip_json (s : Branch_pick.skip_row) :
+                               Yojson.Safe.t =
+                             `Assoc
+                               [ ("name", `String s.Branch_pick.sk_name)
+                               ; ("reason", `String s.Branch_pick.sk_reason) ]
+                           in
+                           Pricklypear_lisp.Ast.VStr
+                             (Yojson.Safe.to_string
+                                (`Assoc
+                                  [ ("branch", `String target_ref)
+                                  ; ("file", `String file_name)
+                                  ; ( "landed",
+                                      `List
+                                        (List.map
+                                           (fun n -> `String n)
+                                           i_landed) )
+                                  ; ( "skipped",
+                                      `List (List.map skip_json i_skipped) )
+                                  ]))
+                       | Branch_pick.Ingest_holes holes ->
+                           failed
+                             ("refused, unresolved deps: "
+                             ^ Branch_pick.holes_msg holes)
+                       | Branch_pick.Ingest_refused why -> failed why)))
+          | _ ->
+              (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("branch/ingest", "bad args (need ref + file + base-gen + ops json)", "bad-args")))));
   (* (bench expr-string [n]) -> VFloat average microseconds per iteration.
      Parses once, warms up once, runs n times (default 1000) under a max
      budget so the bench loop itself never hits Budget_exceeded. Uses the
