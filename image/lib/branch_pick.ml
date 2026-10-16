@@ -532,10 +532,31 @@ let ingest (store : Store.t) ~(target_id : string) ~(ops : ingest_op list)
       | Ok (defs_land, auto, skipped) ->
           let detail =
             Printf.sprintf "file:%s@gen:%Ld" file_name base_gen in
+          (* Doc preservation: the file format carries no docstrings, so a
+             redefine with io_doc = None keeps the target pin's existing
+             doc instead of nulling it (the upsert would otherwise drop it). *)
+          let tgt_docs =
+            List.filter_map
+              (fun (p : Store.pin_row) ->
+                 if String.equal p.Store.p_kind "fn" then
+                   match Store.payload_fields p.Store.p_payload with
+                   | Some _, doc -> Some (p.Store.p_name, doc)
+                   | None, _ -> None
+                 else None)
+              tgt
+          in
+          let doc_for (op : ingest_op) =
+            match op.io_doc with
+            | Some d -> Some d
+            | None -> (
+                match List.assoc_opt op.io_name tgt_docs with
+                | Some d -> d
+                | None -> None)
+          in
           let outcomes =
             land_ingest ~store ~detail ~target_id ~author
               (List.map
-                 (fun (o : ingest_op) -> (o.io_name, o.io_body, o.io_doc))
+                 (fun (o : ingest_op) -> (o.io_name, o.io_body, doc_for o))
                  defs_land)
               unbinds_land
           in

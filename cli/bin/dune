@@ -13,3 +13,10 @@
  (modules pp_sync)
  (libraries pricklypear-cli.lib cmdliner yojson unix re
             pricklypear-lisp))
+
+(executable
+ (name pp_file)
+ (public_name pp-file)
+ (package pricklypear-cli)
+ (modules pp_file)
+ (libraries pricklypear-cli.lib cmdliner yojson unix pricklypear-lisp))

@@ -1626,6 +1626,60 @@ let register ~(hooks : hooks) (t : t) (tbl : Primitives.t) : unit =
                        | Branch_pick.Ingest_refused why -> failed why)))
           | _ ->
               (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("branch/ingest", "bad args (need ref + file + base-gen + ops json)", "bad-args")))));
+  (* (branch/defs ref) -> VStr JSON {branch, head_gen, defs:[{name, body, hash}]}
+     | plain VStr denial / "no such branch: ref".
+
+     branching.file-bridge transport read: the branch's OWN fn pins with
+     their bodies + hashes — the materialize side of the file bridge (files
+     as projections of the def store). Ref-resolved like branch/status
+     (branch_readable); denied for anonymous; server-only. *)
+  Primitives.register_server_only tbl "branch/defs"
+    (fun args ->
+      if t.manifest.username = "anonymous" then
+        (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("branch/defs", "denied for anonymous", "denied"))))
+      else
+        match args with
+        | [ Pricklypear_lisp.Ast.VStr branch_ref ] ->
+            let owner, short = split_branch_ref branch_ref in
+            if not (branch_readable t owner) then
+              (Pricklypear_lisp.Ast.VStr
+                 (Printf.sprintf "denied: branch %s is owned by %s" branch_ref owner))
+            else
+              (match
+                 Store.lookup_branch_id_by_name t.store ~owner ~name:short
+               with
+               | None ->
+                   (Pricklypear_lisp.Ast.VStr
+                      (Printf.sprintf "no such branch: %s" branch_ref))
+               | Some branch_id ->
+                   let pins = Store.pins_at_head t.store ~branch_id in
+                   let head_gen = Store.branch_head_gen t.store ~branch_id in
+                   let defs =
+                     List.filter_map
+                       (fun (p : Store.pin_row) ->
+                          if not (String.equal p.Store.p_kind "fn") then None
+                          else
+                            let body, _doc =
+                              Store.payload_fields p.Store.p_payload in
+                            match body with
+                            | Some b ->
+                                Some
+                                  (`Assoc
+                                    [ ("name", `String p.Store.p_name)
+                                    ; ("body", `String b)
+                                    ; ("hash", `String p.Store.p_hash) ])
+                            | None -> None)
+                       pins
+                   in
+                   Pricklypear_lisp.Ast.VStr
+                     (Yojson.Safe.to_string
+                        (`Assoc
+                          [ ("branch", `String branch_ref)
+                          ; ("head_gen", `Int (Int64.to_int head_gen))
+                          ; ("defs", `List defs) ])))
+        | _ ->
+            (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("branch/defs", "need 1 branch ref", "bad-args")))));
+
   (* (bench expr-string [n]) -> VFloat average microseconds per iteration.
      Parses once, warms up once, runs n times (default 1000) under a max
      budget so the bench loop itself never hits Budget_exceeded. Uses the
