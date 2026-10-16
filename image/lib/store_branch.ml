@@ -1636,28 +1636,44 @@ let merge_branch ?merge3 (t : Store_db.t) ~(source_id : string)
   in
   let () =
     if is_parent_merge then
-      match merged with
-      | Some _ -> (
-          match t.conn with
-          | None -> ()
-          | Some conn ->
-              (try
-                 let _ =
-                   Store_db.exec conn
-                     ~params:[ Pgx.Value.of_string source_id;
-                               Pgx.Value.of_string target_id ]
-                     ("UPDATE branches SET base_gen = COALESCE( " ^
-                      "  (SELECT generation FROM branch_generations " ^
-                      "    WHERE branch_id = $2), 0) WHERE id = $1")
-                 in
-                 ()
-               with exn ->
-                 (* PROBE (i-1788671060-2 keep): best-effort post-merge
-                    bookkeeping — the merge already landed; a stale merge
-                    base only makes the NEXT merge re-diff (conservative). *)
-                 Printf.eprintf "[store] merge base advance: %s\n"
-                   (Printexc.to_string exn)))
-      | None -> ()
+        match merged with
+        | Some r -> (
+            match t.conn with
+            | None -> ()
+            | Some conn ->
+                if r.conflicts <> [] then
+                  (* 6998a14e: an UNRESOLVED merge (diverged rows reported as
+                     conflicts, bodies untouched) must NOT advance the
+                     fork-point base. Advancing would re-classify the
+                     still-diverged names as ahead on the next merge, and the
+                     ahead-copy loop would land the source bodies without
+                     merge3 ever running - the two-merge silent-land path.
+                     jj/git semantics: the merge base moves only when the
+                     merge resolved cleanly. *)
+                  Printf.eprintf
+                    "[store] merge base NOT advanced: %d unresolved conflict(s)\n%!"
+                    (List.length r.conflicts)
+                else
+                  (try
+                     let _ =
+                       Store_db.exec conn
+                         ~params:[
+                           Pgx.Value.of_string source_id;
+                           Pgx.Value.of_string target_id;
+                         ]
+                         ("UPDATE branches SET base_gen = COALESCE( " ^
+                          "  (SELECT generation FROM branch_generations " ^
+                          "    WHERE branch_id = $2), 0) WHERE id = $1")
+                     in
+                     ()
+                   with exn ->
+                     (* PROBE (i-1788671060-2 keep): best-effort post-merge
+                        bookkeeping — the merge already landed; a stale merge
+                        base only makes the NEXT merge re-diff
+                        (conservative). *)
+                     Printf.eprintf "[store] merge base advance: %s\n"
+                       (Printexc.to_string exn)))
+        | None -> ()
   in
   merged
 
