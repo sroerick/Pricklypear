@@ -111,6 +111,19 @@ ensure_env_key PP_LIBS_DIR "${current_link}/libs"
 ensure_env_key PP_SOURCE_ROOT "${current_link}/src"
 ensure_env_key PP_STATIC_DIR "${current_link}/static"
 ensure_env_key PP_PUBLIC_DIR "${current_link}/public"
+# Per-user subdomains (auth.user-subdomains, card 57a8d68c): carry the
+# env example's PP_BASE_DOMAIN into the live env when the key is missing.
+# Never overwrites an operator-edited value; to turn subdomains off, remove
+# the line from BOTH the live env and the example (else the next promote
+# re-adds it).
+if ! grep -q '^PP_BASE_DOMAIN=' "${config_file}" 2>/dev/null; then
+  pp_base_domain="$(grep '^PP_BASE_DOMAIN=' \
+    "${target_dir}/pricklypear.env.example" 2>/dev/null | head -1 | cut -d= -f2- || true)"
+  if [ -n "${pp_base_domain}" ]; then
+    print -- "PP_BASE_DOMAIN=${pp_base_domain}" >> "${config_file}"
+    log "added PP_BASE_DOMAIN=${pp_base_domain} to ${config_file} (from env example)"
+  fi
+fi
 chown root:"${config_group}" "${config_file}"
 chmod 640 "${config_file}"
 
