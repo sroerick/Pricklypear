@@ -93,7 +93,17 @@
 
 (define kanban/card-html
   (lambda (list-id row columns)
-    "Render one card as a draggable article with up/down/left/right buttons."
+    "Render one card as a draggable article with up/down/left/right buttons.
+       Computes the card's own blocked marker directly (one dep scan); board
+       renders go through the -marked chain with a precomputed blocked set."
+    (kanban/card-html-marked list-id row columns
+      (todo/dep/blocked? (as-str (car row))))))
+
+(define kanban/card-html-marked
+  (lambda (list-id row columns blocked?)
+    "card-html with the blocked marker decided by the CALLER: board renders
+       pass blocked-set membership, the delegating card-html passes a fresh
+       todo/dep/blocked? check. Blocked = at least one OPEN blocked-by edge."
     (let ((id (as-str (car row))) (fields (cdr row)))
       (let ((title (as-str (dict-get fields "title")))
             (state (as-str (dict-get fields "state"))))
@@ -108,23 +118,38 @@
             (list
               (html/div (html/attr "class" "kb-card-title") (html/text title))
               (html/div (html/attr "class" "kb-card-meta")
-                (html/text state))
+                (if blocked?
+                  (html/join
+                    (list
+                      (html/text state)
+                      (html/span (html/attr "class" "kb-blocked")
+                        (html/text "blocked"))))
+                  (html/text state)))
               (html/div (html/attr "class" "kb-card-controls")
                 (html/join
                   (list
                     (kanban/move-btn id list-id "left" "←")
                     (kanban/move-btn id list-id "up" "↑")
                     (kanban/move-btn id list-id "down" "↓")
-                    (kanban/move-btn id list-id "right" "→")))))))))))
+                      (kanban/move-btn id list-id "right" "→")))))))))))
 
 (define kanban/cards-html
   (lambda (list-id cards columns)
-    "Concatenated card HTML for the card list."
+    "Concatenated card HTML for the card list. Computes the blocked set in
+       ONE dep scan, then renders through the -marked chain."
+    (kanban/cards-html-marked list-id cards columns
+      (todo/dep/blocked-ids (todo/dep/rows)))))
+
+(define kanban/cards-html-marked
+  (lambda (list-id cards columns blocked-ids)
+    "cards-html with a PRECOMPUTED blocked-id set (todo/dep/blocked-ids)
+       threaded in — the board chain computes it once per render."
     (if (null? cards)
       ""
       (string-append
-        (kanban/card-html list-id (car cards) columns)
-        (kanban/cards-html list-id (cdr cards) columns)))))
+        (kanban/card-html-marked list-id (car cards) columns
+          (todo/dep/member? (as-str (car (car cards))) blocked-ids))
+        (kanban/cards-html-marked list-id (cdr cards) columns blocked-ids)))))
 
 ;; ------------------------------------------------------------------
 ;; card helpers (all tree actions)
@@ -146,6 +171,12 @@
       (lambda (row)
         (string-eq (as-str (dict-get (cdr row) "state")) state))
       all-cards)))
+(define kanban/cards-ready
+  (lambda (list-id)
+    "The list's READY cards (todo/ready): entry-column cards with no open
+       blocked-by edge. The eligibility verb beside cards-in — the surface
+       the supervisor drains."
+    (todo/ready list-id)))
 
 (define kanban/cascade-rename-state
   (lambda (list-id old-name new-name)
@@ -188,7 +219,15 @@
   (lambda (list-id all-cards state columns)
     "One column rendered from a PRECOMPUTED (todo/items-for-list) scan: form
        (drop target) with its cards; stray? cards are excluded here and shown
-       in the other bucket."
+       in the other bucket. Computes the blocked set in ONE dep scan and
+       renders through the -marked chain."
+    (kanban/column-html-marked-from list-id all-cards state columns
+      (todo/dep/blocked-ids (todo/dep/rows)))))
+
+(define kanban/column-html-marked-from
+  (lambda (list-id all-cards state columns blocked-ids)
+    "column-html-from with a PRECOMPUTED blocked-id set (todo/dep/blocked-ids)
+       threaded in — the board chain computes it once for all columns."
     (let ((cards (list/filter
                    (lambda (row) (not (kanban/stray? columns row)))
                    (kanban/cards-in-from all-cards state))))
@@ -219,8 +258,10 @@
                       (html/text count))
                     (kanban/col-remove-btn list-id state))))
               (html/div (html/attr "class" "kb-cards")
-                (kanban/cards-html list-id cards columns))
-              (kanban/add-card-form list-id state))))))));; package kanban -- a board view over todos. One todo-list = one board;
+                (kanban/cards-html-marked list-id cards columns blocked-ids))
+              (kanban/add-card-form list-id state))))))))
+
+;; package kanban -- a board view over todos. One todo-list = one board;
 ;; the list's `columns` field (a JSON array of state-name strings, read via
 ;; json-parse) overrides todo/state/list when present. Cards are todo-items;
 ;; every mutation is a TREE ACTION over the card's datum node
@@ -275,16 +316,23 @@
 (define kanban/columns-html-at-from
   (lambda (list-id all-cards cols full)
     "Internal: render cols from a PRECOMPUTED card scan, passing the FULL
-       board column set `full` down to every kanban/column-html-from so its
-       kanban/stray? test compares each card against the whole board — NOT
+       board column set `full` down to every kanban/column-html-marked-from so
+       its kanban/stray? test compares each card against the whole board — NOT
        the shrinking cdr-suffix that the recursion otherwise hands a later
        column (a card whose state matches the full board must stay in its
-       column, never be bucketed)."
+       column, never be bucketed). Computes the blocked set ONCE for the
+       whole chain (todo/dep/blocked-ids over one todo/dep/rows scan)."
+    (kanban/columns-html-marked-at-from list-id all-cards cols full
+      (todo/dep/blocked-ids (todo/dep/rows)))))
+
+(define kanban/columns-html-marked-at-from
+  (lambda (list-id all-cards cols full blocked-ids)
+    "columns-html-at-from with the blocked-id set threaded in."
     (if (null? cols)
       ""
       (string-append
-        (kanban/column-html-from list-id all-cards (as-str (car cols)) full)
-        (kanban/columns-html-at-from list-id all-cards (cdr cols) full)))))
+        (kanban/column-html-marked-from list-id all-cards (as-str (car cols)) full blocked-ids)
+        (kanban/columns-html-marked-at-from list-id all-cards (cdr cols) full blocked-ids)))))
 
 (define kanban/columns-set
   (lambda (list-id cols)

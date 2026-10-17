@@ -12,6 +12,17 @@
     todo/comments-init!
     todo/css
     todo/cycle
+      todo/dep
+      todo/dep/blocked-ids
+      todo/dep/blocked?
+      todo/dep/blockers
+      todo/dep/entry-state
+      todo/dep/find
+      todo/dep/first-open-col
+      todo/dep/member?
+      todo/dep/open-blockers
+      todo/dep/rows
+      todo/deps-init!
     todo/ensure-inbox
     todo/ensure-space
     todo/event/list
@@ -72,6 +83,8 @@
     todo/recipe-set
     todo/recipes-default
     todo/recipes-for-list
+      todo/ready
+      todo/ready?
     todo/resolve-auto-lane
     todo/resolve-board
     todo/set-state
@@ -94,6 +107,7 @@
     todo/tree/save
     todo/tree/shared-prefix
     todo/tree/tail
+      todo/undep
     todo/ui/handle-post
     todo/item/unassign
   ))
@@ -295,6 +309,260 @@
         "todo-event ok"))))
 
 
+
+;; ------------------------------------------------------------------
+;; dependency DAG (beads-parity): blocked-by edges as todo-dep datum rows
+;; (from_id, to_id) — the from-card is blocked BY the to-card. Same
+;; associated-row pattern as todo-comment / todo-event: edge writes never
+;; touch card bodies (no version churn, no todo-event noise), space routing
+;; rides the TYPE-level admission (todo/admitted-types), and reverse lookups
+;; scan the same prefix. blocks is DERIVABLE (reverse scan), never stored.
+;;
+;; Readiness is a DIRECT-blocker predicate — no graph walk: a card is
+;; blocked while any direct blocker is open. Chains resolve in order as
+;; blockers close (a DONE/PARKED blocker does not block); an open cycle
+;; keeps every member not-ready until one member is closed externally —
+;; cycle-safe by construction, no detection pass. A blocker whose card row
+;; is gone does NOT block (stale edge, ignored).
+;; ------------------------------------------------------------------
+
+(define todo/deps-init!
+  (lambda
+    ()
+    "Ensure the todo-dep datum type exists AND is admitted to the shared
+       open todo space (both guarded, idempotent — the same two checks
+       todo/ensure-space runs per entry point). Called lazily by the dep
+       readers/writers; boot seeds it onto system/main as admin. A missing
+       space or a non-owner identity degrades to a no-op (garden routing)."
+    (seq
+      (if
+        (null? (type-fields (quote todo-dep)))
+        (deftype (quote todo-dep) (quote from_id) (quote to_id))
+        "todo-dep ok")
+      (guard
+        (lambda (e) #f)
+        (if
+          (space-exists? todo/open-space)
+          (space-admit "todo-dep" todo/open-space)
+          #f)))))
+
+(define todo/dep/member?
+  (lambda
+    (id ids)
+    "True when string id is in the id list ids (no std member? exists)."
+    (if
+      (null? ids)
+      #f
+      (if
+        (string-eq (as-str id) (as-str (car ids)))
+        #t
+        (todo/dep/member? id (cdr ids))))))
+
+(define todo/dep/rows
+  (lambda
+    ()
+    "All dep edge rows as (edge-id . body) pairs — ONE prefix scan (capped
+       at 1000 edges, same shape as the comment feed's 200-row cap)."
+    (seq
+      (todo/deps-init!)
+      (todo/tree/rows "todo-dep" 1000))))
+
+(define todo/dep/find
+  (lambda
+    (from to rows)
+    "The edge id of the from->to edge in PRECOMPUTED rows, or () when absent."
+    (if
+      (null? rows)
+      (list)
+      (let
+        ((b (cdr (car rows))))
+        (if
+          (and
+            (string-eq (as-str (dict-get b "from_id")) (as-str from))
+            (string-eq (as-str (dict-get b "to_id")) (as-str to)))
+          (as-str (car (car rows)))
+          (todo/dep/find from to (cdr rows)))))))
+
+(define todo/dep
+  (lambda
+    (from to)
+    "Add a blocked-by edge: card FROM is blocked BY card TO. Returns the new
+       edge id. Refusals (string, no write): \"self edge\", \"no such card:
+       <id>\", \"duplicate edge\"."
+    (seq
+      (todo/deps-init!)
+      (let
+        ((f (as-str from))
+         (t (as-str to)))
+        (if
+          (string-eq f t)
+          "self edge"
+          (if
+            (null? (todo/tree/get "todo-item" f))
+            (string-append "no such card: " f)
+            (if
+              (null? (todo/tree/get "todo-item" t))
+              (string-append "no such card: " t)
+              (if
+                (null? (todo/dep/find f t (todo/dep/rows)))
+                (as-str
+                  (todo/tree/create
+                    "todo-dep"
+                    (dict-set* "{}" (list "from_id" f "to_id" t))))
+                  "duplicate edge"))))))))
+
+(define todo/undep
+  (lambda
+    (from to)
+    "Remove the blocked-by edge from->to. \"removed\" or \"no such edge\"."
+    (seq
+      (todo/deps-init!)
+      (let
+        ((e (todo/dep/find (as-str from) (as-str to) (todo/dep/rows))))
+        (if
+          (null? e)
+          "no such edge"
+          (seq
+            (todo/tree/del "todo-dep" e)
+            "removed"))))))
+
+(define todo/dep/blockers
+  (lambda
+    (id)
+    "Direct blocker ids of card id: the to_ids of its from-edges, open or
+       not (its OWN scan — batch renders use todo/dep/blocked-ids)."
+    (let
+      ((f (as-str id)))
+      (list/map
+        (lambda (r) (as-str (dict-get (cdr r) "to_id")))
+        (list/filter
+          (lambda (r) (string-eq (as-str (dict-get (cdr r) "from_id")) f))
+          (todo/dep/rows))))))
+
+(define todo/dep/open-blockers
+  (lambda
+    (id)
+    "Direct blockers of card id that are still OPEN (todo/state/open?). A
+       blocker with no card row does not block (stale edge, ignored)."
+    (list/filter
+      (lambda
+        (bid)
+        (let
+          ((b (todo/tree/get "todo-item" bid)))
+          (and
+            (not (null? b))
+            (todo/state/open? (todo/item/state b)))))
+      (todo/dep/blockers id))))
+
+(define todo/dep/blocked?
+  (lambda
+    (id)
+    "True when card id has at least one OPEN blocked-by edge."
+    (not (null? (todo/dep/open-blockers id)))))
+
+(define todo/dep/blocked-ids
+  (lambda
+    (rows)
+    "Distinct from_ids with at least one OPEN blocker, from a PRECOMPUTED
+       (todo/dep/rows) scan. One blocker-state read per DISTINCT blocker id
+       (memo alist), so a board render pays edges + blockers, not
+       edges x cards (the 8972cdfe one-scan rule)."
+    (cdr
+      (list/foldl
+        (lambda
+          (acc r)
+          (let
+            ((memo (car acc))
+             (out (cdr acc)))
+            (let
+              ((b (cdr r)))
+              (let
+                ((f (as-str (dict-get b "from_id")))
+                 (t (as-str (dict-get b "to_id"))))
+                (if
+                  (todo/dep/member? f out)
+                  acc
+                  (let
+                    ((known (todo/alist-get memo t)))
+                    (if
+                      (null? known)
+                      (let
+                        ((bc (todo/tree/get "todo-item" t)))
+                        (let
+                          ((open
+                            (if
+                              (null? bc)
+                              "shut"
+                              (if
+                                (todo/state/open? (todo/item/state bc))
+                                "open"
+                                "shut"))))
+                          (if
+                            (string-eq open "open")
+                            (cons (cons (cons t open) memo) (cons f out))
+                            (cons (cons (cons t open) memo) out))))
+                      (if
+                        (string-eq known "open")
+                        (cons memo (cons f out))
+                        acc))))))))
+        (cons (list) (list))
+        rows))))
+
+(define todo/dep/first-open-col
+  (lambda
+    (cols)
+    "First non-empty column name of a pipeline (the default list leads with
+       the \"\" pseudo-column, which todo/state/closed? treats as closed)."
+    (if
+      (null? cols)
+      "TODO"
+      (if
+        (string-eq (as-str (car cols)) "")
+        (todo/dep/first-open-col (cdr cols))
+        (as-str (car cols))))))
+
+(define todo/dep/entry-state
+  (lambda
+    (list-id)
+    "The list's ACTIONABLE entry column: the first non-empty column of its
+       pipeline — TODO on the global default, the list's own first column
+       when it carries a columns override. A card counts as READY only in
+       this column: later columns are in-flight, not ready (beads-parity)."
+    (todo/dep/first-open-col
+      (todo/state/columns-for-list (as-str list-id)))))
+
+(define todo/ready?
+  (lambda
+    (id)
+    "True when card id is READY: it exists, sits in its list's actionable
+       entry column (todo/dep/entry-state), and has no open blocked-by edge."
+    (let
+      ((f (todo/tree/get "todo-item" (as-str id))))
+      (if
+        (null? f)
+        #f
+        (and
+          (string-eq
+            (todo/item/state f)
+            (todo/dep/entry-state (todo/item/list-id f)))
+          (not (todo/dep/blocked? id)))))))
+
+(define todo/ready
+  (lambda
+    (list-id)
+    "The list's READY cards as (id . fields) pairs: entry-column, no open
+       blocked-by edge. ONE dep-row scan for the whole list
+       (todo/dep/blocked-ids) — the eligibility view the supervisor drains."
+    (let
+      ((entry (todo/dep/entry-state list-id))
+       (blocked (todo/dep/blocked-ids (todo/dep/rows))))
+      (list/filter
+        (lambda
+          (row)
+          (and
+            (string-eq (todo/item/state (cdr row)) entry)
+            (not (todo/dep/member? (as-str (car row)) blocked))))
+        (todo/items-for-list list-id)))))
 
 (define todo/count-open-in
   (lambda
@@ -2008,8 +2276,8 @@
 ;; authenticated identity shares ONE board. The mechanism is the existing
 ;; open-space substrate (`data.s.<space>.<type>.<id>`, migration 030) —
 ;; the chat lobby is the precedent. Admission is TYPE-level and routes
-;; FUTURE writes; the four todo types admitted here are todo-list,
-;; todo-item, todo-comment, todo-event.
+;; FUTURE writes; the todo types admitted here are todo-list, todo-item,
+;; todo-comment, todo-event, todo-dep.
 ;;
 ;; ORDERING HAZARD: admission changes (node-path 'todo-item ...), so
 ;; ensure-space MUST run before any read that computes a prefix. Every
@@ -2021,7 +2289,7 @@
   "todo")
 
 (define todo/admitted-types
-  (list "todo-list" "todo-item" "todo-comment" "todo-event"))
+  (list "todo-list" "todo-item" "todo-comment" "todo-event" "todo-dep"))
 
 (define todo/ensure-space
   (lambda
@@ -2045,7 +2313,7 @@
                 acc))
             #t
             todo/admitted-types)))))
-  "Create the shared open `todo` space and admit the four card types
+  "Create the shared open `todo` space and admit the card types
      (idempotent, best-effort; the first writer races safely). Ensures
      the space exists AND the admissions are present even when the space
      predates an admission — so a repair is `(todo/ensure-space)`.

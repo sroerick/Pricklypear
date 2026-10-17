@@ -400,3 +400,8 @@
  (modules operator_console_test)
  (libraries pricklypear-image pricklypear-lisp alcotest eio_main yojson pgx unix))
 
+(test
+ (name todo_dep_dag_test)
+ (modules todo_dep_dag_test)
+ (libraries pricklypear-image pricklypear-common pricklypear-lisp alcotest eio_main yojson pgx unix))
+
