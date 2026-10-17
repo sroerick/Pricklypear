@@ -6346,8 +6346,8 @@
                             (html/attr "type" "submit")
                             (html/attr "class" "secondary")
                             (html/attr "title" "undo last note change")))
-                        "Undo")))
-                    (notes/ui/vis-form slug)))))
+                          "Undo"))))
+                      (notes/ui/vis-form slug))))
         (html/p*
           (html/attr "class" "muted")
           (string-append "tags: " (as-str tags)))
