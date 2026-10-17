@@ -2,7 +2,7 @@
 /**
  * probe_shell_sem.mjs — SEMANTIC shell probe for the glochid/filmstrip
  * shell (companion to the read-only geometry probe_shell_wm.mjs and the
- * chat-surface smoke_agent_cdp.mjs; UI review 2026-09, batch B + C).
+ * chat-surface smoke_glochid_surface.sh; UI review 2026-09, batch B + C).
  *
  * Boots its own scratch glochid (own agent cwd, mock LLM, random port,
  * seeded workspace) and asserts the shell's behavioral INVARIANTS under

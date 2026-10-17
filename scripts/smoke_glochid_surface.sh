@@ -14,7 +14,7 @@
 #   5. GET /settings    => llm-config surface renders with the model
 #                          <select> (borge/agent.borg llm-config)
 #
-# Usage:  scripts/smoke_agent_surface.sh
+# Usage:  scripts/smoke_glochid_surface.sh
 # Prereq: dune build glochid/bin/main.exe
 set -u
 cd "$(dirname "$0")/.."
