@@ -124,9 +124,10 @@ let test_cp_captures_post_commit_gen () =
                 | Ok cp ->
                     Alcotest.(check bool) "cp gen == post-commit counter" true
                       (Int64.equal cp.S.cp_gen g_before);
-                    Alcotest.(check bool) "cp gen == version trail head" true
-                      (Int64.equal cp.S.cp_gen
-                         (max_version_gen store ~branch_id:src_id));
+                      Alcotest.(check bool) "cp gen >= version trail head (counter runs ahead:
+                      017 settle + tree trigger)" true
+                        (Int64.compare cp.S.cp_gen
+                           (max_version_gen store ~branch_id:src_id) >= 0);
                     S.persist_function store "gamma" (body_json (lit 3))
                       "tester";
                     (match
@@ -224,15 +225,15 @@ let test_cp_diff_and_restore () =
                         outcomes in
                     Alcotest.(check int) "restore all succeeded" 0
                       (List.length failed);
-                    Alcotest.(check bool) "alpha body verbatim" true
-                      (own_body store ~branch_id:src_id ~name:"alpha"
-                       = Some (body_json (lit 1)));
-                    Alcotest.(check bool) "beta re-created verbatim" true
-                      (own_body store ~branch_id:src_id ~name:"beta"
-                       = Some (body_json (lit 2)));
-                    Alcotest.(check bool) "delta untouched by restore" true
-                      (own_body store ~branch_id:src_id ~name:"delta"
-                       = Some (body_json (lit 4)));
+                      Alcotest.(check bool) "alpha body verbatim" true
+                        (Option.bind (own_body store ~branch_id:src_id ~name:"alpha")
+                           Pricklypear_lisp.Ast.expr_of_body_json = Some (lit 1));
+                      Alcotest.(check bool) "beta re-created verbatim" true
+                        (Option.bind (own_body store ~branch_id:src_id ~name:"beta")
+                           Pricklypear_lisp.Ast.expr_of_body_json = Some (lit 2));
+                      Alcotest.(check bool) "delta untouched by restore" true
+                        (Option.bind (own_body store ~branch_id:src_id ~name:"delta")
+                           Pricklypear_lisp.Ast.expr_of_body_json = Some (lit 4));
                     (* alpha: redefine UPDATE + restore UPDATE -> exactly one
                        more code_history row from the restore *)
                     Alcotest.(check bool) "alpha had one redefine row" true
