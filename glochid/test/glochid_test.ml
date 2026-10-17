@@ -1499,6 +1499,34 @@ let test_habitat_bearer ~env () =
            Alcotest.(check (pair string string)) "bearer header"
              ("authorization", "Bearer tok-abc") (Habitat.auth_header c))
 
+(* eval_timeout_s: GLOCHID_HABITAT_EVAL_TIMEOUT overrides the 30s
+   default (legacy AGENT_HABITAT_EVAL_TIMEOUT still read); junk or
+   non-positive values fall back to the default. *)
+let test_habitat_eval_timeout () =
+  let saved =
+    [ ("GLOCHID_HABITAT_EVAL_TIMEOUT", Sys.getenv_opt "GLOCHID_HABITAT_EVAL_TIMEOUT")
+    ; ("AGENT_HABITAT_EVAL_TIMEOUT", Sys.getenv_opt "AGENT_HABITAT_EVAL_TIMEOUT") ]
+  in
+  Fun.protect
+    ~finally:(fun () ->
+       List.iter
+         (fun (k, v) ->
+            match v with Some x -> Unix.putenv k x | None -> Unix.putenv k "")
+         saved)
+    (fun () ->
+       List.iter (fun (k, _) -> Unix.putenv k "") saved;
+         Alcotest.(check (float 0.)) "default 30s" 30. (Habitat.eval_timeout_s ());
+       Unix.putenv "GLOCHID_HABITAT_EVAL_TIMEOUT" "120";
+         Alcotest.(check (float 0.)) "glochid override" 120. (Habitat.eval_timeout_s ());
+       Unix.putenv "GLOCHID_HABITAT_EVAL_TIMEOUT" "";
+       Unix.putenv "AGENT_HABITAT_EVAL_TIMEOUT" "45";
+         Alcotest.(check (float 0.)) "legacy spelling" 45. (Habitat.eval_timeout_s ());
+       Unix.putenv "AGENT_HABITAT_EVAL_TIMEOUT" "junk";
+         Alcotest.(check (float 0.)) "junk falls back" 30. (Habitat.eval_timeout_s ());
+       Unix.putenv "AGENT_HABITAT_EVAL_TIMEOUT" "0";
+         Alcotest.(check (float 0.)) "non-positive falls back" 30.
+         (Habitat.eval_timeout_s ()))
+
 (* run-supervisor (run-primitive phase 2): the PPFLOW parse contract + pure
    policy. These are the supervisor/sidecar boundary — a regression here
    silently loses verdicts or usage on the run rows. *)
@@ -1613,7 +1641,9 @@ let () =
         [ Alcotest.test_case "bearer-creds" `Quick
             (fun () -> test_habitat_bearer ~env ())
         ; Alcotest.test_case "expr-builders" `Quick
-            test_habitat_expr_builders ] );
+            test_habitat_expr_builders
+        ; Alcotest.test_case "eval-timeout-env" `Quick
+              test_habitat_eval_timeout ] );
       ( "glochid-route-table",
         [ Alcotest.test_case "register-and-render" `Quick
             (test_route_table_register_and_render ~rt)

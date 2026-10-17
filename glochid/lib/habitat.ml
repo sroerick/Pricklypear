@@ -18,6 +18,8 @@
     user/pass everywhere (eval Basic AND the
     pane forwarder's /login jar) — the laptop then holds a revocable
     credential, never the operator's password.
+      Eval round-trip cap: GLOCHID_HABITAT_EVAL_TIMEOUT seconds
+      (legacy AGENT_HABITAT_EVAL_TIMEOUT still read; default 30).
     Model-facing TOOL "memory" wraps the four core verbs (remember /
     search / get / forget) with the default type. Fail-soft: a broken
     or missing habitat degrades to a Prim_error at CALL time — boot,
@@ -26,7 +28,17 @@
 open Pricklypear_lisp
 open Ast
 
-let eval_timeout_s = 30.
+(** Habitat eval round-trip cap in seconds: GLOCHID_HABITAT_EVAL_TIMEOUT
+    wins when set non-empty (legacy AGENT_HABITAT_EVAL_TIMEOUT still
+    read). Unparseable or non-positive values fall back to the 30s
+    default; read per call, so a long-lived process picks up changes. *)
+let eval_timeout_s () : float =
+  match Config.getenv_compat "HABITAT_EVAL_TIMEOUT" with
+  | Some v -> (
+      match float_of_string_opt (String.trim v) with
+      | Some t when t > 0. -> t
+      | _ -> 30.)
+  | None -> 30.
 (* Habitat env names under the glochid rename compat window: the
    GLOCHID_HABITAT_* spelling wins when set non-empty; legacy
    AGENT_HABITAT_* names stay readable. [n] is a bare suffix. *)
@@ -144,7 +156,7 @@ let eval (env : Eio_unix.Stdenv.base) (expr : string)
             Yojson.Safe.to_string (`Assoc [ ("expr", `String expr) ])
           in
           match
-            Pp_http.request ~timeout_s:eval_timeout_s ~env ~endpoint
+             Pp_http.request ~timeout_s:(eval_timeout_s ()) ~env ~endpoint
               ~meth:"POST" ~path:"/api/eval"
               ~headers:[ auth_header c ]
               ~body ()
