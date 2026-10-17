@@ -875,6 +875,12 @@
     (rb/find-in-rows name (rows (quote recipe))))
   "Locate a stored recipe row by name; () when absent.")
 
+(define (fixed-cost name monthly)
+  (list
+    (cons "type" "fixed")
+    (cons "name" name)
+    (cons "monthly_cost" monthly)))
+
 (define rb/fixed
   (list (fixed-cost "Booth rent" 60.0)))
 
