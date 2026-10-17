@@ -1,0 +1,69 @@
+# /etc/nginx/conf.d/pricklypear-subdomains.conf
+# Per-user subdomains for the Pricklypear image (card 57a8d68c, 2026-10-17).
+#
+# nginx.conf includes /etc/nginx/conf.d/*.conf. The apex and www hosts keep
+# their exact-name server blocks in /etc/nginx/nginx.conf (exact names beat
+# this wildcard); the :80 apex block there is default_server and rewrites
+# unknown hosts to the apex, so this wildcard block must carry its own ACME
+# location and a host-preserving redirect.
+#
+# REQUIRES a wildcard TLS cert for *.pricklypear.rocks (LE DNS-01 — the
+# zone is at ns3/ns4.epik.com; per-host HTTP-01 does not scale to
+# usernames). nginx -t fails while the cert files are missing, so install
+# the cert FIRST:
+#   cert: /etc/ssl/pricklypear.rocks.wild.fullchain.pem
+#   key:  /etc/ssl/private/pricklypear.rocks.wild.key
+#
+# Install as root on the runtime host (155.138.208.45):
+#   install -o root -g wheel -m 644 <this file> \
+#     /etc/nginx/conf.d/pricklypear-subdomains.conf
+#   nginx -t && rcctl reload nginx
+#
+# The image (127.0.0.1:18080) reads PP_BASE_DOMAIN and classifies the Host
+# header itself: <user>.pricklypear.rocks -> Host_garden <user> (session
+# attaches to that garden), apex -> shared faces. Host is passed through
+# below; X-Forwarded-Proto lets it emit Secure cookies without extra env.
+
+# Plain HTTP for gardens: keep ACME working, redirect preserving the host
+# (the apex :80 default_server rewrites subdomains to the apex — this
+# longer-match wildcard block wins for *.pricklypear.rocks).
+server {
+    listen 80;
+    server_name *.pricklypear.rocks;
+
+    location ^~ /.well-known/acme-challenge/ {
+        default_type "text/plain";
+        rewrite ^/.well-known/acme-challenge/(.*)$ /$1 break;
+        root /var/www/acme;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+# HTTPS gardens: <user>.pricklypear.rocks -> the image.
+server {
+    listen 443 ssl;
+    server_name *.pricklypear.rocks;
+
+    ssl_certificate     /etc/ssl/pricklypear.rocks.wild.fullchain.pem;
+    ssl_certificate_key /etc/ssl/private/pricklypear.rocks.wild.key;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+
+    location / {
+        proxy_pass http://127.0.0.1:18080;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Connection "";
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 300s;
+        proxy_connect_timeout 5s;
+        chunked_transfer_encoding on;
+    }
+}
