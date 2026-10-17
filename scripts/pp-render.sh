@@ -65,8 +65,15 @@ if head -c 40 "$MANIFEST" | grep -q '"ok":false'; then
   exit 1
 fi
 
-echo "pp-render: synthesizing -> $OUT" >&2
-"$ENGINE" < "$MANIFEST" > "$OUT"
+"$ENGINE" "$MANIFEST" "$OUT"
+echo "pp-render: wrote $(wc -c < "$OUT" | tr -d ' ') bytes" >&2
+
+FEATURES_BIN="$ROOT/engine/zig-out/bin/pp-features"
+if [ -x "$FEATURES_BIN" ]; then
+  FEATURES="${OUT%.wav}.features.json"
+  "$FEATURES_BIN" "$OUT" "$FEATURES" \
+    && echo "pp-render: features -> $FEATURES" >&2
+fi
 echo "pp-render: wrote $(wc -c < "$OUT" | tr -d ' ') bytes" >&2
 
 if [ "$UPLOAD" = 1 ]; then

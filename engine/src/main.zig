@@ -1,11 +1,12 @@
 //! engine/pp-render — the Pricklypear audio data plane (toy, first cut).
 //!
-//! Contract (borge/songs.borg section rendering): a MANIFEST JSON on
-//! stdin, a 16-bit mono PCM WAV on stdout. The engine composes nothing,
-//! analyzes nothing, knows no keys — it interprets the manifest's
-//! performance events (spelled tones, integer ticks, continuous
-//! dynamics, strum models, slash bass) into samples. Nopales owns the
-//! control plane; this owns the data plane.
+//! Contract (borge/songs.borg section rendering): argv "pp-render
+//! <manifest.json> <out.wav>" - a MANIFEST JSON in, a 16-bit mono PCM WAV
+//! out. The engine composes nothing, analyzes nothing, knows no keys - it
+//! interprets the manifest's performance events (spelled tones, integer
+//! ticks, continuous dynamics, strum models, slash bass) into samples.
+//! Nopales owns the control plane; this owns the data plane. (File-argv I/O
+//! through cstdio: stable across the 0.15 std.Io churn on every host.)
 //!
 //! This is deliberately small: it closes the loop manifest -> bytes ->
 //! media_blob -> /music. Real patches, bakes and the live/WASM hosts
@@ -28,13 +29,19 @@ const Note = struct {
 
 const EngineError = error{ MalformedManifest, NoEvents };
 
-pub fn main(init: std.process.Init) !void {
-    const gpa = init.gpa;
-    const io = init.io;
+const io_util = @import("io_util.zig");
 
-    var in_buf: [64 * 1024]u8 = undefined;
-    var reader = std.Io.File.stdin().reader(io, &in_buf);
-    const input = try reader.interface.allocRemaining(gpa, .unlimited);
+pub fn main() !void {
+    const gpa = std.heap.c_allocator;
+
+    const args = try std.process.argsAlloc(gpa);
+    defer std.process.argsFree(gpa, args);
+    if (args.len != 3) {
+        std.debug.print("usage: pp-render <manifest.json> <out.wav>\n", .{});
+        std.process.exit(2);
+    }
+
+    const input = try io_util.readFileAll(gpa, args[1]);
     defer gpa.free(input);
 
     const wav = render(gpa, input) catch |err| {
@@ -43,10 +50,7 @@ pub fn main(init: std.process.Init) !void {
     };
     defer gpa.free(wav);
 
-    var out_buf: [64 * 1024]u8 = undefined;
-    var writer = std.Io.File.stdout().writer(io, &out_buf);
-    try writer.interface.writeAll(wav);
-    try writer.interface.flush();
+    try io_util.writeFileAll(args[2], wav);
 }
 
 /// Synthesize one sample at time `t` (seconds) from the notes.
