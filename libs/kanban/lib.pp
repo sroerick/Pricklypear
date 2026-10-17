@@ -71,18 +71,21 @@
 
 (define kanban/board
   (lambda (list-id)
-    "Render the full board: list picker + columns row + other bucket + add-column."
+    "Render the full board: list picker + columns row + other bucket + add-column.
+       ONE (todo/items-for-list) scan feeds every column and the other bucket
+       (was: one full todo-item rescan per column — card 8972cdfe)."
     (let ((cols (kanban/columns-for-list list-id)))
-      (html/div (html/attr "id" "kb-board")
-        (html/join
-          (list
-            (kanban/list-picker list-id)
-            (html/div (html/attr "class" "kb-cols")
-              (string-append
-                (kanban/columns-html list-id cols)
-                (kanban/add-column-form list-id)))
-            (kanban/other-bucket list-id cols)
-            (kanban/script)))))))
+      (let ((all-cards (todo/items-for-list list-id)))
+        (html/div (html/attr "id" "kb-board")
+          (html/join
+            (list
+              (kanban/list-picker list-id)
+              (html/div (html/attr "class" "kb-cols")
+                (string-append
+                  (kanban/columns-html-from list-id all-cards cols)
+                  (kanban/add-column-form list-id)))
+              (kanban/other-bucket-from list-id all-cards cols)
+              (kanban/script))))))))
 
 ;; ------------------------------------------------------------------
 ;; HTML rendering
@@ -135,6 +138,15 @@
         (string-eq (as-str (dict-get (cdr row) "state")) state))
       (todo/items-for-list list-id))))
 
+(define kanban/cards-in-from
+  (lambda (all-cards state)
+    "Cards in the given state, from a PRECOMPUTED (todo/items-for-list) scan
+       — the single-pass variant of cards-in (which rescans per call)."
+    (list/filter
+      (lambda (row)
+        (string-eq (as-str (dict-get (cdr row) "state")) state))
+      all-cards)))
+
 (define kanban/cascade-rename-state
   (lambda (list-id old-name new-name)
     "tree/upsert every card in list-id whose state is old-name, setting new-name."
@@ -164,14 +176,22 @@
 
 (define kanban/column-html
   (lambda (list-id state columns)
-    "Render one column as a form (drop target) with its cards. Cards that
-     belong in the 'other' bucket (kanban/stray? — own pipeline off the board,
-     or state not a column) are excluded here so an own-pipeline card never
-     renders in a board column; the other bucket shows it (other-bucket uses
-     the same stray? predicate — nothing is hidden or duplicated)."
+    "Render one column as a form (drop target) with its cards. ONE card scan
+       per board render (was: a full todo-item rescan per column — card
+       8972cdfe). Cards that belong in the 'other' bucket (kanban/stray? —
+       state not a column) are excluded here so a stray card never renders in
+       a board column; the other bucket shows it (other-bucket uses the same
+       stray? predicate — nothing is hidden or duplicated)."
+    (kanban/column-html-from list-id (todo/items-for-list list-id) state columns)))
+
+(define kanban/column-html-from
+  (lambda (list-id all-cards state columns)
+    "One column rendered from a PRECOMPUTED (todo/items-for-list) scan: form
+       (drop target) with its cards; stray? cards are excluded here and shown
+       in the other bucket."
     (let ((cards (list/filter
                    (lambda (row) (not (kanban/stray? columns row)))
-                   (kanban/cards-in list-id state))))
+                   (kanban/cards-in-from all-cards state))))
       (let ((count (as-str (length cards))))
         (html/form "POST" "/kanban"
           (html/attrs
@@ -237,21 +257,34 @@
 
 (define kanban/columns-html
   (lambda (list-id cols)
-    "Concatenated column HTML for the column list."
-    (kanban/columns-html-at list-id cols cols)))
+    "Concatenated column HTML for the column list. ONE card scan feeds all
+       columns (was: one todo-item rescan per column — card 8972cdfe)."
+    (kanban/columns-html-from list-id (todo/items-for-list list-id) cols)))
+
+(define kanban/columns-html-from
+  (lambda (list-id all-cards cols)
+    "Concatenated column HTML from a PRECOMPUTED (todo/items-for-list) scan."
+    (kanban/columns-html-at-from list-id all-cards cols cols)))
 
 (define kanban/columns-html-at
   (lambda (list-id cols full)
-    "Internal: render cols, passing the FULL board column set `full` down to
-     every kanban/column-html so its kanban/stray? test compares each card's
-     own pipeline against the whole board — NOT the shrinking cdr-suffix that
-     the recursion otherwise hands a later column (a card whose own pipeline
-     matches the full board must stay in its column, never be bucketed)."
+    "Internal: render cols with the FULL board column set `full` passed down
+       (see kanban/columns-html-at-from); rescans cards per call."
+    (kanban/columns-html-at-from list-id (todo/items-for-list list-id) cols full)))
+
+(define kanban/columns-html-at-from
+  (lambda (list-id all-cards cols full)
+    "Internal: render cols from a PRECOMPUTED card scan, passing the FULL
+       board column set `full` down to every kanban/column-html-from so its
+       kanban/stray? test compares each card against the whole board — NOT
+       the shrinking cdr-suffix that the recursion otherwise hands a later
+       column (a card whose state matches the full board must stay in its
+       column, never be bucketed)."
     (if (null? cols)
       ""
       (string-append
-        (kanban/column-html list-id (as-str (car cols)) full)
-        (kanban/columns-html-at list-id (cdr cols) full)))))
+        (kanban/column-html-from list-id all-cards (as-str (car cols)) full)
+        (kanban/columns-html-at-from list-id all-cards (cdr cols) full)))))
 
 (define kanban/columns-set
   (lambda (list-id cols)
@@ -491,22 +524,28 @@
 (define kanban/other-bucket
   (lambda (list-id columns)
     "Cards that belong in the trailing 'other' bucket of a board with columns
-     `columns`: state not a column, or own pipeline != the board's columns."
-    (let ((all (todo/items-for-list list-id)))
-      (let ((strays (list/filter
-                      (lambda (row)
-                        (kanban/stray? columns row))
-                      all)))
-        (if (null? strays)
-          ""
-          (html/tag "section"
-            (html/attrs
-              (list (html/attr "class" "kb-col kb-other")))
-            (html/join
-              (list
-                (html/div (html/attr "class" "kb-col-header") (html/text "other"))
-                (html/div (html/attr "class" "kb-cards")
-                  (kanban/cards-html list-id strays columns))))))))))
+       `columns`: state not a column. ONE card scan (was: a full rescan per
+       render — card 8972cdfe)."
+    (kanban/other-bucket-from list-id (todo/items-for-list list-id) columns)))
+
+(define kanban/other-bucket-from
+  (lambda (list-id all-cards columns)
+    "The 'other' bucket, from a PRECOMPUTED (todo/items-for-list) scan:
+       strays = state not a column."
+    (let ((strays (list/filter
+                    (lambda (row)
+                      (kanban/stray? columns row))
+                    all-cards)))
+      (if (null? strays)
+        ""
+        (html/tag "section"
+          (html/attrs
+            (list (html/attr "class" "kb-col kb-other")))
+          (html/join
+            (list
+              (html/div (html/attr "class" "kb-col-header") (html/text "other"))
+              (html/div (html/attr "class" "kb-cards")
+                (kanban/cards-html list-id strays columns)))))))))
 
 (define kanban/out-of-bounds?
   (lambda (j len)

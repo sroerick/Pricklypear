@@ -28,6 +28,20 @@
           acc))
       0 nodes)))
 
+(define workstreams/column-counts-from
+  (lambda (nodes lid)
+    "List of (col . open-count) over the list's own state set, non-zero only,
+       derived from a PRECOMPUTED whole-garden scan (single-pass variant of
+       column-counts, which still rescans the todo-item subtree per call)."
+    (let
+      ((mine (workstreams/open-items-from nodes lid))
+        (cols (todo/state/columns-for-list lid)))
+      (list/filter
+        (lambda (p) (> (cdr p) 0))
+        (list/map
+          (lambda (c) (cons (as-str c) (workstreams/count-column mine c)))
+          cols)))))
+
 (define workstreams/counts-line
   (lambda (counts)
     "'CODE 2 · LOGIC-REVIEW 1 · HUMAN-REVIEW 3' from (col . n) pairs."
@@ -149,21 +163,40 @@
     "Open (non-terminal) card node?"
     (todo/state/open? (todo/item-state (dict-get n "body")))))
 
+(define workstreams/open-items-from
+  (lambda (nodes lid)
+    "Open card nodes for list lid derived from a PRECOMPUTED whole-garden
+       scan (workstreams/pulse-nodes) — the single-pass variant of open-items
+       (which still rescans the todo-item subtree per call)."
+    (list/filter
+      (lambda (n)
+        (and
+          (workstreams/open-node? n)
+          (string-eq
+            (as-str (dict-get (dict-get n "body") "list_id"))
+            (as-str lid))))
+      nodes)))
+
 (define workstreams/page
   (lambda ()
-    "GET /workstreams renders the live orchestration face."
-    (html/page
-      (list
-        (html/h1 (html/text "Workstreams"))
-        (html/p*
-          (html/attr "class" "muted")
-          "Live counts from the todo-tree; open = not DONE/CANCELLED/ARCHIVED,
-           stale = open >3 days. The shared Board list is the overview.")
-        (workstreams/rollup-html)
-        (html/h2 (html/text "Per stream"))
-        (html/join
-          (list/map workstreams/stream-section
-            (workstreams/stream-rows)))))))
+    "GET /workstreams renders the live orchestration face. ONE garden scan
+       (workstreams/pulse-nodes) feeds the rollup AND every stream section —
+       the /workstreams side of the rescan fix (card 8972cdfe; was ~4
+       todo-item subtree rescans per stream per render)."
+    (let ((nodes (workstreams/pulse-nodes)))
+      (html/page
+        (list
+          (html/h1 (html/text "Workstreams"))
+          (html/p*
+            (html/attr "class" "muted")
+            "Live counts from the todo-tree; open = not DONE/CANCELLED/ARCHIVED,
+             stale = open >3 days. The shared Board list is the overview.")
+          (workstreams/rollup-html-from nodes)
+          (html/h2 (html/text "Per stream"))
+          (html/join
+            (list/map
+              (lambda (s) (workstreams/stream-section-from nodes s))
+              (workstreams/stream-rows))))))))
 
 (define workstreams/pulse-count-cell
   (lambda
@@ -412,7 +445,15 @@
 (define workstreams/rollup
   (lambda (col)
     "All open cards currently in column col across every stream: list of
-     (card-id . stream-title)."
+       (card-id . stream-title). ONE whole-garden scan feeds the fold
+       (was: one todo-item subtree rescan per stream — card 8972cdfe)."
+    (workstreams/rollup-from (workstreams/pulse-nodes) col)))
+
+(define workstreams/rollup-from
+  (lambda (nodes col)
+    "All open cards currently in column col across every stream, derived
+       from a PRECOMPUTED whole-garden scan (workstreams/pulse-nodes):
+       list of (card-id . stream-title)."
     (list/foldl
       (lambda (acc stream)
         (append
@@ -422,14 +463,21 @@
               (cons (workstreams/node-id n) (cdr stream)))
             (list/filter
               (lambda (n) (workstreams/in-column? col n))
-              (workstreams/open-items (car stream))))))
+              (workstreams/open-items-from nodes (car stream))))))
       (list)
       (workstreams/stream-rows))))
 
 (define workstreams/rollup-html
   (lambda ()
-    "The 'ready for human review' rollup across all streams."
-    (let ((cards (workstreams/rollup "HUMAN-REVIEW")))
+    "The 'ready for human review' rollup across all streams. ONE whole-garden
+       scan (was: a per-stream rescan inside rollup — card 8972cdfe)."
+    (workstreams/rollup-html-from (workstreams/pulse-nodes))))
+
+(define workstreams/rollup-html-from
+  (lambda (nodes)
+    "The 'ready for human review' rollup across all streams, derived from a
+       PRECOMPUTED whole-garden scan."
+    (let ((cards (workstreams/rollup-from nodes "HUMAN-REVIEW")))
       (html/div
         (html/attr "class" "ws-rollup")
         (html/join
@@ -481,6 +529,17 @@
           (let ((c (dict-get n "created_at")))
             (if (null? c) #f (workstreams/old? c t))))
         (workstreams/open-items list-id)))))
+
+(define workstreams/stale-items-from
+  (lambda (nodes lid)
+    "Open stale cards for lid derived from a PRECOMPUTED whole-garden scan
+       (single-pass variant of stale-items)."
+    (let ((t (workstreams/stale-threshold)))
+      (list/filter
+        (lambda (n)
+          (let ((c (dict-get n "created_at")))
+            (if (null? c) #f (workstreams/old? c t))))
+        (workstreams/open-items-from nodes lid)))))
 
 (define workstreams/stale-threshold
   (lambda () (as-str (date-add-days -3))))
@@ -587,14 +646,22 @@
 
 (define workstreams/stream-section
   (lambda (stream)
-    "One stream: title + board link, non-zero column counts, stale listing."
+    "One stream: title + board link, non-zero column counts, stale listing.
+       ONE whole-garden scan (was: three todo-item subtree rescans — card 8972cdfe)."
+    (workstreams/stream-section-from (workstreams/pulse-nodes) stream)))
+
+(define workstreams/stream-section-from
+  (lambda (nodes stream)
+    "One stream derived from a PRECOMPUTED whole-garden scan
+       (workstreams/pulse-nodes): title + board link, non-zero column
+       counts, stale listing."
     (let
       ((lid (car stream))
         (title (cdr stream)))
       (let
-        ((nodes (workstreams/open-items lid))
-          (counts (workstreams/column-counts lid))
-          (stale (workstreams/stale-items lid)))
+        ((mine (workstreams/open-items-from nodes lid))
+          (counts (workstreams/column-counts-from nodes lid))
+          (stale (workstreams/stale-items-from nodes lid)))
         (html/div
           (html/attr "class" "workstream")
           (html/join
@@ -606,7 +673,7 @@
                     (html/span (html/attr "class" "muted ws-open")
                       (html/text
                         (string-append
-                          " (" (as-str (workstreams/len nodes)) " open)"))))))
+                          " (" (as-str (workstreams/len mine)) " open)"))))))
               (html/p*
                 (html/attr "class" "ws-counts")
                 (if
