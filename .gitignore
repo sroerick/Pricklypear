@@ -56,7 +56,11 @@ tmp_log/
 .ralph/
 .borge-bugs/
 *.bak
-spikes/
+spikes/*
+# spikes/upsets is the versioned OCaml bench declared by borge/upsets.borg
+# (analytics-bench + simulator implements paths); it must stay in git for
+# rule-hash parity/audit. Other spike debris stays ignored.
+!spikes/upsets/
 supervisor/
 
 # generated public release artifacts
