@@ -139,6 +139,41 @@ ssh ${SSH_BASE} "${TARGET_USER}@${TARGET_HOST}" \
 # exactly which .pp edits will not go live. Soft check: credentials
 # absent (or pp-sync not built) only prints the reminder.
 # ----------------------------------------------------------------
+# ----------------------------------------------------------------
+# GUARDED SEED (card 8dff7c9e; borge/branching.borg vault-authority).
+# Promote deploys the KERNEL; the additive boot seed only ADDS names
+# absent on system/main, so a libs/*.pp edit to an EXISTING define is
+# committed but NOT live. Land changed app libs now: `pp-sync reseed`
+# upserts the vault text onto system/main and carries its own
+# vault-drift guard — it REFUSES (exit 2) on
+#   (a) live-only names (reseed would delete them), or
+#   (b) same-name body drift (reseed would roll back live work),
+# and never clobbers by accident. The hook NEVER passes --force: a
+# refusal means a human resolves the divergence — promote from the
+# habitat (personal/dev -> system/main) or `pp-sync pull <pkg>` +
+# reseed, then `pp-sync snapshot` to refresh the vault. The binary is
+# already live here; the seed lagging is loud, not silent.
+# Requires habitat ADMIN credentials in the environment (PP_USER /
+# PP_PASS) — reseed-package is admin-gated.
+# ----------------------------------------------------------------
+if [ -n "${changed_pkgs:-}" ] && [ -n "${PP_USER:-}" ] && [ -n "${PP_PASS:-}" ] && [ -x "${pp_sync_bin}" ]; then
+  seed_failed=""
+  for p in ${changed_pkgs}; do
+    if "${pp_sync_bin}" reseed \
+        --url "${PP_URL:-https://pricklypear.rocks}" \
+        --user "${PP_USER}" --password "${PP_PASS}" \
+        "$p"; then
+      log "seed: libs/$p upserted onto system/main (guarded reseed)"
+    else
+      log "SEED REFUSED for libs/$p — live main diverged from the vault (live-only names or body drift)."
+      log "seed: binary is live; libs/$p is NOT. Resolve: promote from the habitat (personal/dev -> system/main) or pp-sync pull $p + reseed, then pp-sync snapshot."
+      seed_failed="${seed_failed} $p"
+    fi
+  done
+  if [ -n "${seed_failed}" ]; then
+    log "WARNING: kernel promoted; libs NOT live on system/main:${seed_failed}"
+  fi
+fi
 # Self-update AFTER success — never overwrite the running script mid-flight
 if [ -f "${WORKTREE}/scripts/post-receive-prod-hook.ksh" ]; then
   cp "${WORKTREE}/scripts/post-receive-prod-hook.ksh" \
