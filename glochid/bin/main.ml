@@ -109,6 +109,7 @@ let () =
   let port = ref 18090 in
   let do_stop = ref false in
   let do_reload = ref false in
+    let supervisor = ref false in
   let anon (_ : string) = () in
   let speclist =
     Arg.align
@@ -125,6 +126,8 @@ let () =
         ("--open", Arg.Set open_browser, "with --serve: best-effort browser launch");
         ("--stop", Arg.Set do_stop, "send SIGTERM to the running --serve process and exit");
         ("--reload", Arg.Set do_reload, "send SIGHUP to the running --serve process to reload surface + plugins");
+        ("--supervisor", Arg.Set supervisor,
+         "run the PP run-primitive supervisor tick loop alongside --serve (GLOCHID_SUPERVISOR=1 also enables)");
         ("-p", Arg.String (fun s -> pipe_expr := Some s), "EXPR eval and exit");
       ]
   in
@@ -267,6 +270,12 @@ let () =
         Lifecycle.write_pid_file ();
         let shutdown_promise, watcher = Lifecycle.install ~on_reload:reload_surface in
         Eio.Fiber.fork ~sw watcher;
+        (* PP run-primitive supervisor (borge/run-primitive.borg phase 2):
+           the glochid app contract — Q6 rides this existing service, no
+           filmstrip dependency. One scan/tick over data.s.run.*; sidecar
+           children are pp-flow --run --supervised processes. *)
+        if !supervisor || envget "SUPERVISOR" "0" = "1" then
+          Eio.Fiber.fork ~sw (fun () -> Supervisor.run ~env ~sw);
         Fun.protect
           ~finally:(fun () -> Lifecycle.remove_pid_file ())
           (fun () ->
