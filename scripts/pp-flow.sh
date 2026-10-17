@@ -13,6 +13,11 @@
 #   pp-flow.sh --dry-run <card-id>              # print the brief only (no side effects)
 #   pp-flow.sh --claim <card-id>                # set the claim lease, print it
 #   pp-flow.sh --write-back <card-id> [msg]     # advance one column + post evidence comment
+#   pp-flow.sh --run <id> --supervised --brief-file F --claimed-state S \
+#       --columns C --log-dir D  # SUPERVISED SIDECAR (run-primitive phase 2):
+#                                # the glochid supervisor owns claim/brief/
+#                                # write-back; this sidecar runs the adapter,
+#                                # extracts the verdict, reports PPFLOW-* lines.
 #   pp-flow.sh --drain [list-id] [N]            # UNATTENDED: pick + run N claimable cards
 #                                               #   (default 1; --max N; --states "TODO,CODE")
 #   pp-flow.sh --walk <card-id> [--walk-max N]  # drive ONE card through ALL its gates
@@ -82,6 +87,11 @@ DRAIN_MAX=""       # --drain N: at most N cards this invocation
 DRAIN_STATES=""    # --drain-states "A,B": actionable columns (default TODO,CODE)
 DRAIN_EXCLUDE=""   # --drain-exclude "kind1,kind2"
 WALK_MAX=""        # --walk-max N: gate budget for --walk (default 6)
+SUPERVISED=0        # --supervised: sidecar mode (driver logic owned by the glochid supervisor)
+BRIEF_SRC=""        # --brief-file F: the supervisor-rendered brief (supervised mode)
+CLAIMED_STATE=""    # --claimed-state S: the card's state at claim time (supervised mode)
+CARD_COLS=""        # --columns C: the card's column set for destination validation (supervised)
+LOG_DIR_FLAG=""     # --log-dir D: per-run artifact dir (supervised mode)
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -105,10 +115,15 @@ while [ "$#" -gt 0 ]; do
     --walk) MODE="walk"; shift ;;
     --walk-max) WALK_MAX="${2:-}"; shift 2 ;;
     --force) FORCE=1; shift ;;
+    --supervised) SUPERVISED=1; shift ;;
+    --brief-file) BRIEF_SRC="${2:-}"; shift 2 ;;
+    --claimed-state) CLAIMED_STATE="${2:-}"; shift 2 ;;
+    --columns) CARD_COLS="${2:-}"; shift 2 ;;
+    --log-dir) LOG_DIR_FLAG="${2:-}"; shift 2 ;;
     --url) URL="${2:-$URL}"; shift 2 ;;
     --user) AUSER="${2:-$AUSER}"; shift 2 ;;
     --password|--pass) APASS="${2:-$APASS}"; shift 2 ;;
-    --help|-h) sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --help|-h) sed -n '2,45p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     --*) echo "pp-flow: unknown option $1" >&2; exit 2 ;;
     *)
       if [ -z "$CARD" ]; then CARD="$1"
@@ -433,7 +448,7 @@ agent_evidence() {
 }
 
 # ---- modes -----------------------------------------------------------------------
-LOG_DIR="${PP_FLOW_LOG_DIR:-$ROOT/.ralph}"
+LOG_DIR="${LOG_DIR_FLAG:-${PP_FLOW_LOG_DIR:-$ROOT/.ralph}}"
 mkdir -p "$LOG_DIR" 2>/dev/null || true
 SHORT="$(echo "$CARD" | cut -c1-8)"
 
@@ -572,20 +587,40 @@ case "$MODE" in
     ;;
   run)
     T0=$(date +%s)
-    lease="$(claim)" || exit $?
-    echo "pp-flow: claimed $CARD lease=$lease"
-    # ONE round trip for claimed state + brief + columns. The state rides
-    # first so the double-write defense gets a real baseline (gregor run-3
-    # fix); the columns ride last so valid_destination can check the agent's
-    # named column WITHOUT a second habitat probe (see state_brief_cols).
-    sb="$(state_brief_cols "$(json_str "$CARD")")"
-    claimed_state="$(printf '%s\n' "$sb" | sed -n '1p')"
-    # strip the trailing COLSEP + columns off the end, leaving the brief
-    card_cols="$(printf '%s\n' "$sb" | awk -v sep="$COLSEP" 'f{print;next} $0==sep{f=1}')"
-    b="$(printf '%s\n' "$sb" | awk -v sep="$COLSEP" '$0==sep{exit} {print}' | sed -n '3,$p')"
-    if [ -z "$b" ]; then
-      echo "pp-flow: no such card $CARD after claim" >&2
-      exit 1
+    if [ "$SUPERVISED" = "1" ]; then
+      # SUPERVISED SIDECAR (run-primitive phase 2): the supervisor (the glochid
+      # app) owns claims, the brief render, and every card write. This sidecar
+      # shapes the supplied brief, runs the adapter, extracts the verdict, and
+      # reports PPFLOW-* lines on stdout — it NEVER touches the board (the
+      # executor-never-touches-the-board rule).
+      echo "pp-flow: supervised run card=$CARD (claim/brief/write-back owned by the supervisor)"
+      claimed_state="$CLAIMED_STATE"
+      card_cols="$CARD_COLS"
+      if [ -z "$BRIEF_SRC" ] || [ ! -r "$BRIEF_SRC" ]; then
+        echo "pp-flow: supervised brief missing or unreadable: $BRIEF_SRC" >&2
+        exit 2
+      fi
+      b="$(cat "$BRIEF_SRC")"
+      if [ -z "$b" ]; then
+        echo "pp-flow: supervised brief is empty: $BRIEF_SRC" >&2
+        exit 2
+      fi
+    else
+      lease="$(claim)" || exit $?
+      echo "pp-flow: claimed $CARD lease=$lease"
+      # ONE round trip for claimed state + brief + columns. The state rides
+      # first so the double-write defense gets a real baseline (gregor run-3
+      # fix); the columns ride last so valid_destination can check the agent's
+      # named column WITHOUT a second habitat probe (see state_brief_cols).
+      sb="$(state_brief_cols "$(json_str "$CARD")")"
+      claimed_state="$(printf '%s\n' "$sb" | sed -n '1p')"
+      # strip the trailing COLSEP + columns off the end, leaving the brief
+      card_cols="$(printf '%s\n' "$sb" | awk -v sep="$COLSEP" 'f{print;next} $0==sep{f=1}')"
+      b="$(printf '%s\n' "$sb" | awk -v sep="$COLSEP" '$0==sep{exit} {print}' | sed -n '3,$p')"
+      if [ -z "$b" ]; then
+        echo "pp-flow: no such card $CARD after claim" >&2
+        exit 1
+      fi
     fi
     # MACHINE-LOCAL CONTEXT OVERRIDE (vultr, 2026-09-28): the flow-brief
     # template hardcodes roerick's laptop for == CONTEXT == (repo path, opam
@@ -665,26 +700,73 @@ case "$MODE" in
         if [ -z "$dest" ]; then
           noverdict=1
           echo "pp-flow: WARNING review column '$claimed_state' rendered NO verdict (no DESTINATION line); advancing one column conservatively rather than closing" >&2
-          evid="pp-flow: [NO VERDICT RENDERED — the reviewer did not name a DESTINATION. Advanced one column conservatively; read the summary below and re-run if a decision is needed.] $evid"
+          if [ "$SUPERVISED" != "1" ]; then
+            evid="pp-flow: [NO VERDICT RENDERED — the reviewer did not name a DESTINATION. Advanced one column conservatively; read the summary below and re-run if a decision is needed.] $evid"
+          fi
+          # supervised: the RAW evidence rides PPFLOW-EVIDENCE; the supervisor
+          # applies the POLICY-3 prefix itself when it writes back.
         fi
         ;;
     esac
+    if [ "$SUPERVISED" = "1" ]; then
+      # supervisor contract (run-primitive phase 2): verdict + adapter usage
+      # ride stdout as single machine lines — the supervisor captures them
+      # from driver.log and lands them on the run row (the usage pass-through).
+      rep="$(tr -d '\n' < "$LOG_FILE" 2>/dev/null | sed -n 's/.*USAGE-REPORT //p' | tail -1)"
+      u_status=""; u_cat=""; u_trace=""; u_req=0; u_in=0; u_cached=0; u_out=0; u_wall=0; u_msg=""
+      for kv in $rep; do
+        case "$kv" in
+          status=*) u_status="${kv#status=}" ;;
+          category=*) u_cat="${kv#category=}" ;;
+          trace=*) u_trace="${kv#trace=}" ;;
+          requests=*) u_req="${kv#requests=}" ;;
+          input_tokens=*) u_in="${kv#input_tokens=}" ;;
+          cached_tokens=*) u_cached="${kv#cached_tokens=}" ;;
+          output_tokens=*) u_out="${kv#output_tokens=}" ;;
+          wall_s=*) u_wall="${kv#wall_s=}" ;;
+        esac
+      done
+      case "$rep" in
+        *" message="*) u_msg="${rep##* message=}" ;;
+      esac
+      echo "pp-flow: PPFLOW-DEST $dest"
+      echo "pp-flow: PPFLOW-EVIDENCE $evid"
+      echo "pp-flow: PPFLOW-USAGE requests=$u_req input_tokens=$u_in cached_tokens=$u_cached output_tokens=$u_out wall_s=$u_wall trace=$u_trace"
+      echo "pp-flow: PPFLOW-STATUS status=$u_status category=$u_cat trace=$u_trace message=$u_msg"
+    fi
     if [ "$rc" -ne 0 ]; then
       # OBSERVABILITY: a failed run used to vanish (claim released, no card
-      # trace). Post a failure comment so the card feed shows every run.
-      tailtxt="$(tail -c 300 "$LOG_FILE" 2>/dev/null | tr -d '\r' | tr '\n' ' ' | tr -d '\033' | tr -d '"\\')"
-      fmsg="pp-flow: agent FAILED rc=$rc (runner: $PI_RUNNER, ${AGENT_S}s). Log: $LOG_FILE. Tail: $tailtxt"
-      pp_todo_raw "(begin (load-library \"todo\") (todo/comment/add $(json_str "$CARD") $(json_str "$fmsg")) (todo/item/unassign $(json_str "$CARD")))" >/dev/null
+      # trace). Post a failure comment so the card feed shows every run —
+      # in supervised mode the supervisor owns this comment instead.
+      if [ "$SUPERVISED" != "1" ]; then
+        tailtxt="$(tail -c 300 "$LOG_FILE" 2>/dev/null | tr -d '\r' | tr '\n' ' ' | tr -d '\033' | tr -d '"\\')"
+        fmsg="pp-flow: agent FAILED rc=$rc (runner: $PI_RUNNER, ${AGENT_S}s). Log: $LOG_FILE. Tail: $tailtxt"
+        pp_todo_raw "(begin (load-library \"todo\") (todo/comment/add $(json_str "$CARD") $(json_str "$fmsg")) (todo/item/unassign $(json_str "$CARD")))" >/dev/null
+      fi
       T1=$(date +%s)
       ledger_line "$(date -u +%FT%TZ)" "$CARD" "$PI_RUNNER" "$(( T1 - T0 ))" "$AGENT_S" "$rc" "no" "" "$claimed_state" ""
       run_summary "$CARD" "$PI_RUNNER" "$(( T1 - T0 ))" "$AGENT_S" "$rc" "no" "" "$claimed_state" ""
-      echo "pp-flow: agent failed (rc=$rc); card NOT advanced, failure comment posted, claim released — fix and re-run" >&2
+      if [ "$SUPERVISED" = "1" ]; then
+        echo "pp-flow: agent failed (rc=$rc); verdict + usage reported to the supervisor; card writes owned by it" >&2
+      else
+        echo "pp-flow: agent failed (rc=$rc); card NOT advanced, failure comment posted, claim released — fix and re-run" >&2
+      fi
       exit "$rc"
     fi
     case "$evid" in
       "("*")") EVFLAG=no ;;  # the placeholder, not real evidence
       *) EVFLAG=yes ;;
     esac
+    if [ "$SUPERVISED" = "1" ]; then
+      # supervised: the supervisor owns the write-back (transition + evidence
+      # comment + lease release) and the run-row finish; this sidecar stops here.
+      T1=$(date +%s)
+      nodest="$dest"; [ "$noverdict" = 1 ] && nodest="(no-verdict)"
+      ledger_line "$(date -u +%FT%TZ)" "$CARD" "$PI_RUNNER" "$(( T1 - T0 ))" "$AGENT_S" "$rc" "$EVFLAG" "$nodest" "$claimed_state" ""
+      run_summary "$CARD" "$PI_RUNNER" "$(( T1 - T0 ))" "$AGENT_S" "$rc" "$EVFLAG" "$nodest" "$claimed_state" ""
+      echo "pp-flow: supervised run complete for $CARD (write-back owned by the supervisor)"
+      exit 0
+    fi
     # verbatim: the posted comment IS the agent's EVIDENCE line. The claim
     # lease is released inside write_back on every exit path (in-batch), so
     # a successfully written-back card ends with an empty assignee.

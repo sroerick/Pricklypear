@@ -1499,6 +1499,75 @@ let test_habitat_bearer ~env () =
            Alcotest.(check (pair string string)) "bearer header"
              ("authorization", "Bearer tok-abc") (Habitat.auth_header c))
 
+(* run-supervisor (run-primitive phase 2): the PPFLOW parse contract + pure
+   policy. These are the supervisor/sidecar boundary — a regression here
+   silently loses verdicts or usage on the run rows. *)
+let test_supervisor_pure () =
+  let cfg = Supervisor.config () in
+  let v =
+    Supervisor.parse_verdict
+      "noise before\n\
+       pp-flow: PPFLOW-DEST DONE\n\
+       pp-flow: PPFLOW-EVIDENCE built + tested the change (dune build OK)\n\
+       pp-flow: PPFLOW-USAGE requests=3 input_tokens=1200 cached_tokens=800 output_tokens=310 wall_s=95 trace=tr-1\n\
+       pp-flow: PPFLOW-STATUS status=:SUCCEEDED category= trace=tr-1 message=\n\
+       noise after\n"
+  in
+  Alcotest.(check string) "dest" "DONE" v.Supervisor.v_dest;
+  Alcotest.(check string) "evidence" "built + tested the change (dune build OK)"
+    v.Supervisor.v_evid;
+  Alcotest.(check int) "requests" 3 v.Supervisor.v_requests;
+  Alcotest.(check int) "input tokens" 1200 v.Supervisor.v_input;
+  Alcotest.(check int) "cached tokens" 800 v.Supervisor.v_cached;
+  Alcotest.(check int) "output tokens" 310 v.Supervisor.v_output;
+  Alcotest.(check int) "wall" 95 v.Supervisor.v_wall;
+  Alcotest.(check string) "trace" "tr-1" v.Supervisor.v_trace;
+  Alcotest.(check string) "status" ":SUCCEEDED" v.Supervisor.v_status;
+  let v2 =
+    Supervisor.parse_verdict
+      "pp-flow: PPFLOW-STATUS status=:PROVIDER-FAILURE category=:PROVIDER-FAILURE trace=tr-2 message=:PROVIDER-FAILURE HTTP 402 upstream flake"
+  in
+  Alcotest.(check string) "failure status" ":PROVIDER-FAILURE"
+    v2.Supervisor.v_status;
+  Alcotest.(check string) "failure category" ":PROVIDER-FAILURE"
+    v2.Supervisor.v_category;
+  Alcotest.(check string) "failure message" ":PROVIDER-FAILURE HTTP 402 upstream flake"
+    v2.Supervisor.v_message;
+  let tf ~s ~c ~m =
+    Supervisor.transient_failure ~status:s ~category:c ~message:m
+  in
+  Alcotest.(check bool) "crash transient" true (tf ~s:"crashed" ~c:"" ~m:"");
+  Alcotest.(check bool) "timeout transient" true (tf ~s:"timed-out" ~c:"" ~m:"");
+  Alcotest.(check bool) "402 transient" true
+    (tf ~s:"provider-failure" ~c:"PROVIDER-FAILURE" ~m:"HTTP 402 blocked");
+  Alcotest.(check bool) "401 deterministic" false
+    (tf ~s:"provider-failure" ~c:"PROVIDER-FAILURE" ~m:"HTTP 401 bad creds");
+  Alcotest.(check bool) "invalid deterministic" false
+    (tf ~s:"invalid-output" ~c:"INVALID-OUTPUT" ~m:"no verdict");
+  Alcotest.(check int) "backoff 1" 2 (Supervisor.backoff_s 1);
+  Alcotest.(check int) "backoff 2" 4 (Supervisor.backoff_s 2);
+  Alcotest.(check int) "backoff cap" 60 (Supervisor.backoff_s 9);
+  Alcotest.(check string) "csv" "[\"TODO\",\"CODE\"]"
+    (Supervisor.csv_to_json "TODO,CODE");
+  Alcotest.(check string) "csv empty" "[]" (Supervisor.csv_to_json "");
+  Alcotest.(check string) "csv passthrough" "[\"A\"]"
+    (Supervisor.csv_to_json "[\"A\"]");
+  Alcotest.(check bool) "review noverdict" true
+    (Supervisor.noverdict_column "LOGIC-REVIEW");
+  Alcotest.(check bool) "work noverdict" false
+    (Supervisor.noverdict_column "CODE");
+  Alcotest.(check string) "norm status" "timed-out"
+    (Supervisor.norm_status ":TIMED-OUT");
+  Alcotest.(check string) "norm colon" "PROVIDER-FAILURE"
+    (Supervisor.norm_colon ":PROVIDER-FAILURE");
+  let steps =
+    Supervisor.steps_rebuild cfg ~state:"failed" ~attempts:2 ~error:"rc=1"
+  in
+  Alcotest.(check bool) "steps state" true
+    (Supervisor.contains_sub "\"state\":\"failed\"" steps);
+  Alcotest.(check bool) "steps attempts" true
+    (Supervisor.contains_sub "\"attempts\":2" steps)
+
 let () =
   Eio_main.run @@ fun env ->
   let rt = Runtime.make () in
@@ -1575,4 +1644,7 @@ let () =
             (test_habitat_panes ~rt)
         ; Alcotest.test_case "keyboard-shortcuts" `Quick
             (test_glochid_keys ~rt) ] );
+      ( "run-supervisor",
+        [ Alcotest.test_case "pure-policy" `Quick
+            test_supervisor_pure ] );
     ]

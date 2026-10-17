@@ -224,6 +224,7 @@ attempt() {
   intok="$(tr -d '\n' < "$WORK.out" 2>/dev/null | sed -n 's/.*:INPUT-TOKENS[[:space:]]*\([0-9]*\).*/\1/p')"
   outtok="$(tr -d '\n' < "$WORK.out" 2>/dev/null | sed -n 's/.*:OUTPUT-TOKENS[[:space:]]*\([0-9]*\).*/\1/p')"
   reqs="$(tr -d '\n' < "$WORK.out" 2>/dev/null | sed -n 's/.*:PROVIDER-REQUESTS[[:space:]]*\([0-9]*\).*/\1/p')"
+  cached="$(tr -d '\n' < "$WORK.out" 2>/dev/null | sed -n 's/.*:CACHED-TOKENS[[:space:]]*\([0-9]*\).*/\1/p')"
   # Fleet analytics (autolith-analytics M3): one run-step event per attempt,
   # best-effort append; a failed write never affects the job outcome.
   ANALYTICS_EVENTS_DIR="${ANALYTICS_EVENTS_DIR:-$HOME/dev/wyo.tech/autolith-analytics/events}"
@@ -255,9 +256,11 @@ transient_failure() {
 }
 
 attempt=0
+TOTAL_ELAPSED=0
 while : ; do
   attempt=$(( attempt + 1 ))
   attempt "$attempt"
+  TOTAL_ELAPSED=$(( TOTAL_ELAPSED + ${ELAPSED:-0} ))
   echo "pp-flow-autolith: job=$JOB_ID status=${status:-<crashed>} model=${AUTOLITH_MODEL:-default} role=$ROLE perm=$PERM elapsed=${ELAPSED}s trace=$trace tokens_in=$intok tokens_out=$outtok provider_requests=$reqs attempt=$attempt/$(( RETRIES + 1 ))" >&2
   [ "$status" = ":SUCCEEDED" ] && break
   retryable="$(transient_failure)"
@@ -273,6 +276,14 @@ while : ; do
   sleep "$delay"
 done
 
+  # USAGE PASS-THROUGH (run-primitive phase 2): the job result already
+  # carries the provider counts (:INPUT-TOKENS / :OUTPUT-TOKENS /
+  # :PROVIDER-REQUESTS parsed above) and they were dropped at this
+  # boundary. Emit ONE machine line on stdout — it lands in the pp-flow
+  # transcript — so the supervisor's run-usage-set / run-result finally
+  # receive them. status/category/trace are LAST-attempt facts by the same
+  # rule; wall_s accumulates across attempts.
+  echo "pp-flow-autolith: USAGE-REPORT status=${status:-crashed} category=${fcat:-} trace=${trace:-} requests=${reqs:-0} input_tokens=${intok:-0} cached_tokens=${cached:-0} output_tokens=${outtok:-0} wall_s=${TOTAL_ELAPSED:-0} message=${failure:-none}"
 if [ "$status" != ":SUCCEEDED" ]; then
   echo "pp-flow-autolith: job status ${status:-<crashed>} (elapsed=${ELAPSED}s, trace=$trace, failure=${failure:-unknown})" >&2
   archive_failure "${status:-crashed}"
