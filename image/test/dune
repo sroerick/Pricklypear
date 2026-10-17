@@ -142,7 +142,8 @@
 (test
  (name data_spaces_test)
  (modules data_spaces_test)
- (libraries pricklypear-image pricklypear-lisp alcotest eio_main yojson pgx unix))
+   (libraries pricklypear-image pricklypear-lisp pricklypear-common alcotest eio_main
+     yojson pgx unix))
 
 (test
  (name admin_rls_test)

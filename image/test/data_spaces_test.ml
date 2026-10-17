@@ -125,7 +125,7 @@ let test_unadmitted_regression () =
       let free_ty = ty ^ "free" in
       let id = insert conn ~type_name:free_ty ~author:"alice" in
       let got = path_of conn ~id in
-      let want_prefix = "data.u.alice." in
+        let want_prefix = "data.u." ^ TS.enc_label "alice" ^ "." in
       Alcotest.(check bool)
         (Printf.sprintf "user path (got %s)" got)
         true
@@ -178,10 +178,18 @@ let test_rls_floor () =
         "CREATE ROLE pp_spaces_probe NOLOGIN NOSUPERUSER NOBYPASSRLS \
          NOINHERIT";
       exec conn "GRANT SELECT, INSERT ON tree_nodes TO pp_spaces_probe";
+        (* the RLS policy evaluates tree_path_in_member_space / tree_user_is_admin,
+           which read these tables as the probe role (029/030/033). *)
+        exec conn
+          "GRANT SELECT ON data_space_members, data_spaces, users \
+           TO pp_spaces_probe";
       Fun.protect
         ~finally:(fun () ->
           exec conn "RESET ROLE";
           exec conn "REVOKE SELECT, INSERT ON tree_nodes FROM pp_spaces_probe";
+            exec conn
+              "REVOKE SELECT ON data_space_members, data_spaces, users \
+               FROM pp_spaces_probe";
           exec conn "DROP ROLE IF EXISTS pp_spaces_probe")
         (fun () ->
           exec conn "SET ROLE pp_spaces_probe";
@@ -213,8 +221,10 @@ let test_rls_floor () =
 
 (* ---------------- S2: prim surface (Crud-level) ---------------- *)
 
-module Crud = Pricklypear_image_lib.Crud
-module Ast = Pricklypear_lisp.Ast
+  module Crud = Pricklypear_image_lib.Crud
+  module Ast = Pricklypear_lisp.Ast
+  module Rc = Pricklypear_image_lib.Request_context
+  module M = Pricklypear_common.Manifest
 
 (** S2 fixture: unique names, nothing pre-seeded — the tests exercise the
     Crud space-management functions themselves. Tears down by name. *)
@@ -228,11 +238,16 @@ let with_s2 f =
         ~finally:(fun () ->
           exec conn
             (Printf.sprintf
-               "DELETE FROM tree_nodes WHERE kind='datum' AND type_name='%s'; \
-                DELETE FROM data_rows WHERE type_name='%s'; \
-                DELETE FROM data_spaces WHERE name = '%s'"
-               ty ty sp))
-        (fun () -> f store ~sp ~ty))
+                 "DELETE FROM tree_nodes WHERE kind='datum' AND type_name='%s'; \
+                  DELETE FROM data_rows WHERE type_name='%s'; \
+                  DELETE FROM data_spaces WHERE name = '%s'; \
+                  DELETE FROM type_defs WHERE name = '%s'"
+                 ty ty sp ty))
+          (fun () ->
+            (* 043's declared-type write gate: Crud.create/update/update_field
+               reject an undeclared type_name, so declare it schemaless first. *)
+            ignore (Crud.deftype store ~args:[Ast.VStr ty] ~author:"alice");
+            f store ~sp ~ty))
 
 let expect_denied label f =
   match f () with
@@ -396,8 +411,11 @@ let test_row_level_routing () =
 
 (* ---------------- S3: the log consumer (data-history) ---------------- *)
 
-(* S3: member edits produce per-author before-images, newest-first;
-   non-member history reads return nothing (visibility holds). *)
+(* S3: member edits produce before-images, newest-first. Updates preserve the
+   row's author (update_datum binds no author; the actor lands in acted_by,
+   migration 039) — so every version carries the creating author, while the
+   bodies prove each member edit landed. Non-member history reads return
+   nothing (visibility holds). *)
 let test_history () =
   with_s2 (fun store ~sp ~ty ->
       ignore (Crud.space_create store ~caller:"alice" ~name:sp ());
@@ -428,8 +446,10 @@ let test_history () =
             | _ -> Alcotest.fail "version missing author")
           hist
       in
-      Alcotest.(check (list string)) "newest-first authors"
-        [ "bob"; "alice"; "alice" ] authors;
+        Alcotest.(check (list string)) "newest-first authors"
+          (* updates preserve the row author; bodies + versions still pin
+             bob's edit as head (checked below). *)
+          [ "alice"; "alice"; "alice" ] authors;
       let head_n =
         match Yojson.Safe.Util.member "body" (List.hd hist) with
         | `Assoc a -> (
@@ -514,17 +534,38 @@ let test_open_space () =
 let test_shared_field_update_lands () =
   with_s2 (fun store ~sp ~ty ->
       let conn = Option.get (S.conn_of store) in
+        (* the test's premise: a shared-space row. Create the space, add bob
+           as a member, admit the type — otherwise the raw insert lands in
+           alice's user garden and bob cannot see it (visible_sql). *)
+        ignore (Crud.space_create store ~caller:"alice" ~name:sp ());
+        ignore
+          (Crud.space_add_member store ~caller:"alice" ~kernel_admin:false
+             ~space:sp ~username:"bob");
+        ignore
+          (Crud.space_admit store ~caller:"alice" ~kernel_admin:false ~space:sp
+             ~type_name:ty);
       let id = insert conn ~type_name:ty ~author:"alice" in
-      (* bob is a member; update ONE field via the real Crud path *)
-      (match
-         Crud.update_field_guarded store ~type_name:ty ~id ~field:"n"
-           ~value:"2" ~caller:"bob"
-       with
-       | Ast.VStr _ -> ()
-       | Ast.VNil ->
-           Alcotest.fail
-             "shared-space update-field returned no value (a1ce59db silent no-op)"
-       | _ -> Alcotest.fail "shared-space update-field returned unexpected shape");
+        (* bob is a member; update ONE field via the real Crud path.
+           update-field reads the row through session_user() (the fiber-bound
+           request context), so bind bob's context the way prod does. *)
+        let ctx =
+          Rc.make ~is_admin:false
+            ~manifest:(M.make ~user_id:"test" ~username:"bob"
+                         ~branch_id:main_id ~branch_name:"test/personal"
+                         ~boot_mode:M.Boot_on_connect ~image_version:"test" ())
+            ~env:(Pricklypear_lisp.Env.create ())
+            ~routes:(Hashtbl.create 4) ~source_ip:None
+        in
+        Rc.with_current ctx (fun () ->
+            match
+              Crud.update_field_guarded store ~type_name:ty ~id ~field:"n"
+                ~value:"2" ~caller:"bob"
+            with
+            | Ast.VStr _ -> ()
+            | Ast.VNil ->
+                Alcotest.fail
+                  "shared-space update-field returned no value (a1ce59db silent no-op)"
+            | _ -> Alcotest.fail "shared-space update-field returned unexpected shape");
       (* the projection reflects the new value *)
       let sql =
         "SELECT fields->>'n'::text FROM tree_data_rows \
@@ -599,6 +640,9 @@ let test_bookkeeping_on_unstamped_row () =
 let test_node_path_pk_fallback () =
   with_s2 (fun store ~sp ~ty ->
       let conn = Option.get (S.conn_of store) in
+        (* 034 row-level routing is for OPEN spaces; without the space row the
+           update guard has no membership to consult and denies. *)
+        ignore (Crud.space_create store ~caller:"alice" ~name:sp ~open_:true ());
       let id =
         match Crud.create store ~type_name:ty
                 ~fields_json:(Printf.sprintf "{\"n\":1,\"space\":\"%s\"}" sp)
