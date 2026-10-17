@@ -140,12 +140,7 @@
       "classic"
       "Classic Mac"
       "Platinum gray System 7 vibes. The old product default."
-      "theme-classic")
-    (list
-      "as400"
-      "AS/400"
-      "CRT green on near-black — the original notes-tree terminal skin."
-      "theme-as400")))
+      "theme-classic")))
 
 (define theme/chrome
   "#ddd4c0")
@@ -296,20 +291,12 @@
             "#ece9d8"
             "#c0c0c0"
             "#0000ee")
-          (if
-            (string-eq name "as400")
             (theme/swatch-html
               "#111111"
               "#33cc33"
               "#1a1a1a"
               "#1a2a1a"
-              "#33ff33")
-            (theme/swatch-html
-              "#111111"
-              "#33cc33"
-              "#1a1a1a"
-              "#1a2a1a"
-              "#33ff33")))))))
+              "#33ff33")))))) 
 
 (define theme/row-alt
   "#efe9db")

@@ -2006,7 +2006,6 @@
     libs/theme-classic/lib.pp
     libs/theme-prickly/lib.pp
     libs/theme-prickly-night/lib.pp
-    libs/theme-as400/lib.pp
     image/lib/session.ml
    )
    (verify

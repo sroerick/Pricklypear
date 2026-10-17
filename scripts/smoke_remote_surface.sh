@@ -2,7 +2,7 @@
 # pp-remote HTML surface smoke — the shared agent loop running on the
 # CLIENT host (borge/remote-eval.borg agent-loop): chat page, multipart
 # /chat stream over a mock provider, eval box at /eval, lens browser at
-# /code. Mirrors smoke_agent_surface.sh; no image required (the mock
+# /code. Mirrors smoke_glochid_surface.sh; no image required (the mock
 # provider makes no tool calls, so nothing crosses the wire).
 #
 # Boots `_build/default/remote/bin/main.exe --serve --mock-script`, then:

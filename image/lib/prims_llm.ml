@@ -88,7 +88,7 @@ let register (t : t) (tbl : Primitives.t) : unit =
 
   (* (llm-chat system user [temperature] [max-tokens]) -> VStr content.
      Raw one-shot chat completion — NOT the agentic install loop. Returns
-     the model's content string. Used by libs/forge drafters and any
+     the model's content string. Used by forge spec-graph drafters and any
      caller that wants a plain completion. See llm_client.call. *)
   Primitives.register tbl "llm-chat"
     (fun args ->
@@ -120,7 +120,7 @@ let register (t : t) (tbl : Primitives.t) : unit =
        | Ok s -> (Pricklypear_lisp.Ast.VStr s)
        | Error e -> (Pricklypear_lisp.Ast.VStr ("llm-chat: " ^ e))));
         (* lint-exempt-prim-error: forge/llm-error? pattern-matches this error
-           prefix (libs/forge lib.pp); raising needs the paired Nopales guard
+           prefix; raising needs the paired Nopales guard
            change on the live package. Tracked on the habitat issue register. *)
 
   (* Coding tools: freeze AST rewrites into store *)

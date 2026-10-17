@@ -339,7 +339,7 @@
   (subsection errors-and-locations
    (doc "Structured interpreter errors with source locations; catch surface for packages")
    (status implemented)
-   (implements lisp/lib/ast.ml lisp/lib/eval.ml lisp/lib/reader.ml image/lib/http_pages.ml image/lib/agent_tools.ml scripts/lint_prim_error_returns.sh)
+   (implements lisp/lib/ast.ml lisp/lib/eval.ml lisp/lib/reader.ml image/lib/http_pages.ml image/lib/agent_tools.ml)
    (verify
     (test "parse error includes line:col")
     (test "unbound var error includes name and optional span")
