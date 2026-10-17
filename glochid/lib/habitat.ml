@@ -136,8 +136,8 @@ let eval (env : Eio_unix.Stdenv.base) (expr : string)
       Error
         "habitat bridge not configured: set GLOCHID_HABITAT_URL/USER/PASS \
          (or PP_URL/PP_USER/PP_PASS)"
-  | Some { url; user; pass } -> (
-      match Pp_http.split_base (trim_url url) with
+  | Some c -> (
+      match Pp_http.split_base (trim_url c.url) with
       | Error e -> Error ("habitat: " ^ e)
       | Ok endpoint -> (
           let body =
@@ -146,7 +146,7 @@ let eval (env : Eio_unix.Stdenv.base) (expr : string)
           match
             Pp_http.request ~timeout_s:eval_timeout_s ~env ~endpoint
               ~meth:"POST" ~path:"/api/eval"
-              ~headers:[ basic_auth_header ~user ~password:pass ]
+              ~headers:[ auth_header c ]
               ~body ()
           with
           | Error e -> Error ("habitat: " ^ e)
