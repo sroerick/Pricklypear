@@ -1573,8 +1573,46 @@ let serve_eio
            ~context:[("phase", "eio-connection")]
            ("eio connection handler failed: " ^ Printexc.to_string ex))
   in
-  while true do
-    Eio.Net.accept_fork socket ~sw ~on_error (fun client_sock client_addr ->
-        try conn_handler client_addr client_sock
-        with exn -> on_error exn)
-  done
+    (* Per-connection lifetime cap (card 778572ee): a wedged connection
+       fiber — gluten's read loop parked on a never-resolved yield after an
+       httpun error state — never returns, so eio's accept_fork never closes
+       the flow; ~193 such CLOSE_WAIT fds exhausted the soft limit and accept
+       failed with EMFILE forever (the 2026-10-16 tuna 5h outage). Race every
+       connection against PP_HTTP_CONN_TIMEOUT (seconds, default 900, 0
+       disables): the losing handler fiber is cancelled, which unblocks the
+       parked read, the handler completes, and the flow is closed. Long
+       streams (SSE) are the tradeoff: 15 min per connection, configurable. *)
+    let conn_timeout_s =
+      match Sys.getenv_opt "PP_HTTP_CONN_TIMEOUT" with
+      | Some s ->
+          (match int_of_string_opt s with
+           | Some n when n >= 0 -> n
+           | _ -> 900)
+      | None -> 900
+    in
+    let sockaddr_str (sa : Eio.Net.Sockaddr.stream) : string =
+      match unix_sockaddr_of_eio sa with
+      | Unix.ADDR_UNIX p -> p
+      | Unix.ADDR_INET (a, p) ->
+          Unix.string_of_inet_addr a ^ ":" ^ string_of_int p
+    in
+    while true do
+      Eio.Net.accept_fork socket ~sw ~on_error (fun client_sock client_addr ->
+          if conn_timeout_s <= 0 then
+            (try conn_handler client_addr client_sock with exn -> on_error exn)
+          else
+            try
+              ignore
+                (Eio.Fiber.first
+                   (fun () -> conn_handler client_addr client_sock)
+                   (fun () ->
+                      Eio.Time.sleep (Eio.Stdenv.clock env)
+                        (float_of_int conn_timeout_s);
+                      ignore
+                        (Ops_log.warn ~component:"http"
+                           ~context:[ ("phase", "conn-timeout") ]
+                           (Printf.sprintf
+                              "connection from %s exceeded %ds; reaping"
+                              (sockaddr_str client_addr) conn_timeout_s))))
+            with exn -> on_error exn)
+    done

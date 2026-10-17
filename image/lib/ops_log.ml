@@ -74,6 +74,14 @@ let push (ev : event) : unit =
    with ex -> Mutex.unlock mutex; raise ex);
   Mutex.unlock mutex
 
+(** UTC ISO-8601 stamp for the stderr mirror line. The 2026-10-16 tuna
+    forensics suffered from timestamp-less request logs (only boot lines
+    carried any time), so every ops-log line now stamps itself. *)
+let iso_utc (t : float) : string =
+  let tm = Unix.gmtime t in
+  Printf.sprintf "%04d-%02d-%02dT%02d:%02d:%02dZ"
+    (tm.Unix.tm_year + 1900) (tm.Unix.tm_mon + 1) tm.Unix.tm_mday
+    tm.Unix.tm_hour tm.Unix.tm_min tm.Unix.tm_sec
 let emit ?(context = []) ~(level : level) ~(component : string)
     (msg : string) : event =
   let fp = fingerprint_of ~component ~msg in
@@ -94,8 +102,8 @@ let emit ?(context = []) ~(level : level) ~(component : string)
       ^ String.concat " "
           (List.map (fun (k, v) -> k ^ "=" ^ v) context)
   in
-  Printf.eprintf "[%s] %s: %s%s\n%!"
-    (level_to_string level) component msg ctx;
+  Printf.eprintf "%s [%s] %s: %s%s\n%!"
+    (iso_utc ev.ts) (level_to_string level) component msg ctx;
   ev
 
 let info ?(context = []) ~component msg = emit ~context ~level:Info ~component msg
