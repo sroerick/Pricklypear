@@ -525,9 +525,7 @@
     "Open cards created before the 3-day threshold (oldest first)."
     (let ((t (workstreams/stale-threshold)))
       (list/filter
-        (lambda (n)
-          (let ((c (dict-get n "created_at")))
-            (if (null? c) #f (workstreams/old? c t))))
+        (lambda (n) (workstreams/stale-node? n t))
         (workstreams/open-items list-id)))))
 
 (define workstreams/stale-items-from
@@ -536,13 +534,17 @@
        (single-pass variant of stale-items)."
     (let ((t (workstreams/stale-threshold)))
       (list/filter
-        (lambda (n)
-          (let ((c (dict-get n "created_at")))
-            (if (null? c) #f (workstreams/old? c t))))
+        (lambda (n) (workstreams/stale-node? n t))
         (workstreams/open-items-from nodes lid)))))
 
 (define workstreams/stale-threshold
   (lambda () (as-str (date-add-days -3))))
+
+(define workstreams/stale-node?
+  (lambda (n t)
+    "Stale open-card node: created_at present and older than threshold t."
+    (let ((c (dict-get n "created_at")))
+      (if (null? c) #f (workstreams/old? c t)))))
 
 (define workstreams/status-map-default
   (lambda
