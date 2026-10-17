@@ -267,7 +267,7 @@
                       --window train|validate|holdout \
                       --out manifest.json
          |)))
-   (implements spikes/upsets/sim_main.ml spikes/upsets/replay.ml spikes/upsets/fills.ml spikes/upsets/poison_test.ml)
+   (implements spikes/upsets/sim_main.ml spikes/upsets/replay.ml spikes/upsets/fills.ml spikes/upsets/upsets_test.ml)
   )
 
   (subsection parity-contract
