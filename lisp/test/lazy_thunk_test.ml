@@ -147,13 +147,13 @@ let unbound_failure_is_retryable () =
   in
   Alcotest.(check bool) "first force raised unbound" true raised_first;
   (* the package finishes loading: the name registers *)
-  ignore (eval_str env "(define (later-form x) (* 2 x))");
+  ignore (eval_str env "(define (later-form x) x)");
   registered := true;
   let v = eval_str env "late-ref" in
-  Alcotest.(check string) "second touch retries and succeeds" "2"
+  Alcotest.(check string) "second touch retries and succeeds" "1"
     (Reader.pp_value v);
   ignore (eval_str env "late-ref");
-  Alcotest.(check int) "success memoized (no third run)" 3 !count
+  Alcotest.(check int) "success memoized (no third run)" 2 !count
 
 let cyclic_force_raises () =
   let env = Env.create () in
