@@ -67,7 +67,14 @@ let emit_write ~(caller : string) ~(cls : string) ~(type_name : string)
   (* d1399ea3 boundary-origin: mutating rows carry the client source_ip
      (Request_context fiber binding; None outside a request). IP-class
      metadata stays OFF data rows themselves — the ledger is the boundary. *)
-  let origin : string option = Request_context.source_ip (Request_context.get () |> Option.get) in
+    let origin : string option =
+      (* session_actor above documents the contract: scripts and jobs bind no
+         request context. Option.get here crashed every non-request write
+         (tests, scripts, jobs) with invalid_argument "option is None". *)
+      match Request_context.get () with
+      | Some c -> Request_context.source_ip c
+      | None -> None
+    in
   ignore
     (Activity_ledger.push ~actor:caller ~cls
        ~target:(Activity_ledger.path_target (type_name ^ "/" ^ id))
@@ -794,11 +801,18 @@ let create_outcome
     (* tree is truth; reverse trigger mirrors to data_rows *)
     let id = Tree_store.insert_datum conn ~type_name ~fields_json ~author
         ~acted_by:(session_actor ()) in
-    (match id with
-     | Ok s ->
-         emit_write ~caller:author ~cls:"data.write" ~type_name ~id:s
-           ~outcome:"ok";
-         W_ok s
+      (match id with
+       | Ok s ->
+           (* Row-level body-space routing (034): the pre-insert guard with
+              ~id:None only checks admitted types, so a create whose body
+              carries "space" skipped the membership check entirely —
+              anonymous could write into an open space. Re-guard against the
+              landed row's actual space; the tx aborts on denial. *)
+           guard_space_write conn ~prim:"create" ~type_name ~caller:author
+             ~id:(Some s);
+           emit_write ~caller:author ~cls:"data.write" ~type_name ~id:s
+             ~outcome:"ok";
+           W_ok s
      | Error _ ->
          raise (Pricklypear_lisp.Ast.Interp_error
                   (Pricklypear_lisp.Ast.Prim_error
@@ -2082,7 +2096,13 @@ let tree_children_html (store : Store.t) ~(prefix : string) ~(garden_root : stri
 let emit_tree_write ~(caller : string) ~(target : string) ~(outcome : string)
     : unit =
   if caller <> "" && caller <> "unknown" then
-    let origin : string option = Request_context.source_ip (Request_context.get () |> Option.get) in
+      let origin : string option =
+        (* same contract as emit_write: scripts and jobs bind no request
+           context; never Option.get here. *)
+        match Request_context.get () with
+        | Some c -> Request_context.source_ip c
+        | None -> None
+      in
     ignore
       (Activity_ledger.push ~actor:caller ~cls:"data.write"
          ~target:(Activity_ledger.path_target target) ~outcome
