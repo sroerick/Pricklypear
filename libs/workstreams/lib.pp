@@ -938,14 +938,17 @@
 (define workstreams/run-patch
   (lambda (run-id updates)
     "Read-modify-write one row: updates is a flat (k v k v ...) list.
-     Returns the new body, or () when the row is gone. The read and the
-     write land in ONE eval — the phase-2 CAS contract point."
+     Returns the FRESH body after the write, or () when the row is
+     gone. The read and the write land in ONE eval — the phase-2 CAS
+     contract point."
     (let
       ((cur (workstreams/run-get run-id)))
       (if
         (null? cur)
         ()
-        (workstreams/run-save run-id (dict-set* cur updates))))))
+        (seq
+          (workstreams/run-save run-id (dict-set* cur updates))
+          (workstreams/run-get run-id))))))
 
 (define workstreams/run-state
   (lambda (row)
@@ -981,44 +984,35 @@
         ()
         (if
           (string-eq (workstreams/run-state cur) "queued")
-          (workstreams/run-save
+          (workstreams/run-patch
             run-id
-            (dict-set*
-              cur
-              (list
-                "state" "claimed"
-                "claim_supervisor_id" (as-str supervisor-id)
-                "claim_lease_ts" (now-iso)
-                "claim_heartbeat_at" (now-iso)
-                "claim_ttl_s" (as-str ttl-s)
-                "claim_deadline" (as-str deadline-iso)
-                "runner_instance" (as-str instance-id)
-                "runner_identity" (as-str identity)
-                "claimed_at" (now-iso))))
+            (list
+              "state" "claimed"
+              "claim_supervisor_id" (as-str supervisor-id)
+              "claim_lease_ts" (now-iso)
+              "claim_heartbeat_at" (now-iso)
+              "claim_ttl_s" (as-str ttl-s)
+              "claim_deadline" (as-str deadline-iso)
+              "runner_instance" (as-str instance-id)
+              "runner_identity" (as-str identity)
+              "claimed_at" (now-iso)))
           ())))))
 
 (define workstreams/run-heartbeat
   (lambda (run-id deadline-iso)
     "Bump the claim's heartbeat (the supervisor tick while a child
-     lives) and extend the expiry deadline. Returns the row, or ()
-     when the row is missing."
-    (let
-      ((cur (workstreams/run-get run-id)))
-      (if
-        (null? cur)
-        ()
-        (workstreams/run-save
-          run-id
-          (dict-set*
-            cur
-            (list
-              "claim_heartbeat_at" (now-iso)
-              "claim_deadline" (as-str deadline-iso))))))))
+     lives) and extend the expiry deadline. Returns the fresh row, or
+     () when the row is missing."
+    (workstreams/run-patch
+      run-id
+      (list
+        "claim_heartbeat_at" (now-iso)
+        "claim_deadline" (as-str deadline-iso)))))
 
 (define workstreams/run-start
   (lambda (run-id)
-    "claimed -> running (the first sidecar spawned). Returns the row,
-     or () when the row is missing or not claimed."
+    "claimed -> running (the first sidecar spawned). Returns the fresh
+     row, or () when the row is missing or not claimed."
     (let
       ((cur (workstreams/run-get run-id)))
       (if
@@ -1026,9 +1020,9 @@
         ()
         (if
           (string-eq (workstreams/run-state cur) "claimed")
-          (workstreams/run-save
+          (workstreams/run-patch
             run-id
-            (dict-set* cur (list "state" "running" "started_at" (now-iso))))
+            (list "state" "running" "started_at" (now-iso)))
           ())))))
 
 (define workstreams/run-step-set
@@ -1080,15 +1074,13 @@
           ((s (workstreams/run-state cur)))
           (if
             (or (string-eq s "claimed") (string-eq s "running"))
-            (workstreams/run-save
+            (workstreams/run-patch
               run-id
-              (dict-set*
-                cur
-                (list
-                  "state" (as-str final-state)
-                  "error_class" (as-str error-class)
-                  "error_message" (as-str error-message)
-                  "ended_at" (now-iso))))
+              (list
+                "state" (as-str final-state)
+                "error_class" (as-str error-class)
+                "error_message" (as-str error-message)
+                "ended_at" (now-iso)))
             ()))))))
 
 (define workstreams/run-expired?
@@ -1123,11 +1115,17 @@
 (define workstreams/run-all
   (lambda ()
     "Every run row in the shared run space as (id . body) pairs, id
-     dashed. ONE scan of the run subtree (rows sit two levels below
-     the data.s.run root: data.s.run.run.<uuid-label>)."
+     dashed. ONE scan of the shared data root filtered to the run type
+     (the todo/item/all-shared pattern — datum paths are
+     data.s.<enc-space>.<enc-type>.<uuid-label> and tree_enc_label
+     mangles the bare prefix, so a data.s.run scan misses; the proven
+     pattern wins)."
     (list/map
       todo/tree/node->pair
-      (tree/list "data.s.run" 2 2000))))
+      (list/filter
+        (lambda (nj)
+          (string-eq (as-str (dict-get nj "type")) "run"))
+        (tree/list "data.s" 3 2000)))))
 
 (define workstreams/run-open
   (lambda ()
