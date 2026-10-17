@@ -174,6 +174,17 @@ keep the two roughly aligned when you change authority/workflow rules.
 
 Also: `(notes/doc/get "wiki-schema")` for the notes/wiki shape.
 
+### Identity hygiene: notes write to YOUR garden (2026-10-17)
+
+`notes/doc/*` writes attach to the CURRENT identity. Each agent's
+notes — `log/sessions`, `log/issues`, `spec/<pkg>`, its own docs —
+land in its own `<user>/personal` garden, and that is correct.
+Default to reading and modifying notes under your OWN user; never
+`(checkout …)` another user's branch to edit their notes. Cross-user
+note writes are the exception and must be named explicitly. Filing to
+the shared Board (todo prims, list `0b21ffaa`) is NOT a cross-user
+write.
+
 ### Local-first dev loop (laptop lens, no per-call HTTP)
 
 For Nopales development on this device, prefer the local lens over
