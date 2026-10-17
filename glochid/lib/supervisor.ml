@@ -551,7 +551,6 @@ let run_step_expr (cfg : t) (run_id : string) ~(state : string)
 let runs_scan_expr () : string =
   let fields =
     [
-      "id";
       "card_id";
       "list_id";
       "from_state";
