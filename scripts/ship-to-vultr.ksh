@@ -35,7 +35,13 @@ require_target() {
 
 build_and_pack() {
   cd "$PP_ROOT"
-  /bin/ksh scripts/build-release-openbsd.ksh "$PP_ROOT/build"
+  # build-release prints progress (and downstream tool output) on stdout;
+  # only its final line is the archive path. Route build stdout to stderr so
+  # the command-substitution capture below sees nothing but our own echo.
+  # (2026-10-17: public_artifacts stdout polluted the capture -> "missing
+  # archive" killed the ship before scp/promote.)
+  /bin/ksh scripts/build-release-openbsd.ksh "$PP_ROOT/build" 1>&2
+  print -- "$PP_ROOT/build/pricklypear-openbsd.tar.gz"
 }
 
 ship_archive() {
