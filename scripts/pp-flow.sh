@@ -143,11 +143,22 @@ fi
 [ -n "$APASS" ] || [ -n "${PP_TOKEN:-}" ] || { echo "pp-flow: no credentials (set PP_PASS, or PP_TOKEN for Bearer auth)" >&2; exit 2; }
 
 # ---- eval plumbing -----------------------------------------------------------
-# Every todo call runs inside (begin (load-library "todo") ...) so a fresh
-# session still has the lib (and the executor badge is the usual load path).
+# NO (load-library "todo") around these calls (2026-10-18 perf fix). The old
+# comment here claimed "a fresh session still has the lib" — but the session
+# registry keeps ONE Session.t per identity (image.per-identity-sessions,
+# never expired) and package names bind LAZILY from the branch chain
+# (image.lazy-env-load), so the first (todo/...) lookup forces the def. The
+# wrapper therefore only re-evaluated libs/todo/lib.pp onto the runner's
+# branch on EVERY call: measured on prod 2026-10-18 against a fresh identity,
+# (count (todo/item/all)) is ~23ms bare and ~1600ms wrapped (~70x), and it
+# spammed the log with "[load-library] todo onto non-main branch ..." pin
+# warnings. AGENTS.md is explicit: load-library is a DEPLOY tool, not a
+# session step. Keep these bare. (Callers that used to pass their own
+# (begin (load-library ...)) wrapper double-wrapped it: pp_todo_val already
+# prefixed one.)
 pp_eval() { if [ -n "$APASS" ]; then "$SCRIPT_DIR/pp-eval.sh" -j --url "$URL" --user "$AUSER" --password "$APASS" -e "$1" 2>&1; else "$SCRIPT_DIR/pp-eval.sh" -j --url "$URL" -e "$1" 2>&1; fi; }
-pp_todo_raw() { pp_eval "(begin (load-library \"todo\") $1)"; }
-pp_todo_val() { if [ -n "$APASS" ]; then "$SCRIPT_DIR/pp-eval.sh" --url "$URL" --user "$AUSER" --password "$APASS" -e "(begin (load-library \"todo\") $1)" 2>/dev/null; else "$SCRIPT_DIR/pp-eval.sh" --url "$URL" -e "(begin (load-library \"todo\") $1)" 2>/dev/null; fi; }
+pp_todo_raw() { pp_eval "$1"; }
+pp_todo_val() { if [ -n "$APASS" ]; then "$SCRIPT_DIR/pp-eval.sh" --url "$URL" --user "$AUSER" --password "$APASS" -e "$1" 2>/dev/null; else "$SCRIPT_DIR/pp-eval.sh" --url "$URL" -e "$1" 2>/dev/null; fi; }
 # Nopales-safe string literal via POSIX awk (escape backslash, dquote, tab;
 # join newline-separated records with \n). OpenBSD ksh has no ${v//pat/rep}.
 # No interpreter one-liner, matching the repo's no-Python rule.
@@ -202,12 +213,12 @@ release_lease() { pp_todo_raw "(todo/item/unassign $1)" >/dev/null; }
 # decision logic stays in the shell. Field separator is "|"; every field is a
 # uuid, a STATE token, or "ok"/"missing" — none can contain the separator.
 # ONE eval: exists + current state of a card.
-card_state_probe() { pp_todo_val "(begin (load-library \"todo\") (if (null? (todo/item/get $1)) (string-append \"missing\") (string-append \"ok|\" (as-str (todo/item/state (todo/item/get $1))))))"; }
+card_state_probe() { pp_todo_val "(if (null? (todo/item/get $1)) (string-append \"missing\") (string-append \"ok|\" (as-str (todo/item/state (todo/item/get $1)))))"; }
 # ONE eval: advance one column + evidence comment + release lease. Returns
 # "event|comment|state" (state read AFTER the cycle, same eval). The lease
 # release rides IN the batch: a write-back that forgets it resurrects the
 # stale-lease bug this script already fixed once (card ac7ddff9, 09-27).
-advance_batch() { pp_todo_val "(begin (load-library \"todo\") (string-append (as-str (todo/cycle $1)) \"|\" (as-str (todo/comment/add $1 $2)) \"|\" (as-str (todo/item/state (todo/item/get $1))) \"|\" (as-str (todo/item/unassign $1))))"; }
+advance_batch() { pp_todo_val "(string-append (as-str (todo/cycle $1)) \"|\" (as-str (todo/comment/add $1 $2)) \"|\" (as-str (todo/item/state (todo/item/get $1))) \"|\" (as-str (todo/item/unassign $1)))"; }
 # ONE eval: set explicit destination + evidence comment + release lease.
 # NOTE (autonomy hardening, 2026-09-27): the destination is mirrored back into
 # the response with (as-str $3), NOT a literal "$3". A literal meant the shell
@@ -218,9 +229,9 @@ advance_batch() { pp_todo_val "(begin (load-library \"todo\") (string-append (as
 # (the exact stale-lease regression the fallback exists to prevent). Verified
 # live on the AUTO lane: a LOGIC-REVIEW PASS with DESTINATION: DONE now goes
 # LOGIC-REVIEW -> DONE in one round trip.
-dest_batch() { pp_todo_val "(begin (load-library \"todo\") (string-append (as-str (todo/set-state $1 $3)) \"|\" (as-str (todo/comment/add $1 $2)) \"|\" (as-str $3) \"|\" (as-str (todo/item/unassign $1))))"; }
+dest_batch() { pp_todo_val "(string-append (as-str (todo/set-state $1 $3)) \"|\" (as-str (todo/comment/add $1 $2)) \"|\" (as-str $3) \"|\" (as-str (todo/item/unassign $1)))"; }
 # ONE eval: evidence comment + release lease (card already left its claimed column).
-comment_batch() { pp_todo_val "(begin (load-library \"todo\") (string-append (as-str (todo/comment/add $1 $2)) \"|\" (as-str (todo/item/unassign $1))))"; }
+comment_batch() { pp_todo_val "(string-append (as-str (todo/comment/add $1 $2)) \"|\" (as-str (todo/item/unassign $1)))"; }
 # ONE eval: state + brief + the card's valid columns together. The state is a
 # short token; the run marker below is randomly generated so card content can
 # never contain it. COLUMNS ride along because the destination validation needs
@@ -231,7 +242,7 @@ comment_batch() { pp_todo_val "(begin (load-library \"todo\") (string-append (as
 COLSEP="PPCUTCOLS${RANDOM}${RANDOM}PPCUT"
 state_brief_cols() {
   MARK="PPCUT${RANDOM}${RANDOM}PPCUT"
-  pp_todo_val "(begin (load-library \"todo\") (let ((it (todo/item/get $1))) (string-append (as-str (todo/item/state it)) \"\\n$MARK\\n\" (as-str (todo/flow-brief $1)) \"\\n$COLSEP\\n\" (list/foldl (lambda (a c) (string-append a \",\" (as-str c))) \"\" (todo/state/columns-for-list (as-str (todo/item/list-id it)))))))"
+  pp_todo_val "(let ((it (todo/item/get $1))) (string-append (as-str (todo/item/state it)) \"\\n$MARK\\n\" (as-str (todo/flow-brief $1)) \"\\n$COLSEP\\n\" (list/foldl (lambda (a c) (string-append a \",\" (as-str c))) \"\" (todo/state/columns-for-list (as-str (todo/item/list-id it)))))))"
 }
 
 # ONE eval: pick the next claimable card for an unattended drain loop.
@@ -255,8 +266,7 @@ drain_pick() { # $1 list-id-expr (or "")  $2 states-expr  $3 exclude-kinds-expr
   # body interpolates ONLY the three numeric/JSON args below; it contains no
   # backticks and no bare $.
   src="$(cat <<LISP
-(begin (load-library "todo")
-  (let ((states (json-parse $2))
+(let ((states (json-parse $2))
         (excl (json-parse $3))
         (want-list (as-str $1)))
     (let ((in? (lambda (x xs)
@@ -279,7 +289,7 @@ drain_pick() { # $1 list-id-expr (or "")  $2 states-expr  $3 exclude-kinds-expr
               ""
               (string-append (as-str (car first))
                              "|" (todo/item/state (cdr first))
-                             "|" (todo/item/title (cdr first)))))))))
+                             "|" (todo/item/title (cdr first))))))))
 LISP
 )"
   pp_todo_val "$src"
@@ -741,7 +751,7 @@ case "$MODE" in
       if [ "$SUPERVISED" != "1" ]; then
         tailtxt="$(tail -c 300 "$LOG_FILE" 2>/dev/null | tr -d '\r' | tr '\n' ' ' | tr -d '\033' | tr -d '"\\')"
         fmsg="pp-flow: agent FAILED rc=$rc (runner: $PI_RUNNER, ${AGENT_S}s). Log: $LOG_FILE. Tail: $tailtxt"
-        pp_todo_raw "(begin (load-library \"todo\") (todo/comment/add $(json_str "$CARD") $(json_str "$fmsg")) (todo/item/unassign $(json_str "$CARD")))" >/dev/null
+        pp_todo_raw "(begin (todo/comment/add $(json_str "$CARD") $(json_str "$fmsg")) (todo/item/unassign $(json_str "$CARD")))" >/dev/null
       fi
       T1=$(date +%s)
       ledger_line "$(date -u +%FT%TZ)" "$CARD" "$PI_RUNNER" "$(( T1 - T0 ))" "$AGENT_S" "$rc" "no" "" "$claimed_state" ""
