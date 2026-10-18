@@ -725,6 +725,125 @@ let test_filmstrip_optimistic ~rt () =
      | Ast.VBool b -> b
      | other -> Alcotest.fail ("expect: " ^ Reader.pp_value other))
 
+(** file-issue rail button (card 5877331e): the railtabs strip carries a
+    declared lookbook element that opens the /issues register as a pane
+    (open-or-focus, OOB into #fs-sink) -- reporting an issue or UI
+    feedback is one click from any desktop. The examples card + the host
+    inventory witness the lookbook discipline; a hyper/expect rides a
+    real POST /filmstrip/open roundtrip with route=/issues (a stub
+    issues face stands in on the agent runtime). *)
+let test_filmstrip_file_issue ~rt () =
+  Surface.load ~rt;
+  (* hermetic ws: a throwaway row file so stale pane state from an earlier
+     test or run can never satisfy (or mask) the open roundtrip below *)
+  let ws = "/tmp/glochid-file-issue-test-ws.json" in
+  (try Sys.remove ws with Sys_error _ -> ());
+  ignore (Runtime.eval_string ~rt
+            {|(define glochid/ws-file "/tmp/glochid-file-issue-test-ws.json")|});
+  let has needle s =
+    (try ignore (Str.search_forward (Str.regexp_string needle) s 0); true
+     with Not_found -> false)
+  in
+  let eval_str ~what str =
+    match Runtime.eval_string ~rt str with
+    | Ast.VStr s -> s
+    | other -> Alcotest.fail (what ^ ": " ^ Reader.pp_value other)
+    | exception Ast.Interp_error e ->
+        Alcotest.fail
+          (what ^ ": INTERP "
+           ^ (match e with
+              | Ast.Prim_error (k, n, m) -> k ^ "/" ^ n ^ ": " ^ m
+              | _ -> "opaque"))
+  in
+  (* the examples card: the element's declaration (lookbook discipline) *)
+  let card = eval_str ~what:"examples card" {|(ui/file-issue/examples)|} in
+  Alcotest.(check bool) "lookbook: file-issue card declares the element" true
+    (has "ui/file-issue" card);
+  (* the host inventory: the ui rail root + /lookbook face read this def *)
+  Alcotest.(check bool) "lookbook: file-issue registered in the inventory" true
+    (has "ui/file-issue"
+           (eval_str ~what:"lookbook/elements" {|(json-emit (lookbook/elements))|}));
+  (* the rail strip renders the declared button *)
+  let rail =
+    eval_str ~what:"railtabs" {|(render-html (filmstrip/railtabs-html (list) 0))|}
+  in
+  Alcotest.(check bool) "rail: file-issue button present" true
+    (has "fs-file-issue" rail && has "file an issue" rail);
+  (* the declared verb: posts /filmstrip/open with route=/issues into #fs-sink *)
+  let hxvals =
+    eval_str ~what:"hx-vals"
+      {|(as-str (hyper/attr
+                  (car (hyper/query
+                         (soup/parse (render-html (filmstrip/railtabs-html (list) 0)))
+                         "#fs-file-issue"))
+                  "hx-vals"))|}
+  in
+  Alcotest.(check bool) "rail: file-issue hx-vals carries the issues route" true
+    (has "/issues" hxvals && has "route" hxvals);
+  Alcotest.(check bool) "rail: file-issue posts /filmstrip/open" true
+    (has "hx-post=\"/filmstrip/open\"" rail);
+  (* hyper/expect: stub /issues, then POST /filmstrip/open through the
+     real route machinery; the OOB fragment must carry the opened pane
+     rendering the issues face. *)
+  (match Runtime.eval_string ~rt
+           {|(seq (define (stub-issues)
+                      (render-html "<div id=issue-reg>issues-register</div>"))
+                  (route "/issues" "stub-issues"))|}
+  with
+  | _ -> ()
+  | exception Ast.Interp_error e ->
+      Alcotest.fail
+        ("stub issues face: INTERP "
+         ^ (match e with
+            | Ast.Prim_error (k, n, m) -> k ^ "/" ^ n ^ ": " ^ m
+            | _ -> "opaque")));
+  ignore (Runtime.eval_string ~rt
+    {|(define pg (soup/parse (route/dispatch (route/lookup "/filmstrip/open") "POST" "/filmstrip/open" (list (cons "route" "/issues")) (list (cons "hx-request" "true")))))|});
+  Alcotest.(check bool) "hyper: expect the issues pane in the open fragment" true
+    (match Runtime.eval_string ~rt {|(hyper/expect pg "#issue-reg" "issues-register")|} with
+     | Ast.VBool b -> b
+     | other -> Alcotest.fail ("expect: " ^ Reader.pp_value other))
+
+(** start-menu cap (card e3de4aa0): the zero-JS start menu floats OVER
+    the tree below the railtabs strip, so it must never extend below the
+    screen -- glochid/base-css caps it at ~2/3 of the viewport height
+    with its own scroll. hyper/expect rides a real GET / through the
+    route machinery: the full page's <style> embeds glochid/base-css. *)
+let test_filmstrip_start_menu_cap ~rt () =
+  Surface.load ~rt;
+  let has needle s =
+    (try ignore (Str.search_forward (Str.regexp_string needle) s 0); true
+     with Not_found -> false)
+  in
+  let eval_str ~what str =
+    match Runtime.eval_string ~rt str with
+    | Ast.VStr s -> s
+    | other -> Alcotest.fail (what ^ ": " ^ Reader.pp_value other)
+    | exception Ast.Interp_error e ->
+        Alcotest.fail
+          (what ^ ": INTERP "
+           ^ (match e with
+              | Ast.Prim_error (k, n, m) -> k ^ "/" ^ n ^ ": " ^ m
+              | _ -> "opaque"))
+  in
+  (* the declared host stylesheet carries the cap + its own scroll *)
+  Alcotest.(check bool) "base-css: start menu capped at ~2/3 viewport, own scroll" true
+    (has "max-height:66vh;overflow-y:auto"
+           (eval_str ~what:"base-css" {|glochid/base-css|}));
+  (* the menu element still renders the capped class *)
+  Alcotest.(check bool) "start-menu: renders the fs-start-menu box" true
+    (has "fs-start-menu"
+           (eval_str ~what:"start-menu" {|(render-html (glochid/start-menu))|}));
+  (* hyper/expect over the changed route: GET / serves the page whose
+     <style> embeds glochid/base-css with the viewport cap. *)
+  ignore (Runtime.eval_string ~rt
+      {|(define pg (soup/parse (route/dispatch (route/lookup "/") "GET" "/" (list) (list))))|});
+  Alcotest.(check bool) "hyper: GET / serves the start-menu cap in <style>" true
+    (match Runtime.eval_string ~rt
+             {|(hyper/expect pg "style" "max-height:66vh;overflow-y:auto")|} with
+     | Ast.VBool b -> b
+     | other -> Alcotest.fail ("expect: " ^ Reader.pp_value other))
+
 (** rail trees (borge/filmstrip.borg rail-trees-v4): the windows tree
     renders from DECLARED ws state (3 desktop dirs + shelf subtree on an
     empty workspace), level fragments splice lazy, dir rows carry
@@ -1290,7 +1409,7 @@ let test_lookbook ~rt () =
            {|(list/map (lambda (n) (lb/get n "open")) (glochid/ui-tree ""))|}
    with
    | Ast.VList opens ->
-       Alcotest.(check int) "ui root: lib seeds + glochid host elements" 13
+        Alcotest.(check int) "ui root: lib seeds + glochid host elements + ui/file-issue" 14
          (List.length opens);
        Alcotest.(check bool) "ui rows open-or-focus the /lookbook pane" true
          (List.exists
@@ -1760,6 +1879,10 @@ let () =
             (test_move_to_desk ~rt)
           ; Alcotest.test_case "optimistic-loader" `Quick
               (test_filmstrip_optimistic ~rt)
+          ; Alcotest.test_case "file-issue-rail" `Quick
+                (test_filmstrip_file_issue ~rt)
+            ; Alcotest.test_case "start-menu-cap" `Quick
+                  (test_filmstrip_start_menu_cap ~rt)
         ; Alcotest.test_case "lookbook" `Quick
             (test_lookbook ~rt)
         ; Alcotest.test_case "habitat-panes" `Quick
