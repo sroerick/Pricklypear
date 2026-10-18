@@ -55,9 +55,14 @@ consolidated message, not streamed narration. Private-DM mode may stream later
   newer than the client's last id (204 + empty when nothing new). Client keeps
   `last-id` in a `hx-vals` hidden field or data attribute. 4s stays for P1;
   SSE (`hx-sse`) is the P4 replacement if polling shows up in the wedge hunt.
-- **History:** `GET /chat?before=<id>` paginates older rows on scroll-top
-  (`hx-get` + `hx-swap="afterbegin"`), 50 rows/page. Cursor fields already
-  exist (`created_at`, row ids are sortable epoch-based).
+- **History:** `GET /chat?before=<id>` (DM: `/chat/dm?peer=..&before=<id>`)
+  returns one older 50-row page under HX-Request; a "Load older messages"
+  control swaps it into the `#chat-older` region above the log. A region,
+  not `afterbegin`-into-the-log: the 4s poll re-swaps the log window, which
+  would clobber rows inserted into the log. Incremental `/chat/partial?after=`
+  polling (P1 above) remains the follow-up that unlocks afterbegin-in-log
+  history. Cursor fields already exist (`created_at`, row ids are sortable
+  epoch-based).
 
 ## Attachments (the hx-multipart payoff)
 
@@ -95,6 +100,21 @@ consolidated message, not streamed narration. Private-DM mode may stream later
   row for working agents, DM parity for all of the above. Accept: unread line
   lands exactly on first unseen message after reload; counts clear on view.
 - **P4 - (optional) SSE:** replace polling if it ever shows in the wedge hunt.
+
+## Shipped: windowed live view + lazy history (2026-10-18, card 70015a74)
+
+- Live surface (initial GET, 4s poll, POST response) renders only the last
+  `chat/window-size` (50) messages, id-sorted - no full-chat fetch/render.
+- Sticky scroll: `ui/chat-log` snaps to bottom on every swap and on load
+  (`hx-trigger="load, every 4s"`) unless the reader scrolled up
+  (wheel/touchmove sets a read flag on the log); sending a message clears
+  the flag and snaps the target log to the latest (composer after-request).
+- DM parity: the DM log now polls `GET /chat/dm?peer=` (an HX-Request GET
+  returns the windowed transcript fragment), so DMs get the same autoscroll
+  and catch-up behavior as the lobby.
+- Known gap: a message that falls out of the 50-window between loaded older
+  pages stays hidden until reload; the incremental `after=` poll is the fix
+  (P1 above).
 
 ## Open questions
 

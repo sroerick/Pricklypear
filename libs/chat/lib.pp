@@ -88,6 +88,28 @@
           ".chatpage"
           (list "max-height" "72vh" "gap" ".5rem"))
         (css/rule ".chat-log" (list "padding" ".5rem"))
+          (css/rule
+            ".chat-older"
+            (list "max-height" "40vh" "overflow-y" "auto"))
+          (css/rule
+            ".chat-older-btn"
+            (list
+              "margin"
+              ".35rem 0"
+              "font"
+              "inherit"
+              "padding"
+              ".25rem .6rem"
+              "border"
+              "1px solid var(--border)"
+              "border-radius"
+              "4px"
+              "background"
+              "var(--panel)"
+              "color"
+              "inherit"
+              "cursor"
+              "pointer"))
         (css/rule
           ".chat-composer"
           (list "gap" ".5rem" "align-items" "flex-end"))
@@ -160,7 +182,7 @@
   (lambda
     (peer)
     (let
-      ((xs (chat/history (chat/dm peer))))
+        ((xs (chat/latest (chat/dm peer))))
       (if
         (null? xs)
         (list
@@ -169,7 +191,7 @@
             (list "class" "muted")
             (list (ui/text "No messages yet."))))
         (list/map chat/bubble xs))))
-  "DM transcript kid values.")
+  "DM transcript kid values (live window: latest chat/window-size; older\n     pages lazy-load into the #chat-older region).")
 
 (define chat/dm-list-li
   (lambda
@@ -228,10 +250,12 @@
     (lookbook/html
       (ui/chatpage
         "dm-main"
-        ""
-        (string-append "/chat/dm?peer=" peer)
-        (chat/dm-kids peer))))
-  "Render the DM main area with message form and history.")
+          (string-append "/chat/dm?peer=" peer)
+          (string-append "/chat/dm?peer=" peer)
+          (chat/dm-kids peer))))
+  "Render the DM main area with message form and history. The DM page is
+     its own poll: an HX-Request GET returns the windowed transcript
+     fragment, so DMs get autoscroll + catch-up like the lobby.")
 
 (define chat/dm-messages-html
   (lambda
@@ -265,18 +289,27 @@
               (hx-request?)
               (render-html (chat/kids-html (chat/dm-kids peer)))
               (redirect (string-append "/chat/dm?peer=" peer))))
-          (html/page
-            (list
-              (html/h1 (string-append "DM with " peer))
-              (html/p*
-                ""
-                (html/join
-                  (list
-                    (html/a "/chat" "Lobby")
-                    (html/span "" " · ")
-                    (html/a "/chat/dm" "All DMs"))))
-              (chat/dm-main-html peer)))))))
-  "DM route handler: list, open, or post to a DM thread.")
+          (if
+            (blank? (as-str (request-param "before")))
+            (if
+              (hx-request?)
+              (render-html (chat/kids-html (chat/dm-kids peer)))
+              (html/page
+                (list
+                  (html/h1 (string-append "DM with " peer))
+                  (html/p*
+                    ""
+                    (html/join
+                      (list
+                        (html/a "/chat" "Lobby")
+                        (html/span "" " · ")
+                        (html/a "/chat/dm" "All DMs"))))
+                  (chat/dm-older-initial peer)
+                  (chat/dm-main-html peer))))
+            (render-html (chat/dm-older-html peer (request-param "before"))))))))
+  "DM route handler: list, open, or post to a DM thread. Under HX-Request a
+     GET is the windowed transcript fragment (the log poll); a GET with
+     ?before=<id> returns one older history page for #chat-older.")
 
 (define chat/dm-peer-from-title
   (lambda
@@ -538,8 +571,10 @@
 (define chat/lobby
   (lambda
     ()
-    (seq (chat/ensure-lobby) (chat/history chat/lobby-id)))
-  "Ensure the lobby exists and return its message history.")
+      (seq (chat/ensure-lobby) (chat/latest chat/lobby-id)))
+  "Ensure the lobby exists and return its live window (latest
+     chat/window-size messages) — the lobby render no longer pulls the
+     entire chat.")
 
 (define chat/lobby-id
   "lobby")
@@ -676,17 +711,29 @@
           (hx-request?)
           (render-html (chat/kids-html (chat/log-kids)))
           (redirect "/chat")))
-      (html/page
-        (list
-          (html/h1 "Chat")
-          (html/p*
-            (html/attr "class" "muted")
-            (string-append
-              "Lobby for everyone on this box. You are "
-              (as-str (whoami))
-              "."))
-          (chat/main-html)))))
-  "Chat lobby route handler: GET renders the page; POST sends a message and,\n     under the HX-Request HEADER, answers the TRANSCRIPT FRAGMENT that swaps\n     into #chat-main-log (a non-htmx POST redirects).")
+      (if
+        (blank? (as-str (request-param "before")))
+        (html/page
+          (list
+            (html/h1 "Chat")
+            (html/p*
+              (html/attr "class" "muted")
+              (string-append
+                "Lobby for everyone on this box. You are "
+                (as-str (whoami))
+                "."))
+            (chat/older-initial)
+            (chat/main-html)))
+        (if
+          (hx-request?)
+          (render-html (chat/older-html (request-param "before")))
+          (redirect "/chat")))))
+  "Chat lobby route handler: GET renders the page (live window of the
+     latest chat/window-size messages + the lazy-history region); a GET
+     with ?before=<id> under HX-Request returns one OLDER page for
+     #chat-older; POST sends a message and, under HX-Request, answers the
+     windowed transcript fragment that swaps into #chat-main-log (a
+     non-htmx POST redirects).")
 
 (define chat/partial
   (lambda
@@ -785,3 +832,209 @@
 (define chat/users
   (lambda () (list-usernames))
   "List all usernames on the image.")
+
+;; --- windowing + lazy history (card 70015a74, 2026-10-18) ---
+;; The live surface (initial render, 4s poll, POST response) renders only
+;; the latest chat/window-size messages; older history lazy-loads one page
+;; at a time into the #chat-older region above the log. New helpers live at
+;; the end of the file: define order is irrelevant in Nopales (bodies are
+;; lazy recipes; chat/char-rank already forward-references
+;; chat/char-rank-loop).
+
+(define chat/window-size 50)
+
+(define chat/id-le?
+  (lambda (a b)
+    (let ((sa (as-str a)) (sb (as-str b)))
+      (if (string-eq sa sb) #t (string<? sa sb))))
+  "Row-id <= (tie-break only: lexicographic via the native string<?; chat/
+   row-le? carries the chronological order via created_at, so any stored
+   id shape works. Was char-rank-walking chat/str-le? — O(alphabet) per
+   character, blew the eval-step budget on 98 lobby rows.")
+
+(define chat/id-lt?
+  (lambda (a b)
+    (if (string-eq (as-str a) (as-str b)) #f (chat/id-le? a b)))
+  "Row-id < (chronological).")
+
+(define chat/row-when
+  (lambda (row) (as-str (dict-get (chat/row-fields row) "created_at")))
+  "Row sort stamp: created_at. ISO stamps (chat/timestamp, uniform 20
+   chars) sort chronologically; blank and legacy epoch stamps sort before
+   them, which stays chronological for every shape chat/fmt-ts knows.")
+
+(define chat/row-le?
+  (lambda (a b)
+    (let ((ta (chat/row-when a)) (tb (chat/row-when b)))
+      (if (string-eq ta tb)
+        (chat/id-le? (chat/row-id a) (chat/row-id b))
+        (string<? ta tb))))
+  "Row <= (chronological): created_at first (native string order; ISO stamps
+   are uniform 20 chars, blank sorts first), row id as tie-break.")
+
+(define chat/row-index
+  (lambda (rows id i)
+    (if (null? rows)
+      -1
+      (if (string-eq (chat/row-id (car rows)) (as-str id))
+        i
+        (chat/row-index (cdr rows) id (+ i 1)))))
+  "Position of the row with this id in an ordered row list, -1 when the
+   id is absent (pruned or beyond the 200-row fetch cap).")
+
+(define chat/half
+  (lambda (n) (if (< n 2) 0 (+ 1 (chat/half (- n 2)))))
+  "n / 2 rounded down (avoids relying on a quotient prim).")
+
+(define chat/split-at
+  (lambda (xs n)
+    (if (or (<= n 0) (null? xs))
+      (cons () xs)
+      (let ((rest (chat/split-at (cdr xs) (- n 1))))
+        (cons (cons (car xs) (car rest)) (cdr rest)))))
+  "Split xs into (first-n . rest) pair.")
+
+(define chat/merge-rows
+  (lambda (a b)
+    (if (null? a)
+      b
+      (if (null? b)
+        a
+        (if (chat/row-le? (car a) (car b))
+          (cons (car a) (chat/merge-rows (cdr a) b))
+          (cons (car b) (chat/merge-rows a (cdr b)))))))
+  "Merge two row-le?-ascending row lists.")
+
+(define chat/sort-rows
+  (lambda (rows)
+    (if (or (null? rows) (null? (cdr rows)))
+      rows
+      (let ((parts (chat/split-at rows (chat/half (length rows)))))
+        (chat/merge-rows
+          (chat/sort-rows (car parts))
+          (chat/sort-rows (cdr parts))))))
+  "Sort rows (created_at,id)-ascending (merge sort; the live fetch is
+   capped at 200 rows by chat/all-messages).")
+
+(define chat/take-n
+  (lambda (n xs)
+    (if (or (<= n 0) (null? xs))
+      ()
+      (cons (car xs) (chat/take-n (- n 1) (cdr xs)))))
+  "First n elements of xs.")
+
+(define chat/take-last
+  (lambda (n xs) (reverse (chat/take-n n (reverse xs))))
+  "Last n elements of xs, original order.")
+
+(define chat/room-rows
+  (lambda (room-id) (chat/sort-rows (chat/history room-id)))
+   "All messages for an accessible room, (created_at,id)-ascending ((rows)
+   gives no order promise). Bounded by chat/all-messages' 200-row cap.")
+
+(define chat/latest
+  (lambda (room-id)
+    (chat/take-last chat/window-size (chat/room-rows room-id)))
+    "The live window: latest chat/window-size messages for a room,
+   chronological. The live surface never renders more than this.")
+
+(define chat/more-older?
+  (lambda (rows before)
+    (< 0 (chat/row-index rows before 0)))
+  "True when the cursor row sits after the head of the ordered list, i.e.
+   older rows exist before its position.")
+
+(define chat/no-older-kid
+  (lambda () (ui/elm "p" (list "class" "muted") (list (ui/text "No older messages."))))
+  "Muted note when a lazy-history fetch has nothing older.")
+
+(define chat/older-bar
+  (lambda (href)
+    (html/button
+      (html/attrs
+        (list
+          (html/attr "hx-get" href)
+          (html/attr "hx-target" "#chat-older")
+          (html/attr "hx-swap" "outerHTML")))
+      "Load older messages"))
+  "Lazy-history control: fetches one older page and replaces the
+   #chat-older region with it plus the next control.")
+
+(define chat/older-region
+  (lambda (kids href)
+    (html/div
+      (html/attrs
+        (list (html/attr "id" "chat-older") (html/attr "class" "chat-older")))
+      (html/join
+        (append
+          (list (chat/kids-html kids))
+          (if (string-eq href "") (list) (list (chat/older-bar href)))))))
+  "The #chat-older region: accumulated older pages + the load-older control.
+   It sits ABOVE the polled log as a page sibling, so the 4s poll (which
+   re-swaps the log window) never clobbers loaded history.")
+
+(define chat/older-rows
+  (lambda (room-id before)
+    (let* ((rows (chat/room-rows room-id))
+           (i (chat/row-index rows before 0)))
+      (if (< i 0)
+        ()
+        (chat/take-last chat/window-size (chat/take-n i rows)))))
+  "One older page: the window-size ordered rows immediately before the
+   cursor row's position (position-based, so any stored id shape works).
+   Cursor not found -> ().")
+
+(define chat/older-html
+  (lambda (before)
+    (let ((rows (chat/older-rows chat/lobby-id before)))
+      (if
+        (null? rows)
+        (chat/older-region (list (chat/no-older-kid)) "")
+        (chat/older-region
+          (list/map chat/bubble rows)
+          (string-append "/chat?before=" (chat/row-id (car rows)))))))
+  "Lobby older-history fragment (GET /chat?before=<id> under HX-Request).")
+
+(define chat/older-initial
+  (lambda ()
+    (let* ((rows (chat/room-rows chat/lobby-id))
+           (window (chat/take-last chat/window-size rows)))
+      (if
+        (null? window)
+        ""
+        (if
+          (chat/more-older? rows (chat/row-id (car window)))
+          (chat/older-region
+            (list)
+            (string-append "/chat?before=" (chat/row-id (car window))))
+          ""))))
+  "Initial lobby #chat-older region: the control only when history exists
+   beyond the live window, empty otherwise.")
+
+(define chat/dm-older-html
+  (lambda (peer before)
+    (let ((rows (chat/older-rows (chat/dm peer) before)))
+      (if
+        (null? rows)
+        (chat/older-region (list (chat/no-older-kid)) "")
+        (chat/older-region
+          (list/map chat/bubble rows)
+          (string-append "/chat/dm?peer=" (as-str peer) "&before=" (chat/row-id (car rows)))))))
+  "DM older-history fragment (GET /chat/dm?peer=..&before=<id> under
+   HX-Request).")
+
+(define chat/dm-older-initial
+  (lambda (peer)
+    (let* ((rows (chat/room-rows (chat/dm peer)))
+           (window (chat/take-last chat/window-size rows)))
+      (if
+        (null? window)
+        ""
+        (if
+          (chat/more-older? rows (chat/row-id (car window)))
+          (chat/older-region
+            (list)
+            (string-append "/chat/dm?peer=" (as-str peer) "&before=" (chat/row-id (car window))))
+          ""))))
+  "Initial DM #chat-older region: the control only when history exists
+   beyond the live window, empty otherwise.")
