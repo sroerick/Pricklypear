@@ -133,6 +133,7 @@ let test_loop_tool_round_trip ~env ~sw ~rt () =
             ];
           stop_reason = "tool_use";
           raw = `Assoc [ ("role", `String "assistant"); ("content", `String "") ];
+            usage = None;
         }
     else
       Ok
@@ -141,6 +142,7 @@ let test_loop_tool_round_trip ~env ~sw ~rt () =
           calls = [];
           stop_reason = "stop";
           raw = `Assoc [ ("role", `String "assistant"); ("content", `String "done") ];
+            usage = None;
         }
   in
   let cfg : Provider.cfg =
@@ -183,6 +185,7 @@ let test_loop_tool_block ~env ~sw ~rt () =
             ];
           stop_reason = "tool_use";
           raw = `Assoc [ ("role", `String "assistant"); ("content", `String "") ];
+            usage = None;
         }
     else (
       let saw_block =
@@ -205,6 +208,7 @@ let test_loop_tool_block ~env ~sw ~rt () =
           calls = [];
           stop_reason = "stop";
           raw = `Assoc [ ("role", `String "assistant"); ("content", `String "ok") ];
+            usage = None;
         })
   in
   let cfg : Provider.cfg =
@@ -259,6 +263,7 @@ let test_loop_turn2_history_shape ~env ~sw ~rt () =
                                   `String "{\"command\":\"echo hi\"}" ) ] );
                           ];
                     ] ) ];
+            usage = None;
         }
     else if !calls = 2 then
       Ok
@@ -267,6 +272,7 @@ let test_loop_turn2_history_shape ~env ~sw ~rt () =
           calls = [];
           stop_reason = "stop";
           raw = `Assoc [ ("role", `String "assistant"); ("content", `String "done") ];
+            usage = None;
         }
     else (
       captured := messages;
@@ -276,6 +282,7 @@ let test_loop_turn2_history_shape ~env ~sw ~rt () =
           calls = [];
           stop_reason = "stop";
           raw = `Assoc [ ("role", `String "assistant"); ("content", `String "ok2") ];
+            usage = None;
         })
   in
   let cfg : Provider.cfg =
@@ -1398,8 +1405,9 @@ let test_sessions_roundtrip ~rt () =
 let test_loop_on_msg ~env ~sw ~rt () =
   let complete ~env:_ ~sw:_ ~cfg:_ ~messages:_ ~tools:_ ~on_delta:_ =
     Ok
-      { Provider.text = "done"; calls = []; stop_reason = "stop";
-        raw = `Assoc [ ("role", `String "assistant"); ("content", `String "done") ] }
+        { Provider.text = "done"; calls = []; stop_reason = "stop";
+          raw = `Assoc [ ("role", `String "assistant"); ("content", `String "done") ];
+          usage = None }
   in
   let cfg : Provider.cfg =
     { base_url = "http://127.0.0.1:1"; api_key = ""; model = "mock"; system = "" }
@@ -1677,4 +1685,108 @@ let () =
       ( "run-supervisor",
         [ Alcotest.test_case "pure-policy" `Quick
             test_supervisor_pure ] );
+      (* ---- PP native runner (borge/run-primitive.borg PHASE 3) ---- *)
+      ( "native-runner",
+        [ Alcotest.test_case "verdict-from-json" `Quick (fun () ->
+              let v =
+                Native_run.parse_verdict
+                  {|{"verdict":"PASS","destination":"CODE","evidence":"ran the suite"}|}
+              in
+              Alcotest.(check string) "verdict" "PASS" v.Native_run.v_verdict;
+              Alcotest.(check string) "destination" "CODE" v.Native_run.v_destination;
+              Alcotest.(check string) "evidence" "ran the suite" v.Native_run.v_evidence);
+          Alcotest.test_case "verdict-from-prose-wrapped-json" `Quick (fun () ->
+              let v =
+                Native_run.parse_verdict
+                  "Here is my answer:\n{\"verdict\":\"FAIL\",\"destination\":\"\",\"evidence\":\"wip\"}\nThanks."
+              in
+              Alcotest.(check string) "verdict" "FAIL" v.Native_run.v_verdict;
+              Alcotest.(check string) "evidence" "wip" v.Native_run.v_evidence);
+          Alcotest.test_case "verdict-from-line-contract" `Quick (fun () ->
+              let v =
+                Native_run.parse_verdict
+                  "did the thing\nDESTINATION: LOGIC-REVIEW\nEVIDENCE: suite green"
+              in
+              Alcotest.(check string) "destination" "LOGIC-REVIEW"
+                v.Native_run.v_destination;
+              Alcotest.(check string) "evidence" "suite green" v.Native_run.v_evidence;
+              Alcotest.(check string) "no invented verdict" "" v.Native_run.v_verdict);
+          Alcotest.test_case "no-verdict-is-total" `Quick (fun () ->
+              (* POLICY-3: an unparseable answer is reported faithfully (empty),
+                 never guessed - the supervisor owns the fail-safe. *)
+              let v = Native_run.parse_verdict "not json at all, just prose" in
+              Alcotest.(check string) "empty verdict" "" v.Native_run.v_verdict;
+              Alcotest.(check string) "empty evidence" "" v.Native_run.v_evidence);
+          Alcotest.test_case "usage-accumulates-per-request" `Quick (fun () ->
+              let u : Native_run.usage =
+                Native_run.add_usage Native_run.zero_usage
+                  (Native_run.provider_usage ~input_tokens:100 ~cached_tokens:40
+                     ~output_tokens:7)
+              in
+              (* annotations above are load-bearing: the accumulator and the
+                 per-request provider record share three field names *)
+              let u : Native_run.usage =
+                Native_run.add_usage u
+                  (Native_run.provider_usage ~input_tokens:5 ~cached_tokens:0
+                     ~output_tokens:1)
+              in
+              Alcotest.(check int) "requests" 2 u.Native_run.requests;
+              Alcotest.(check int) "input" 105 u.Native_run.input_tokens;
+              Alcotest.(check int) "cached" 40 u.Native_run.cached_tokens;
+              Alcotest.(check int) "output" 8 u.Native_run.output_tokens);
+          Alcotest.test_case "result-round-trip" `Quick (fun () ->
+              let r =
+                { Native_run.r_schema = Native_run.schema;
+                  r_step_name = "executor";
+                  r_step_state = "done";
+                  r_attempts = 2;
+                  r_outcome = "pass";
+                  r_verdict =
+                    { Native_run.v_verdict = "PASS";
+                      v_destination = "CODE";
+                      v_evidence = "suite green" };
+                  r_usage =
+                    { Native_run.requests = 12; input_tokens = 3456;
+                      cached_tokens = 3000; output_tokens = 789; wall_s = 42.5 };
+                  r_tool_total = 3;
+                  r_tools = [ ("bash", 2); ("read", 1) ];
+                  r_turns = 12;
+                  r_model = "syn:large:text";
+                  r_error_class = "";
+                  r_error_message = "";
+                  r_transcript_ref = "/tmp/x/driver.log" }
+              in
+              (match Native_run.result_of_json (Native_run.to_json r) with
+               | Some back ->
+                   Alcotest.(check string) "step state" "done"
+                     back.Native_run.r_step_state;
+                   Alcotest.(check int) "attempts" 2 back.Native_run.r_attempts;
+                   Alcotest.(check int) "input tokens" 3456
+                     back.Native_run.r_usage.Native_run.input_tokens;
+                   Alcotest.(check int) "cached tokens" 3000
+                     back.Native_run.r_usage.Native_run.cached_tokens;
+                   Alcotest.(check int) "output tokens" 789
+                     back.Native_run.r_usage.Native_run.output_tokens;
+                   Alcotest.(check bool) "wall preserved" true
+                     (abs_float
+                        (back.Native_run.r_usage.Native_run.wall_s -. 42.5)
+                      < 0.001);
+                   Alcotest.(check string) "destination" "CODE"
+                     back.Native_run.r_verdict.Native_run.v_destination;
+                   Alcotest.(check (list (pair string int))) "tools"
+                     [ ("bash", 2); ("read", 1) ]
+                     back.Native_run.r_tools
+               | None -> Alcotest.fail "round trip lost the result"));
+          Alcotest.test_case "classify-error" `Quick (fun () ->
+              Alcotest.(check string) "429" "transient"
+                (Native_run.classify_error "HTTP 429: slow down");
+              Alcotest.(check string) "503" "transient"
+                (Native_run.classify_error "HTTP 503: gateway");
+              Alcotest.(check string) "401" "deterministic"
+                (Native_run.classify_error "HTTP 401: bad credentials");
+              Alcotest.(check string) "timeout" "timeout"
+                (Native_run.classify_error "provider timeout");
+              Alcotest.(check string) "crash is retryable" "transient"
+                (Native_run.classify_error "connection reset by peer"))
+        ] );
     ]

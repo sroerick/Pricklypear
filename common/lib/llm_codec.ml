@@ -373,12 +373,63 @@ let sse_data_payload (line : string) : string option =
     here, [Openai.parse_reply] in the standalone agent) and inherit the
     XML-fallback / reasoning_content handling and history [raw] shape
     unchanged. *)
+(** Provider-STRUCTURED token usage for ONE provider request, as the
+    OpenAI-compatible wire reports it. borge/run-primitive.borg
+    budget-accounting asks for exactly this: the run row's usage used to be a
+    SELF-REPORT scraped out of the executor's stdout, which cannot be enforced
+    on; these numbers come from the provider's own response body.
+    [cached_tokens] rides [prompt_tokens_details.cached_tokens] on the
+    gateways that report it; a missing field means 0, never "unknown". *)
+type usage = {
+  input_tokens : int;   (* usage.prompt_tokens *)
+  cached_tokens : int;  (* usage.prompt_tokens_details.cached_tokens *)
+  output_tokens : int;  (* usage.completion_tokens *)
+}
+
+let usage_int (j : Yojson.Safe.t) : int =
+  match j with
+  | `Int i -> i
+  | `Intlit s -> (try int_of_string s with _ -> 0)
+  | `Float f -> int_of_float f
+  | _ -> 0
+
+(** Read the [usage] object of a full chat-completions response - or of one
+    streaming chunk: with [stream_options.include_usage] the provider emits a
+    FINAL chunk that carries usage and no choices. None when the body has no
+    usage object at all, so a caller can tell "not reported" from "zero". *)
+let usage_of_response_json (json : Yojson.Safe.t) : usage option =
+  let open Yojson.Safe.Util in
+  match json |> member "usage" with
+  | `Assoc _ as u ->
+      Some
+        { input_tokens = usage_int (u |> member "prompt_tokens");
+          cached_tokens =
+            usage_int
+              (u |> member "prompt_tokens_details" |> member "cached_tokens");
+          output_tokens = usage_int (u |> member "completion_tokens") }
+  | _ -> None
+
+(** Re-encode [usage] in wire shape, so a REASSEMBLED streaming response
+    carries the same [usage] object a non-streamed one does and every host
+    parser ([parse_turn_response_json] here, [Provider.Openai.parse_reply] in
+    the standalone agent) reads it without a special case. *)
+let usage_to_json (u : usage) : Yojson.Safe.t =
+  `Assoc
+    [ ("prompt_tokens", `Int u.input_tokens);
+      ("completion_tokens", `Int u.output_tokens);
+      ("total_tokens", `Int (u.input_tokens + u.output_tokens));
+      ("prompt_tokens_details", `Assoc [ ("cached_tokens", `Int u.cached_tokens) ]) ]
+
 type stream_result = {
   text : string;
   reasoning : string;
   tool_calls : tool_call list;  (* arguments = concatenated fragments *)
   finish : string;
   response : Yojson.Safe.t;
+  usage : usage option;
+      (* PROVIDER-STRUCTURED usage for this one request when the provider
+         reported it; None = the body carried no usage object, which is not
+         the same as zero. *)
 }
 
 (** Reassemble [lines] (the SSE [data:] payloads of one streaming
@@ -396,11 +447,15 @@ let reassemble_stream ?(on_text : string -> unit = fun _ -> ())
   (* index -> accumulated tool-call fragment {id; name; arguments buf} *)
   let tool_bufs : (int, string * string * Buffer.t) Hashtbl.t = Hashtbl.create 4 in
   let finish = ref "stop" in
+    let usage = ref None in
   List.iter
     (fun data ->
       if data <> "[DONE]" then
         (try
            let json = Yojson.Safe.from_string data in
+             (match usage_of_response_json json with
+              | Some u -> usage := Some u
+              | None -> ());
            match json |> member "choices" |> to_list with
            | choice :: _ ->
                (match choice |> member "finish_reason" |> to_string_option with
@@ -510,16 +565,19 @@ let reassemble_stream ?(on_text : string -> unit = fun _ -> ())
   in
   let response =
     `Assoc
-      [
-        ( "choices",
-          `List
-            [
-              `Assoc
-                [ ("message", msg); ("finish_reason", `String !finish) ];
-            ] );
-      ]
+      ([
+          ( "choices",
+            `List
+              [
+                `Assoc
+                  [ ("message", msg); ("finish_reason", `String !finish) ];
+              ] );
+        ]
+       @ (match !usage with
+          | None -> []
+          | Some u -> [ ("usage", usage_to_json u) ]))
   in
-  { text; reasoning; tool_calls; finish = !finish; response }
+  { text; reasoning; tool_calls; finish = !finish; response; usage = !usage }
 
 (** Extract delta content from one streaming SSE JSON payload ([DONE]
     or a [choices[0].delta.content] chunk). *)
