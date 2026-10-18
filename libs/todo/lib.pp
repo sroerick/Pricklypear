@@ -1820,11 +1820,68 @@
               3
               4)))))))
 
+(define todo/item/prio-decorate
+  (lambda
+    (row)
+    "Decorate a row with its precomputed sort keys: (rank pos . row)."
+    (cons
+      (todo/item/prio-rank (cdr row))
+      (cons
+        (todo/item/prio-pos (cdr row))
+        row))))
+
+(define todo/item/prio-undecorate
+  (lambda
+    (e)
+    "Strip the precomputed keys from a decorated row."
+    (cdr (cdr e))))
+
+(define todo/item/prio-key-le?
+  (lambda
+    (a b)
+    "Cheap comparator on decorated rows: rank and position are precomputed
+     numbers, so only the id tiebreak touches strings."
+    (if
+      (< (car a) (car b))
+      #t
+      (if
+        (> (car a) (car b))
+        #f
+        (if
+          (< (car (cdr a)) (car (cdr b)))
+          #t
+          (if
+            (> (car (cdr a)) (car (cdr b)))
+            #f
+            (string<=? (car (cdr (cdr a))) (car (cdr (cdr b))))))))))
+
+(define todo/item/prio-key-insert
+  (lambda
+    (sorted e)
+    "Insertion step over decorated rows."
+    (if
+      (null? sorted)
+      (list e)
+      (if
+        (todo/item/prio-key-le? e (car sorted))
+        (cons e sorted)
+        (cons (car sorted) (todo/item/prio-key-insert (cdr sorted) e))))))
+
 (define todo/item/prio-sorted
   (lambda
     (rows)
-    "Rows ordered by priority rank, then position, then id (insertion sort; no sort prim in-image)."
-    (list/foldl todo/item/prio-insert () rows)))
+    "Rows ordered by priority rank, then position, then id. Decorates each
+     row once (rank + position computed per row), insertion-sorts on the
+     precomputed keys, then strips them. The old version recomputed BOTH
+     rows' rank and position on every comparison - O(n^2) expensive
+     comparisons blew the eval budget at ~60 eligible rows (supervisor
+     boot scan budget exceeded, 10-18). Same ordering semantics."
+    (list/map
+      todo/item/prio-undecorate
+      (list/foldl
+        todo/item/prio-key-insert
+        ()
+        (list/map todo/item/prio-decorate rows)))))
 
 (define todo/item/priority
   (lambda
