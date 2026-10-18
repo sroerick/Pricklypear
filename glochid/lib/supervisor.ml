@@ -1188,12 +1188,17 @@ let tick (st : st) : unit =
              in
              (prio_rank pr, pos, jstr (jmember "id" c))
            in
-           List.iter
-             (fun c ->
-               let id = jstr (jmember "id" c) in
-               if id <> "" && not (Hashtbl.mem open_cards id) then
-                 create_run st c)
-             (List.sort (fun a b -> compare (card_key a) (card_key b)) cards)
+             List.iter
+               (fun c ->
+                 let id = jstr (jmember "id" c) in
+                 if id <> "" && not (Hashtbl.mem open_cards id) then begin
+                   create_run st c;
+                   (* the eligible list can carry the same card twice
+                      (todo/item/active duplicates, 10-18) - register the
+                      card as open so a second copy does not queue again *)
+                   Hashtbl.replace open_cards id ()
+                 end)
+               (List.sort (fun a b -> compare (card_key a) (card_key b)) cards)
        | Ok _ -> ());
       (* 4. DISPATCH: due retries first, then queued rows by creation order
             (todo/item/queue owns the ORDER; creation order mirrors it —
