@@ -1787,6 +1787,73 @@ let () =
               Alcotest.(check string) "timeout" "timeout"
                 (Native_run.classify_error "provider timeout");
               Alcotest.(check string) "crash is retryable" "transient"
-                (Native_run.classify_error "connection reset by peer"))
+                (Native_run.classify_error "connection reset by peer"));
+          Alcotest.test_case "native-transient-classes-retry" `Quick (fun () ->
+              (* The native runner classifies its own error, and the
+                 supervisor takes that answer as authoritative (it cannot
+                 re-derive it from the sidecar's text vocabulary). Pin the
+                 mapping the harvest applies, so a rename in
+                 Native_run.classify_error cannot silently turn every
+                 transient provider fault into a one-shot dead run. *)
+              let retries cls =
+                cls = "transient" || cls = "timeout"
+              in
+              Alcotest.(check bool) "HTTP 429 retries" true
+                (retries (Native_run.classify_error "HTTP 429: slow down"));
+              Alcotest.(check bool) "HTTP 503 retries" true
+                (retries (Native_run.classify_error "HTTP 503: gateway"));
+              Alcotest.(check bool) "timeout retries" true
+                (retries (Native_run.classify_error "provider timeout"));
+              Alcotest.(check bool) "HTTP 401 does NOT retry" false
+                (retries (Native_run.classify_error "HTTP 401: bad creds"));
+              Alcotest.(check bool) "max-turns does NOT retry" false
+                (retries
+                   (Native_run.classify_error
+                      "LLM: max turns exceeded (8)")));
+          (* ---- the PHASE 3 dispatch seam: ONE place chooses a runner ---- *)
+          Alcotest.test_case "runner-kind-defaults-to-the-phase-2-sidecar" `Quick
+            (fun () ->
+              (* The recorded flip gate: the default must NOT become native
+                 just because the native runner exists. *)
+              let cfg = Supervisor.config () in
+              Alcotest.(check string) "default kind" "pp-flow"
+                cfg.Supervisor.runner_kind;
+              Alcotest.(check string) "sidecar step name" "sidecar"
+                (Yojson.Safe.from_string (Supervisor.steps_initial cfg)
+                |> Yojson.Safe.Util.to_list
+                |> (function [] -> `Null | x :: _ -> x)
+                |> Yojson.Safe.Util.member "name"
+                |> Yojson.Safe.Util.to_string));
+          Alcotest.test_case "native-kind-names-its-own-step" `Quick (fun () ->
+              (* A row read later must say which runner produced it. *)
+              let cfg = Supervisor.config () in
+              let native = { cfg with Supervisor.runner_kind = "native" } in
+              let step =
+                Yojson.Safe.from_string (Supervisor.steps_initial native)
+                |> Yojson.Safe.Util.to_list
+                |> (function [] -> `Null | x :: _ -> x)
+              in
+              Alcotest.(check string) "native step name" "native"
+                (Yojson.Safe.Util.member "name" step
+                |> Yojson.Safe.Util.to_string);
+              Alcotest.(check string) "native step kind" "native"
+                (Yojson.Safe.Util.member "kind" step
+                |> Yojson.Safe.Util.to_string));
+          Alcotest.test_case "unknown-kind-falls-back-to-the-sidecar" `Quick
+            (fun () ->
+              (* spawn_run is a two-arm if: anything that is not exactly
+                 "native" runs the phase-2 sidecar. Pin that, so a typo in
+                 an env var can never dispatch nothing. *)
+              let cfg = Supervisor.config () in
+              let typo = { cfg with Supervisor.runner_kind = "nativ" } in
+              Alcotest.(check bool) "typo is not native" false
+                (typo.Supervisor.runner_kind = "native");
+              Alcotest.(check string) "typo still names a sidecar step"
+                "sidecar"
+                (Yojson.Safe.from_string (Supervisor.steps_initial typo)
+                |> Yojson.Safe.Util.to_list
+                |> (function [] -> `Null | x :: _ -> x)
+                |> Yojson.Safe.Util.member "name"
+                |> Yojson.Safe.Util.to_string))
         ] );
     ]
