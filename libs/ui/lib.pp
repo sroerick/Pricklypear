@@ -1138,7 +1138,13 @@
             "border-bottom"
             "2px solid #000"
             "padding"
-            ".5rem .75rem"))
+            ".5rem .75rem"
+            "display"
+            "flex"
+            "align-items"
+            "center"
+            "gap"
+            ".5rem"))
         (css/rule
           "header .brand"
           (list
@@ -1164,16 +1170,16 @@
         (css/rule
           "header .meta"
           (list
-            "display"
-            "block"
+            "margin"
+            "0 0 0 auto"
+            "text-align"
+            "right"
             "font-family"
             "var(--font-mono)"
             "font-size"
             ".8rem"
             "color"
-            "var(--muted)"
-            "margin"
-            ".25rem 0 .5rem")))))
+            "var(--muted)")))))
   "Render the theme-header base stylesheet rules.")
 
 (define ui/theme-menu
