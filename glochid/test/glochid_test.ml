@@ -990,8 +990,10 @@ let test_glochid_keys ~rt () =
              (has "/filmstrip/keys/close" html);
            Alcotest.(check bool) "shell carries the guard clause" true
              (has "activeElement.tagName" html);
-           Alcotest.(check bool) "shell carries the keys hint" true
-             (has "fs-keys" html)
+            Alcotest.(check bool) "shell carries the keys hint" true
+              (has "fs-keys" html);
+            Alcotest.(check bool) "shell page never scrolls (card a5bdd8ce)" true
+              (has "body:has(.fs-shell){overflow:hidden}" html)
        | other -> Alcotest.fail ("shell: " ^ Reader.pp_value other));
       (* no live pane yet: the chord answers the status line *)
       Alcotest.(check bool) "no focused pane = status line" true
