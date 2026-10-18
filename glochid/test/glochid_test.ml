@@ -531,6 +531,139 @@ let test_libs_hyper_on_agent ~rt () =
     (Runtime.eval_string ~rt
        {|(hyper/text (hyper/click (hyper/visit "/branchy/page") "#bb" (list)) "#bout")|})
 
+
+(** calendar faces (card e1d032a0): the calendar day/event click is
+    PANE-LOCAL in filmstrip. Loads libs/lookbook + libs/calendar the way
+    the habitat boots them (html + hyper first), binds the /calendar
+    route, and asserts: (1) hyper/expect over the changed route -- GET
+    /calendar?day=2026-10-18 serves the day agenda fragment with the day
+    header; (2) the month grid day cells carry hx-get + hx-target
+    #cal-main (pane-local swap, never a plain anchor out of the shell);
+    (3) lookbook evidence: calendar/nav-a answers its examples card and
+    is registered in (lookbook/elements). *)
+
+let test_calendar_day_pane_local ~rt () =
+  let rec find_libs_dir dir =
+    let cand = Filename.concat dir "libs/hyper/lib.pp" in
+    if Sys.file_exists cand then dir
+    else
+      let parent = Filename.dirname dir in
+      if parent = dir then "libs"
+      else find_libs_dir parent
+  in
+  let libs_dir =
+    let root = find_libs_dir (Sys.getcwd ()) in
+    Filename.concat root "libs"
+  in
+  let load name =
+    let p = Filename.concat (Filename.concat libs_dir name) "lib.pp" in
+    match Runtime.load_file ~rt p with
+    | Ok () -> ()
+    | Error e -> Alcotest.fail (name ^ ": " ^ e)
+  in
+  let fmt_interp_error = function
+    | Ast.Unbound_var s -> "unbound: " ^ s
+    | Ast.Not_a_function _ -> "not-a-function"
+    | Ast.Arity_mismatch (n, exp, got) ->
+      Printf.sprintf "arity %s: expected %d got %d" n exp got
+    | Ast.Wrong_arg_count (n, exp, got) ->
+      Printf.sprintf "wrong-arg-count %s: expected %d got %d" n exp got
+    | Ast.Type_mismatch (exp, _) -> "type-mismatch: expected " ^ exp
+    | Ast.Budget_exceeded -> "budget-exceeded"
+    | Ast.Prim_error (p, m, _) -> "prim " ^ p ^ ": " ^ m
+    | Ast.Parse_error (m, l, c) -> Printf.sprintf "parse: %s at %d:%d" m l c
+    | Ast.User_error (m, _) -> "user-error: " ^ m
+  in
+  let eval_or_fail what s =
+    match Runtime.eval_string ~rt s with
+    | v -> v
+    | exception Ast.Interp_error e ->
+      Alcotest.fail (what ^ ": " ^ fmt_interp_error e)
+    | exception e -> Alcotest.fail (what ^ ": " ^ Printexc.to_string e)
+  in
+  List.iter load ["html"; "hyper"; "lookbook"; "calendar"];
+  (* Store/session prims the face reads at render time; defines resolve
+     at call time, so the loads above never needed them. date-format /
+     date-weekday back the date prims the month/day renders hit
+     (2026-10: the 1st is a Thursday, so dow = (mod (+ 3 d) 7)). *)
+  ignore (eval_or_fail "stubs"
+            {|(begin (define (rows k n) (list))
+                     (define (todo/item/all) (list))
+                     (define (notes/doc/get s) (list))
+                     (define (tree/list-kind a b c) (list))
+                     (define (date-today) "2026-10-18")
+                     (define (date-format y m d)
+                       (string-append (as-str y) "-"
+                                      (calendar/pad2 m) "-"
+                                      (calendar/pad2 d)))
+                     (define (date-weekday y m d) (mod (+ 3 d) 7))
+                     ;; request-param is a Nopales shim in the surface
+                     ;; blob, not a runtime prim; the face reads it at
+                     ;; dispatch.
+                     (define (request-param n) (query-param n)))|});
+  ignore (Runtime.eval_string ~rt {|(route "/calendar" "calendar/page")|});
+  (* Dispatch the changed route the way the host does: a real request
+     context with the HX-Request header (pane partial mode). *)
+  let dispatch params =
+    match Runtime.dispatch_route ~rt ~handler:"calendar/page" ~method_:"GET"
+            ~path:"/calendar" ~params ~headers:[ ("hx-request", "true") ]
+            ~body:"" with
+    | Ast.VStr html -> html
+    | other -> Alcotest.fail ("calendar/page: " ^ Ast.pp_value_short other)
+    | exception Ast.Interp_error e ->
+      Alcotest.fail ("calendar/page dispatch: " ^ fmt_interp_error e)
+    | exception e -> Alcotest.fail ("calendar/page dispatch: " ^ Printexc.to_string e)
+  in
+  let nopales_str s =
+    let b = Buffer.create (String.length s * 2) in
+    String.iter
+      (fun c ->
+        match c with
+        | '"' -> Buffer.add_string b "\\\""
+        | '\\' -> Buffer.add_string b "\\\\"
+        | '\n' -> Buffer.add_string b "\\n"
+        | c -> Buffer.add_char b c)
+      s;
+    Buffer.contents b
+  in
+  (* (1) hyper/expect over the changed route: GET /calendar?day=2026-10-18
+     under HX-Request serves the day agenda fragment (the pane body). *)
+  let day_html = dispatch [ ("day", "2026-10-18") ] in
+  ignore (eval_or_fail "day page"
+            ("(define pg (soup/parse \"" ^ nopales_str day_html ^ "\"))"));
+  Alcotest.check pp_value_testable "day fragment via hyper/expect"
+    (Ast.VBool true)
+    (eval_or_fail "hyper/expect h2" {|(hyper/expect pg "h2" "2026-10-18")|});
+  (* (2) the month grid: every day cell is a pane-local anchor. *)
+  let month_html = dispatch [ ("ym", "2026-10") ] in
+  ignore (eval_or_fail "month page"
+            ("(define pgm (soup/parse \"" ^ nopales_str month_html ^ "\"))"));
+  Alcotest.check pp_value_testable "day cells swap #cal-main in place"
+    (Ast.VBool true)
+    (eval_or_fail "hx-target #cal-main"
+       {|(string-contains? (hyper/html pgm) "hx-target=\"#cal-main\"")|});
+  Alcotest.check pp_value_testable "day cell hx-gets the day route"
+    (Ast.VBool true)
+    (eval_or_fail "hx-get day route"
+       {|(string-contains? (hyper/html pgm) "hx-get=\"/calendar?day=2026-10-18\"")|});
+  (* (3) lookbook evidence for the new element. *)
+  Alcotest.check pp_value_testable "nav-a is pane-local"
+    (Ast.VStr "#cal-main")
+    (eval_or_fail "nav-a attrs"
+       {|(soup/attr
+           (car (soup/select
+                  (soup/parse
+                    (calendar/nav-a "/calendar?day=2026-10-18" "18"))
+                  "a"))
+           "hx-target")|});
+  Alcotest.check pp_value_testable "lookbook inventory registers calendar/nav-a"
+    (Ast.VBool true)
+    (eval_or_fail "lookbook inventory"
+       {|(string-contains? (json-emit (lookbook/elements)) "calendar/nav-a")|});
+  Alcotest.check pp_value_testable "nav-a examples card"
+    (Ast.VStr "calendar/nav-a")
+    (eval_or_fail "examples card"
+       {|(lb/get (calendar/nav-a/examples) "name")|})
 (** surfaces: the chat + code pages are Nopales route-table handlers
     (rendered via libs/html), redefinable live; a consumed turn's captured
     parts replay through hyper/stream. Loads the embedded surface the
@@ -1875,6 +2008,9 @@ let () =
       ( "libs-hyper-on-glochid",
         [ Alcotest.test_case "visit-click-stream" `Quick
             (test_libs_hyper_on_agent ~rt) ] );
+        ( "calendar-faces",
+          [ Alcotest.test_case "day-click-pane-local" `Quick
+              (test_calendar_day_pane_local ~rt) ] );
       ( "surfaces",
         [ Alcotest.test_case "nopales-routes" `Quick
             (test_surfaces_nopales_routes ~rt)

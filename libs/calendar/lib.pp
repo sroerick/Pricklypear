@@ -951,8 +951,8 @@
       (html/div (html/attr "class" "cal-cell cal-empty") "")
       (let
         ((day (calendar/ymd y m d)))
-        (html/a
-          (string-append "/calendar?day=" day)
+          (calendar/nav-a
+            (string-append "/calendar?day=" day)
           (html/div
             (html/attr
               "class"
@@ -966,7 +966,8 @@
                   (html/attr "class" "cal-dom")
                   (html/text (as-str d)))
                 (calendar/cell-marks day))))))))
-  "Render a single calendar day cell as HTML with link and marks.")
+  "Render a single calendar day cell as a pane-local link (hx-get swaps
+#cal-main in place) with day number and event marks.")
 
 (define calendar/day-cell-fast
   (lambda
@@ -991,8 +992,8 @@
             ((nt (calendar/count-todos-in day all-todos)))
             (let
               ((daily (calendar/has-daily? day)))
-              (html/a
-                (string-append "/calendar?day=" day)
+                (calendar/nav-a
+                  (string-append "/calendar?day=" day)
                 (html/div
                   (html/attr
                     "class"
@@ -1049,8 +1050,8 @@
               (calendar/count-recurring-on day))))
           (let
             ((nt (calendar/count-todos-in day all-todos)))
-            (html/a
-              (string-append "/calendar?day=" day)
+              (calendar/nav-a
+                (string-append "/calendar?day=" day)
               (html/div
                 (html/attr
                   "class"
@@ -1095,9 +1096,11 @@
       (let
         ((day (calendar/ymd y m d)))
         (string-append
-          "<a href=\"/calendar?day="
-          day
-          "\"><div class=\""
+            "<a href=\"/calendar?day="
+            day
+            "\" hx-get=\"/calendar?day="
+            day
+            "\" hx-target=\"#cal-main\" hx-swap=\"outerHTML\"><div class=\""
           (if
             (calendar/day-eq? day today)
             "cal-cell cal-today"
@@ -1124,6 +1127,44 @@
   (lambda (a b) (string-eq (as-str a) (as-str b)))
   "Check if two day strings are equal (as strings).")
 
+(define calendar/nav-a
+  (lambda
+    (href label)
+    (html/tag
+      "a"
+      (html/attrs
+        (list
+          (html/attr "href" href)
+          (html/attr "hx-get" href)
+          (html/attr "hx-target" "#cal-main")
+          (html/attr "hx-swap" "outerHTML")))
+      label))
+  "Pane-local calendar link: hx-get swaps #cal-main in place (filmstrip
+pane or classic page); plain href fallback without JS.")
+
+(define calendar/nav-a/examples
+  (lambda ()
+    (lb/obj
+      (list
+        "name" "calendar/nav-a"
+        "doc" "One pane-local calendar link: hx-get swaps #cal-main in place (filmstrip pane or classic page); plain href fallback without JS."
+        "file" "libs/calendar/lib.pp"
+        "formals" (json-emit (list "href" "label"))
+        "variants" (json-emit
+                     (list
+                       (lb/obj (list "href" "/calendar?ym=2026-10" "label" "<"))
+                       (lb/obj (list "href" "/calendar?day=2026-10-18" "label" "18"))))
+        "source"
+        "(calendar/nav-a href label) ->\n  (html/tag \"a\"\n    (html/attrs\n      (list (html/attr \"href\" href)\n            (html/attr \"hx-get\" href)\n            (html/attr \"hx-target\" \"#cal-main\")\n            (html/attr \"hx-swap\" \"outerHTML\")))\n    label)))))")))
+  "The calendar/nav-a card: this def IS the element's declaration.")
+
+(define lookbook/elements
+  (lambda () (append (lookbook/base-elements) (list "calendar/nav-a")))
+  "Calendar package registration on the lookbook seam (libs/lookbook):
+the package vocabulary appends to lookbook/base-elements -- never a
+captured snapshot of the seam itself (the cyclic-thunk-force rule).
+Every entry answers a <name>/examples card.")
+
 (define calendar/day-html
   (lambda
     (day)
@@ -1136,9 +1177,9 @@
             (html/attr "class" "muted")
             (html/join
               (list
-                (html/a
-                  (string-append "/calendar?ym=" (calendar/ym day))
-                  "← month")
+                  (calendar/nav-a
+                    (string-append "/calendar?ym=" (calendar/ym day))
+                    "← month")
                 " · "
                 (html/a
                   (string-append "/notes?slug=daily-" day)
@@ -1557,10 +1598,10 @@
           (html/attr "class" "cal-nav")
           (html/join
             (list
-              (html/a (string-append "/calendar?ym=" prev) "◀")
-              (html/strong ym)
-              (html/a (string-append "/calendar?ym=" next) "▶")
-              (html/a "/calendar" "Today")))))))
+                (calendar/nav-a (string-append "/calendar?ym=" prev) "◀")
+                (html/strong ym)
+                (calendar/nav-a (string-append "/calendar?ym=" next) "▶")
+                (calendar/nav-a "/calendar" "Today")))))))
   "Render previous/next/today navigation links for a YYYY-MM month.")
 
 (define calendar/pad-start
@@ -1606,13 +1647,16 @@
               (null? day)
               (redirect "/calendar")
               (redirect (string-append "/calendar?day=" (as-str day)))))))
-      (html/page
-        (list
-          (html/h1 "Calendar")
-          (html/p*
-            (html/attr "class" "muted")
-            "Month grid · day agenda · events + due todos + daily notes")
-          (calendar/main-html)))))
+        (if
+          (hx-request?)
+          (render-html (calendar/main-html))
+          (html/page
+            (list
+              (html/h1 "Calendar")
+              (html/p*
+                (html/attr "class" "muted")
+                "Month grid · day agenda · events + due todos + daily notes")
+              (calendar/main-html))))))
   "Route handler for /calendar: POST actions or GET page render.")
 
 (define calendar/rd-str-loop
