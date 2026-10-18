@@ -75,6 +75,10 @@
     todo/node/parse-ref
     todo/node/promote-form
     todo/node/seed-state
+    todo/node/marked-keywords
+    todo/node/marked-rows
+    todo/node/slug-map
+    todo/node/row-of
     todo/node/unpromoted
     todo/page
     todo/promote-handler
@@ -1505,6 +1509,10 @@
 (define todo/item/for-list
   (lambda
     (list-id)
+    (todo/item/for-list-from (as-str list-id) (todo/item/all))))
+(define todo/item/for-list-from
+  (lambda
+    (list-id items)
     (let
       ((lid (as-str list-id))
         (inbox-id (todo/list/ensure-inbox)))
@@ -1517,7 +1525,10 @@
               (string-eq fl lid)
               #t
               (if (string-eq fl "") (string-eq lid inbox-id) #f))))
-        (todo/item/all)))))
+        items)))
+  "todo/item/for-list over a CALLER-SUPPLIED card snapshot, so a page that
+     already read todo/item/all never scans the board a second time
+     (2026-10-18 budget fix; todo/item/all is ~40k steps per scan).")
 
 (define todo/item/for-user
   (lambda
@@ -1534,12 +1545,13 @@
 (define todo/item/get
   (lambda (id) (todo/tree/get "todo-item" id)))
 
+;; KIND field precedes; item/html follows.
 (define todo/item/html
   (lambda
-    (view)
+    (view items)
     (if
       (string-eq view "from-notes")
-      (todo/from-notes-html view)
+      (todo/from-notes-html view items)
       (if
         (string-eq view "archived")
         (html/ul
@@ -1549,31 +1561,29 @@
               (acc row)
               (string-append acc (todo/item/list-li row view)))
             ""
-            (list/take (todo/item/archived) 80)))
-        (if
-          (string-eq view "everything")
-          (html/join
-            (list
-              (html/h2 "Lists")
-              (html/ul
-                (html/attr "class" "card todo-list")
-                (list/foldl
-                  (lambda
-                    (acc row)
-                    (string-append acc (todo/item/list-li row view)))
-                  ""
-                  (list/take (todo/item/active (todo/item/all)) 80)))
-              (todo/from-notes-html view)))
-          (html/ul
-            (html/attr "class" "card todo-list")
-            (list/foldl
-              (lambda
-                (acc row)
-                (string-append acc (todo/item/list-li row view)))
-              ""
-              (list/take
-                (todo/item/active (todo/item/for-list view))
-                150))))))))
+            (list/take
+              (list/filter
+                (lambda (row)
+                  (todo/state/archived? (todo/item/state (cdr row))))
+                items)
+              80)))
+        (html/ul
+          (html/attr "class" "card todo-list")
+          (list/foldl
+            (lambda
+              (acc row)
+              (string-append acc (todo/item/list-li row view)))
+            ""
+            (list/take
+              (todo/item/active (todo/item/for-list-from view items))
+              150))))))
+  "Render a view's CARD rows over the page's ONE card snapshot (items).
+     OBITUARY (2026-10-18 budget fix): the 'everything' arm used to rebuild
+     the whole smart view inline — Lists heading + 80 rows + the from-notes
+     sections — which re-read the board (todo/item/all) and the note scrape
+     per section. todo/ui/main now assembles the smart view ONCE and calls
+     this for the plain-list / archived arms only; 'everything'/'from-notes'
+     never reach the old duplicate render.")
 
 ;; kind field — borge/workstreams.borg pipeline-model issues-convergence:
 ;; a todo-item with a kind tag (BUG/DESIGN/SMELL/CLEANUP) is READ AS AN
@@ -3946,11 +3956,77 @@
         (todo/item/all))))
   "Every non-empty origin_ref on the board, read ONCE (one card scan) so
      the unpromoted filter never does a DB read per note node.")
-(define todo/node/unpromoted
+;; MARKED-HEADING READ PATH (2026-10-18 budget fix). OBITUARY (what/why):
+;; todo/node/unpromoted used to fold notes/outline/all-todos, which decodes
+;; EVERY note's full outline (tree/note-index-full: 3385 notes / 21981
+;; heading nodes on prod) to find the handful of marked headings. That
+;; single call exceeds the 400k-step route budget on its own, so
+;; /todos?view=everything and ?view=from-notes returned
+;; "budget exceeded" (500) while ?view=open/archived stayed up — the
+;; note-todos bridge (commit 1adea6e) wired the scrape into
+;; todo/item/html and blew the page. The replacement inverts the read:
+;; MARKED HEADINGS FIRST via tree/find-by on body.todo (one indexed read
+;; per keyword; 106 hits for ~525 steps), then resolve each hit's note
+;; slug from the LIGHT note index (no outlines) using the subtree path
+;; (a heading path is <note-path>.h.<nid>[, .h.<nid>...], so the note
+;; path is the segment before the FIRST .h.). Same (slug nid title
+;; keyword) rows in the same shape, ~3x under budget. The full-outline
+;; fold stays DELETED here, not kept as a fallback — it can never fit a
+;; request (borge/notes.outline-read-path budget-scale).
+(define todo/node/marked-keywords
+  (list " " "TODO" "DONE" "ARCHIVED" "CANCELLED")
+  "Every todo keyword a note heading can carry. Leading-space used to
+     match the live data's single-space placeholder keyword.")
+(define todo/node/marked-rows
   (lambda
     ()
+    (list/foldl
+      (lambda (acc kw)
+        (append acc (tree/find-by (quote heading) "todo" kw 20000)))
+      (list)
+      todo/node/marked-keywords))
+  "Marked note headings as node JSON, one tree/find-by body-field read
+     per keyword. tree/find-by is garden-scoped and viewer-gated by the
+     prim, exactly like the full-index path it replaces.")
+(define todo/node/slug-map
+  (lambda
+    ()
+    (list/foldl
+      (lambda (acc r)
+        (dict-set acc
+          (as-str (dict-get (cdr r) "_path"))
+          (as-str (dict-get (cdr r) "slug"))))
+      "{}"
+      (tree/note-index (notes/tree/root) 5000)))
+  "path -> slug over the LIGHT note index (outline stays \"[]\", so the
+     rows are cheap). The join key for marked headings -> note slug.")
+(define todo/node/row-of
+  (lambda
+    (smap nj)
+    (let*
+      ((p (as-str (dict-get nj "path")))
+       (notep (car (string-split p ".h.")))
+       (slug (dict-get smap notep))
+       (b (dict-get nj "body")))
+      (list (if (null? slug) "" (as-str slug))
+            (as-str (dict-get b "id"))
+            (as-str (dict-get b "title"))
+            (as-str (dict-get b "todo")))))
+  "One marked heading node -> (slug nid title keyword). A heading path is
+     <note-path>.h.<nid>[.h.<nid>...]; splitting on the FIRST .h. yields
+     the owning note path, which is the slug-map key.")
+(define todo/node/unpromoted
+  (lambda
+    (items)
     (let
-      ((promoted (todo/node/promoted-refs)))
+      ((promoted
+          (list/filter
+            (lambda (r) (not (string-eq r "")))
+            (list/map
+              (lambda (row) (todo/item/origin-ref (cdr row)))
+              items)))
+        (smap (todo/node/slug-map))
+        (marked (todo/node/marked-rows)))
       (list/filter
         (lambda
           (t)
@@ -3960,7 +4036,7 @@
             (null? (list/filter
                      (lambda (r) (string-eq r ref))
                      promoted))))
-        (notes/outline/all-todos))))
+        (list/map (lambda (nj) (todo/node/row-of smap nj)) marked))))
   "Outline todo rows (slug nid title keyword) with NO card on the board —
      the honest 'notes (unpromoted)' section of /todos (note-todos clause
      4). The board renders only promoted cards; this is the only place a
@@ -4034,10 +4110,14 @@
   "One unpromoted node row with a promote button (POST action=promote-node).")
 (define todo/from-notes-html
   (lambda
-    (view)
+    (view items)
     (let
-      ((cards (todo/from-notes-items))
-        (unpromoted (todo/node/unpromoted)))
+      ((cards
+          (list/filter
+            (lambda (row)
+              (string-eq (todo/item/origin-kind (cdr row)) "note"))
+            items))
+        (unpromoted (todo/node/unpromoted items)))
       (html/join
         (list
           (html/h2 "From notes")
@@ -4074,7 +4154,8 @@
   "The 'from notes' view: promoted cards (shared, workable) plus the
      unpromoted nodes that are NOT on the board yet (note-todos clause 4).
      Replaces the scrape-cache notes block, which showed every node as if
-     it were a board item.")
+     it were a board item. Takes the page's ONE card snapshot (items) so
+     the view never re-scans the board.")
 (define todo/promote-handler
   (lambda
     ()
@@ -4113,19 +4194,36 @@
                   (list
                     (html/div
                       (html/attr "class" "todo-side")
-                      (todo/ui/nav view))
+                      (todo/ui/nav view (todo/item/all)))
                     (html/div
                       (html/attr "class" "todo-body")
                       (todo/ui/detail (as-str id-param) view))))))))
-        (let
-          ((list-id
-            (if
-              (string-eq view "everything")
-              (todo/list/ensure-inbox)
+        (let*
+          ((items (todo/item/all))
+            (list-id
               (if
-                (string-eq view "from-notes")
-                ""
-                (if (string-eq view "archived") "" view)))))
+                (string-eq view "everything")
+                (todo/list/ensure-inbox)
+                (if
+                  (string-eq view "from-notes")
+                  ""
+                  (if (string-eq view "archived") "" view))))
+            (body
+              (if
+                (string-eq view "everything")
+                (html/join
+                  (list
+                    (html/h2 "Lists")
+                    (html/ul
+                      (html/attr "class" "card todo-list")
+                      (list/foldl
+                        (lambda
+                          (acc row)
+                          (string-append acc (todo/item/list-li row view)))
+                        ""
+                        (list/take (todo/item/active items) 80)))
+                    (todo/from-notes-html view items)))
+                (todo/item/html view items))))
           (html/div
             (html/attr "id" "todo-main")
             (html/join
@@ -4136,20 +4234,26 @@
                     (list
                       (html/div
                         (html/attr "class" "todo-side")
-                        (todo/ui/nav view))
+                        (todo/ui/nav view items))
                       (html/div
                         (html/attr "class" "todo-body")
                         (html/join
                           (list
                             (todo/ui/add-form view list-id)
-                            (todo/item/html view)))))))))))))))
+                            body)))))))))))))
+  "The /todos main region for a view. Reads the board ONCE (items) and
+     threads that snapshot through nav, the row lists and the from-notes
+     view. OBITUARY (2026-10-18 budget fix): each of those used to call
+     todo/item/all itself, so /todos?view=everything paid the card scan
+     three times and the note scrape twice — 500 budget-exceeded. The
+     'everything' smart view is now assembled HERE (Lists + from-notes)
+     rather than nested inside todo/item/html.")
 
 (define todo/ui/nav
   (lambda
-    (view)
+    (view items)
     (let
       ((lists (todo/list/all))
-        (items (todo/item/all))
         (inbox (todo/list/ensure-inbox)))
       (let
         ((arch-n
