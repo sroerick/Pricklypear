@@ -3225,6 +3225,57 @@
     (t id)
     (seq (tree/delete (node-path t (as-str id))) id)))
 
+(define todo/tree/row-id?
+  (lambda
+    (nj id)
+    "Does node nj encode datum id? True when the path's encoded id
+     (todo/tree/path-id) matches, or when the legacy redash form matches -
+     the latter keeps in-flight ids minted before the 10-18 path-id fix
+     resolvable through the fallback scan."
+    (let
+      ((p (as-str (dict-get nj "path"))))
+      (or
+        (string-eq (as-str (todo/tree/path-id p)) (as-str id))
+        (string-eq (todo/tree/redash (todo/tree/tail p)) (as-str id))))))
+
+(define todo/tree/find-node-scan
+  (lambda
+    (t id)
+    "Bounded scan fallback for datum rows whose STORED path diverges from
+     node-path's computed form (dashed id segments, spaces moved after the
+     row was written): scan the type's caller prefix, then the shared
+     data.s root (type-checked there, since that scan crosses every datum
+     type). Returns the first matching node dict, (list) when nothing
+     matches. Same 5000-node caps the enumeration paths already pay."
+    (let
+      ((g
+        (list/foldl
+          (lambda
+            (acc nj)
+            (if
+              (null? acc)
+              (if (todo/tree/row-id? nj id) nj acc)
+              acc))
+          (list)
+          (tree/list (todo/tree/prefix t) 1 5000))))
+      (if
+        (null? g)
+        (list/foldl
+          (lambda
+            (acc nj)
+            (if
+              (null? acc)
+              (if
+                (and
+                  (string-eq (as-str (dict-get nj "type")) (as-str t))
+                  (todo/tree/row-id? nj id))
+                nj
+                acc)
+              acc))
+          (list)
+          (tree/list (todo/tree/shared-prefix) 3 5000))
+        g))))
+
 (define todo/tree/get
   (lambda
     (t id)
@@ -3233,7 +3284,12 @@
       (list)
       (let
         ((n (tree/get (node-path t (as-str id)))))
-        (if (null? n) (list) (dict-get n "body"))))))
+        (if
+          (null? n)
+          (let
+            ((hit (todo/tree/find-node-scan t (as-str id))))
+            (if (null? hit) (list) (dict-get hit "body")))
+          (dict-get n "body"))))))
 
 (define todo/tree/insert-by-created
   (lambda
@@ -3348,9 +3404,22 @@
 (define todo/tree/save
   (lambda
     (t id fields)
-    (seq
-      (tree/upsert (node-path t (as-str id)) "datum" t fields)
-      id)))
+    (let
+      ((nid (as-str id)))
+      (let
+        ((p (node-path t nid)))
+        (seq
+          (tree/upsert
+            (if
+              (null? (tree/get p))
+              (let
+                ((hit (todo/tree/find-node-scan t nid)))
+                (if (null? hit) p (as-str (dict-get hit "path"))))
+              p)
+            "datum"
+            t
+            fields)
+          id)))))
 
 (define todo/tree/set-field
   (lambda
