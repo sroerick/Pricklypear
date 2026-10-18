@@ -1875,7 +1875,9 @@
      precomputed keys, then strips them. The old version recomputed BOTH
      rows' rank and position on every comparison - O(n^2) expensive
      comparisons blew the eval budget at ~60 eligible rows (supervisor
-     boot scan budget exceeded, 10-18). Same ordering semantics."
+       boot scan budget exceeded, 10-18). Same ordering semantics. Ships
+         via the hook's guarded pp-sync reseed - the boot seed is additive
+       and cannot refresh an existing define's body."
     (list/map
       todo/item/prio-undecorate
       (list/foldl
