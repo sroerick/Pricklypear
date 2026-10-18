@@ -2361,24 +2361,36 @@ let call_handler (t : t) ?request (handler_name : string)
                 the flag stuck true for the session (fail-closed, but it
                 would deny meta-eval prims for the identity's session
                 lifetime). *)
-             Fun.protect
-               (fun () ->
-                  match request with
-                  | None -> run ()
-                  | Some req ->
-                      t.current_request <- Some req;
-                      Fun.protect
-                        ~finally:(fun () -> t.current_request <- None)
-                        run)
-               ~finally:(fun () -> t.public_dispatch <- prev))
-      end else
-        (match request with
-         | None -> run ()
-         | Some req ->
-             t.current_request <- Some req;
-             Fun.protect
-               ~finally:(fun () -> t.current_request <- None)
-               run)
+               Fun.protect
+                 (fun () ->
+                    match request with
+                    | None -> run ()
+                    | Some req ->
+                        (* card c58830ad: RESTORE the previous binding, never
+                           clear to None. A nested dispatch (route/dispatch ->
+                           call_handler) used to clobber the OUTER handler's
+                           request binding; any request-* prim after the nested
+                           call then raised "no active request" (notes panel
+                           click -> filmstrip open/leaf -> in-process pane
+                           dispatch -> outer handler requestless). *)
+                        let prev_req = t.current_request in
+                        t.current_request <- Some req;
+                        Fun.protect
+                          ~finally:(fun () -> t.current_request <- prev_req)
+                          run)
+                 ~finally:(fun () -> t.public_dispatch <- prev))
+        end else
+          (match request with
+           | None -> run ()
+           | Some req ->
+               (* card c58830ad: restore, don't clear (see the public arm
+                  above) — a nested route/dispatch must not leave the outer
+                  handler requestless. *)
+               let prev_req = t.current_request in
+               t.current_request <- Some req;
+               Fun.protect
+                 ~finally:(fun () -> t.current_request <- prev_req)
+                 run)
 
 (* Late-bind the route/dispatch thunk now that call_handler exists. *)
 let () =
@@ -2454,10 +2466,14 @@ let () =
         in
         let budget = Pricklypear_lisp.Eval.make_budget () in
         let t0 = Unix.gettimeofday () in
-        let outcome =
-          t.current_request <- Some req;
-          Fun.protect
-            ~finally:(fun () -> t.current_request <- None)
+          let outcome =
+            (* card c58830ad: restore, don't clear — same discipline as
+               call_handler; the probe may now run nested inside a real
+               request without stealing its binding. *)
+            let prev_req = t.current_request in
+            t.current_request <- Some req;
+            Fun.protect
+              ~finally:(fun () -> t.current_request <- prev_req)
             (fun () ->
               try
                 let _v =
