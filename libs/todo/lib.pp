@@ -3228,15 +3228,25 @@
 (define todo/tree/row-id?
   (lambda
     (nj id)
-    "Does node nj encode datum id? True when the path's encoded id
-     (todo/tree/path-id) matches, or when the legacy redash form matches -
-     the latter keeps in-flight ids minted before the 10-18 path-id fix
-     resolvable through the fallback scan."
+    "Does node nj encode datum id? O(1): the stored path must END with the
+     id as its final dot-segment (path tail = \".\" + id), or the legacy
+     redash form of the path tail matches (in-flight ids minted before
+     the 10-18 path-id fix). Replaces the path-id char-loop comparison,
+     whose per-node cost blew the eval budget when the fallback scan ran
+     over the full shared listing (10-18: find-node-scan returned empty
+     on prod while the same listing matched instantly with this check)."
     (let
       ((p (as-str (dict-get nj "path"))))
-      (or
-        (string-eq (as-str (todo/tree/path-id p)) (as-str id))
-        (string-eq (todo/tree/redash (todo/tree/tail p)) (as-str id))))))
+      (let
+        ((n (string-length (as-str id))))
+        (if
+          (< (string-length p) (+ n 1))
+          #f
+          (or
+            (string-eq
+              (substring p (- (string-length p) (+ n 1)) (string-length p))
+              (string-append "." (as-str id)))
+            (string-eq (todo/tree/redash (todo/tree/tail p)) (as-str id))))))))
 
 (define todo/tree/find-node-scan
   (lambda
