@@ -246,7 +246,7 @@
     (r label)
     (html/button
       (html/attrs
-        (list
+        (append (list
           (html/attr "type" "button")
           (html/attr "class" "fs-applink")
           (html/attr "hx-post" "/filmstrip/open")
@@ -923,6 +923,11 @@ between strip and rail).")
           (css/raw "*{scrollbar-width:thin;scrollbar-color:var(--sel-bg) transparent}::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--sel-bg);border-radius:6px}::-webkit-scrollbar-thumb:hover{background:var(--muted)}::-webkit-scrollbar-corner{background:transparent}.fs-applink{background:none;border:0;color:var(--sel-accent);padding:0;margin:0;font:inherit;cursor:pointer;text-decoration:none}.fs-applink:hover{text-decoration:underline}.fs-modelsel{font-size:.6em;padding:.1rem .3rem}")
           (css/raw ".lb-btn{font:inherit;padding:.25rem .7rem;border:1px solid var(--border);border-radius:4px;background:var(--panel);color:inherit;cursor:pointer}.lb-btn-primary{background:var(--pp-btn-hi);border-color:var(--pp-btn-hi);color:#fff}.lb-btn-danger{background:var(--pp-danger);border-color:var(--pp-danger);color:#fff}.lb-badge{display:inline-block;font-size:.72em;padding:.05rem .45rem;border-radius:999px;border:1px solid var(--border);color:var(--muted)}.lb-badge-ok{color:var(--pp-ok);border-color:var(--pp-ok)}.lb-badge-warn{color:var(--pp-warn);border-color:var(--pp-warn)}.lb-card{border:1px solid var(--border);border-radius:6px;padding:.75rem;background:var(--panel)}.lb-card h3{margin:0 0 .5rem;display:flex;gap:.5rem;align-items:center}.lb-card p{margin:.25rem 0 0}.lb-stage{border:1px dashed var(--border);padding:.9rem;border-radius:6px;display:flex;gap:.6rem;align-items:center;flex-wrap:wrap}.lb-form{display:flex;gap:.4rem;flex-wrap:wrap;align-items:center;margin:.6rem 0}.lb-form input{font:inherit;padding:.2rem .4rem;background:var(--panel);color:inherit;border:1px solid var(--border);border-radius:4px}.lb-form label{color:var(--muted,#9aa3b2);font-size:.85em}.lb-folds{margin-top:.6rem}.lb-folds details{margin:.3rem 0}.lb-folds summary{cursor:pointer;color:var(--muted,#9aa3b2)}.lb-folds pre{overflow:auto;font-size:.85em;background:var(--panel);padding:.5rem;border-radius:4px;border:1px solid var(--border)}.lb-vtabs{display:flex;gap:.3rem;flex-wrap:wrap;margin:.4rem 0}.lb-vtab{cursor:pointer}.lb-vtab.fs-sel{outline:1px solid var(--sel-accent)}.lb-swatch{display:inline-flex;align-items:center;gap:.4rem;padding:.15rem .55rem;border:1px solid var(--border);border-radius:4px;font-size:.85em}.lb-swatch b{width:.95em;height:.95em;display:inline-block;border-radius:3px;border:1px solid var(--border)}.lb-palette{display:flex;gap:.35rem;flex-wrap:wrap}.lb-palette .lb-swatch{border:none;padding-left:0}.lb-palette .lb-swatch b{width:1.6em;height:1.6em}.lb-palette .lb-swatch span{color:var(--muted)}")
             (css/raw ".fs-railtabs{display:flex;gap:.4rem;align-items:center;border:1px solid var(--border);background:var(--panel);padding:.45rem .5rem}.fs-start{position:relative;flex:0 0 auto}.fs-start-word{cursor:pointer;list-style:none;font-weight:700}.fs-start-word::-webkit-details-marker{display:none}.fs-start-menu{position:absolute;left:0;top:100%;z-index:30;display:flex;flex-direction:column;min-width:10rem;background:var(--panel);border:1px solid var(--border);box-shadow:0 4px 14px rgba(0,0,0,.5);padding:.25rem}.fs-start-entry{width:100%;text-align:left;padding:.55rem .6rem;white-space:nowrap}.fs-start-entry:hover{background:var(--sel-bg)}.fs-railtab.fs-btn{background:none;border:1px solid transparent;color:var(--sel-accent)}.fs-keys{margin-left:auto;color:var(--muted,#6b7080);cursor:help;font-size:1.1em;user-select:none}")
+            ;; start menu cap (card e3de4aa0): the menu must never extend
+            ;; below the screen -- cap it at about two-thirds of the viewport
+            ;; height with its own scroll (the narrow-sheet rule below
+            ;; overrides with an upward-opening 60vh menu).
+            (css/rule ".fs-start-menu" (list "max-height" "66vh" "overflow-y" "auto"))
         ;; rail-trees-v4 chrome (RECOVERED: these rules were dropped from
         ;; the css in the p2 splice -- the renderer kept emitting the
         ;; classes, so the habitat tree rendered as a bare list; the
@@ -2169,7 +2174,7 @@ desktop 0).")
             (html/tag
               "button"
               (html/attrs
-                (list
+                  (append (list
                   (html/attr "class" "fs-btn")
                   (html/attr "title" "cycle width (third/half/full)")
                   (html/attr "hx-post" "/filmstrip/width")
@@ -2183,7 +2188,7 @@ desktop 0).")
             (html/tag
               "button"
               (html/attrs
-                (list
+                  (append (list
                   (html/attr "class" "fs-btn")
                   (html/attr "title" "close pane")
                   (html/attr "hx-post" "/filmstrip/close")
@@ -2691,6 +2696,10 @@ DOM alive.")
               (html/text "rail")))
           (filmstrip/railtabs)
           (list (filmstrip/coltabs-html panes focus))
+            ;; the file-issue affordance (card 5877331e): one declared
+            ;; button on the rail opens the /issues register -- reporting
+            ;; an issue or UI feedback is one click from any desktop.
+            (list (lookbook/html (ui/file-issue "file an issue")))
           (list (filmstrip/keys-hint))))))
   "The rail mode controlbox (one word per tree root, per
 filmstrip.borg sidebar-main-dichotomy -- the axis toggle word was
@@ -4169,6 +4178,40 @@ data: the hx-* verbs ride attrs verbatim through the projection.")
         "hx-swap" "innerHTML")
       (list (ui/text label))))
   "One start-menu entry: opens `route` as a pane via /filmstrip/open.")
+
+(define ui/file-issue
+  (lambda (label)
+    (ui/elm
+      "button"
+      (list
+        "id" "fs-file-issue"
+        "class" "fs-btn fs-applink"
+        "title" "report an issue or UI feedback (opens /issues)"
+        "hx-post" "/filmstrip/open"
+        "hx-vals" "{\"route\":\"/issues\"}"
+        "hx-target" "#fs-sink"
+        "hx-swap" "innerHTML")
+      (list (ui/text label))))
+  "One rail file-issue button: opens the issues register (/issues) as a
+pane via /filmstrip/open (open-or-focus, OOB into #fs-sink). The issues
+face owns the creator form; this element only transports the route --
+declared behavior data, never its own markup.")
+
+(define ui/file-issue/examples
+  (lambda ()
+    (lb/obj
+      (list
+        "name" "ui/file-issue"
+        "doc" "One rail file-issue button: opens the /issues register as a pane via /filmstrip/open; the issues face owns the creator form."
+        "file" "libs/filmstrip/lib.pp"
+        "formals" (json-emit (list "label"))
+        "variants" (json-emit
+                     (list
+                       (lb/obj (list "label" "file an issue"))
+                       (lb/obj (list "label" "report a bug"))))
+        "source"
+        "(ui/file-issue label) ->\n  (ui/elm \"button\"\n    (list \"id\" \"fs-file-issue\"\n          \"class\" \"fs-btn fs-applink\"\n          \"title\" \"report an issue or UI feedback (opens /issues)\"\n          \"hx-post\" \"/filmstrip/open\"\n          \"hx-vals\" \"{\\\"route\\\":\\\"/issues\\\"}\"\n          \"hx-target\" \"#fs-sink\"\n          \"hx-swap\" \"innerHTML\")\n    (list (ui/text label)))")))
+  "The ui/file-issue card: this def IS the element's declaration.")
 
 ;; ---- route bindings (vault, additive at load/boot-seed) ----
 ;; filmstrip.borg filmstrip-shell: the shell is the DEFAULT habitat
