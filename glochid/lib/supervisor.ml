@@ -708,8 +708,9 @@ type st = {
   live : (string, child) Hashtbl.t;       (* run_id -> live sidecar *)
   ctxs : (string, ctx) Hashtbl.t;         (* run_id -> dispatch context *)
   retry_at : (string, float) Hashtbl.t;   (* run_id -> earliest dispatch *)
-  taken : (string, unit) Hashtbl.t;       (* rows adopted this boot *)
-  mutable last_summary : string;
+    taken : (string, unit) Hashtbl.t;       (* rows adopted this boot *)
+    ghosts : (string, unit) Hashtbl.t;      (* cards whose run died card-missing; boot-local re-queue guard *)
+    mutable last_summary : string;
 }
 
 let eval_ok (st : st) (expr : string) : Yojson.Safe.t option =
@@ -719,6 +720,19 @@ let eval_ok (st : st) (expr : string) : Yojson.Safe.t option =
       log "eval failed: %s" e;
       None
 
+(* Ghost-card loop guard (card 1f23880a, 10-18): a card whose run terminates
+   card-missing stays eligible EVERY tick — its assignee is empty and nothing
+   on the card marks it out — so each tick re-queued a fresh run row and
+   burned the claim CAS + the claim-time eval (the 399-run ghost-card loop,
+   duplicate rows per card, claim-facts burn, tick degradation). Boot-local
+   suppression: once a card's run dies card-missing, stop re-queueing it
+   until restart, and say so ONCE. *)
+let mark_ghost (st : st) (card : string) : unit =
+  if card <> "" && not (Hashtbl.mem st.ghosts card) then begin
+    Hashtbl.replace st.ghosts card ();
+    log "ghost card %s: run died card-missing; skipping re-queue until restart"
+      card
+  end
 (* USAGE IS A SELF-REPORT (ratified): the gate is ADVISORY until
    provider-structured usage lands. The row's own caps win when set; 0 =
    unlimited. *)
@@ -739,7 +753,10 @@ let write_back (st : st) ~(card : string) ~(claimed_state : string)
   | None -> Error "write-back-probe"
   | Some j -> (
       let probe = jstr j in
-      if probe = "missing" then Error "card-missing"
+        if probe = "missing" then begin
+          mark_ghost st card;
+          Error "card-missing"
+        end
       else
         let cur =
           match String.index_opt probe '|' with
@@ -1023,10 +1040,11 @@ let dispatch_queued (st : st) (r : row) : unit =
           ignore (eval_ok st
                     (run_finish_expr run_id "failed" "claim-facts"
                        "claim-time eval failed"))
-      | Some Facts_missing ->
-          ignore (eval_ok st
-                    (run_finish_expr run_id "canceled" "card-missing"
-                       "card vanished before dispatch"))
+        | Some Facts_missing ->
+            mark_ghost st r.r_card;
+            ignore (eval_ok st
+                      (run_finish_expr run_id "canceled" "card-missing"
+                         "card vanished before dispatch"))
       | Some (Facts_ok (cs, brief, cols, assignee)) ->
           if assignee <> "" && assignee <> "run:" ^ run_id then
             (* another driver holds the card lease: park for a human *)
@@ -1112,7 +1130,8 @@ let take_over (st : st) (r : row) : unit =
                 { x_run = r.r_id; x_card = r.r_card; x_claimed_state = cs;
                   x_cols = cols; x_brief = brief_src; x_dir = dir;
                   x_attempts = 1; x_wall_exceeded = false }
-          | _ -> None)
+            | Some Facts_missing -> mark_ghost st r.r_card; None
+            | None -> None)
     in
     match ctx with
     | Some ctx ->
@@ -1191,7 +1210,8 @@ let tick (st : st) : unit =
              List.iter
                (fun c ->
                  let id = jstr (jmember "id" c) in
-                 if id <> "" && not (Hashtbl.mem open_cards id) then begin
+                  if id <> "" && not (Hashtbl.mem open_cards id)
+                     && not (Hashtbl.mem st.ghosts id) then begin
                    create_run st c;
                    (* the eligible list can carry the same card twice
                       (todo/item/active duplicates, 10-18) - register the
@@ -1316,8 +1336,8 @@ let run ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t) : unit =
       let sess = { env; mutex = Eio.Mutex.create () } in
       let st =
         { cfg; sess; sw; live = Hashtbl.create 4; ctxs = Hashtbl.create 8;
-          retry_at = Hashtbl.create 4; taken = Hashtbl.create 4;
-          last_summary = "" }
+            retry_at = Hashtbl.create 4; taken = Hashtbl.create 4;
+            ghosts = Hashtbl.create 8; last_summary = "" }
       in
       log
         "starting: tick=%ds concurrency=%d states=%s exclude=%s list=%s script=%s cwd=%s identity=%s instance=%s"
