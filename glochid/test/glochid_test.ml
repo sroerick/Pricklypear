@@ -705,7 +705,7 @@ let test_filmstrip_optimistic ~rt () =
    | Ast.VStr _ -> ()
    | other -> Alcotest.fail ("open: " ^ Reader.pp_value other));
   ignore (Runtime.eval_string ~rt
-    {|(define pg (soup/parse (route/dispatch (route/lookup \"/filmstrip/open\") \"POST\" \"/filmstrip/open\" (list (cons \"route\" \"/bindings\")) (list (cons \"hx-request\" \"true\")))))|});
+      {|(define pg (soup/parse (route/dispatch (route/lookup "/filmstrip/open") "POST" "/filmstrip/open" (list (cons "route" "/bindings")) (list (cons "hx-request" "true")))))|});
   ignore (Runtime.eval_string ~rt
     {|(define pid (hyper/attr (car (hyper/query pg ".fs-pane")) "data-pane"))|});
   ignore (Runtime.eval_string ~rt
@@ -716,12 +716,12 @@ let test_filmstrip_optimistic ~rt () =
                 (hyper/query pg "button"))))|});
   Alcotest.check pp_value_testable "hyper: optimistic close verb served"
     (Ast.VStr "close")
-    (Runtime.eval_string ~rt {|(as-str (hyper/attr close-btn "data-optimistic"))|});
+      (Runtime.eval_string ~rt {|(as-str (hyper/attr close-btn "data-optimistic"))|});
   (* hyper/expect over the changed route: the pane fragment served by
      POST /filmstrip/open carries the optimistic close verb. (hyper/click's
      fragment-branch handling is broken at HEAD -- visit-click-stream.) *)
   Alcotest.(check bool) "hyper: optimistic pane fragment serves the title" true
-    (match Runtime.eval_string ~rt {|(hyper/expect pg \".fs-title\" \"/bindings\")|} with
+      (match Runtime.eval_string ~rt {|(hyper/expect pg ".fs-title" "/bindings")|} with
      | Ast.VBool b -> b
      | other -> Alcotest.fail ("expect: " ^ Reader.pp_value other))
 
