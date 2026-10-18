@@ -252,7 +252,8 @@
           (html/attr "hx-post" "/filmstrip/open")
           (html/attr "hx-vals" (string-append "{\"route\":\"" r "\"}"))
           (html/attr "hx-target" "#fs-sink")
-          (html/attr "hx-swap" "innerHTML")))
+            (html/attr "hx-swap" "innerHTML"))
+            (filmstrip/optimistic-attrs "open")))
       (html/text label)))
   "In-shell app link: a link-looking button POSTing /filmstrip/open\n(hx-vals carries the route; open-or-focus semantics) with the OOB pane\nswaps landed in #fs-sink. Pane chrome uses these INSTEAD of <a href> --\nan anchor navigates the WHOLE WINDOW out of the shell; an app-link\nnever leaves it. Returns a PLAIN string (no render-html: the sentinel\nwould leak into any string-append embed like chat/body's h1 nav).")
 
@@ -701,6 +702,37 @@ between strip and rail).")
             "#fff"
             "font-weight"
             "700"))
+          ;; card c7be7174 (optimistic loader): strip mutations apply
+          ;; instantly -- htmx's htmx-request class (set the moment a
+          ;; trigger fires, dropped on settle) drives the pending
+          ;; affordance; the server's OOB response returns the source of
+          ;; truth already unfaded.
+          (css/rule
+            "[data-optimistic].htmx-request"
+            (list
+              "opacity"
+              ".55"
+              "pointer-events"
+              "none"))
+          (css/rule
+            ".fs-pane"
+            (list
+              "transition"
+              "opacity .12s ease"))
+          (css/rule
+            ".fs-pane:has([data-optimistic].htmx-request)"
+            (list
+              "opacity"
+              ".55"
+              "pointer-events"
+              "none"))
+          (css/rule
+            ".fs-pane.fs-optimistic"
+            (list
+              "opacity"
+              ".55"
+              "pointer-events"
+              "none"))
         (css/rule
           ".fs-content"
           (list
@@ -1469,10 +1501,22 @@ filmstrip/register-keys! instead of copying this registry.")
     ()
     (html/join
       (list/map
-        (lambda (row)
-          (filmstrip/sentinel (car row) (car (cdr row)) (car (cdr (cdr row)))))
+          (lambda (row)
+            ;; card c7be7174: move rows ride the optimistic loader -- the
+            ;; focused pane transposes instantly and stays semi-faded
+            ;; until the roundtrip returns the strip.
+            (filmstrip/sentinel
+              (car row) (car (cdr row)) (car (cdr (cdr row)))
+              (if (string-starts-with? (car row) "/filmstrip/move")
+                (filmstrip/optimistic-attrs "move")
+                (list))))
         filmstrip/key-rows)))
-  "alt+arrows move focus; alt+shift+arrows move pane order. The server\nowns focus and answers with OOB class swaps (borge pane-protocol).\nSentinels render from the keyboard registry (filmstrip/key-rows):\nframework defaults, then host-appended rows.")
+  "alt+arrows move focus; alt+shift+arrows move pane order. The server
+owns focus and answers with OOB class swaps (borge pane-protocol).
+Sentinels render from the keyboard registry (filmstrip/key-rows):
+framework defaults, then host-appended rows. Move rows ride the
+optimistic loader (filmstrip/optimistic-attrs, card c7be7174):
+instant transpose, semi-fade until the roundtrip.")
 
 (define filmstrip/keys-hint
   (lambda ()
@@ -2014,6 +2058,52 @@ pane owns the fixed lift). A focused rail pane is a ring, not a window
             #t)))))
   "OOB response body for an open/leaf click: OOB class swap on the\npreviously focused pane, then the opened pane -- appended with its real\ndispatched content, or re-swapped focused (open-or-focus).")
 
+(define filmstrip/optimistic-attrs
+  (lambda
+    (verb)
+    (if
+      (string-eq verb "move")
+      (list
+        (html/attr "data-optimistic" verb)
+        (html/attr
+          "hx-on::before-request"
+          "var v=this.getAttribute('hx-vals')||'';var d=v.indexOf('left')>=0?'left':'right';var f=document.querySelector('.fs-pane.focused');if(f){var n=d=='left'?f.previousElementSibling:f.nextElementSibling;if(n&&n.classList.contains('fs-pane')){if(d=='left'){f.parentNode.insertBefore(f,n)}else{f.parentNode.insertBefore(n,f)}f.classList.add('fs-optimistic')}}")
+        (html/attr
+          "hx-on::after-request"
+          "document.querySelectorAll('.fs-optimistic').forEach(function(n){n.classList.remove('fs-optimistic')})"))
+      (list (html/attr "data-optimistic" verb))))
+  "Optimistic-loader attrs for one strip-mutation verb (card c7be7174):
+data-optimistic marks the trigger; htmx's htmx-request class + the
+filmstrip/css :has rules semi-fade the affected pane node the moment an
+ordering/opening/closing swap fires, and the server's OOB response (the
+source of truth) lands already unfaded. The keyboard MOVE sentinel sits
+outside the panes, so its hx-on transposes the focused pane instantly
+and clears the marker on settle (hx-on: the declared inline-behavior
+idiom; zero script files).")
+
+(define filmstrip/optimistic-attrs/examples
+  (lambda
+    ()
+    (lb/obj
+      (list
+        "name"
+        "filmstrip/optimistic-attrs"
+        "doc"
+        "Optimistic htmx loader attrs: instant semi-fade (and instant keyboard-order application) with unfade on the server roundtrip."
+        "file"
+        "libs/filmstrip/lib.pp"
+        "formals"
+        (json-emit (list "verb"))
+        "variants"
+        (json-emit
+          (list
+            (lb/obj (list "verb" "close"))
+            (lb/obj (list "verb" "open"))
+            (lb/obj (list "verb" "move"))))
+        "source"
+        "(filmstrip/optimistic-attrs verb) -> extra trigger attrs.\ndata-optimistic=<verb>; verb=move adds hx-on::before-request\n(transpose the focused pane now) + hx-on::after-request (drop\nfs-optimistic). The fade rides filmstrip/css + htmx's htmx-request\nclass; the server's OOB swap returns the unfaded truth.")))
+  "The filmstrip/optimistic-attrs card: this def IS the element's\ndeclaration (card c7be7174).")
+
 (define filmstrip/page
   (lambda
     ()
@@ -2087,7 +2177,8 @@ desktop 0).")
                     "hx-vals"
                     (string-append "{\"id\":\"" id "\"}"))
                   (html/attr "hx-target" "#fs-sink")
-                  (html/attr "hx-swap" "innerHTML")))
+                      (html/attr "hx-swap" "innerHTML"))
+                    (filmstrip/optimistic-attrs "width")))
               "width")
             (html/tag
               "button"
@@ -2100,7 +2191,8 @@ desktop 0).")
                     "hx-vals"
                     (string-append "{\"id\":\"" id "\"}"))
                   (html/attr "hx-target" "#fs-sink")
-                  (html/attr "hx-swap" "innerHTML")))
+                      (html/attr "hx-swap" "innerHTML"))
+                    (filmstrip/optimistic-attrs "close")))
               "close"))))))
   "Pane title bar: route label + width cycle + close, all htmx POSTs.")
 
@@ -3004,18 +3096,21 @@ retires; this framework body is the one residence).")
 
 (define filmstrip/sentinel
   (lambda
-    (url vals trigger)
-    (html/div
-      (html/attrs
-        (list
-          (html/attr "class" "fs-sentinel")
-          (html/attr "hx-post" url)
-          (html/attr "hx-vals" vals)
-          (html/attr "hx-trigger" trigger)
-          (html/attr "hx-target" "#fs-sink")
-          (html/attr "hx-swap" "innerHTML")))
+      (url vals trigger extra)
+      (html/div
+        (html/attrs
+          (append (list
+            (html/attr "class" "fs-sentinel")
+            (html/attr "hx-post" url)
+            (html/attr "hx-vals" vals)
+            (html/attr "hx-trigger" trigger)
+            (html/attr "hx-target" "#fs-sink")
+            (html/attr "hx-swap" "innerHTML") extra)))
       ""))
-  "Invisible trigger element: an htmx key filter on the body that POSTs a\nshell event (vals carries the dir param). Zero javascript files (D3) --\nthe filter expression is htmx.")
+  "Invisible trigger element: an htmx key filter on the body that POSTs a
+shell event (vals carries the dir param). Zero javascript files (D3) --
+the filter expression is htmx. extra (card c7be7174) rides the
+optimistic-loader attrs (filmstrip/optimistic-attrs) onto the trigger.")
 
 (define filmstrip/shelf-oob
   (lambda () "")

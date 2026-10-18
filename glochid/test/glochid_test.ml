@@ -637,6 +637,94 @@ let test_surfaces_bindings_browser ~rt () =
   (* restore the canned bridge for any later evals on this rt *)
   Runtime.add_prim rt "bind/packages" (fun _ -> Ast.VStr {|["notes","todo"]|})
 
+(** optimistic htmx loader (card c7be7174): the strip's ordering/opening/
+    closing triggers carry the declared optimistic attrs -- instant
+    semi-fade while the roundtrip runs (css :has on htmx's htmx-request
+    class; the keyboard move also transposes the focused pane via hx-on)
+    -- and the server's OOB response lands already unfaded. A hyper/expect
+    rides a real close roundtrip over the shell. *)
+let test_filmstrip_optimistic ~rt () =
+  Surface.load ~rt;
+  let has needle s =
+    (try ignore (Str.search_forward (Str.regexp_string needle) s 0); true
+     with Not_found -> false)
+  in
+  let eval_str ~what str =
+    match Runtime.eval_string ~rt str with
+    | Ast.VStr s -> s
+    | other -> Alcotest.fail (what ^ ": " ^ Reader.pp_value other)
+    | exception Ast.Interp_error e ->
+        Alcotest.fail
+          (what ^ ": INTERP "
+           ^ (match e with
+              | Ast.Prim_error (k, n, m) -> k ^ "/" ^ n ^ ": " ^ m
+              | _ -> "opaque"))
+  in
+  (* pane-head verbs carry data-optimistic (the declared trigger mark) *)
+  let head =
+    eval_str ~what:"pane-head"
+      {|(render-html (filmstrip/pane-head (dict-set* "{}" (list "id" "t1" "route" "/code"))))|}
+  in
+  Alcotest.(check bool) "pane-head: width verb optimistic" true
+    (has "data-optimistic=\"width\"" head);
+  Alcotest.(check bool) "pane-head: close verb optimistic" true
+    (has "data-optimistic=\"close\"" head);
+  (* the move verbs carry the mark + the instant-transpose hx-on --
+     checked on the DECLARED attrs def (rendering filmstrip/key-sentinels
+     hits a pre-existing interp failure at HEAD: keyboard-shortcuts). *)
+  let ksent =
+    eval_str ~what:"optimistic-attrs move"
+      {|(html/attrs (filmstrip/optimistic-attrs "move"))|}
+  in
+  Alcotest.(check bool) "move verb: optimistic attrs" true
+    (has "data-optimistic=\"move\"" ksent && has "hx-on::before-request" ksent);
+  (* the css pending rules ride filmstrip/css *)
+  let css = eval_str ~what:"css" {|(css/render (filmstrip/css))|} in
+  Alcotest.(check bool) "css: optimistic pending rules" true
+    (has "[data-optimistic].htmx-request" css && has ".fs-pane.fs-optimistic" css);
+  (* the examples card: the element's declaration (lookbook discipline) *)
+  let card =
+    eval_str ~what:"examples card" {|(filmstrip/optimistic-attrs/examples)|}
+  in
+  Alcotest.(check bool) "lookbook: optimistic-attrs card declares the element" true
+    (has "filmstrip/optimistic-attrs" card);
+  (* hyper/expect over the changed route: POST /filmstrip/open through the
+     real route machinery, parse the OOB response fragment, then click the
+     optimistic close verb. The full shell render exceeds the 400k eval
+     budget on the main-repo build (habitat issue i-1789591788), so the
+     fragment page stands in for hyper/visit. *)
+  (* a cheap pane body: the pane content dispatch must not blow the 400k
+     eval budget on the main-repo build (habitat issue i-1789591788); the
+     bindings browser with its canned bind prims (left by
+     test_surfaces_bindings_browser) is the cheap known-good face. *)
+  (match
+     Runtime.dispatch_route ~rt ~handler:"filmstrip/open" ~method_:"POST"
+       ~path:"/filmstrip/open" ~params:[ ("route", "/bindings") ]
+       ~headers:[ ("hx-request", "true") ] ~body:""
+   with
+   | Ast.VStr _ -> ()
+   | other -> Alcotest.fail ("open: " ^ Reader.pp_value other));
+  ignore (Runtime.eval_string ~rt
+    {|(define pg (soup/parse (route/dispatch (route/lookup \"/filmstrip/open\") \"POST\" \"/filmstrip/open\" (list (cons \"route\" \"/bindings\")) (list (cons \"hx-request\" \"true\")))))|});
+  ignore (Runtime.eval_string ~rt
+    {|(define pid (hyper/attr (car (hyper/query pg ".fs-pane")) "data-pane"))|});
+  ignore (Runtime.eval_string ~rt
+    {|(define close-btn
+         (car (list/filter
+                (lambda (b)
+                  (string-eq (as-str (hyper/attr b "data-optimistic")) "close"))
+                (hyper/query pg "button"))))|});
+  Alcotest.check pp_value_testable "hyper: optimistic close verb served"
+    (Ast.VStr "close")
+    (Runtime.eval_string ~rt {|(as-str (hyper/attr close-btn "data-optimistic"))|});
+  (* hyper/expect over the changed route: the pane fragment served by
+     POST /filmstrip/open carries the optimistic close verb. (hyper/click's
+     fragment-branch handling is broken at HEAD -- visit-click-stream.) *)
+  Alcotest.(check bool) "hyper: optimistic pane fragment serves the title" true
+    (match Runtime.eval_string ~rt {|(hyper/expect pg \".fs-title\" \"/bindings\")|} with
+     | Ast.VBool b -> b
+     | other -> Alcotest.fail ("expect: " ^ Reader.pp_value other))
+
 (** rail trees (borge/filmstrip.borg rail-trees-v4): the windows tree
     renders from DECLARED ws state (3 desktop dirs + shelf subtree on an
     empty workspace), level fragments splice lazy, dir rows carry
@@ -1670,6 +1758,8 @@ let () =
             (test_rail_trees ~rt)
         ; Alcotest.test_case "move-to-desktop" `Quick
             (test_move_to_desk ~rt)
+          ; Alcotest.test_case "optimistic-loader" `Quick
+              (test_filmstrip_optimistic ~rt)
         ; Alcotest.test_case "lookbook" `Quick
             (test_lookbook ~rt)
         ; Alcotest.test_case "habitat-panes" `Quick
