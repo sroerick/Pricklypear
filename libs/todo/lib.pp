@@ -3341,24 +3341,31 @@
   (lambda
     (p)
     "The item id a stored node path encodes. A 32-char undashed final
-     segment is a dash-stripped UUID: re-dash it (legacy redash form,
-     unchanged for every normal row). Anything else is the id VERBATIM:
-     rows stored with a dashed id segment (e.g. the shared Board card
-     7e60c6a9-2222-4444-8666-abcde0604e60) must emit their true id,
-     because the kernel node-path resolves UUID ids by node lookup, while
-     the old redash(last-32-chars-of-path) corrupted them into phantom
-     ids todo/item/get could never resolve (ghost-card churn, 10-18)."
+     segment is a dash-stripped UUID: re-dash it (legacy redash form).
+     Anything else is the id VERBATIM (rows stored with a dashed id
+     segment - e.g. the shared Board card
+     7e60c6a9-2222-4444-8666-abcde0604e60 - must emit their true id so
+     todo/item/get resolves them; ghost-card churn 10-18). O(1) probes:
+     the char before a 32-char tail (n-33) or a 36-char tail (n-37) must
+     be the boundary dot; anything else falls back to the path-segment
+     char loop. The old always-loop version cost ~600 steps per node and
+     blew the supervisor scan's eval budget (boot scan budget exceeded,
+     10-18). The 32-char check runs FIRST: a dashed UUID has no dot at
+     n-33, but a short type label can put a dot at n-37."
     (let
-      ((seg (todo/tree/path-segment p)))
+      ((s (as-str p)))
       (let
-        ((n (string-length seg)))
+        ((n (string-length s)))
         (if
-          (< n 32)
-          seg
+          (< n 33)
+          (todo/tree/path-segment s)
           (if
-            (< 32 n)
-            seg
-            (todo/tree/redash seg)))))))
+            (string-eq (substring s (- n 33) (- n 32)) \".\")
+            (todo/tree/redash (substring s (- n 32) n))
+            (if
+              (and (< 36 n) (string-eq (substring s (- n 37) (- n 36)) \".\"))
+              (substring s (- n 36) n)
+              (todo/tree/path-segment s))))))))
 
 (define todo/tree/node->pair
   (lambda
