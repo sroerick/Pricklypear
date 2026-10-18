@@ -572,12 +572,12 @@ let runs_scan_expr () : string =
   let gets =
     List.map
       (fun k ->
-        Printf.sprintf "%s (as-str (dict-get (cdr p) %s))" (q k) (q k))
+        Printf.sprintf "%s (as-str (dict-get b %s))" (q k) (q k))
       fields
   in
   Printf.sprintf
-      "(json-emit (list/map (lambda (p) (dict-set* \"{}\" (list %s %s))) (list/filter (lambda (p) (let ((s (as-str (dict-get (cdr p) \"state\")))) (or (string-eq s \"queued\") (string-eq s \"claimed\") (string-eq s \"running\") (string-eq s \"parked\")))) (workstreams/run-all))))"
-    "\"id\" (as-str (car p))" (String.concat " " gets)
+      "(begin (load-library \"todo\") (let ((cid (lambda (p) (let ((s (as-str p))) (let ((n (string-length s))) (if (< n 33) (todo/tree/path-segment s) (if (string-eq (substring s (- n 33) 1) \".\") (todo/tree/redash (substring s (- n 32) 32)) (if (and (< 36 n) (string-eq (substring s (- n 37) 1) \".\")) (substring s (- n 36) 36)(todo/tree/path-segment s))))))))) (json-emit (list/map (lambda (nj) (let ((b (dict-get nj \"body\"))) (dict-set* \"{}\" (list \"id\" (cid (dict-get nj \"path\")) %s)))) (list/filter (lambda (nj) (let ((st (as-str (dict-get (dict-get nj \"body\") \"state\")))) (and (string-eq (as-str (dict-get nj \"type\")) \"run\") (or (string-eq st \"queued\") (string-eq st \"claimed\") (string-eq st \"running\") (string-eq st \"parked\"))))) (tree/list \"data.s\" 3 2000))))))"
+      (String.concat " " gets)
 
 let queue_eligible_expr (cfg : t) : string =
   (* The PP-side prio-sorted moved OUT of this expression (10-18): the
@@ -596,7 +596,7 @@ let queue_eligible_expr (cfg : t) : string =
    per row. The tick's scan rows are active-only now, so terminal counts
    for the standup summary come from here. *)
 let runs_tally_expr () : string =
-  {|(json-emit (list/foldl (lambda (a p) (let ((s (as-str (dict-get (cdr p) "state")))) (let ((n (dict-get a s))) (dict-set* a (list s (as-str (+ 1 (if (null? n) 0 n)))))))) "{}" (workstreams/run-all)))|}
+  {|(begin (load-library "todo") (json-emit (list/map (lambda (nj) (as-str (dict-get (dict-get nj "body") "state"))) (list/filter (lambda (nj) (string-eq (as-str (dict-get nj "type")) "run")) (tree/list "data.s" 3 2000)))))|}
 
 (* ---- card writes (pp-flow's batched-eval discipline, ONE round trip) ---- *)
 
@@ -1237,31 +1237,29 @@ let tick (st : st) : unit =
         in
         go cap queued
       end;
-      (* 6. PUBLISH: counts for the standup surface (stderr in phase 2).
-            Active counts from the scan rows (active-only now); terminal
-            counts from the cheap one-fold tally over ALL run rows. *)
-      let active_count s =
-        List.length (List.filter (fun r -> r.r_state = s) rows)
-      in
-      let tally =
-        match eval_json st.sess (runs_tally_expr ()) with
-        | Ok j -> (
-            let h = Hashtbl.create 16 in
-            (match j with
-               | `Assoc assocs ->
-                 List.iter (fun (k, v) -> Hashtbl.replace h k (jint v)) assocs
-             | _ -> ());
-            Some h)
-        | Error _ -> None
-      in
-      let count s =
-        match List.find_opt (fun r -> r.r_state = s) rows with
-        | Some _ -> active_count s
-        | None -> (
-            match tally with
-            | Some h -> ( match Hashtbl.find_opt h s with Some n -> n | None -> 0 )
-            | None -> 0)
-      in
+        (* 6. PUBLISH: counts for the standup surface (stderr in phase 2).
+              Active counts from the scan rows (active-only now); terminal
+              counts OCaml-side from the cheap state-list eval over ALL run
+              rows (PP-side dict arithmetic broke on missing keys). *)
+        let active_count s =
+          List.length (List.filter (fun r -> r.r_state = s) rows)
+        in
+        let tally =
+          match eval_json st.sess (runs_tally_expr ()) with
+          | Ok j -> (
+              match j with
+              | `List items -> Some (List.map jstr items)
+              | _ -> None)
+          | Error _ -> None
+        in
+        let count s =
+          match List.find_opt (fun r -> r.r_state = s) rows with
+          | Some _ -> active_count s
+          | None -> (
+              match tally with
+              | Some states -> List.length (List.filter (fun t -> t = s) states)
+              | None -> 0)
+        in
       let summary =
         Printf.sprintf
           "runs: queued=%d claimed=%d running=%d succeeded=%d failed=%d timed_out=%d canceled=%d dead=%d parked=%d live-sidecars=%d"
