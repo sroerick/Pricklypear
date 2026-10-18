@@ -578,46 +578,65 @@ let runs_scan_expr () : string =
 
 let queue_eligible_expr (cfg : t) : string =
   Printf.sprintf
-      {|(begin (load-library "todo") (let ((states (json-parse %s)) (excl (json-parse %s)) (want-list %s)) (let ((in? (lambda (x xs) (list/foldl (lambda (a c) (if (string-eq (as-str c) (as-str x)) #t a)) #f xs)))) (json-emit (list/map (lambda (row) (let ((b (cdr row))) (dict-set* "{}" (list "id" (as-str (car row)) "state" (as-str (todo/item/state b)) "title" (as-str (todo/item/title b)) "list_id" (as-str (todo/item/list-id b)) "kind" (as-str (dict-get b "kind")))))) (todo/item/prio-sorted (list/filter (lambda (row) (let ((b (cdr row))) (and (string-eq (todo/item/assignee b) "") (or (string-eq want-list "") (string-eq (todo/item/list-id b) want-list)) (in? (todo/item/state b) states) (or (null? excl) (not (in? (as-str (dict-get b "kind")) excl)))))) (todo/item/active (todo/item/all)))))))))|}
+      {|(begin (let ((states (json-parse %s)) (excl (json-parse %s)) (want-list %s)) (let ((in? (lambda (x xs) (list/foldl (lambda (a c) (if (string-eq (as-str c) (as-str x)) #t a)) #f xs)))) (json-emit (list/map (lambda (row) (let ((b (cdr row))) (dict-set* "{}" (list "id" (as-str (car row)) "state" (as-str (todo/item/state b)) "title" (as-str (todo/item/title b)) "list_id" (as-str (todo/item/list-id b)) "kind" (as-str (dict-get b "kind")))))) (todo/item/prio-sorted (list/filter (lambda (row) (let ((b (cdr row))) (and (string-eq (todo/item/assignee b) "") (or (string-eq want-list "") (string-eq (todo/item/list-id b) want-list)) (in? (todo/item/state b) states) (or (null? excl) (not (in? (as-str (dict-get b "kind")) excl)))))) (todo/item/active (todo/item/all)))))))))|}
     (q (csv_to_json cfg.states)) (q (csv_to_json cfg.exclude_kinds))
     (q cfg.list_id)
 
 (* ---- card writes (pp-flow's batched-eval discipline, ONE round trip) ---- *)
 
+(* NO (load-library "todo") IN THESE EXPRESSIONS (2026-10-18 perf fix).
+   Every supervisor eval used to open with (begin (load-library "todo") ...),
+   added when the loop was new out of a fear that "a fresh session still has
+   the lib". That fear was unfounded and expensive: the session registry
+   keeps ONE Session.t per identity (image.per-identity-sessions, never
+   expired), and package names bind LAZILY from the branch chain
+   (image.lazy-env-load) — the first (todo/...) lookup forces the def. So
+   the wrapper only re-evaluated libs/todo/lib.pp (hundreds of defines) onto
+   the runner's branch on EVERY call, re-pinning them and paying a full
+   load-library each round trip.
+
+   Measured on prod 2026-10-18 against a fresh identity:
+     (count (todo/item/all))                       23 ms
+     (begin (load-library "todo") (count ...))  1600 ms   (~70x)
+   It was also the source of the endless "[load-library] todo onto non-main
+   branch admin/agent (pin warning)" spam. AGENTS.md is explicit: load-library
+   is a DEPLOY tool, not a session step. Keep these expressions bare. *)
+
+
 let probe_expr (card : string) : string =
   Printf.sprintf
-    {|(begin (load-library "todo") (if (null? (todo/item/get %s)) "missing" (string-append "ok|" (as-str (todo/item/state (todo/item/get %s))))))|}
+    {|(if (null? (todo/item/get %s)) "missing" (string-append "ok|" (as-str (todo/item/state (todo/item/get %s)))))|}
     (q card) (q card)
 
 let advance_expr (card : string) (msg : string) : string =
   Printf.sprintf
-    {|(begin (load-library "todo") (string-append (as-str (todo/cycle %s)) "|" (as-str (todo/comment/add %s %s)) "|" (as-str (todo/item/state (todo/item/get %s))) "|" (as-str (todo/item/unassign %s))))|}
+    {|(string-append (as-str (todo/cycle %s)) "|" (as-str (todo/comment/add %s %s)) "|" (as-str (todo/item/state (todo/item/get %s))) "|" (as-str (todo/item/unassign %s)))|}
     (q card) (q card) (q msg) (q card) (q card)
 
 let dest_expr (card : string) (msg : string) (dest : string) : string =
   Printf.sprintf
-    {|(begin (load-library "todo") (string-append (as-str (todo/set-state %s %s)) "|" (as-str (todo/comment/add %s %s)) "|" (as-str %s) "|" (as-str (todo/item/unassign %s))))|}
+    {|(string-append (as-str (todo/set-state %s %s)) "|" (as-str (todo/comment/add %s %s)) "|" (as-str %s) "|" (as-str (todo/item/unassign %s)))|}
     (q card) (q dest) (q card) (q msg) (q dest) (q card)
 
 let comment_only_expr (card : string) (msg : string) : string =
   Printf.sprintf
-    {|(begin (load-library "todo") (string-append (as-str (todo/comment/add %s %s)) "|" (as-str (todo/item/unassign %s))))|}
+    {|(string-append (as-str (todo/comment/add %s %s)) "|" (as-str (todo/item/unassign %s)))|}
     (q card) (q msg) (q card)
 
 let unassign_expr (card : string) : string =
-  Printf.sprintf {|(begin (load-library "todo") (todo/item/unassign %s))|} (q card)
+  Printf.sprintf {|(todo/item/unassign %s)|} (q card)
 
 let assign_expr (card : string) (lease : string) : string =
-  Printf.sprintf {|(begin (load-library "todo") (todo/item/assign %s %s))|} (q card)
+  Printf.sprintf {|(todo/item/assign %s %s)|} (q card)
     (q lease)
 
 let card_comment_expr (card : string) (msg : string) : string =
   Printf.sprintf
-    {|(begin (load-library "todo") (todo/comment/add %s %s) (todo/item/unassign %s))|}
+    {|(begin (todo/comment/add %s %s) (todo/item/unassign %s))|}
     (q card) (q msg) (q card)
 
 let restore_state_expr (card : string) (state : string) : string =
-  Printf.sprintf {|(begin (load-library "todo") (todo/set-state %s %s))|} (q card)
+  Printf.sprintf {|(todo/set-state %s %s)|} (q card)
     (q state)
 
 (* ONE claim-time eval: claimed state + brief + columns + assignee (the
@@ -626,7 +645,7 @@ let restore_state_expr (card : string) (state : string) : string =
 let claim_facts_expr (card : string) (mark : string) (colsep : string)
     (mark2 : string) : string =
   Printf.sprintf
-    {|(begin (load-library "todo") (if (null? (todo/item/get %s)) "missing" (let ((it (todo/item/get %s))) (string-append (as-str (todo/item/state it)) "\n%s\n" (as-str (todo/flow-brief %s)) "\n%s\n" (list/foldl (lambda (a c) (string-append a "," (as-str c))) "" (todo/state/columns-for-list (as-str (todo/item/list-id it)))) "\n%s\n" (as-str (todo/item/assignee it))))))|}
+    {|(if (null? (todo/item/get %s)) "missing" (let ((it (todo/item/get %s))) (string-append (as-str (todo/item/state it)) "\n%s\n" (as-str (todo/flow-brief %s)) "\n%s\n" (list/foldl (lambda (a c) (string-append a "," (as-str c))) "" (todo/state/columns-for-list (as-str (todo/item/list-id it)))) "\n%s\n" (as-str (todo/item/assignee it)))))|}
     (q card) (q card) mark (q card) colsep mark2
 
 (* ------------------------------------------------------------------ *)
