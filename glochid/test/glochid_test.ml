@@ -836,13 +836,24 @@ let test_filmstrip_start_menu_cap ~rt () =
            (eval_str ~what:"start-menu" {|(render-html (glochid/start-menu))|}));
   (* hyper/expect over the changed route: GET / serves the page whose
      <style> embeds glochid/base-css with the viewport cap. *)
-  ignore (Runtime.eval_string ~rt
-      {|(define pg (soup/parse (route/dispatch (route/lookup "/") "GET" "/" (list) (list))))|});
-  Alcotest.(check bool) "hyper: GET / serves the start-menu cap in <style>" true
-    (match Runtime.eval_string ~rt
-             {|(hyper/expect pg "style" "max-height:66vh;overflow-y:auto")|} with
+  let page =
+    match Runtime.dispatch_route ~rt ~handler:"chat/page" ~method_:"GET"
+            ~path:"/" ~params:[] ~headers:[] ~body:"" with
+    | Ast.VStr s -> s
+    | other -> Alcotest.fail ("page: " ^ Reader.pp_value other)
+  in
+  Runtime.add_prim rt "page-html" (fun _ -> Ast.VStr page);
+  ignore (Runtime.eval_string ~rt {|(define pg (soup/parse (page-html)))|});
+  (* hyper/expect over the changed route: the served <style> text IS
+     the declared glochid/base-css (which carries the viewport cap). *)
+  Alcotest.(check bool) "hyper: GET / <style> serves the declared base-css" true
+    (match Runtime.eval_string ~rt {|(hyper/expect pg "style" glochid/base-css)|} with
      | Ast.VBool b -> b
-     | other -> Alcotest.fail ("expect: " ^ Reader.pp_value other))
+     | other -> Alcotest.fail ("expect: " ^ Reader.pp_value other));
+  (* ... and the served stylesheet carries the cap + its own scroll *)
+  Alcotest.(check bool) "hyper: GET / serves the start-menu viewport cap" true
+    (has "max-height:66vh;overflow-y:auto"
+           (eval_str ~what:"served style" {|(hyper/text pg "style")|}))
 
 (** rail trees (borge/filmstrip.borg rail-trees-v4): the windows tree
     renders from DECLARED ws state (3 desktop dirs + shelf subtree on an
