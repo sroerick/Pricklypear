@@ -708,9 +708,9 @@ type st = {
   live : (string, child) Hashtbl.t;       (* run_id -> live sidecar *)
   ctxs : (string, ctx) Hashtbl.t;         (* run_id -> dispatch context *)
   retry_at : (string, float) Hashtbl.t;   (* run_id -> earliest dispatch *)
-    taken : (string, unit) Hashtbl.t;       (* rows adopted this boot *)
-    ghosts : (string, unit) Hashtbl.t;      (* cards whose run died card-missing; boot-local re-queue guard *)
-    mutable last_summary : string;
+  taken : (string, unit) Hashtbl.t;       (* rows adopted this boot *)
+  ghosts : (string, unit) Hashtbl.t;      (* cards whose run died card-missing; boot-local re-queue guard *)
+  mutable last_summary : string;
 }
 
 let eval_ok (st : st) (expr : string) : Yojson.Safe.t option =
@@ -757,7 +757,7 @@ let write_back (st : st) ~(card : string) ~(claimed_state : string)
           mark_ghost st card;
           Error "card-missing"
         end
-      else
+        else
         let cur =
           match String.index_opt probe '|' with
           | Some i -> String.sub probe (i + 1) (String.length probe - i - 1)
@@ -1040,11 +1040,11 @@ let dispatch_queued (st : st) (r : row) : unit =
           ignore (eval_ok st
                     (run_finish_expr run_id "failed" "claim-facts"
                        "claim-time eval failed"))
-        | Some Facts_missing ->
-            mark_ghost st r.r_card;
-            ignore (eval_ok st
-                      (run_finish_expr run_id "canceled" "card-missing"
-                         "card vanished before dispatch"))
+      | Some Facts_missing ->
+          mark_ghost st r.r_card;
+          ignore (eval_ok st
+                    (run_finish_expr run_id "canceled" "card-missing"
+                       "card vanished before dispatch"))
       | Some (Facts_ok (cs, brief, cols, assignee)) ->
           if assignee <> "" && assignee <> "run:" ^ run_id then
             (* another driver holds the card lease: park for a human *)
@@ -1130,8 +1130,8 @@ let take_over (st : st) (r : row) : unit =
                 { x_run = r.r_id; x_card = r.r_card; x_claimed_state = cs;
                   x_cols = cols; x_brief = brief_src; x_dir = dir;
                   x_attempts = 1; x_wall_exceeded = false }
-            | Some Facts_missing -> mark_ghost st r.r_card; None
-            | None -> None)
+          | Some Facts_missing -> mark_ghost st r.r_card; None
+          | None -> None)
     in
     match ctx with
     | Some ctx ->
@@ -1210,8 +1210,8 @@ let tick (st : st) : unit =
              List.iter
                (fun c ->
                  let id = jstr (jmember "id" c) in
-                  if id <> "" && not (Hashtbl.mem open_cards id)
-                     && not (Hashtbl.mem st.ghosts id) then begin
+                 if id <> "" && not (Hashtbl.mem open_cards id)
+                    && not (Hashtbl.mem st.ghosts id) then begin
                    create_run st c;
                    (* the eligible list can carry the same card twice
                       (todo/item/active duplicates, 10-18) - register the
@@ -1336,8 +1336,8 @@ let run ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t) : unit =
       let sess = { env; mutex = Eio.Mutex.create () } in
       let st =
         { cfg; sess; sw; live = Hashtbl.create 4; ctxs = Hashtbl.create 8;
-            retry_at = Hashtbl.create 4; taken = Hashtbl.create 4;
-            ghosts = Hashtbl.create 8; last_summary = "" }
+          retry_at = Hashtbl.create 4; taken = Hashtbl.create 4;
+          ghosts = Hashtbl.create 8; last_summary = "" }
       in
       log
         "starting: tick=%ds concurrency=%d states=%s exclude=%s list=%s script=%s cwd=%s identity=%s instance=%s"
