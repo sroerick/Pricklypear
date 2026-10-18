@@ -547,7 +547,10 @@ let run_step_expr (cfg : t) (run_id : string) ~(state : string)
 
 (* ONE scan of the shared run space (workstreams/run-all: the proven
    all-shared depth, filtered to the run type), projected to the fields the
-   supervisor decides from. *)
+   supervisor decides from. ACTIVE ROWS ONLY (queued/claimed/running/parked):
+   the run table grows without bound and the full projection over ~620 rows
+   blew the eval budget (10-18 tick scan budget-exceeded). Terminal counts
+   for the standup summary come from runs_tally_expr instead. *)
 let runs_scan_expr () : string =
   let fields =
     [
@@ -573,14 +576,27 @@ let runs_scan_expr () : string =
       fields
   in
   Printf.sprintf
-    "(json-emit (list/map (lambda (p) (dict-set* \"{}\" (list %s %s))) (workstreams/run-all)))"
+      "(json-emit (list/map (lambda (p) (dict-set* \"{}\" (list %s %s))) (list/filter (lambda (p) (let ((s (as-str (dict-get (cdr p) \"state\")))) (or (string-eq s \"queued\") (string-eq s \"claimed\") (string-eq s \"running\") (string-eq s \"parked\")))) (workstreams/run-all))))"
     "\"id\" (as-str (car p))" (String.concat " " gets)
 
 let queue_eligible_expr (cfg : t) : string =
+  (* The PP-side prio-sorted moved OUT of this expression (10-18): the
+     insertion sort's per-comparison rank+position recomputation blew the
+     eval budget at ~60 eligible rows (the todo-lib decorate-once sort,
+     eadf3e0, is committed but not yet seeded onto system/main). The
+     canonical work order (priority rank, then position, then id) is
+     mirrored OCaml-side in the tick - POLICY-6: the same key, the
+     supervisor never invents an order. *)
   Printf.sprintf
-      {|(begin (load-library "todo") (let ((states (json-parse %s)) (excl (json-parse %s)) (want-list %s)) (let ((in? (lambda (x xs) (list/foldl (lambda (a c) (if (string-eq (as-str c) (as-str x)) #t a)) #f xs)))) (json-emit (list/map (lambda (row) (let ((b (cdr row))) (dict-set* "{}" (list "id" (as-str (car row)) "state" (as-str (todo/item/state b)) "title" (as-str (todo/item/title b)) "list_id" (as-str (todo/item/list-id b)) "kind" (as-str (dict-get b "kind")))))) (todo/item/prio-sorted (list/filter (lambda (row) (let ((b (cdr row))) (and (string-eq (todo/item/assignee b) "") (or (string-eq want-list "") (string-eq (todo/item/list-id b) want-list)) (in? (todo/item/state b) states) (or (null? excl) (not (in? (as-str (dict-get b "kind")) excl)))))) (todo/item/active (todo/item/all)))))))))|}
+      {|(begin (load-library "todo") (let ((states (json-parse %s)) (excl (json-parse %s)) (want-list %s)) (let ((in? (lambda (x xs) (list/foldl (lambda (a c) (if (string-eq (as-str c) (as-str x)) #t a)) #f xs)))) (json-emit (list/map (lambda (row) (let ((b (cdr row))) (dict-set* "{}" (list "id" (as-str (car row)) "state" (as-str (todo/item/state b)) "title" (as-str (todo/item/title b)) "list_id" (as-str (todo/item/list-id b)) "kind" (as-str (dict-get b "kind")) "priority" (as-str (dict-get b "priority")) "position" (as-str (dict-get b "position")))))) (list/filter (lambda (row) (let ((b (cdr row))) (and (string-eq (todo/item/assignee b) "") (or (string-eq want-list "") (string-eq (todo/item/list-id b) want-list)) (in? (todo/item/state b) states) (or (null? excl) (not (in? (as-str (dict-get b "kind")) excl)))))) (todo/item/active (todo/item/all))))))))|}
     (q (csv_to_json cfg.states)) (q (csv_to_json cfg.exclude_kinds))
     (q cfg.list_id)
+
+(* Cheap per-state count over ALL run rows: one dict-get + one dict-set*
+   per row. The tick's scan rows are active-only now, so terminal counts
+   for the standup summary come from here. *)
+let runs_tally_expr () : string =
+  {|(json-emit (list/foldl (lambda (a p) (let ((s (as-str (dict-get (cdr p) "state")))) (let ((n (dict-get a s))) (dict-set* a (list s (as-str (+ 1 (if (null? n) 0 n)))))))) "{}" (workstreams/run-all)))|}
 
 (* ---- card writes (pp-flow's batched-eval discipline, ONE round trip) ---- *)
 
@@ -1155,12 +1171,29 @@ let tick (st : st) : unit =
                if not (terminal_run_state r.r_state) then
                  Hashtbl.replace open_cards r.r_card ())
              rows;
+           (* POLICY-6: create runs in the canonical work order - priority
+              rank (P0..P3, else 4), then position, then id - mirroring
+              todo/item/prio-le? exactly. The PP-side prio-sorted moved out
+              of the scan expression for eval budget (part 2d not yet
+              seeded); the supervisor mirrors, never invents, the order. *)
+           let prio_rank (s : string) : int =
+             match s with "P0" -> 0 | "P1" -> 1 | "P2" -> 2 | "P3" -> 3 | _ -> 4
+           in
+           let card_key (c : Yojson.Safe.t) : int * int * string =
+             let pr = jstr (jmember "priority" c) in
+             let pos =
+               match int_of_string_opt (jstr (jmember "position" c)) with
+               | Some i -> i
+               | None -> 0
+             in
+             (prio_rank pr, pos, jstr (jmember "id" c))
+           in
            List.iter
              (fun c ->
                let id = jstr (jmember "id" c) in
                if id <> "" && not (Hashtbl.mem open_cards id) then
                  create_run st c)
-             cards
+             (List.sort (fun a b -> compare (card_key a) (card_key b)) cards)
        | Ok _ -> ());
       (* 4. DISPATCH: due retries first, then queued rows by creation order
             (todo/item/queue owns the ORDER; creation order mirrors it —
@@ -1204,8 +1237,31 @@ let tick (st : st) : unit =
         in
         go cap queued
       end;
-      (* 6. PUBLISH: counts for the standup surface (stderr in phase 2). *)
-      let count s = List.length (List.filter (fun r -> r.r_state = s) rows) in
+      (* 6. PUBLISH: counts for the standup surface (stderr in phase 2).
+            Active counts from the scan rows (active-only now); terminal
+            counts from the cheap one-fold tally over ALL run rows. *)
+      let active_count s =
+        List.length (List.filter (fun r -> r.r_state = s) rows)
+      in
+      let tally =
+        match eval_json st.sess (runs_tally_expr ()) with
+        | Ok j -> (
+            let h = Hashtbl.create 16 in
+            (match j with
+               | `Assoc assocs ->
+                 List.iter (fun (k, v) -> Hashtbl.replace h k (jint v)) assocs
+             | _ -> ());
+            Some h)
+        | Error _ -> None
+      in
+      let count s =
+        match List.find_opt (fun r -> r.r_state = s) rows with
+        | Some _ -> active_count s
+        | None -> (
+            match tally with
+            | Some h -> ( match Hashtbl.find_opt h s with Some n -> n | None -> 0 )
+            | None -> 0)
+      in
       let summary =
         Printf.sprintf
           "runs: queued=%d claimed=%d running=%d succeeded=%d failed=%d timed_out=%d canceled=%d dead=%d parked=%d live-sidecars=%d"
