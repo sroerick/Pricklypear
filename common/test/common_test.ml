@@ -357,6 +357,46 @@ let llm_codec_tests = [
     Alcotest.(check string) "no text from garbage" "" r.text;
     Alcotest.(check string) "default finish" "stop" r.finish;
     Alcotest.(check int) "no tool calls" 0 (List.length r.tool_calls));
+  (* ---- provider-structured usage (borge/run-primitive.borg
+     budget-accounting; the phase-3 seam) ---- *)
+  ("llm-codec: usage_of_response_json reads the provider counts", `Quick, fun () ->
+    let body =
+      Yojson.Safe.from_string
+        {|{"choices":[{"message":{"role":"assistant","content":"hi"}}],
+           "usage":{"prompt_tokens":1200,"completion_tokens":340,
+                    "prompt_tokens_details":{"cached_tokens":900}}}|}
+    in
+    (match Llm_codec.usage_of_response_json body with
+     | Some u ->
+         Alcotest.(check int) "input" 1200 u.Llm_codec.input_tokens;
+         Alcotest.(check int) "cached" 900 u.Llm_codec.cached_tokens;
+         Alcotest.(check int) "output" 340 u.Llm_codec.output_tokens
+     | None -> Alcotest.fail "expected a usage object"));
+  ("llm-codec: no usage object reports None, not zeros", `Quick, fun () ->
+    Alcotest.(check bool) "absent" true
+      (Llm_codec.usage_of_response_json
+         (Yojson.Safe.from_string {|{"choices":[]}|})
+       = None));
+  ("llm-codec: a reassembled stream keeps the final usage chunk", `Quick, fun () ->
+    (* stream_options.include_usage puts usage in the LAST chunk, which carries
+       NO choices at all - the shape that used to be dropped on the floor. *)
+    let lines =
+      [ {|{"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":null}]}|};
+        {|{"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":2,
+             "prompt_tokens_details":{"cached_tokens":5}}}|} ]
+    in
+    let r = Llm_codec.reassemble_stream lines in
+    (match r.Llm_codec.usage with
+     | Some u ->
+         Alcotest.(check int) "stream input" 10 u.Llm_codec.input_tokens;
+         Alcotest.(check int) "stream cached" 5 u.Llm_codec.cached_tokens;
+         Alcotest.(check int) "stream output" 2 u.Llm_codec.output_tokens
+     | None -> Alcotest.fail "stream usage dropped");
+    (* the synthetic response must carry it too: that is how parse_reply (and
+       every other host parser) reads usage with no special case *)
+    (match Llm_codec.usage_of_response_json r.Llm_codec.response with
+     | Some u -> Alcotest.(check int) "response input" 10 u.Llm_codec.input_tokens
+     | None -> Alcotest.fail "synthesized response lost usage"));
 ]
 
 let () =

@@ -175,10 +175,12 @@ let run ~(env : Eio_unix.Stdenv.base) ~sw ~(host : host)
         on_delta:(Provider.delta -> unit) ->
         (Provider.reply, string) Result.t)
     ?(max_turns = max_turns_default)
+    ?(on_usage : (Provider.usage -> unit) option)
     ?(on_msg : (Provider.message -> unit) option)
     ~(on_event : turn_event -> unit) (history : Provider.message list ref)
     (prompt : string) : (unit, string) Result.t =
   let on_msg = Option.value on_msg ~default:ignore in
+  let on_usage = Option.value on_usage ~default:ignore in
   let user_msg =
     { Provider.role = "user"; content = `String prompt;
       tool_call_id = None; tool_calls = None }
@@ -200,6 +202,13 @@ let run ~(env : Eio_unix.Stdenv.base) ~sw ~(host : host)
       with
       | Error e -> Error e
       | Ok reply ->
+            (* PROVIDER-STRUCTURED usage, per request: the loop hands the
+               provider's own counts to the host instead of letting them
+               evaporate (borge/run-primitive.borg budget-accounting). The host
+               accumulates: one callback per provider request. *)
+            (match reply.usage with
+             | Some u -> on_usage u
+             | None -> ());
           (* Replay the assistant turn in OPENAI MESSAGE SHAPE: content is the
              raw message's content field (never the whole message object —
              nesting it here produced provider 400s on turn 2), tool_calls
