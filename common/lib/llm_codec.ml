@@ -396,17 +396,34 @@ let usage_int (j : Yojson.Safe.t) : int =
 (** Read the [usage] object of a full chat-completions response - or of one
     streaming chunk: with [stream_options.include_usage] the provider emits a
     FINAL chunk that carries usage and no choices. None when the body has no
-    usage object at all, so a caller can tell "not reported" from "zero". *)
+    usage object at all, so a caller can tell "not reported" from "zero".
+
+    TOTAL, and that is load-bearing. A real provider omits the optional
+    sub-objects entirely (Synthetic sends no [prompt_tokens_details] on the
+    first chunk and ["prompt_tokens_details": null] later), and
+    [Yojson.Safe.Util.member] RAISES a [Type_error] on a null/missing
+    member. The reassembly loop calls this per chunk inside a
+    [with _ -> ()] "malformed line, skip" guard, so a raise here did not
+    skip a malformed line - it threw away a VALID chunk's content, and a
+    whole streamed reply came back empty ("LLM: empty content
+    (finish=stop)"). Read every optional field defensively: a missing
+    detail is 0, never an exception. (2026-10-18: this silently broke every
+    streamed turn on a provider that nulls the details object.) *)
 let usage_of_response_json (json : Yojson.Safe.t) : usage option =
-  let open Yojson.Safe.Util in
-  match json |> member "usage" with
+  (* Every read is defensive: member lookup on a null/missing/non-object
+     yields 0, never an exception. *)
+  let field obj k =
+    match obj with
+    | `Assoc kv -> (match List.assoc_opt k kv with Some v -> v | None -> `Null)
+    | _ -> `Null
+  in
+  match field json "usage" with
   | `Assoc _ as u ->
       Some
-        { input_tokens = usage_int (u |> member "prompt_tokens");
+        { input_tokens = usage_int (field u "prompt_tokens");
           cached_tokens =
-            usage_int
-              (u |> member "prompt_tokens_details" |> member "cached_tokens");
-          output_tokens = usage_int (u |> member "completion_tokens") }
+            usage_int (field (field u "prompt_tokens_details") "cached_tokens");
+          output_tokens = usage_int (field u "completion_tokens") }
   | _ -> None
 
 (** Re-encode [usage] in wire shape, so a REASSEMBLED streaming response
@@ -518,7 +535,19 @@ let reassemble_stream ?(on_text : string -> unit = fun _ -> ())
                       tcs
                 | _ -> ())
            | [] -> ()
-         with _ -> ()) (* malformed data line -> skip, lenient *))
+         (* Lenient on the wire, but NOT silently lossy. Only a genuinely
+            unparseable payload is skipped; anything else is a defect in
+            this function and must not be mistaken for a malformed line.
+            (2026-10-18: a raising optional-field read inside the per-chunk
+            body was swallowed here, discarding every CONTENT chunk of a
+            valid streamed reply - the reply came back empty with
+            finish=stop. If this handler widens again, that bug returns as
+            an empty answer.) *)
+         with
+         | Yojson.Json_error _ -> ()
+         | e ->
+             Printf.eprintf "[llm_codec] reassemble_stream: dropped chunk (%s)\n%!"
+               (Printexc.to_string e)))
     lines;
   let text = Buffer.contents text_buf in
   let reasoning = Buffer.contents reasoning_buf in

@@ -357,6 +357,43 @@ let llm_codec_tests = [
     Alcotest.(check string) "no text from garbage" "" r.text;
     Alcotest.(check string) "default finish" "stop" r.finish;
     Alcotest.(check int) "no tool calls" 0 (List.length r.tool_calls));
+  ( "llm-codec: a null usage detail does not eat a content chunk",
+    `Quick,
+    fun () ->
+      (* REGRESSION (2026-10-18): Synthetic sends usage with
+         "prompt_tokens_details": null AND omits it entirely on the first
+         chunk. [member "cached_tokens"] on a null RAISES, and the
+         per-chunk guard used to swallow that - so the chunk's CONTENT was
+         discarded and every streamed reply came back empty
+         ("LLM: empty content (finish=stop)"), which broke --once and the
+         whole phase-3 native runner. The usage read must be total. *)
+      let lines =
+        [ {|{"choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":858,"completion_tokens":0}}|};
+          {|{"choices":[{"index":0,"delta":{"content":"HELLO"},"finish_reason":"stop"}],"usage":{"prompt_tokens":858,"completion_tokens":5}}|};
+          {|{"choices":[],"usage":{"prompt_tokens":858,"completion_tokens":5,"prompt_tokens_details":null}}|} ]
+      in
+      let r = Llm_codec.reassemble_stream lines in
+      Alcotest.(check string) "content survived" "HELLO" r.text;
+      Alcotest.(check string) "finish" "stop" r.finish;
+      (match r.usage with
+       | Some u ->
+           Alcotest.(check int) "input" 858 u.Llm_codec.input_tokens;
+           Alcotest.(check int) "cached defaults to 0, not a raise" 0
+             u.Llm_codec.cached_tokens
+       | None -> Alcotest.fail "usage dropped"));
+  ( "llm-codec: usage tolerates a missing details object entirely",
+    `Quick,
+    fun () ->
+      let u =
+        Llm_codec.usage_of_response_json
+          (Yojson.Safe.from_string
+             {|{"usage":{"prompt_tokens":7,"completion_tokens":3}}|})
+      in
+      match u with
+      | Some u ->
+          Alcotest.(check int) "input" 7 u.Llm_codec.input_tokens;
+          Alcotest.(check int) "cached" 0 u.Llm_codec.cached_tokens
+      | None -> Alcotest.fail "expected usage");
   (* ---- provider-structured usage (borge/run-primitive.borg
      budget-accounting; the phase-3 seam) ---- *)
   ("llm-codec: usage_of_response_json reads the provider counts", `Quick, fun () ->
