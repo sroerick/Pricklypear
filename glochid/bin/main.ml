@@ -278,8 +278,14 @@ let () =
         Eio.Fiber.fork ~sw watcher;
         (* PP run-primitive supervisor (borge/run-primitive.borg phase 2):
            the glochid app contract — Q6 rides this existing service, no
-           filmstrip dependency. One scan/tick over data.s.run.*; sidecar
-           children are pp-flow --run --supervised processes. *)
+           filmstrip dependency. One scan/tick over data.s.run.*; children
+           are one runner per attempt, chosen by SUPERVISOR_RUNNER_KIND:
+             pp-flow (default)  pp-flow.sh --run --supervised (the autolith
+                                adapter); usage is scraped from its log
+             native  (phase 3)  this binary's --run-brief entry; usage is
+                                provider-structured (the result file)
+           The native kind is OPT-IN: the recorded flip gate is "do NOT flip
+           the default until the loop has survived real overnight cards". *)
         if !supervisor || envget "SUPERVISOR" "0" = "1" then
           Eio.Fiber.fork ~sw (fun () -> Supervisor.run ~env ~sw);
         Fun.protect
