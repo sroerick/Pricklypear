@@ -221,7 +221,7 @@
             "style"
             (string-append
               (pads/size-css (quote (grow 1)))
-              ";min-height:2.5rem"))
+              ";min-height:2.5rem;min-width:0"))
           (list))
         (ui/elm
           "button"
@@ -237,7 +237,7 @@
         "name"
         "ui/chat-composer"
         "doc"
-        "The input row INSIDE the chat shell: a growing text input + a fitting send button, posting action and swapping target."
+          "The input row INSIDE the chat shell: a growing, shrinkable text input (flex:1 + min-width:0) + a fitting send button, posting action and swapping target."
         "file"
         "libs/chat/lib.pp"
         "formals"
@@ -248,7 +248,7 @@
             (lb/obj
               (list "action" "/chat" "target" "#chat-main-log"))))
           "source"
-          "(ui/chat-composer action target) -> a chat-composer form row: hx-post action, hx-target target, hx-swap innerHTML; hx-on::after-request resets the input and snaps the target log to the latest on a successful send")))
+          "(ui/chat-composer action target) -> a chat-composer form row: hx-post action, hx-target target, hx-swap innerHTML; hx-on::after-request resets the input and snaps the target log to the latest on a successful send; the textarea is flex:1 + min-width:0 so the row shrinks cleanly at small widths")))
     "The ui/chat-composer card.")
 
 (define ui/chat-log
