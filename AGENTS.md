@@ -81,6 +81,68 @@ Supervisor/authd multi-process topology is retired (see
 `.borge-bugs/` (quote compounds, AST nodes design, schema-authority,
 optional SSH). Monitor command: bottom of `README.md`.
 
+### 2026-10-18 page-latency incident (forced-RLS def views + factory load)
+
+**Symptom.** Every page was seconds slow, `/welcome` (a pure static
+compose) worst at 2-8s; `/health`, `/agent.txt` and
+`/.well-known/agent.json` stayed fast. Load on the 1-vCPU box sat at
+1.3-1.8 with one Postgres backend pinned at 70-85% CPU for hours; the
+image log showed ~2.5 statements/sec over 20ms.
+
+**Two independent causes, both fixed.**
+
+1. **The def views were not indexable under FORCED RLS** (code bug,
+   migration `044_tree_def_name_index.sql`). `tree_nodes` has
+   `relforcerowsecurity = true`, and the views derived `name` in the
+   SELECT list as `tree_dec_label((string_to_array(path,'.'))[4])`.
+   Because `tree_dec_label` is IMMUTABLE but **not LEAKPROOF**, the
+   planner may not push the derived-name equality below the RLS
+   barrier: it drove from `tree_nodes_kind_type_idx` on `kind='fn'` and
+   filtered after the policy, scanning all 4293 fn rows (259MB table)
+   to return 1. Measured as the app role on prod: view lookup **48.7ms**
+   with "Rows Removed by Filter: 4292"; the same shape against
+   `function_defs` (which has a plain `(branch_id, name)` btree) **1.1ms**.
+   An expression index on `tree_dec_label(...)` does NOT fix it — also
+   unusable across the RLS barrier (verified). The fix is a STORED
+   GENERATED column `tree_nodes.def_name` (a plain column reference
+   raises no leak-proofing question) + `(def_name, kind)` partial index
+   + the three views selecting the column. Result on prod: 48.7ms →
+   **2.4ms**, lockstep intact (0 drift). Table rewrite ~14-18s.
+   **Durable lesson: a non-LEAKPROOF expression anywhere in a predicate
+   on an RLS-forced table silently disables its indexes. Prefer stored
+   columns for derived join keys.**
+
+2. **The software factory ran ~92% of all HTTP traffic with 70x
+   waste** (glochid/pp-flow, commit cddd0a9). The supervisor and
+   pp-flow wrapped *every* todo call in
+   `(begin (load-library "todo") ...)`, re-evaluating the whole
+   package onto the runner's branch per call. Package names bind
+   LAZILY (image.lazy-env-load) and sessions are per-identity and never
+   expired, so the wrapper was pure waste: measured on prod against a
+   fresh identity, `(count (todo/item/all))` is **23ms bare vs 1600ms
+   wrapped (~70x)**, and it spammed the log with `[load-library] todo
+   onto non-main branch ...` pin warnings. `pp_todo_val` also prefixed
+   its own wrapper, double-wrapping 5 call sites.
+
+**Operational follow-ups applied.** Unrotated `image.log` (137MB of
+mostly `PP_TRACE_DB` lines) is now rotated by an idempotent
+`install_log_rotation` in `pricklypear-promote.ksh` (OpenBSD newsyslog
+reads ONLY `/etc/newsyslog.conf` — there is no `.conf.d` drop-in on the
+runtime host); prod's log was rotated live. **`PP_TRACE_DB=1` is set in
+prod's `/etc/pricklypear/pricklypear.env`** — it traces every query
+over 20ms to stderr and should be removed once the remaining slow
+statements (`tree_data_rows` scans, RLS-filtering 869 rows in ~84ms)
+are dealt with.
+
+**Debug recipes that worked** (reusable): `/timing` is the per-route
+server-side truth; `PP_EVAL_TRACE=1` gives per-phase attach timings;
+`PP_TRACE_DB=1` logs any query over 20ms; `activity_ledger` plus
+`pg_stat_activity` identify who is generating load; `nginx-access.log`
+is the only access log (nginx logs there, not `/var/log/nginx`).
+Compare app-role timings against superuser timings — **RLS only applies
+to the app role**, so a superuser EXPLAIN will happily show an index
+scan that the image can never get.
+
 ### 2026-09-14 promote incident (gate vs boot floor)
 
 Two promotes (20347ee, ca2bc21) rolled back despite healthy binaries:
