@@ -3419,10 +3419,10 @@
           (< n 33)
           (todo/tree/path-segment s)
           (if
-            (string-eq (substring s (- n 33) (- n 32)) \".\")
+            (string-eq (substring s (- n 33) 1) ".")
             (todo/tree/redash (substring s (- n 32) n))
             (if
-              (and (< 36 n) (string-eq (substring s (- n 37) (- n 36)) \".\"))
+              (and (< 36 n) (string-eq (substring s (- n 37) 1) "."))
               (substring s (- n 36) n)
               (todo/tree/path-segment s))))))))
 
