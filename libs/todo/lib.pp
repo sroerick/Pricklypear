@@ -43,6 +43,7 @@
     todo/item/branch-kind
     todo/item/cycle
     todo/item/delete
+      todo/item/for-list-from
     todo/item/get
     todo/item/kind
     todo/item/list-id
@@ -1518,6 +1519,16 @@
               #t
               (if (string-eq fl "") (string-eq lid inbox-id) #f))))
         (todo/item/all)))))
+
+;; ops incident (card bf2d6e46, 2026-10-18): a habitat /todos dispatch
+;; called todo/item/for-list-from, which no branch bound (no caller in
+;; git; the call site is store content on another identity's branch).
+;; Same contract as todo/item/for-list; boot seed re-binds the name
+;; additively on system/main so the call site resolves chain-wide.
+(define todo/item/for-list-from
+  (lambda
+    (list-id)
+    (todo/item/for-list list-id)))
 
 (define todo/item/for-user
   (lambda
