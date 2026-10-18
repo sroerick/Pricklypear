@@ -213,7 +213,13 @@ let test_classifier () =
   Alcotest.(check bool) "RLS violation is not" false
     (S.is_serialization_failure (err "42501"));
   Alcotest.(check bool) "plain Failure is not" false
-    (S.is_serialization_failure (Failure "boom"))
+    (S.is_serialization_failure (Failure "boom"));
+  Alcotest.(check bool) "22P02 is invalid input syntax" true
+    (S.is_invalid_input_syntax (err "22P02"));
+  Alcotest.(check bool) "serialization failure is not" false
+    (S.is_invalid_input_syntax (err "40001"));
+  Alcotest.(check bool) "plain Failure is not" false
+    (S.is_invalid_input_syntax (Failure "boom"))
 
 let () =
   Alcotest.run "rls-floor"
