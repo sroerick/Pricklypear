@@ -3250,12 +3250,56 @@
           (car sorted)
           (todo/tree/insert-by-created nj (cdr sorted)))))))
 
+(define todo/tree/path-segment
+  (lambda
+    (p)
+    "The id segment of a stored node path: everything after the last dot
+     (paths are dot-separated labels; the datum id is the final one)."
+    (todo/tree/path-segment* (as-str p) 0 -1)))
+
+(define todo/tree/path-segment*
+  (lambda
+    (s i seen)
+    (if
+      (< i (string-length s))
+      (todo/tree/path-segment*
+        s
+        (+ i 1)
+        (if (string-eq (substring s i (+ i 1)) ".") i seen))
+      (if
+        (< seen 0)
+        s
+        (substring s (+ seen 1) (string-length s))))))
+
+(define todo/tree/path-id
+  (lambda
+    (p)
+    "The item id a stored node path encodes. A 32-char undashed final
+     segment is a dash-stripped UUID: re-dash it (legacy redash form,
+     unchanged for every normal row). Anything else is the id VERBATIM:
+     rows stored with a dashed id segment (e.g. the shared Board card
+     7e60c6a9-2222-4444-8666-abcde0604e60) must emit their true id,
+     because the kernel node-path resolves UUID ids by node lookup, while
+     the old redash(last-32-chars-of-path) corrupted them into phantom
+     ids todo/item/get could never resolve (ghost-card churn, 10-18)."
+    (let
+      ((seg (todo/tree/path-segment p)))
+      (let
+        ((n (string-length seg)))
+        (if
+          (< n 32)
+          seg
+          (if
+            (< 32 n)
+            seg
+            (todo/tree/redash seg)))))))
+
 (define todo/tree/node->pair
   (lambda
     (nj)
-    (cons
-      (todo/tree/redash (todo/tree/tail (dict-get nj "path")))
-      (dict-get nj "body"))))
+      (cons
+        (todo/tree/path-id (dict-get nj "path"))
+        (dict-get nj "body"))))
 
 (define todo/tree/path-ok?
   (lambda
