@@ -562,12 +562,24 @@ let run_usage_expr (run_id : string) (v : verdict) : string =
   Printf.sprintf "(workstreams/run-usage-set %s %d %d %d %d %d)"
     (q run_id) v.v_requests v.v_input v.v_cached v.v_output v.v_wall
 
-let run_result_expr (run_id : string) (v : verdict) (fallback_msg : string) :
-    string =
-  let status = if v.v_status = "" then "crashed" else norm_status v.v_status in
+(* The run row's result_status/error_class/error_message. [v_status] is the
+   SIDECAR's terminal keyword (empty = no PPFLOW-STATUS line); a native run
+   has no such keyword and passes an explicit [status] instead, so the
+   native path never inherits the sidecar's "empty means crashed" reading.
+   [ok] names the success case outright: a native step that SUCCEEDED has
+   an empty v_status, which would otherwise be recorded as a crash on the
+   row after the run had already been marked succeeded. *)
+let run_result_expr ?(status : string option) ?(ok = false) (run_id : string)
+    (v : verdict) (fallback_msg : string) : string =
+  let status =
+    match status with
+    | Some s -> s
+    | None -> if v.v_status = "" then "crashed" else norm_status v.v_status
+  in
   let category =
-    if v.v_category = "" then
-      (if v.v_status = "" then "sidecar-failure" else "")
+    if ok then ""
+    else if v.v_category = "" then
+      if v.v_status = "" && status = "crashed" then "sidecar-failure" else ""
     else norm_colon v.v_category
   in
   let msg = if v.v_message = "" then fallback_msg else v.v_message in
@@ -1092,7 +1104,11 @@ let harvest_native (st : st) ~(child : child) ~(ctx : ctx) ~(rc : int) : unit =
          only until phase 3). *)
       ignore (eval_ok st (run_usage_expr run_id v));
       ignore (eval_ok st
-                (run_result_expr run_id v
+                (run_result_expr ~ok:(res.Native_run.r_step_state = "done")
+                   ~status:
+                     (if res.Native_run.r_step_state = "done" then "succeeded"
+                      else "failed")
+                   run_id v
                    (Printf.sprintf "native %s/%s" res.Native_run.r_outcome
                       res.Native_run.r_step_state)));
       let attempts = ctx.x_attempts + 1 in

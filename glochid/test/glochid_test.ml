@@ -1684,7 +1684,56 @@ let () =
             (test_glochid_keys ~rt) ] );
       ( "run-supervisor",
         [ Alcotest.test_case "pure-policy" `Quick
-            test_supervisor_pure ] );
+            test_supervisor_pure;
+          Alcotest.test_case "native-success-is-not-a-crash-on-the-row" `Quick
+            (fun () ->
+              (* A native step that SUCCEEDED reports no v_status (there is no
+                 PPFLOW-STATUS line on that path). The sidecar reading of
+                 "empty status = crashed" must not leak onto an explicit,
+                 already-determined success, or the row's result_status says
+                 crashed after run-finish said succeeded. *)
+              let v =
+                { Supervisor.v_dest = "DONE";
+                  v_evid = "evidence";
+                  v_status = "";
+                  v_category = "";
+                  v_trace = "";
+                  v_message = "";
+                  v_requests = 1;
+                  v_input = 885;
+                  v_cached = 768;
+                  v_output = 178;
+                  v_wall = 5 }
+              in
+              let args e =
+                (* the printfs emit a quoted Lisp call; read the status and
+                   category with a regex-free split on the quoted strings *)
+                let quoted =
+                  String.split_on_char '"' e
+                  |> List.mapi (fun i s -> (i, s))
+                  |> List.filter (fun (i, _) -> i mod 2 = 1)
+                  |> List.map snd
+                in
+                quoted
+              in
+              let native_ok =
+                args
+                  (Supervisor.run_result_expr ~ok:true ~status:"succeeded"
+                     "r1" v "native pass/done")
+              in
+              Alcotest.(check bool) "result_status is succeeded" true
+                (List.mem "succeeded" native_ok);
+              Alcotest.(check bool) "no bogus sidecar-failure class" false
+                (List.mem "sidecar-failure" native_ok);
+              (* the sidecar path is unchanged: empty status still reads
+                 crashed/sidecar-failure *)
+              let sidecar_fail =
+                args (Supervisor.run_result_expr "r2" v "no PPFLOW-STATUS line")
+              in
+              Alcotest.(check bool) "sidecar empty status still crashes" true
+                (List.mem "crashed" sidecar_fail);
+              Alcotest.(check bool) "sidecar keeps its failure class" true
+                (List.mem "sidecar-failure" sidecar_fail)) ] );
       (* ---- PP native runner (borge/run-primitive.borg PHASE 3) ---- *)
       ( "native-runner",
         [ Alcotest.test_case "verdict-from-json" `Quick (fun () ->
