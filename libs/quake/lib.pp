@@ -19,7 +19,7 @@
     (if
       (>= lo hi)
       ()
-      (cons lo (quake/range (+ lo 1)))))
+      (cons lo (quake/range (+ lo 1) hi))))
 )
 
 (define quake/bar-svg
@@ -30,7 +30,7 @@
            (padb 34)
            (n (length pairs))
            (maxv (list/foldl (lambda (acc p) (if (> (car (cdr p)) acc) (car (cdr p)) acc)) 1 pairs))
-           (gapw (div (- w padl 10) n))
+           (gapw (div (- (- w padl) 10) n))
            (barw (div (* gapw 7) 10))
            (bars
              (list/map
