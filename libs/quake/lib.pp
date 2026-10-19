@@ -20,7 +20,7 @@
       (>= lo hi)
       ()
       (cons lo (quake/range (+ lo 1)))))
-  "Integers lo..hi-1.")
+)
 
 (define quake/bar-svg
   (lambda (pairs title unit)
@@ -62,7 +62,7 @@
         (html/join bars)
         "<line x1='" (as-str padl) "' y1='" (as-str (- h padb))
         "' x2='" (as-str w) "' y2='" (as-str (- h padb)) "' stroke='#2a2e3a'/></svg>")))
-  "Server-rendered SVG bar chart from label-count pairs.")
+)
 
 (define quake/page
   (lambda ()
