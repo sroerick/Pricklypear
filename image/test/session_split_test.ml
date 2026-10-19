@@ -146,6 +146,35 @@ let test_boot_seed_reexports () =
        (fun p -> List.mem p (S.discover_seed_packages ()))
        [ "std"; "notes"; "todo" ])
 
+(** Regression (card d93d8292, "[ops] handler: unbound: marked"):
+    call_handler must EVAL the handler in the same env it LOOKED it up in —
+    the per-request snapshot (image.per-request-context). A concurrent
+    rehydrate swaps t.eval_state.env mid-request; evaluating the found
+    handler in the swapped live env used to die "unbound: <handler>"
+    and auto-file a reliability incident. *)
+let test_handler_evals_in_snapshot_env () =
+  let t = anon_session () in
+  ignore (eval_value t "(define (marked) \"ok\")");
+  let snapshot_env = S.env t in
+  (* Simulate the rehydrate: the live env moves to a fresh, handler-free
+     record; the request context keeps holding the snapshot env. *)
+  t.eval_state.env <- Pricklypear_lisp.Env.create ();
+  let ctx =
+    Pricklypear_image_lib.Request_context.make
+      ~manifest:(S.manifest t)
+      ~env:snapshot_env
+      ~is_admin:false
+      ~routes:(Pricklypear_image_lib.Request_context.copy_routes (S.routes t))
+      ~source_ip:None
+  in
+  Pricklypear_image_lib.Request_context.with_current ctx (fun () ->
+      match S.call_handler t "marked" with
+      | S.Handler_ok _ -> ()
+      | S.Handler_unbound ->
+          Alcotest.fail "handler bound in the snapshot env resolved as unbound"
+      | S.Handler_error msg ->
+          Alcotest.fail (Printf.sprintf "handler died after env divergence: %s" msg))
+
 (* Control_rim captures Eio effects, so eval-touching cases run inside
    the Eio scheduler (rls_floor_test precedent). *)
 let in_eio f = Eio_main.run (fun _ -> f ())
@@ -159,6 +188,8 @@ let () =
             (fun () -> in_eio test_subrecord_state_live)
         ; Alcotest.test_case "control prim guards through the hooks seam" `Quick
             (fun () -> in_eio test_control_prim_guards_through_seam)
+          ; Alcotest.test_case "handler evals in the snapshot env" `Quick
+              (fun () -> in_eio test_handler_evals_in_snapshot_env)
         ; Alcotest.test_case "boot seed re-exports" `Quick
             test_boot_seed_reexports
         ]) ]
