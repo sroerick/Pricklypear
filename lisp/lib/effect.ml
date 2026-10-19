@@ -167,7 +167,7 @@ let pure_prims = [
   "cadr"; "caar"; "caddr"; "cddr"; "assoc"; "member";
   "string-replace"; "string-downcase"; "string-upcase";
   "string-starts-with?"; "string-ends-with?";
-  "url-encode"; "url-decode"; "sha1"; "html-decode";
+   "url-encode"; "url-decode"; "sha1"; "sha256"; "html-decode";
   "parse-date"; "xml-parse"; "random-uuid";
   "verify-ssh-key";  (* pure crypto check on args; no store *)
   "media-url";       (* builds /media/<id> string; no store read *)

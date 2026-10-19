@@ -917,10 +917,15 @@
          lisp/test/eval_test.ml, no DB, no HTTP).
 
          v1 SHIPPED registration path: real.
-         Kernel I/O prims shipped (Effect.pure_prims / Net):
-           http-get (Net; admin/agent), xml-parse, html-decode,
-           parse-date, url-encode/decode, sha1, string helpers,
-           random-uuid, now, now-ms, now-iso, sleep (Lwt, max 60s/call).
+           Kernel I/O prims shipped (Effect.pure_prims / Net):
+             http-get (Net; admin/agent), xml-parse, html-decode,
+             parse-date, url-encode/decode, sha1, sha256, string helpers,
+             random-uuid, now, now-ms, now-iso, sleep (Lwt, max 60s/call).
+           sha256 (prims_crypto.ml, Digestif) is the FED gate prim:
+             the tuna fed surface (fed-value/fed-ops) stays unimplemented
+             until a PP sha256 prim exists, because FED1/FED2's client
+             laws are rehash-verify-and-reject and an unverifiable client
+             would absorb (libs/tuna/lib.pp header law).
          DEFERRED: Solo5 pgx path; host cron/scheduler table.
 
          define-docstring (lisp-interpreter): image registers

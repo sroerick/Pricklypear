@@ -171,11 +171,12 @@ let make_with_defaults () : t =
   (* ONE shared pure catalog (pure/prims_pure.ml [Prims_pure.install])
      — the frozen pure surface every host registers (i-1788670799-f:
      the per-host hand copies here / client / agent / remote had
-     already diverged). Image-only extras layer ON TOP
-     (Hashtbl.replace semantics): wall-clock prims (prims_time.ml
-     reads Unix), sha1 (prims_crypto.ml), and the crypto-grade
-     random-uuid shadow below (the browser client keeps the pure
-     MT19937 version). *)
+      already diverged). Image-only extras layer ON TOP
+      (Hashtbl.replace semantics): wall-clock prims (prims_time.ml
+      reads Unix), sha1 + sha256 (prims_crypto.ml; sha256 backs the
+      tuna FED surface's rehash-verify laws, libs/tuna/lib.pp), and the
+      crypto-grade random-uuid shadow below (the browser client keeps
+      the pure MT19937 version). *)
   Prims_pure.install t;
   register_sync t "date-today" Prims_time.prim_date_today;
   register_sync t "now" Prims_time.prim_now;
@@ -185,7 +186,8 @@ let make_with_defaults () : t =
   register_sync t "date-format" Prims_time.prim_date_format;
   register_sync t "date-add-days" Prims_time.prim_date_add_days;
   register_sync t "date-diff-days" Prims_time.prim_date_diff_days;
-  register_sync t "sha1" Prims_crypto.prim_sha1;
+    register_sync t "sha1" Prims_crypto.prim_sha1;
+    register_sync t "sha256" Prims_crypto.prim_sha256;
   register_sync t "random-uuid" prim_random_uuid;
   t
 
@@ -397,7 +399,8 @@ let prim_summary (name : string) : string =
   | "string-ends-with?" -> "suffix test"
   | "url-encode" -> "percent-encode a string"
   | "url-decode" -> "percent-decode a string"
-  | "sha1" -> "SHA-1 hex digest of a string"
+   | "sha1" -> "SHA-1 hex digest of a string"
+   | "sha256" -> "SHA-256 hex digest of a string (64 lowercase hex; tuna FED rehash-verify)"
   | "html-decode" -> "decode HTML entities in a string"
   | "parse-date" -> "parse RFC-822/ISO-8601/date -> UTC epoch int"
   | "xml-parse" -> "lenient XML text -> Lisp tree"

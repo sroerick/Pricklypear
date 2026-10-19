@@ -788,10 +788,18 @@ let io_prim_tests = [
   ("url roundtrip", `Quick, fun () ->
     Alcotest.(check string) "roundtrip" (q "hello & world?")
       (eval_str "(url-decode (url-encode \"hello & world?\"))"));
-  ("sha1", `Quick, fun () ->
-    Alcotest.(check string) "sha1 abc"
-      (q "a9993e364706816aba3e25717850c26c9cd0d89d")
-      (eval_str "(sha1 \"abc\")"));
+    ("sha1", `Quick, fun () ->
+      Alcotest.(check string) "sha1 abc"
+        (q "a9993e364706816aba3e25717850c26c9cd0d89d")
+        (eval_str "(sha1 \"abc\")"));
+    ("sha256", `Quick, fun () ->
+      Alcotest.(check string) "sha256 abc"
+        (q "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+        (eval_str "(sha256 \"abc\")"));
+    ("sha256 empty", `Quick, fun () ->
+      Alcotest.(check string) "sha256 empty"
+        (q "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+        (eval_str "(sha256 \"\")"));
   ("html-decode named", `Quick, fun () ->
     Alcotest.(check string) "decode named" (q "Hi & bye")
       (eval_str "(html-decode \"Hi &amp; bye\")"));
