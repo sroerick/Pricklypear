@@ -7,7 +7,7 @@
 
 (package quake
 
-(define quake/yearly (quote (("1975" 3344) ("1976" 3631) ("1977" 3614) ("1978" 3348) ("1979" 3327))))
+(define quake/yearly (quote (("1975" 3344))))
 
 (define quake/bar-svg
   (lambda (pairs title unit)
