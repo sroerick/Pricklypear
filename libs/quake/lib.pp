@@ -97,53 +97,47 @@
   "Integers lo..hi-1.")
 
 (define quake/bar-svg
-  (lambda
-    (pairs title unit)
-    (let*
-      ((w 920)
-       (h 320)
-       (pad-l 46)
-       (pad-b 34)
-       (n (length pairs))
-       (maxv
-         (list/foldl
-           (lambda (acc p)
-             (if (> (cdr p) acc) (cdr p) acc))
-           1
-           pairs))
-       (bw (div (* (- w pad-l 10) 100) (* n 120)))
-       (gap (div (- w pad-l 10) n))
-       (bars
-         (list/map
-           (lambda (i)
-             (let*
-               ((p (nth pairs i))
-                (v (cdr p))
-                (bh (div (* v (- h pad-b 20)) maxv))
-                (x (+ pad-l (* i gap) (div (- gap bw) 2)))
-                (y (- h pad-b bh))
-                (label (car p)))
-               (string-append
-                 "<rect x='" (as-str x) "' y='" (as-str y)
-                 "' width='" (as-str bw) "' height='" (as-str bh)
-                 "' fill='#7aa2f7'><title>" label ": " (as-str v) " " unit "</title></rect>"
-                 (if (= (mod i 5) 0)
-                     (string-append "<text x='" (as-str x) "' y='" (as-str (- h 10))
-                       "' font-size='9' fill='#6b7080' text-anchor='middle'>" label "</text>")
-                     ""))))
-           (quake/range 0 (- n 1)))))
+  (lambda (pairs title unit)
+    (let* ((w 920) (h 320) (padl 46) (padb 34) (n (length pairs))
+           (maxv (list/foldl (lambda (acc p) (if (> (cdr p) acc) (cdr p) acc)) 1 pairs))
+           (gapw (div (- w padl 10) n))
+           (barw (div (* gapw 7) 10))
+           (bars
+             (list/map
+               (lambda (i)
+                 (let* ((p (list-ref pairs i))
+                        (label (as-str (car p)))
+                        (v (cdr p))
+                        (bh (div (* v (- h padb 20)) maxv))
+                        (x (+ padl (* i gapw) (div (- gapw barw) 2)))
+                        (y (- h padb bh))
+                        (bar (string-append
+                          "<rect x='" (as-str x) "' y='" (as-str y)
+                          "' width='" (as-str barw) "' height='" (as-str bh)
+                          "' fill='#7aa2f7'><title>" label ": " (as-str v)
+                          " " unit "</title></rect>"))
+                        (tick (if (= (mod i 5) 0)
+                                (string-append
+                                  "<text x='" (as-str x) "' y='" (as-str (- h 10))
+                                  "' font-size='9' fill='#6b7080' text-anchor='middle'>"
+                                  label "</text>")
+                                "")))
+                   (string-append bar tick)))
+               (list/range n))))
       (string-append
         "<svg viewBox='0 0 " (as-str w) " " (as-str h)
-        "' width='100%' style='max-width:" (as-str w) "px' role='img'>"
-        "<text x='" (as-str pad-l) "' y='16' font-size='12' fill='#d8dee9'>" title "</text>"
+        "' width='100%' role='img'><text x='10' y='16' font-size='12'>"
+        title "</text>"
         (html/join bars)
-        "<line x1='" (as-str pad-l) "' y1='" (as-str (- h pad-b))
-        "' x2='" (as-str w) "' y2='" (as-str (- h pad-b)) "' stroke='#2a2e3a'/></svg>"))))
-  "Server-rendered SVG bar chart from (label . count) pairs. No JS.)
+        "<line x1='" (as-str padl) "' y1='" (as-str (- h padb))
+        "' x2='" (as-str w) "' y2='" (as-str (- h padb)) "' stroke='#2a2e3a'/></svg>"))))
+  "Server-rendered SVG bar chart from (label . count) pairs."))
+
+
+
 
 (define quake/page
-  (lambda
-    ()
+  (lambda ()
     (html/page
       (list
         (html/h1 "Earthquakes")
@@ -153,10 +147,10 @@
         (html/h2 "Events per year")
         (html/div
           (html/attr "style" "max-width:960px")
-          (quake/bar-svg quake/yearly "M4.5+ events per year, 1975-2026" "events"))
+          (quake/bar-svg quake/yearly "M4.5+ events per year" "events"))
         (html/p*
           (html/attr "class" "muted")
-          "Counts rise over time because the detection network grows, not because the planet shakes more - any rate model must account for the instruments.")
+          "Counts rise with time because the detection network grows - any rate model must account for the instruments.")
         (html/h2 "Depth distribution")
         (html/div
           (html/attr "style" "max-width:960px")
@@ -167,15 +161,15 @@
         (html/h2 "M7+ by region")
         (html/div
           (html/attr "style" "max-width:960px")
-          (quake/bar-svg quake/regions-m7 "M7+ events by region, top 12 (693 total)" "M7+ events"))
+          (quake/bar-svg quake/regions-m7 "M7+ events by region, top 12 of 693" "M7+ events"))
         (html/h2 "Gutenberg-Richter check")
         (html/p*
           (html/attr "class" "muted")
-          "log10(cumulative count) vs magnitude is linear: b-value = 1.03 over M5-7.5, textbook. The ETL self-validates.")
+          "log10(cumulative count) vs magnitude is linear: b = 1.03 over M5-7.5, textbook. The ETL self-validates.")
         (html/h2 "OSINT corner")
         (html/p*
           (html/attr "class" "muted")
-          "497 nuclear explosions M4.5+ appear in the catalog as a distinct type (Kazakhstan, Nevada, Russia, French Polynesia; tail = 2017 DPRK)."))))
+          "497 nuclear explosions M4.5+ sit in the catalog as a distinct type (Kazakhstan, Nevada, Russia, French Polynesia; tail = 2017 DPRK).")))))
 
-(route "/quake" "quake/page"))
+(route "/quake" "quake/page")
 )
