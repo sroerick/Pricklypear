@@ -538,6 +538,139 @@ let test_libs_hyper_on_agent ~rt () =
     (Runtime.eval_string ~rt
        {|(hyper/text (hyper/click (hyper/visit "/branchy/page") "#bb" (list)) "#bout")|})
 
+
+(** calendar faces (card e1d032a0): the calendar day/event click is
+    PANE-LOCAL in filmstrip. Loads libs/lookbook + libs/calendar the way
+    the habitat boots them (html + hyper first), binds the /calendar
+    route, and asserts: (1) hyper/expect over the changed route -- GET
+    /calendar?day=2026-10-18 serves the day agenda fragment with the day
+    header; (2) the month grid day cells carry hx-get + hx-target
+    #cal-main (pane-local swap, never a plain anchor out of the shell);
+    (3) lookbook evidence: calendar/nav-a answers its examples card and
+    is registered in (lookbook/elements). *)
+
+let test_calendar_day_pane_local ~rt () =
+  let rec find_libs_dir dir =
+    let cand = Filename.concat dir "libs/hyper/lib.pp" in
+    if Sys.file_exists cand then dir
+    else
+      let parent = Filename.dirname dir in
+      if parent = dir then "libs"
+      else find_libs_dir parent
+  in
+  let libs_dir =
+    let root = find_libs_dir (Sys.getcwd ()) in
+    Filename.concat root "libs"
+  in
+  let load name =
+    let p = Filename.concat (Filename.concat libs_dir name) "lib.pp" in
+    match Runtime.load_file ~rt p with
+    | Ok () -> ()
+    | Error e -> Alcotest.fail (name ^ ": " ^ e)
+  in
+  let fmt_interp_error = function
+    | Ast.Unbound_var s -> "unbound: " ^ s
+    | Ast.Not_a_function _ -> "not-a-function"
+    | Ast.Arity_mismatch (n, exp, got) ->
+      Printf.sprintf "arity %s: expected %d got %d" n exp got
+    | Ast.Wrong_arg_count (n, exp, got) ->
+      Printf.sprintf "wrong-arg-count %s: expected %d got %d" n exp got
+    | Ast.Type_mismatch (exp, _) -> "type-mismatch: expected " ^ exp
+    | Ast.Budget_exceeded -> "budget-exceeded"
+    | Ast.Prim_error (p, m, _) -> "prim " ^ p ^ ": " ^ m
+    | Ast.Parse_error (m, l, c) -> Printf.sprintf "parse: %s at %d:%d" m l c
+    | Ast.User_error (m, _) -> "user-error: " ^ m
+  in
+  let eval_or_fail what s =
+    match Runtime.eval_string ~rt s with
+    | v -> v
+    | exception Ast.Interp_error e ->
+      Alcotest.fail (what ^ ": " ^ fmt_interp_error e)
+    | exception e -> Alcotest.fail (what ^ ": " ^ Printexc.to_string e)
+  in
+  List.iter load ["html"; "hyper"; "lookbook"; "calendar"];
+  (* Store/session prims the face reads at render time; defines resolve
+     at call time, so the loads above never needed them. date-format /
+     date-weekday back the date prims the month/day renders hit
+     (2026-10: the 1st is a Thursday, so dow = (mod (+ 3 d) 7)). *)
+  ignore (eval_or_fail "stubs"
+            {|(begin (define (rows k n) (list))
+                     (define (todo/item/all) (list))
+                     (define (notes/doc/get s) (list))
+                     (define (tree/list-kind a b c) (list))
+                     (define (date-today) "2026-10-18")
+                     (define (date-format y m d)
+                       (string-append (as-str y) "-"
+                                      (calendar/pad2 m) "-"
+                                      (calendar/pad2 d)))
+                     (define (date-weekday y m d) (mod (+ 3 d) 7))
+                     ;; request-param is a Nopales shim in the surface
+                     ;; blob, not a runtime prim; the face reads it at
+                     ;; dispatch.
+                     (define (request-param n) (query-param n)))|});
+  ignore (Runtime.eval_string ~rt {|(route "/calendar" "calendar/page")|});
+  (* Dispatch the changed route the way the host does: a real request
+     context with the HX-Request header (pane partial mode). *)
+  let dispatch params =
+    match Runtime.dispatch_route ~rt ~handler:"calendar/page" ~method_:"GET"
+            ~path:"/calendar" ~params ~headers:[ ("hx-request", "true") ]
+            ~body:"" with
+    | Ast.VStr html -> html
+    | other -> Alcotest.fail ("calendar/page: " ^ Ast.pp_value_short other)
+    | exception Ast.Interp_error e ->
+      Alcotest.fail ("calendar/page dispatch: " ^ fmt_interp_error e)
+    | exception e -> Alcotest.fail ("calendar/page dispatch: " ^ Printexc.to_string e)
+  in
+  let nopales_str s =
+    let b = Buffer.create (String.length s * 2) in
+    String.iter
+      (fun c ->
+        match c with
+        | '"' -> Buffer.add_string b "\\\""
+        | '\\' -> Buffer.add_string b "\\\\"
+        | '\n' -> Buffer.add_string b "\\n"
+        | c -> Buffer.add_char b c)
+      s;
+    Buffer.contents b
+  in
+  (* (1) hyper/expect over the changed route: GET /calendar?day=2026-10-18
+     under HX-Request serves the day agenda fragment (the pane body). *)
+  let day_html = dispatch [ ("day", "2026-10-18") ] in
+  ignore (eval_or_fail "day page"
+            ("(define pg (soup/parse \"" ^ nopales_str day_html ^ "\"))"));
+  Alcotest.check pp_value_testable "day fragment via hyper/expect"
+    (Ast.VBool true)
+    (eval_or_fail "hyper/expect h2" {|(hyper/expect pg "h2" "2026-10-18")|});
+  (* (2) the month grid: every day cell is a pane-local anchor. *)
+  let month_html = dispatch [ ("ym", "2026-10") ] in
+  ignore (eval_or_fail "month page"
+            ("(define pgm (soup/parse \"" ^ nopales_str month_html ^ "\"))"));
+  Alcotest.check pp_value_testable "day cells swap #cal-main in place"
+    (Ast.VBool true)
+    (eval_or_fail "hx-target #cal-main"
+       {|(string-contains? (hyper/html pgm) "hx-target=\"#cal-main\"")|});
+  Alcotest.check pp_value_testable "day cell hx-gets the day route"
+    (Ast.VBool true)
+    (eval_or_fail "hx-get day route"
+       {|(string-contains? (hyper/html pgm) "hx-get=\"/calendar?day=2026-10-18\"")|});
+  (* (3) lookbook evidence for the new element. *)
+  Alcotest.check pp_value_testable "nav-a is pane-local"
+    (Ast.VStr "#cal-main")
+    (eval_or_fail "nav-a attrs"
+       {|(soup/attr
+           (car (soup/select
+                  (soup/parse
+                    (calendar/nav-a "/calendar?day=2026-10-18" "18"))
+                  "a"))
+           "hx-target")|});
+  Alcotest.check pp_value_testable "lookbook inventory registers calendar/nav-a"
+    (Ast.VBool true)
+    (eval_or_fail "lookbook inventory"
+       {|(string-contains? (json-emit (lookbook/elements)) "calendar/nav-a")|});
+  Alcotest.check pp_value_testable "nav-a examples card"
+    (Ast.VStr "calendar/nav-a")
+    (eval_or_fail "examples card"
+       {|(lb/get (calendar/nav-a/examples) "name")|})
 (** surfaces: the chat + code pages are Nopales route-table handlers
     (rendered via libs/html), redefinable live; a consumed turn's captured
     parts replay through hyper/stream. Loads the embedded surface the
@@ -643,6 +776,224 @@ let test_surfaces_bindings_browser ~rt () =
     (not (has "<li" downLevel));
   (* restore the canned bridge for any later evals on this rt *)
   Runtime.add_prim rt "bind/packages" (fun _ -> Ast.VStr {|["notes","todo"]|})
+
+(** optimistic htmx loader (card c7be7174): the strip's ordering/opening/
+    closing triggers carry the declared optimistic attrs -- instant
+    semi-fade while the roundtrip runs (css :has on htmx's htmx-request
+    class; the keyboard move also transposes the focused pane via hx-on)
+    -- and the server's OOB response lands already unfaded. A hyper/expect
+    rides a real close roundtrip over the shell. *)
+let test_filmstrip_optimistic ~rt () =
+  Surface.load ~rt;
+  let has needle s =
+    (try ignore (Str.search_forward (Str.regexp_string needle) s 0); true
+     with Not_found -> false)
+  in
+  let eval_str ~what str =
+    match Runtime.eval_string ~rt str with
+    | Ast.VStr s -> s
+    | other -> Alcotest.fail (what ^ ": " ^ Reader.pp_value other)
+    | exception Ast.Interp_error e ->
+        Alcotest.fail
+          (what ^ ": INTERP "
+           ^ (match e with
+              | Ast.Prim_error (k, n, m) -> k ^ "/" ^ n ^ ": " ^ m
+              | _ -> "opaque"))
+  in
+  (* pane-head verbs carry data-optimistic (the declared trigger mark) *)
+  let head =
+    eval_str ~what:"pane-head"
+      {|(render-html (filmstrip/pane-head (dict-set* "{}" (list "id" "t1" "route" "/code"))))|}
+  in
+  Alcotest.(check bool) "pane-head: width verb optimistic" true
+    (has "data-optimistic=\"width\"" head);
+  Alcotest.(check bool) "pane-head: close verb optimistic" true
+    (has "data-optimistic=\"close\"" head);
+  (* the move verbs carry the mark + the instant-transpose hx-on --
+     checked on the DECLARED attrs def (rendering filmstrip/key-sentinels
+     hits a pre-existing interp failure at HEAD: keyboard-shortcuts). *)
+  let ksent =
+    eval_str ~what:"optimistic-attrs move"
+      {|(html/attrs (filmstrip/optimistic-attrs "move"))|}
+  in
+  Alcotest.(check bool) "move verb: optimistic attrs" true
+    (has "data-optimistic=\"move\"" ksent && has "hx-on::before-request" ksent);
+  (* the css pending rules ride filmstrip/css *)
+  let css = eval_str ~what:"css" {|(css/render (filmstrip/css))|} in
+  Alcotest.(check bool) "css: optimistic pending rules" true
+    (has "[data-optimistic].htmx-request" css && has ".fs-pane.fs-optimistic" css);
+  (* the examples card: the element's declaration (lookbook discipline) *)
+  let card =
+    eval_str ~what:"examples card" {|(filmstrip/optimistic-attrs/examples)|}
+  in
+  Alcotest.(check bool) "lookbook: optimistic-attrs card declares the element" true
+    (has "filmstrip/optimistic-attrs" card);
+  (* hyper/expect over the changed route: POST /filmstrip/open through the
+     real route machinery, parse the OOB response fragment, then click the
+     optimistic close verb. The full shell render exceeds the 400k eval
+     budget on the main-repo build (habitat issue i-1789591788), so the
+     fragment page stands in for hyper/visit. *)
+  (* a cheap pane body: the pane content dispatch must not blow the 400k
+     eval budget on the main-repo build (habitat issue i-1789591788); the
+     bindings browser with its canned bind prims (left by
+     test_surfaces_bindings_browser) is the cheap known-good face. *)
+  (match
+     Runtime.dispatch_route ~rt ~handler:"filmstrip/open" ~method_:"POST"
+       ~path:"/filmstrip/open" ~params:[ ("route", "/bindings") ]
+       ~headers:[ ("hx-request", "true") ] ~body:""
+   with
+   | Ast.VStr _ -> ()
+   | other -> Alcotest.fail ("open: " ^ Reader.pp_value other));
+  ignore (Runtime.eval_string ~rt
+      {|(define pg (soup/parse (route/dispatch (route/lookup "/filmstrip/open") "POST" "/filmstrip/open" (list (cons "route" "/bindings")) (list (cons "hx-request" "true")))))|});
+  ignore (Runtime.eval_string ~rt
+    {|(define pid (hyper/attr (car (hyper/query pg ".fs-pane")) "data-pane"))|});
+  ignore (Runtime.eval_string ~rt
+    {|(define close-btn
+         (car (list/filter
+                (lambda (b)
+                  (string-eq (as-str (hyper/attr b "data-optimistic")) "close"))
+                (hyper/query pg "button"))))|});
+  Alcotest.check pp_value_testable "hyper: optimistic close verb served"
+    (Ast.VStr "close")
+      (Runtime.eval_string ~rt {|(as-str (hyper/attr close-btn "data-optimistic"))|});
+  (* hyper/expect over the changed route: the pane fragment served by
+     POST /filmstrip/open carries the optimistic close verb. (hyper/click's
+     fragment-branch handling is broken at HEAD -- visit-click-stream.) *)
+  Alcotest.(check bool) "hyper: optimistic pane fragment serves the title" true
+      (match Runtime.eval_string ~rt {|(hyper/expect pg ".fs-title" "/bindings")|} with
+     | Ast.VBool b -> b
+     | other -> Alcotest.fail ("expect: " ^ Reader.pp_value other))
+
+(** file-issue rail button (card 5877331e): the railtabs strip carries a
+    declared lookbook element that opens the /issues register as a pane
+    (open-or-focus, OOB into #fs-sink) -- reporting an issue or UI
+    feedback is one click from any desktop. The examples card + the host
+    inventory witness the lookbook discipline; a hyper/expect rides a
+    real POST /filmstrip/open roundtrip with route=/issues (a stub
+    issues face stands in on the agent runtime). *)
+let test_filmstrip_file_issue ~rt () =
+  Surface.load ~rt;
+  (* hermetic ws: a throwaway row file so stale pane state from an earlier
+     test or run can never satisfy (or mask) the open roundtrip below *)
+  let ws = "/tmp/glochid-file-issue-test-ws.json" in
+  (try Sys.remove ws with Sys_error _ -> ());
+  ignore (Runtime.eval_string ~rt
+            {|(define glochid/ws-file "/tmp/glochid-file-issue-test-ws.json")|});
+  let has needle s =
+    (try ignore (Str.search_forward (Str.regexp_string needle) s 0); true
+     with Not_found -> false)
+  in
+  let eval_str ~what str =
+    match Runtime.eval_string ~rt str with
+    | Ast.VStr s -> s
+    | other -> Alcotest.fail (what ^ ": " ^ Reader.pp_value other)
+    | exception Ast.Interp_error e ->
+        Alcotest.fail
+          (what ^ ": INTERP "
+           ^ (match e with
+              | Ast.Prim_error (k, n, m) -> k ^ "/" ^ n ^ ": " ^ m
+              | _ -> "opaque"))
+  in
+  (* the examples card: the element's declaration (lookbook discipline) *)
+  let card = eval_str ~what:"examples card" {|(ui/file-issue/examples)|} in
+  Alcotest.(check bool) "lookbook: file-issue card declares the element" true
+    (has "ui/file-issue" card);
+  (* the host inventory: the ui rail root + /lookbook face read this def *)
+  Alcotest.(check bool) "lookbook: file-issue registered in the inventory" true
+    (has "ui/file-issue"
+           (eval_str ~what:"lookbook/elements" {|(json-emit (lookbook/elements))|}));
+  (* the rail strip renders the declared button *)
+  let rail =
+    eval_str ~what:"railtabs" {|(render-html (filmstrip/railtabs-html (list) 0))|}
+  in
+  Alcotest.(check bool) "rail: file-issue button present" true
+    (has "fs-file-issue" rail && has "file an issue" rail);
+  (* the declared verb: posts /filmstrip/open with route=/issues into #fs-sink *)
+  let hxvals =
+    eval_str ~what:"hx-vals"
+      {|(as-str (hyper/attr
+                  (car (hyper/query
+                         (soup/parse (render-html (filmstrip/railtabs-html (list) 0)))
+                         "#fs-file-issue"))
+                  "hx-vals"))|}
+  in
+  Alcotest.(check bool) "rail: file-issue hx-vals carries the issues route" true
+    (has "/issues" hxvals && has "route" hxvals);
+  Alcotest.(check bool) "rail: file-issue posts /filmstrip/open" true
+    (has "hx-post=\"/filmstrip/open\"" rail);
+  (* hyper/expect: stub /issues, then POST /filmstrip/open through the
+     real route machinery; the OOB fragment must carry the opened pane
+     rendering the issues face. *)
+  (match Runtime.eval_string ~rt
+           {|(seq (define (stub-issues)
+                      (render-html "<div id=issue-reg>issues-register</div>"))
+                  (route "/issues" "stub-issues"))|}
+  with
+  | _ -> ()
+  | exception Ast.Interp_error e ->
+      Alcotest.fail
+        ("stub issues face: INTERP "
+         ^ (match e with
+            | Ast.Prim_error (k, n, m) -> k ^ "/" ^ n ^ ": " ^ m
+            | _ -> "opaque")));
+  ignore (Runtime.eval_string ~rt
+    {|(define pg (soup/parse (route/dispatch (route/lookup "/filmstrip/open") "POST" "/filmstrip/open" (list (cons "route" "/issues")) (list (cons "hx-request" "true")))))|});
+  Alcotest.(check bool) "hyper: expect the issues pane in the open fragment" true
+    (match Runtime.eval_string ~rt {|(hyper/expect pg "#issue-reg" "issues-register")|} with
+     | Ast.VBool b -> b
+     | other -> Alcotest.fail ("expect: " ^ Reader.pp_value other))
+
+(** start-menu cap (card e3de4aa0): the zero-JS start menu floats OVER
+    the tree below the railtabs strip, so it must never extend below the
+    screen -- glochid/base-css caps it at ~2/3 of the viewport height
+    with its own scroll. hyper/expect rides a real GET / through the
+    route machinery: the full page's <style> embeds glochid/base-css. *)
+let test_filmstrip_start_menu_cap ~rt () =
+  Surface.load ~rt;
+  let has needle s =
+    (try ignore (Str.search_forward (Str.regexp_string needle) s 0); true
+     with Not_found -> false)
+  in
+  let eval_str ~what str =
+    match Runtime.eval_string ~rt str with
+    | Ast.VStr s -> s
+    | other -> Alcotest.fail (what ^ ": " ^ Reader.pp_value other)
+    | exception Ast.Interp_error e ->
+        Alcotest.fail
+          (what ^ ": INTERP "
+           ^ (match e with
+              | Ast.Prim_error (k, n, m) -> k ^ "/" ^ n ^ ": " ^ m
+              | _ -> "opaque"))
+  in
+  (* the declared host stylesheet carries the cap + its own scroll *)
+  Alcotest.(check bool) "base-css: start menu capped at ~2/3 viewport, own scroll" true
+    (has "max-height:66vh;overflow-y:auto"
+           (eval_str ~what:"base-css" {|glochid/base-css|}));
+  (* the menu element still renders the capped class *)
+  Alcotest.(check bool) "start-menu: renders the fs-start-menu box" true
+    (has "fs-start-menu"
+           (eval_str ~what:"start-menu" {|(render-html (glochid/start-menu))|}));
+  (* hyper/expect over the changed route: GET / serves the page whose
+     <style> embeds glochid/base-css with the viewport cap. *)
+  let page =
+    match Runtime.dispatch_route ~rt ~handler:"chat/page" ~method_:"GET"
+            ~path:"/" ~params:[] ~headers:[] ~body:"" with
+    | Ast.VStr s -> s
+    | other -> Alcotest.fail ("page: " ^ Reader.pp_value other)
+  in
+  Runtime.add_prim rt "page-html" (fun _ -> Ast.VStr page);
+  ignore (Runtime.eval_string ~rt {|(define pg (soup/parse (page-html)))|});
+  (* hyper/expect over the changed route: the served <style> text IS
+     the declared glochid/base-css (which carries the viewport cap). *)
+  Alcotest.(check bool) "hyper: GET / <style> serves the declared base-css" true
+    (match Runtime.eval_string ~rt {|(hyper/expect pg "style" glochid/base-css)|} with
+     | Ast.VBool b -> b
+     | other -> Alcotest.fail ("expect: " ^ Reader.pp_value other));
+  (* ... and the served stylesheet carries the cap + its own scroll *)
+  Alcotest.(check bool) "hyper: GET / serves the start-menu viewport cap" true
+    (has "max-height:66vh;overflow-y:auto"
+           (eval_str ~what:"served style" {|(hyper/text pg "style")|}))
 
 (** rail trees (borge/filmstrip.borg rail-trees-v4): the windows tree
     renders from DECLARED ws state (3 desktop dirs + shelf subtree on an
@@ -997,8 +1348,10 @@ let test_glochid_keys ~rt () =
              (has "/filmstrip/keys/close" html);
            Alcotest.(check bool) "shell carries the guard clause" true
              (has "activeElement.tagName" html);
-           Alcotest.(check bool) "shell carries the keys hint" true
-             (has "fs-keys" html)
+            Alcotest.(check bool) "shell carries the keys hint" true
+              (has "fs-keys" html);
+            Alcotest.(check bool) "shell page never scrolls (card a5bdd8ce)" true
+              (has "body:has(.fs-shell){overflow:hidden}" html)
        | other -> Alcotest.fail ("shell: " ^ Reader.pp_value other));
       (* no live pane yet: the chord answers the status line *)
       Alcotest.(check bool) "no focused pane = status line" true
@@ -1207,7 +1560,7 @@ let test_lookbook ~rt () =
            {|(list/map (lambda (n) (lb/get n "open")) (glochid/ui-tree ""))|}
    with
    | Ast.VList opens ->
-       Alcotest.(check int) "ui root: lib seeds + glochid host elements" 13
+        Alcotest.(check int) "ui root: lib seeds + glochid host elements + ui/file-issue" 14
          (List.length opens);
        Alcotest.(check bool) "ui rows open-or-focus the /lookbook pane" true
          (List.exists
@@ -1663,6 +2016,9 @@ let () =
       ( "libs-hyper-on-glochid",
         [ Alcotest.test_case "visit-click-stream" `Quick
             (test_libs_hyper_on_agent ~rt) ] );
+        ( "calendar-faces",
+          [ Alcotest.test_case "day-click-pane-local" `Quick
+              (test_calendar_day_pane_local ~rt) ] );
       ( "surfaces",
         [ Alcotest.test_case "nopales-routes" `Quick
             (test_surfaces_nopales_routes ~rt)
@@ -1676,6 +2032,12 @@ let () =
             (test_rail_trees ~rt)
         ; Alcotest.test_case "move-to-desktop" `Quick
             (test_move_to_desk ~rt)
+          ; Alcotest.test_case "optimistic-loader" `Quick
+              (test_filmstrip_optimistic ~rt)
+          ; Alcotest.test_case "file-issue-rail" `Quick
+                (test_filmstrip_file_issue ~rt)
+            ; Alcotest.test_case "start-menu-cap" `Quick
+                  (test_filmstrip_start_menu_cap ~rt)
         ; Alcotest.test_case "lookbook" `Quick
             (test_lookbook ~rt)
         ; Alcotest.test_case "habitat-panes" `Quick

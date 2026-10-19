@@ -488,6 +488,19 @@ let launch (env : route_env) (page_fn : Session.t -> unit) : unit =
                  ~content_type:"text/plain" "request body too large";
                ()
              end
+             else if Store_db.is_invalid_input_syntax exn then begin
+               (* Invalid input syntax (SQLSTATE 22P02, e.g. a bad id cast
+                  into ::uuid by a handler): a 400, not a 500 — the client,
+                  not the server, is at fault. Logged, but no [ops] incident
+                  card — the client can fix the request. *)
+               ignore
+                 (Ops_log.info ~component:"http"
+                    ~context:[ ("path", path) ]
+                    "invalid input syntax (22P02); 400");
+               text_response reqd ~status:`Bad_request
+                 ~content_type:"text/plain" "invalid id or input syntax";
+               ()
+             end
              else begin
                (* Log the real exception to ops; never echo raw exception text
                   back to the client (500 bodies are generic — incident is

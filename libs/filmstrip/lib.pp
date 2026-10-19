@@ -246,13 +246,14 @@
     (r label)
     (html/button
       (html/attrs
-        (list
+        (append (list
           (html/attr "type" "button")
           (html/attr "class" "fs-applink")
           (html/attr "hx-post" "/filmstrip/open")
           (html/attr "hx-vals" (string-append "{\"route\":\"" r "\"}"))
           (html/attr "hx-target" "#fs-sink")
-          (html/attr "hx-swap" "innerHTML")))
+            (html/attr "hx-swap" "innerHTML"))
+            (filmstrip/optimistic-attrs "open")))
       (html/text label)))
   "In-shell app link: a link-looking button POSTing /filmstrip/open\n(hx-vals carries the route; open-or-focus semantics) with the OOB pane\nswaps landed in #fs-sink. Pane chrome uses these INSTEAD of <a href> --\nan anchor navigates the WHOLE WINDOW out of the shell; an app-link\nnever leaves it. Returns a PLAIN string (no render-html: the sentinel\nwould leak into any string-append embed like chat/body's h1 nav).")
 
@@ -701,6 +702,37 @@ between strip and rail).")
             "#fff"
             "font-weight"
             "700"))
+          ;; card c7be7174 (optimistic loader): strip mutations apply
+          ;; instantly -- htmx's htmx-request class (set the moment a
+          ;; trigger fires, dropped on settle) drives the pending
+          ;; affordance; the server's OOB response returns the source of
+          ;; truth already unfaded.
+          (css/rule
+            "[data-optimistic].htmx-request"
+            (list
+              "opacity"
+              ".55"
+              "pointer-events"
+              "none"))
+          (css/rule
+            ".fs-pane"
+            (list
+              "transition"
+              "opacity .12s ease"))
+          (css/rule
+            ".fs-pane:has([data-optimistic].htmx-request)"
+            (list
+              "opacity"
+              ".55"
+              "pointer-events"
+              "none"))
+          (css/rule
+            ".fs-pane.fs-optimistic"
+            (list
+              "opacity"
+              ".55"
+              "pointer-events"
+              "none"))
         (css/rule
           ".fs-content"
           (list
@@ -879,11 +911,23 @@ between strip and rail).")
             ;; width (2026-10-14 pane theming).
             (css/raw "main{max-width:none;margin:0;padding:0}")
           (css/raw ".fs-shell{height:calc(100vh - 2rem)}.fs-shell:has(#fs-axis.col){flex-direction:row}.fs-shell:has(#fs-axis.col) .fs-content{order:0;flex:1 1 auto;min-height:0;min-width:0}#fs-surface{display:contents}#fs-rail{display:contents}.fs-shell:has(#fs-axis.col) #fs-rail{order:-3;display:flex;flex-direction:column;flex:0 0 20rem;max-width:20rem;min-width:0;min-height:0;overflow-y:auto;overflow-x:hidden;gap:.25rem;padding:.25rem .25rem .25rem 0}")
+            ;; card a5bdd8ce: the filmstrip page is a window-manager
+            ;; surface -- the main window NEVER scrolls (panes, trees and
+            ;; menus scroll internally; niri discipline). Scoped with :has
+            ;; so pages hosting no shell keep their own scrolling; a
+            ;; subpixel-tall or stale layout clips instead of scrolling
+            ;; the page.
+            (css/raw "body:has(.fs-shell){overflow:hidden}")
           (css/raw ".fs-shell:not(:has(#fs-axis.col)) .fs-pane[data-region=\\\"rail\\\"]{flex:0 0 auto;max-height:20rem;min-width:20rem;min-height:0;overflow:hidden}.fs-shell:not(:has(#fs-axis.col)) .fs-pane[data-region=\\\"rail\\\"] .fs-body{display:block;flex:1 1 auto;min-height:0;overflow:auto}.fs-shell:has(#fs-axis.col) .fs-pane[data-region=\\\"rail\\\"]{flex:1 1 auto;width:100%;min-height:0}.fs-shell:has(#fs-axis.col) .fs-pane[data-region=\\\"rail\\\"] .fs-body{display:block;flex:1 1 auto;min-height:0;overflow:auto}.fs-shell:has(#fs-axis.col) .chatpage{height:100%}")
           (css/raw ".bubble{background:var(--panel);border-radius:6px;padding:.5rem .75rem;margin:.5rem 0;white-space:pre-wrap}.bubble.user{color:var(--pp-ok)}.bubble.llm{color:var(--ink)}.bubble.repl{color:var(--pp-repl)}.trace{color:var(--muted);font-size:.85em;white-space:pre-wrap}.think{color:var(--muted);font-size:.9em;margin:.4rem 0}.think summary{cursor:pointer}.think>div{white-space:pre-wrap}.reason{color:var(--muted);font-style:italic}.think .tk,.think .tool{margin:.25rem 0 .25rem .25rem}.think .tk>summary,.think .tool>summary{color:var(--muted)}.think .tk>div,.think .tool>div{margin-left:.9rem;padding-left:.5rem;border-left:1px solid var(--border)}.think:not(:has(.reason,.trace)){display:none}.chatpage{display:flex;flex-direction:column;height:calc(100vh - 6rem)}.chatpage #log{flex:1;min-height:0;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:.75rem;margin-bottom:.75rem}.chatpage form{display:flex;gap:.5rem;flex-shrink:0}.chatpage #msg{flex:1}.chatpage form button{flex-shrink:0}")
           (css/raw "*{scrollbar-width:thin;scrollbar-color:var(--sel-bg) transparent}::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--sel-bg);border-radius:6px}::-webkit-scrollbar-thumb:hover{background:var(--muted)}::-webkit-scrollbar-corner{background:transparent}.fs-applink{background:none;border:0;color:var(--sel-accent);padding:0;margin:0;font:inherit;cursor:pointer;text-decoration:none}.fs-applink:hover{text-decoration:underline}.fs-modelsel{font-size:.6em;padding:.1rem .3rem}")
           (css/raw ".lb-btn{font:inherit;padding:.25rem .7rem;border:1px solid var(--border);border-radius:4px;background:var(--panel);color:inherit;cursor:pointer}.lb-btn-primary{background:var(--pp-btn-hi);border-color:var(--pp-btn-hi);color:#fff}.lb-btn-danger{background:var(--pp-danger);border-color:var(--pp-danger);color:#fff}.lb-badge{display:inline-block;font-size:.72em;padding:.05rem .45rem;border-radius:999px;border:1px solid var(--border);color:var(--muted)}.lb-badge-ok{color:var(--pp-ok);border-color:var(--pp-ok)}.lb-badge-warn{color:var(--pp-warn);border-color:var(--pp-warn)}.lb-card{border:1px solid var(--border);border-radius:6px;padding:.75rem;background:var(--panel)}.lb-card h3{margin:0 0 .5rem;display:flex;gap:.5rem;align-items:center}.lb-card p{margin:.25rem 0 0}.lb-stage{border:1px dashed var(--border);padding:.9rem;border-radius:6px;display:flex;gap:.6rem;align-items:center;flex-wrap:wrap}.lb-form{display:flex;gap:.4rem;flex-wrap:wrap;align-items:center;margin:.6rem 0}.lb-form input{font:inherit;padding:.2rem .4rem;background:var(--panel);color:inherit;border:1px solid var(--border);border-radius:4px}.lb-form label{color:var(--muted,#9aa3b2);font-size:.85em}.lb-folds{margin-top:.6rem}.lb-folds details{margin:.3rem 0}.lb-folds summary{cursor:pointer;color:var(--muted,#9aa3b2)}.lb-folds pre{overflow:auto;font-size:.85em;background:var(--panel);padding:.5rem;border-radius:4px;border:1px solid var(--border)}.lb-vtabs{display:flex;gap:.3rem;flex-wrap:wrap;margin:.4rem 0}.lb-vtab{cursor:pointer}.lb-vtab.fs-sel{outline:1px solid var(--sel-accent)}.lb-swatch{display:inline-flex;align-items:center;gap:.4rem;padding:.15rem .55rem;border:1px solid var(--border);border-radius:4px;font-size:.85em}.lb-swatch b{width:.95em;height:.95em;display:inline-block;border-radius:3px;border:1px solid var(--border)}.lb-palette{display:flex;gap:.35rem;flex-wrap:wrap}.lb-palette .lb-swatch{border:none;padding-left:0}.lb-palette .lb-swatch b{width:1.6em;height:1.6em}.lb-palette .lb-swatch span{color:var(--muted)}")
             (css/raw ".fs-railtabs{display:flex;gap:.4rem;align-items:center;border:1px solid var(--border);background:var(--panel);padding:.45rem .5rem}.fs-start{position:relative;flex:0 0 auto}.fs-start-word{cursor:pointer;list-style:none;font-weight:700}.fs-start-word::-webkit-details-marker{display:none}.fs-start-menu{position:absolute;left:0;top:100%;z-index:30;display:flex;flex-direction:column;min-width:10rem;background:var(--panel);border:1px solid var(--border);box-shadow:0 4px 14px rgba(0,0,0,.5);padding:.25rem}.fs-start-entry{width:100%;text-align:left;padding:.55rem .6rem;white-space:nowrap}.fs-start-entry:hover{background:var(--sel-bg)}.fs-railtab.fs-btn{background:none;border:1px solid transparent;color:var(--sel-accent)}.fs-keys{margin-left:auto;color:var(--muted,#6b7080);cursor:help;font-size:1.1em;user-select:none}")
+            ;; start menu cap (card e3de4aa0): the menu must never extend
+            ;; below the screen -- cap it at about two-thirds of the viewport
+            ;; height with its own scroll (the narrow-sheet rule below
+            ;; overrides with an upward-opening 60vh menu).
+            (css/rule ".fs-start-menu" (list "max-height" "66vh" "overflow-y" "auto"))
         ;; rail-trees-v4 chrome (RECOVERED: these rules were dropped from
         ;; the css in the p2 splice -- the renderer kept emitting the
         ;; classes, so the habitat tree rendered as a bare list; the
@@ -1462,10 +1506,22 @@ filmstrip/register-keys! instead of copying this registry.")
     ()
     (html/join
       (list/map
-        (lambda (row)
-          (filmstrip/sentinel (car row) (car (cdr row)) (car (cdr (cdr row)))))
+          (lambda (row)
+            ;; card c7be7174: move rows ride the optimistic loader -- the
+            ;; focused pane transposes instantly and stays semi-faded
+            ;; until the roundtrip returns the strip.
+            (filmstrip/sentinel
+              (car row) (car (cdr row)) (car (cdr (cdr row)))
+              (if (string-starts-with? (car row) "/filmstrip/move")
+                (filmstrip/optimistic-attrs "move")
+                (list))))
         filmstrip/key-rows)))
-  "alt+arrows move focus; alt+shift+arrows move pane order. The server\nowns focus and answers with OOB class swaps (borge pane-protocol).\nSentinels render from the keyboard registry (filmstrip/key-rows):\nframework defaults, then host-appended rows.")
+  "alt+arrows move focus; alt+shift+arrows move pane order. The server
+owns focus and answers with OOB class swaps (borge pane-protocol).
+Sentinels render from the keyboard registry (filmstrip/key-rows):
+framework defaults, then host-appended rows. Move rows ride the
+optimistic loader (filmstrip/optimistic-attrs, card c7be7174):
+instant transpose, semi-fade until the roundtrip.")
 
 (define filmstrip/keys-hint
   (lambda ()
@@ -2007,6 +2063,52 @@ pane owns the fixed lift). A focused rail pane is a ring, not a window
             #t)))))
   "OOB response body for an open/leaf click: OOB class swap on the\npreviously focused pane, then the opened pane -- appended with its real\ndispatched content, or re-swapped focused (open-or-focus).")
 
+(define filmstrip/optimistic-attrs
+  (lambda
+    (verb)
+    (if
+      (string-eq verb "move")
+      (list
+        (html/attr "data-optimistic" verb)
+        (html/attr
+          "hx-on::before-request"
+          "var v=this.getAttribute('hx-vals')||'';var d=v.indexOf('left')>=0?'left':'right';var f=document.querySelector('.fs-pane.focused');if(f){var n=d=='left'?f.previousElementSibling:f.nextElementSibling;if(n&&n.classList.contains('fs-pane')){if(d=='left'){f.parentNode.insertBefore(f,n)}else{f.parentNode.insertBefore(n,f)}f.classList.add('fs-optimistic')}}")
+        (html/attr
+          "hx-on::after-request"
+          "document.querySelectorAll('.fs-optimistic').forEach(function(n){n.classList.remove('fs-optimistic')})"))
+      (list (html/attr "data-optimistic" verb))))
+  "Optimistic-loader attrs for one strip-mutation verb (card c7be7174):
+data-optimistic marks the trigger; htmx's htmx-request class + the
+filmstrip/css :has rules semi-fade the affected pane node the moment an
+ordering/opening/closing swap fires, and the server's OOB response (the
+source of truth) lands already unfaded. The keyboard MOVE sentinel sits
+outside the panes, so its hx-on transposes the focused pane instantly
+and clears the marker on settle (hx-on: the declared inline-behavior
+idiom; zero script files).")
+
+(define filmstrip/optimistic-attrs/examples
+  (lambda
+    ()
+    (lb/obj
+      (list
+        "name"
+        "filmstrip/optimistic-attrs"
+        "doc"
+        "Optimistic htmx loader attrs: instant semi-fade (and instant keyboard-order application) with unfade on the server roundtrip."
+        "file"
+        "libs/filmstrip/lib.pp"
+        "formals"
+        (json-emit (list "verb"))
+        "variants"
+        (json-emit
+          (list
+            (lb/obj (list "verb" "close"))
+            (lb/obj (list "verb" "open"))
+            (lb/obj (list "verb" "move"))))
+        "source"
+        "(filmstrip/optimistic-attrs verb) -> extra trigger attrs.\ndata-optimistic=<verb>; verb=move adds hx-on::before-request\n(transpose the focused pane now) + hx-on::after-request (drop\nfs-optimistic). The fade rides filmstrip/css + htmx's htmx-request\nclass; the server's OOB swap returns the unfaded truth.")))
+  "The filmstrip/optimistic-attrs card: this def IS the element's\ndeclaration (card c7be7174).")
+
 (define filmstrip/page
   (lambda
     ()
@@ -2072,7 +2174,7 @@ desktop 0).")
             (html/tag
               "button"
               (html/attrs
-                (list
+                  (append (list
                   (html/attr "class" "fs-btn")
                   (html/attr "title" "cycle width (third/half/full)")
                   (html/attr "hx-post" "/filmstrip/width")
@@ -2080,12 +2182,13 @@ desktop 0).")
                     "hx-vals"
                     (string-append "{\"id\":\"" id "\"}"))
                   (html/attr "hx-target" "#fs-sink")
-                  (html/attr "hx-swap" "innerHTML")))
+                      (html/attr "hx-swap" "innerHTML"))
+                    (filmstrip/optimistic-attrs "width")))
               "width")
             (html/tag
               "button"
               (html/attrs
-                (list
+                  (append (list
                   (html/attr "class" "fs-btn")
                   (html/attr "title" "close pane")
                   (html/attr "hx-post" "/filmstrip/close")
@@ -2093,7 +2196,8 @@ desktop 0).")
                     "hx-vals"
                     (string-append "{\"id\":\"" id "\"}"))
                   (html/attr "hx-target" "#fs-sink")
-                  (html/attr "hx-swap" "innerHTML")))
+                      (html/attr "hx-swap" "innerHTML"))
+                    (filmstrip/optimistic-attrs "close")))
               "close"))))))
   "Pane title bar: route label + width cycle + close, all htmx POSTs.")
 
@@ -2592,6 +2696,10 @@ DOM alive.")
               (html/text "rail")))
           (filmstrip/railtabs)
           (list (filmstrip/coltabs-html panes focus))
+            ;; the file-issue affordance (card 5877331e): one declared
+            ;; button on the rail opens the /issues register -- reporting
+            ;; an issue or UI feedback is one click from any desktop.
+            (list (lookbook/html (ui/file-issue "file an issue")))
           (list (filmstrip/keys-hint))))))
   "The rail mode controlbox (one word per tree root, per
 filmstrip.borg sidebar-main-dichotomy -- the axis toggle word was
@@ -2997,18 +3105,21 @@ retires; this framework body is the one residence).")
 
 (define filmstrip/sentinel
   (lambda
-    (url vals trigger)
-    (html/div
-      (html/attrs
-        (list
-          (html/attr "class" "fs-sentinel")
-          (html/attr "hx-post" url)
-          (html/attr "hx-vals" vals)
-          (html/attr "hx-trigger" trigger)
-          (html/attr "hx-target" "#fs-sink")
-          (html/attr "hx-swap" "innerHTML")))
+      (url vals trigger extra)
+      (html/div
+        (html/attrs
+          (append (list
+            (html/attr "class" "fs-sentinel")
+            (html/attr "hx-post" url)
+            (html/attr "hx-vals" vals)
+            (html/attr "hx-trigger" trigger)
+            (html/attr "hx-target" "#fs-sink")
+            (html/attr "hx-swap" "innerHTML") extra)))
       ""))
-  "Invisible trigger element: an htmx key filter on the body that POSTs a\nshell event (vals carries the dir param). Zero javascript files (D3) --\nthe filter expression is htmx.")
+  "Invisible trigger element: an htmx key filter on the body that POSTs a
+shell event (vals carries the dir param). Zero javascript files (D3) --
+the filter expression is htmx. extra (card c7be7174) rides the
+optimistic-loader attrs (filmstrip/optimistic-attrs) onto the trigger.")
 
 (define filmstrip/shelf-oob
   (lambda () "")
@@ -4067,6 +4178,40 @@ data: the hx-* verbs ride attrs verbatim through the projection.")
         "hx-swap" "innerHTML")
       (list (ui/text label))))
   "One start-menu entry: opens `route` as a pane via /filmstrip/open.")
+
+(define ui/file-issue
+  (lambda (label)
+    (ui/elm
+      "button"
+      (list
+        "id" "fs-file-issue"
+        "class" "fs-btn fs-applink"
+        "title" "report an issue or UI feedback (opens /issues)"
+        "hx-post" "/filmstrip/open"
+        "hx-vals" "{\"route\":\"/issues\"}"
+        "hx-target" "#fs-sink"
+        "hx-swap" "innerHTML")
+      (list (ui/text label))))
+  "One rail file-issue button: opens the issues register (/issues) as a
+pane via /filmstrip/open (open-or-focus, OOB into #fs-sink). The issues
+face owns the creator form; this element only transports the route --
+declared behavior data, never its own markup.")
+
+(define ui/file-issue/examples
+  (lambda ()
+    (lb/obj
+      (list
+        "name" "ui/file-issue"
+        "doc" "One rail file-issue button: opens the /issues register as a pane via /filmstrip/open; the issues face owns the creator form."
+        "file" "libs/filmstrip/lib.pp"
+        "formals" (json-emit (list "label"))
+        "variants" (json-emit
+                     (list
+                       (lb/obj (list "label" "file an issue"))
+                       (lb/obj (list "label" "report a bug"))))
+        "source"
+        "(ui/file-issue label) ->\n  (ui/elm \"button\"\n    (list \"id\" \"fs-file-issue\"\n          \"class\" \"fs-btn fs-applink\"\n          \"title\" \"report an issue or UI feedback (opens /issues)\"\n          \"hx-post\" \"/filmstrip/open\"\n          \"hx-vals\" \"{\\\"route\\\":\\\"/issues\\\"}\"\n          \"hx-target\" \"#fs-sink\"\n          \"hx-swap\" \"innerHTML\")\n    (list (ui/text label)))")))
+  "The ui/file-issue card: this def IS the element's declaration.")
 
 ;; ---- route bindings (vault, additive at load/boot-seed) ----
 ;; filmstrip.borg filmstrip-shell: the shell is the DEFAULT habitat

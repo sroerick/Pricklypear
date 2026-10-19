@@ -598,7 +598,10 @@ let run_step_expr (cfg : t) (run_id : string) ~(state : string)
 
 (* ONE scan of the shared run space (workstreams/run-all: the proven
    all-shared depth, filtered to the run type), projected to the fields the
-   supervisor decides from. *)
+   supervisor decides from. ACTIVE ROWS ONLY (queued/claimed/running/parked):
+   the run table grows without bound and the full projection over ~620 rows
+   blew the eval budget (10-18 tick scan budget-exceeded). Terminal counts
+   for the standup summary come from runs_tally_expr instead. *)
 let runs_scan_expr () : string =
   let fields =
     [
@@ -620,18 +623,31 @@ let runs_scan_expr () : string =
   let gets =
     List.map
       (fun k ->
-        Printf.sprintf "%s (as-str (dict-get (cdr p) %s))" (q k) (q k))
+        Printf.sprintf "%s (as-str (dict-get b %s))" (q k) (q k))
       fields
   in
   Printf.sprintf
-    "(json-emit (list/map (lambda (p) (dict-set* \"{}\" (list %s %s))) (workstreams/run-all)))"
-    "\"id\" (as-str (car p))" (String.concat " " gets)
+      "(begin (let ((cid (lambda (p) (let ((s (as-str p))) (let ((n (string-length s))) (if (< n 33) (todo/tree/path-segment s) (if (string-eq (substring s (- n 33) 1) \".\") (todo/tree/redash (substring s (- n 32) 32)) (if (and (< 36 n) (string-eq (substring s (- n 37) 1) \".\")) (substring s (- n 36) 36)(todo/tree/path-segment s))))))))) (json-emit (list/map (lambda (nj) (let ((b (dict-get nj \"body\"))) (dict-set* \"{}\" (list \"id\" (cid (dict-get nj \"path\")) %s)))) (list/filter (lambda (nj) (let ((st (as-str (dict-get (dict-get nj \"body\") \"state\")))) (and (string-eq (as-str (dict-get nj \"type\")) \"run\") (or (string-eq st \"queued\") (string-eq st \"claimed\") (string-eq st \"running\") (string-eq st \"parked\"))))) (tree/list \"data.s\" 3 2000))))))"
+      (String.concat " " gets)
 
 let queue_eligible_expr (cfg : t) : string =
+  (* The PP-side prio-sorted moved OUT of this expression (10-18): the
+     insertion sort's per-comparison rank+position recomputation blew the
+     eval budget at ~60 eligible rows (the todo-lib decorate-once sort,
+     eadf3e0, is committed but not yet seeded onto system/main). The
+     canonical work order (priority rank, then position, then id) is
+     mirrored OCaml-side in the tick - POLICY-6: the same key, the
+     supervisor never invents an order. *)
   Printf.sprintf
-      {|(begin (let ((states (json-parse %s)) (excl (json-parse %s)) (want-list %s)) (let ((in? (lambda (x xs) (list/foldl (lambda (a c) (if (string-eq (as-str c) (as-str x)) #t a)) #f xs)))) (json-emit (list/map (lambda (row) (let ((b (cdr row))) (dict-set* "{}" (list "id" (as-str (car row)) "state" (as-str (todo/item/state b)) "title" (as-str (todo/item/title b)) "list_id" (as-str (todo/item/list-id b)) "kind" (as-str (dict-get b "kind")))))) (todo/item/prio-sorted (list/filter (lambda (row) (let ((b (cdr row))) (and (string-eq (todo/item/assignee b) "") (or (string-eq want-list "") (string-eq (todo/item/list-id b) want-list)) (in? (todo/item/state b) states) (or (null? excl) (not (in? (as-str (dict-get b "kind")) excl)))))) (todo/item/active (todo/item/all)))))))))|}
+      {|(begin (let ((states (json-parse %s)) (excl (json-parse %s)) (want-list %s)) (let ((in? (lambda (x xs) (list/foldl (lambda (a c) (if (string-eq (as-str c) (as-str x)) #t a)) #f xs)))) (json-emit (list/map (lambda (row) (let ((b (cdr row))) (dict-set* "{}" (list "id" (as-str (car row)) "state" (as-str (todo/item/state b)) "title" (as-str (todo/item/title b)) "list_id" (as-str (todo/item/list-id b)) "kind" (as-str (dict-get b "kind")) "priority" (as-str (dict-get b "priority")) "position" (as-str (dict-get b "position")))))) (list/filter (lambda (row) (let ((b (cdr row))) (and (string-eq (todo/item/assignee b) "") (or (string-eq want-list "") (string-eq (todo/item/list-id b) want-list)) (in? (todo/item/state b) states) (or (null? excl) (not (in? (as-str (dict-get b "kind")) excl)))))) (todo/item/active (todo/item/all))))))))|}
     (q (csv_to_json cfg.states)) (q (csv_to_json cfg.exclude_kinds))
     (q cfg.list_id)
+
+(* Cheap per-state count over ALL run rows: one dict-get + one dict-set*
+   per row. The tick's scan rows are active-only now, so terminal counts
+   for the standup summary come from here. *)
+let runs_tally_expr () : string =
+  {|(begin (json-emit (list/map (lambda (nj) (as-str (dict-get (dict-get nj "body") "state"))) (list/filter (lambda (nj) (string-eq (as-str (dict-get nj "type")) "run")) (tree/list "data.s" 3 2000)))))|}
 
 (* ---- card writes (pp-flow's batched-eval discipline, ONE round trip) ---- *)
 
@@ -763,6 +779,7 @@ type st = {
   ctxs : (string, ctx) Hashtbl.t;         (* run_id -> dispatch context *)
   retry_at : (string, float) Hashtbl.t;   (* run_id -> earliest dispatch *)
   taken : (string, unit) Hashtbl.t;       (* rows adopted this boot *)
+  ghosts : (string, unit) Hashtbl.t;      (* cards whose run died card-missing; boot-local re-queue guard *)
   mutable last_summary : string;
 }
 
@@ -773,6 +790,19 @@ let eval_ok (st : st) (expr : string) : Yojson.Safe.t option =
       log "eval failed: %s" e;
       None
 
+(* Ghost-card loop guard (card 1f23880a, 10-18): a card whose run terminates
+   card-missing stays eligible EVERY tick — its assignee is empty and nothing
+   on the card marks it out — so each tick re-queued a fresh run row and
+   burned the claim CAS + the claim-time eval (the 399-run ghost-card loop,
+   duplicate rows per card, claim-facts burn, tick degradation). Boot-local
+   suppression: once a card's run dies card-missing, stop re-queueing it
+   until restart, and say so ONCE. *)
+let mark_ghost (st : st) (card : string) : unit =
+  if card <> "" && not (Hashtbl.mem st.ghosts card) then begin
+    Hashtbl.replace st.ghosts card ();
+    log "ghost card %s: run died card-missing; skipping re-queue until restart"
+      card
+  end
 (* USAGE IS A SELF-REPORT (ratified): the gate is ADVISORY until
    provider-structured usage lands. The row's own caps win when set; 0 =
    unlimited. *)
@@ -793,8 +823,11 @@ let write_back (st : st) ~(card : string) ~(claimed_state : string)
   | None -> Error "write-back-probe"
   | Some j -> (
       let probe = jstr j in
-      if probe = "missing" then Error "card-missing"
-      else
+        if probe = "missing" then begin
+          mark_ghost st card;
+          Error "card-missing"
+        end
+        else
         let cur =
           match String.index_opt probe '|' with
           | Some i -> String.sub probe (i + 1) (String.length probe - i - 1)
@@ -1241,6 +1274,7 @@ let dispatch_queued (st : st) (r : row) : unit =
                     (run_finish_expr run_id "failed" "claim-facts"
                        "claim-time eval failed"))
       | Some Facts_missing ->
+          mark_ghost st r.r_card;
           ignore (eval_ok st
                     (run_finish_expr run_id "canceled" "card-missing"
                        "card vanished before dispatch"))
@@ -1329,7 +1363,8 @@ let take_over (st : st) (r : row) : unit =
                 { x_run = r.r_id; x_card = r.r_card; x_claimed_state = cs;
                   x_cols = cols; x_brief = brief_src; x_dir = dir;
                   x_attempts = 1; x_wall_exceeded = false }
-          | _ -> None)
+          | Some Facts_missing -> mark_ghost st r.r_card; None
+          | None -> None)
     in
     match ctx with
     | Some ctx ->
@@ -1388,12 +1423,35 @@ let tick (st : st) : unit =
                if not (terminal_run_state r.r_state) then
                  Hashtbl.replace open_cards r.r_card ())
              rows;
-           List.iter
-             (fun c ->
-               let id = jstr (jmember "id" c) in
-               if id <> "" && not (Hashtbl.mem open_cards id) then
-                 create_run st c)
-             cards
+           (* POLICY-6: create runs in the canonical work order - priority
+              rank (P0..P3, else 4), then position, then id - mirroring
+              todo/item/prio-le? exactly. The PP-side prio-sorted moved out
+              of the scan expression for eval budget (part 2d not yet
+              seeded); the supervisor mirrors, never invents, the order. *)
+           let prio_rank (s : string) : int =
+             match s with "P0" -> 0 | "P1" -> 1 | "P2" -> 2 | "P3" -> 3 | _ -> 4
+           in
+           let card_key (c : Yojson.Safe.t) : int * int * string =
+             let pr = jstr (jmember "priority" c) in
+             let pos =
+               match int_of_string_opt (jstr (jmember "position" c)) with
+               | Some i -> i
+               | None -> 0
+             in
+             (prio_rank pr, pos, jstr (jmember "id" c))
+           in
+             List.iter
+               (fun c ->
+                 let id = jstr (jmember "id" c) in
+                 if id <> "" && not (Hashtbl.mem open_cards id)
+                    && not (Hashtbl.mem st.ghosts id) then begin
+                   create_run st c;
+                   (* the eligible list can carry the same card twice
+                      (todo/item/active duplicates, 10-18) - register the
+                      card as open so a second copy does not queue again *)
+                   Hashtbl.replace open_cards id ()
+                 end)
+               (List.sort (fun a b -> compare (card_key a) (card_key b)) cards)
        | Ok _ -> ());
       (* 4. DISPATCH: due retries first, then queued rows by creation order
             (todo/item/queue owns the ORDER; creation order mirrors it —
@@ -1437,8 +1495,29 @@ let tick (st : st) : unit =
         in
         go cap queued
       end;
-      (* 6. PUBLISH: counts for the standup surface (stderr in phase 2). *)
-      let count s = List.length (List.filter (fun r -> r.r_state = s) rows) in
+        (* 6. PUBLISH: counts for the standup surface (stderr in phase 2).
+              Active counts from the scan rows (active-only now); terminal
+              counts OCaml-side from the cheap state-list eval over ALL run
+              rows (PP-side dict arithmetic broke on missing keys). *)
+        let active_count s =
+          List.length (List.filter (fun r -> r.r_state = s) rows)
+        in
+        let tally =
+          match eval_json st.sess (runs_tally_expr ()) with
+          | Ok j -> (
+              match j with
+              | `List items -> Some (List.map jstr items)
+              | _ -> None)
+          | Error _ -> None
+        in
+        let count s =
+          match List.find_opt (fun r -> r.r_state = s) rows with
+          | Some _ -> active_count s
+          | None -> (
+              match tally with
+              | Some states -> List.length (List.filter (fun t -> t = s) states)
+              | None -> 0)
+        in
       let summary =
         Printf.sprintf
           "runs: queued=%d claimed=%d running=%d succeeded=%d failed=%d timed_out=%d canceled=%d dead=%d parked=%d live-sidecars=%d"
@@ -1491,7 +1570,7 @@ let run ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t) : unit =
       let st =
         { cfg; sess; sw; live = Hashtbl.create 4; ctxs = Hashtbl.create 8;
           retry_at = Hashtbl.create 4; taken = Hashtbl.create 4;
-          last_summary = "" }
+          ghosts = Hashtbl.create 8; last_summary = "" }
       in
       log
         "starting: tick=%ds concurrency=%d states=%s exclude=%s list=%s runner=%s script=%s cwd=%s identity=%s instance=%s"

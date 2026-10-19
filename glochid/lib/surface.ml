@@ -178,6 +178,9 @@ let surface_source = {pp|
     ".fs-start-word{cursor:pointer;list-style:none;font-weight:700}"
     ".fs-start-word::-webkit-details-marker{display:none}"
     ".fs-start-menu{position:absolute;left:0;top:100%;z-index:30;display:flex;flex-direction:column;min-width:10rem;background:var(--panel);border:1px solid var(--border);box-shadow:0 4px 14px rgba(0,0,0,.5);padding:.25rem}"
+    ;; card e3de4aa0: the menu must never extend below the screen -- cap it
+    ;; at about two-thirds of the viewport height with its own scroll.
+    ".fs-start-menu{max-height:66vh;overflow-y:auto}"
     ".fs-start-entry{width:100%;text-align:left;padding:.3rem .5rem;white-space:nowrap}"
     ".fs-start-entry:hover{background:var(--sel-bg)}"
     ".fs-railtab.fs-btn{background:none;border:1px solid transparent;color:var(--sel-accent)}"
@@ -1035,7 +1038,7 @@ formals, tokens resolved through glochid/tg.")
       (list
         "ui/railtab" "ui/start-entry" "ui/bubble" "ui/tool-line"
         "ui/turn-open" "ui/think-open" "ui/tool-open" "ui/turn-error"
-        "ui/swatch" "ui/palette")))
+          "ui/swatch" "ui/palette" "ui/file-issue")))
   "Glochid's lookbook inventory: the lib seed elements + glochid's own
 shell chrome. Every entry answers a <name>/examples card; the ui rail
 root + /lookbook face read this one def.")
