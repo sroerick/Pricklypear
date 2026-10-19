@@ -124,21 +124,21 @@
                 (y (- h pad-b bh))
                 (label (car p)))
                (string-append
-                 "<rect x=\"" (as-str x) "\" y=\"" (as-str y)
-                 "\" width=\"" (as-str bw) "\" height=\"" (as-str bh)
-                 "\" fill=\"#7aa2f7\"><title>" label ": " (as-str v) " " unit "</title></rect>"
+                 "<rect x='" (as-str x) "' y='" (as-str y)
+                 "' width='" (as-str bw) "' height='" (as-str bh)
+                 "' fill='#7aa2f7'><title>" label ": " (as-str v) " " unit "</title></rect>"
                  (if (= (mod i 5) 0)
-                     (string-append "<text x=\"" (as-str x) "\" y=\"" (as-str (- h 10))
-                       "\" font-size=\"9\" fill=\"#6b7080\" text-anchor=\"middle\">" label "</text>")
+                     (string-append "<text x='" (as-str x) "' y='" (as-str (- h 10))
+                       "' font-size='9' fill='#6b7080' text-anchor='middle'>" label "</text>")
                      ""))))
            (quake/range 0 (- n 1)))))
       (string-append
-        "<svg viewBox=\"0 0 " (as-str w) " " (as-str h)
-        "\" width=\"100%\" style=\"max-width:" (as-str w) "px\" role=\"img\">"
-        "<text x=\"" (as-str pad-l) "\" y=\"16\" font-size=\"12\" fill=\"#d8dee9\">" title "</text>"
+        "<svg viewBox='0 0 " (as-str w) " " (as-str h)
+        "' width='100%' style='max-width:" (as-str w) "px' role='img'>"
+        "<text x='" (as-str pad-l) "' y='16' font-size='12' fill='#d8dee9'>" title "</text>"
         (html/join bars)
-        "<line x1=\"" (as-str pad-l) "\" y1=\"" (as-str (- h pad-b))
-        "\" x2=\"" (as-str w) "\" y2=\"" (as-str (- h pad-b)) "\" stroke=\"#2a2e3a\"/></svg>"))))
+        "<line x1='" (as-str pad-l) "' y1='" (as-str (- h pad-b))
+        "' x2='" (as-str w) "' y2='" (as-str (- h pad-b)) "' stroke='#2a2e3a'/></svg>"))))
   "Server-rendered SVG bar chart from (label . count) pairs. No JS.)
 
 (define quake/page
