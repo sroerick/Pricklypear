@@ -99,5 +99,5 @@
           (html/attr "class" "muted")
           "497 nuclear explosions M4.5+ sit in the catalog as a distinct type - Kazakhstan, Nevada, Russia, French Polynesia; tail = 2017 DPRK.")))))
 
-(route "/quake" "quake/page")
+(route "/quake" "quake/page" "public")
 )
