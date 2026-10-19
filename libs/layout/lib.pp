@@ -455,30 +455,34 @@
             "0 auto 1rem"
             "image-rendering"
             "auto"))
-        (css/rule
-          ".layout-hero-title"
-          (list
-            "font-size"
-            "2rem"
-            "font-weight"
-            "700"
-            "margin"
-            "0 0 .5rem"
-            "letter-spacing"
-            "-0.02em"))
-        (css/rule
-          ".layout-hero-tagline"
-          (list
-            "font-size"
-            "1.1rem"
-            "max-width"
-            "36rem"
-            "margin"
-            "0 auto 1.25rem"
-            "line-height"
-            "1.5"
-            "color"
-            "#333"))
+          (css/rule
+            ".layout-hero-title"
+            (list
+              "font-size"
+              "2rem"
+              "font-weight"
+              "700"
+              "margin"
+              "0 0 .5rem"
+              "letter-spacing"
+              "-0.02em"
+              "text-wrap"
+              "balance"))
+          (css/rule
+            ".layout-hero-tagline"
+            (list
+              "font-size"
+              "1.1rem"
+              "max-width"
+              "36rem"
+              "margin"
+              "0 auto 1.25rem"
+              "line-height"
+              "1.5"
+              "text-wrap"
+              "pretty"
+              "color"
+              "#333"))
         (css/rule
           ".layout-hero-actions"
           (list
@@ -540,37 +544,47 @@
             ".85rem"
             "text-align"
             "left"))
-        (css/rule
-          ".layout-card-title"
-          (list "margin" "0 0 .4rem" "font-size" "1.05rem"))
-        (css/rule
-          ".layout-card-body"
-          (list
-            "font-size"
-            ".95rem"
-            "line-height"
-            "1.45"
-            "color"
-            "#222"))
+          (css/rule
+            ".layout-card-title"
+            (list "margin" "0 0 .4rem" "font-size" "1.05rem" "text-wrap" "balance"))
+          (css/rule
+            ".layout-card-body"
+            (list
+              "font-size"
+              ".95rem"
+              "line-height"
+              "1.45"
+              "text-wrap"
+              "pretty"
+              "color"
+              "#222"))
         (css/rule
           ".layout-section"
           (list "margin" "1.5rem 0" "padding" "0 .25rem"))
-        (css/rule
-          ".layout-section-title"
-          (list
-            "font-size"
-            "1.25rem"
-            "border-bottom"
-            "1px solid #808080"
-            "padding-bottom"
-            ".25rem"
-            "margin"
-            "0 0 .75rem"))
-        (css/rule
-          ".layout-section-body"
-          (list "line-height" "1.55" "max-width" "40rem"))
-        (css/rule
-          ".layout-page"
+          (css/rule
+            ".layout-section-title"
+            (list
+              "font-size"
+              "1.25rem"
+              "border-bottom"
+              "1px solid #808080"
+              "padding-bottom"
+              ".25rem"
+              "margin"
+              "0 0 .75rem"
+              "text-wrap"
+              "balance"))
+          (css/rule
+            ".layout-section-body"
+            (list "line-height" "1.55" "max-width" "40rem" "text-wrap" "pretty"))
+          (css/rule
+            "pre"
+            (list "overflow-x" "auto" "max-width" "100%"))
+          (css/rule
+            ".ast-table"
+            (list "display" "block" "overflow-x" "auto" "max-width" "100%"))
+          (css/rule
+              ".layout-page"
           (list
             "max-width"
             "52rem"
