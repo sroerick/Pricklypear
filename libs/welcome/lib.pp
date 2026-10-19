@@ -52,7 +52,9 @@
             (list
               (html/a "/roadmap" (html/text "roadmap"))
               (html/text " · ")
-              (html/a "/welcome" (html/text "welcome")))))))));; package welcome -- exported from live branch system/main
+              (html/a "/welcome" (html/text "welcome"))
+              (html/text " · ")
+              (layout/mailto "roerick@wyo.town"))))))));; package welcome -- exported from live branch system/main
 
 (define welcome/blank?
   (lambda (s) "True if trimmed s is empty." (string-eq (string-trim (as-str s)) "")))
@@ -84,7 +86,11 @@
                 "If the PDF is missing on this host, the deploy step that runs scripts/public_artifacts.sh has not installed it yet — the code browser and tarball still cover the tree."))))
         (html/div
           (html/attr "class" "layout-foot")
-          (html/a "/welcome" (html/text "← welcome")))))))
+          (html/join
+            (list
+              (html/a "/welcome" (html/text "← welcome"))
+              (html/text " · ")
+              (layout/mailto "roerick@wyo.town"))))))))
 
 (define welcome/guestbook
   (lambda
@@ -201,7 +207,11 @@
         (layout/section "Entries" (welcome/guestbook-entries))
         (html/div
           (html/attr "class" "layout-foot")
-          (html/a "/welcome" (html/text "welcome")))))))
+          (html/join
+            (list
+              (html/a "/welcome" (html/text "welcome"))
+              (html/text " · ")
+              (layout/mailto "roerick@wyo.town"))))))))
 
 (define welcome/guestbook-record
   (lambda
@@ -458,7 +468,7 @@
               (html/text " · ")
               (html/a "/about" (html/text "concepts (after login)"))
               (html/text " · ")
-              (html/a "mailto:roerick@wyo.town" (html/text "roerick@wyo.town")))))))))
+              (layout/mailto "roerick@wyo.town"))))))))
 
 (define welcome/roadmap
   (lambda
@@ -515,4 +525,6 @@
             (list
               (html/a "/background" (html/text "background"))
               (html/text " · ")
-              (html/a "/welcome" (html/text "welcome")))))))))
+              (html/a "/welcome" (html/text "welcome"))
+              (html/text " · ")
+              (layout/mailto "roerick@wyo.town"))))))))
