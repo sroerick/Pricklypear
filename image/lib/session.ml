@@ -1086,34 +1086,47 @@ and eval_form (t : t) (expr : Pricklypear_lisp.Ast.expr)
      pure waste. This is what made (load-library "todo") re-evaluate +
      re-persist ~1000 defines per call and blow page/eval budgets
      (budget-exceeded loops). Changed/new defines still eval + persist
-     normally. *)
-  let load_skips (e : Pricklypear_lisp.Ast.expr) : bool =
-    match t.eval_state.load_skip_names with
-    | None -> false
-    | Some tbl ->
-      (match Pricklypear_lisp.Eval.parse_top_define e with
-       | Some { name; body; doc } ->
-           (match Hashtbl.find_opt tbl name with
-            | Some stored ->
-                stored =
-                  (Pricklypear_lisp.Reader.pp_expr body ^ "\x00"
-                   ^ (match doc with Some d -> d | None -> ""))
-            | None -> false)
-       | None ->
-           (match e with
-            | Pricklypear_lisp.Ast.App
-                (Pricklypear_lisp.Ast.Var "defmacro",
-                 [ Pricklypear_lisp.Ast.Var name; params_expr; body_expr ]) ->
-                let stored_macro =
-                  Pricklypear_lisp.Reader.pp_expr
-                    (Pricklypear_lisp.Ast.App
-                       (Pricklypear_lisp.Ast.Var "__macro__",
-                        [ params_expr; body_expr ]))
-                in
-                (match Hashtbl.find_opt tbl name with
-                 | Some stored -> stored = stored_macro ^ "\x00"
-                 | None -> false)
-            | _ -> false))
+      normally. *)
+    (* image.load-library-skip self-heal (2026-10-18): skip only when the
+       env ACTUALLY binds the name. The map is built from chain-visible
+       rows, which load_defs binds — but a parked session's env can lose
+       a binding silently (incremental rehydrate applies only journal
+       deltas, and "nothing for this chain: keep the env" skips the full
+       rebuild). Then every load-library skipped the define forever and
+       the session stayed poisoned (prod 10-18: gregor sessions and the
+       swarm supervisor died on 'unbound: todo/tree/redash' every tick
+       while the store was fine). The check is O(1); a miss costs one
+       normal eval + persist, which re-binds and heals. *)
+    let load_skips (e : Pricklypear_lisp.Ast.expr) : bool =
+      match t.eval_state.load_skip_names with
+      | None -> false
+      | Some tbl ->
+        let env_binds name = Hashtbl.mem t.eval_state.env.bindings name in
+        (match Pricklypear_lisp.Eval.parse_top_define e with
+         | Some { name; body; doc } ->
+             (match Hashtbl.find_opt tbl name with
+              | Some stored ->
+                  env_binds name
+                  && stored =
+                       (Pricklypear_lisp.Reader.pp_expr body ^ "\x00"
+                        ^ (match doc with Some d -> d | None -> ""))
+              | None -> false)
+         | None ->
+             (match e with
+              | Pricklypear_lisp.Ast.App
+                  (Pricklypear_lisp.Ast.Var "defmacro",
+                   [ Pricklypear_lisp.Ast.Var name; params_expr; body_expr ]) ->
+                  let stored_macro =
+                    Pricklypear_lisp.Reader.pp_expr
+                      (Pricklypear_lisp.Ast.App
+                         (Pricklypear_lisp.Ast.Var "__macro__",
+                          [ params_expr; body_expr ]))
+                  in
+                  (match Hashtbl.find_opt tbl name with
+                   | Some stored ->
+                       env_binds name && stored = stored_macro ^ "\x00"
+                   | None -> false)
+              | _ -> false))
   in
   let load_skip_hit = load_skips expr in
   if seed_skip || load_skip_hit then Pricklypear_lisp.Ast.VNil
@@ -2348,24 +2361,36 @@ let call_handler (t : t) ?request (handler_name : string)
                 the flag stuck true for the session (fail-closed, but it
                 would deny meta-eval prims for the identity's session
                 lifetime). *)
-             Fun.protect
-               (fun () ->
-                  match request with
-                  | None -> run ()
-                  | Some req ->
-                      t.current_request <- Some req;
-                      Fun.protect
-                        ~finally:(fun () -> t.current_request <- None)
-                        run)
-               ~finally:(fun () -> t.public_dispatch <- prev))
-      end else
-        (match request with
-         | None -> run ()
-         | Some req ->
-             t.current_request <- Some req;
-             Fun.protect
-               ~finally:(fun () -> t.current_request <- None)
-               run)
+               Fun.protect
+                 (fun () ->
+                    match request with
+                    | None -> run ()
+                    | Some req ->
+                        (* card c58830ad: RESTORE the previous binding, never
+                           clear to None. A nested dispatch (route/dispatch ->
+                           call_handler) used to clobber the OUTER handler's
+                           request binding; any request-* prim after the nested
+                           call then raised "no active request" (notes panel
+                           click -> filmstrip open/leaf -> in-process pane
+                           dispatch -> outer handler requestless). *)
+                        let prev_req = t.current_request in
+                        t.current_request <- Some req;
+                        Fun.protect
+                          ~finally:(fun () -> t.current_request <- prev_req)
+                          run)
+                 ~finally:(fun () -> t.public_dispatch <- prev))
+        end else
+          (match request with
+           | None -> run ()
+           | Some req ->
+               (* card c58830ad: restore, don't clear (see the public arm
+                  above) — a nested route/dispatch must not leave the outer
+                  handler requestless. *)
+               let prev_req = t.current_request in
+               t.current_request <- Some req;
+               Fun.protect
+                 ~finally:(fun () -> t.current_request <- prev_req)
+                 run)
 
 (* Late-bind the route/dispatch thunk now that call_handler exists. *)
 let () =
@@ -2441,10 +2466,14 @@ let () =
         in
         let budget = Pricklypear_lisp.Eval.make_budget () in
         let t0 = Unix.gettimeofday () in
-        let outcome =
-          t.current_request <- Some req;
-          Fun.protect
-            ~finally:(fun () -> t.current_request <- None)
+          let outcome =
+            (* card c58830ad: restore, don't clear — same discipline as
+               call_handler; the probe may now run nested inside a real
+               request without stealing its binding. *)
+            let prev_req = t.current_request in
+            t.current_request <- Some req;
+            Fun.protect
+              ~finally:(fun () -> t.current_request <- prev_req)
             (fun () ->
               try
                 let _v =

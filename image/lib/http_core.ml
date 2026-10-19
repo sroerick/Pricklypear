@@ -146,8 +146,10 @@ let emergency_css : string =
    nav.emergency-nav{width:100%;margin-top:.35rem}\n\
    .emergency-home{border:2px solid #8b0000;background:#fff3cd;padding:.75rem}\n\
    a{color:#000080}\n\
-   header{border-bottom:2px solid #000;padding:.5rem;background:#fff}\n\
+   header{border-bottom:2px solid #000;padding:.5rem;background:#fff;\n\
+   display:flex;align-items:center;gap:.5rem}\n\
    .brand-logo{height:1.6rem;display:block}\n\
+   .meta{margin-left:auto;text-align:right}\n\
    main{padding:.75rem}\n\
    .card{border:2px solid #000;background:#fff;padding:.75rem;margin:.5rem 0}\n\
    .err{color:#8b0000;font-weight:700}\n\
@@ -886,7 +888,7 @@ let chrome ?nav_html ~(session : Session.t)
   in
   (* Metadata reads the SNAPSHOT manifest when callers pass one
      (image.per-request-context), so a concurrent attach_anonymous
-     cannot paint "user=anonymous" on an authed page's header. Callers
+     cannot paint the anonymous username on an authed page's header. Callers
      outside the HTTP gate fall back to the live session manifest. *)
   HTML.div [] [
     HTML.header [] (
@@ -894,7 +896,7 @@ let chrome ?nav_html ~(session : Session.t)
           HTML.img [ HTML.class_ "brand-logo"; HTML.src "/assets/pplogo.png";
                      HTML.alt "Pricklypear" ] ];
         HTML.span [HTML.class_ "meta"] [
-          txt "user=%s  branch=%s  up=%ds"
+          txt "%s  %s  %ds"
             manifest.username
             manifest.branch_name
             (Session.uptime_seconds session);

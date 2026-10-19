@@ -200,8 +200,8 @@
           target
           "hx-swap"
           "innerHTML"
-          "hx-on::after-request"
-          "if(event.detail.successful){this.reset()}"))
+            "hx-on::after-request"
+            "if(event.detail.successful){this.reset();var l=document.querySelector(this.getAttribute('hx-target'));if(l){delete l.dataset.read;l.scrollTop=l.scrollHeight}}"))
       (list
         (ui/elm
           "textarea"
@@ -221,7 +221,7 @@
             "style"
             (string-append
               (pads/size-css (quote (grow 1)))
-              ";min-height:2.5rem"))
+              ";min-height:2.5rem;min-width:0"))
           (list))
         (ui/elm
           "button"
@@ -237,7 +237,7 @@
         "name"
         "ui/chat-composer"
         "doc"
-        "The input row INSIDE the chat shell: a growing text input + a fitting send button, posting action and swapping target."
+          "The input row INSIDE the chat shell: a growing, shrinkable text input (flex:1 + min-width:0) + a fitting send button, posting action and swapping target."
         "file"
         "libs/chat/lib.pp"
         "formals"
@@ -247,9 +247,9 @@
           (list
             (lb/obj
               (list "action" "/chat" "target" "#chat-main-log"))))
-        "source"
-        "(ui/chat-composer action target) ->\n  (ui/elm \"form\"\n    (chat/box 'row '(fit) \"chat-composer\" \"\"\n      (list \"method\" \"post\" \"hx-post\" action \"hx-target\" target ...))\n    (list (ui/elm \"textarea\" (list \"name\" \"body\" \"style\" \"flex:1;min-height:2.5rem\" ...) (list))\n          (ui/elm \"button\" (list \"type\" \"submit\") (list (ui/text \"Send\")))))")))
-  "The ui/chat-composer card.")
+          "source"
+          "(ui/chat-composer action target) -> a chat-composer form row: hx-post action, hx-target target, hx-swap innerHTML; hx-on::after-request resets the input and snaps the target log to the latest on a successful send; the textarea is flex:1 + min-width:0 so the row shrinks cleanly at small widths")))
+    "The ui/chat-composer card.")
 
 (define ui/chat-log
   (lambda
@@ -263,6 +263,13 @@
           "chat-log"
           ";min-height:0;overflow-y:auto"
           (list "id" id))
+        (list
+          "hx-on::after-swap"
+          "if(!this.dataset.read||this.scrollHeight-this.scrollTop-this.clientHeight<160)this.scrollTop=this.scrollHeight"
+          "hx-on:wheel"
+          "this.dataset.read=1"
+          "hx-on:touchmove"
+          "this.dataset.read=1")
         (if
           (string-eq poll "")
           (list)
@@ -270,11 +277,11 @@
             "hx-get"
             poll
             "hx-trigger"
-            "every 4s"
+            "load, every 4s"
             "hx-swap"
             "innerHTML")))
       (chat/kid-list body)))
-  "One declared transcript region.")
+  "One declared transcript region. Autoscroll: every swap snaps to the\n     latest message unless the reader scrolled up (wheel/touchmove sets the\n     read flag); the poll also fires on load, so the initial view lands at\n     the bottom.")
 
 (define ui/chat-log/examples
   (lambda
@@ -301,8 +308,8 @@
                 "body"
                 "Say hi to the box."))))
         "source"
-        "(ui/chat-log id poll body) ->\n  (ui/elm \"div\"\n    (chat/box 'column '(grow 1) \"chat-log\" \";min-height:0;overflow-y:auto\"\n      (list \"id\" id \"hx-get\" poll \"hx-trigger\" \"every 4s\" \"hx-swap\" \"innerHTML\"))\n    (chat/kid-list body))")))
-  "The ui/chat-log card.")
+          "(ui/chat-log id poll body) -> a chat-log div with autoscroll hooks: hx-on::after-swap snaps to the latest unless the reader scrolled up (wheel/touchmove set a read flag); poll trigger is load, every 4s")))
+    "The ui/chat-log card.")
 
 (define ui/chatpage
   (lambda
@@ -1138,7 +1145,13 @@
             "border-bottom"
             "2px solid #000"
             "padding"
-            ".5rem .75rem"))
+            ".5rem .75rem"
+            "display"
+            "flex"
+            "align-items"
+            "center"
+            "gap"
+            ".5rem"))
         (css/rule
           "header .brand"
           (list
@@ -1164,16 +1177,16 @@
         (css/rule
           "header .meta"
           (list
-            "display"
-            "block"
+            "margin"
+            "0 0 0 auto"
+            "text-align"
+            "right"
             "font-family"
             "var(--font-mono)"
             "font-size"
             ".8rem"
             "color"
-            "var(--muted)"
-            "margin"
-            ".25rem 0 .5rem")))))
+            "var(--muted)")))))
   "Render the theme-header base stylesheet rules.")
 
 (define ui/theme-menu

@@ -196,7 +196,16 @@ let is_unique_violation (exn : exn) : bool =
   | Pgx.PostgreSQL_Error (_, fields) ->
       String.equal fields.Pgx.Error_response.code "23505"
   | _ -> false
-
+(** invalid_text_representation (SQLSTATE 22P02): the client-fault class —
+    a handler passed a non-uuid / non-integer id into a ::uuid or int cast
+    (the "[ops] handler ... 22P02 invalid input syntax" 500 class, card
+    fb492910). The HTTP boundary converts this to a 400 Bad Request instead
+    of a 500 + ops incident card; every other class propagates. *)
+let is_invalid_input_syntax (exn : exn) : bool =
+  match exn with
+  | Pgx.PostgreSQL_Error (_, fields) ->
+      String.equal fields.Pgx.Error_response.code "22P02"
+  | _ -> false
 (** i-1788671060-2 (swallow-and-default retirement): a FAILED query is an
     error, not an empty result. Store/auth_store DB-error catch-arms call
     this instead of eprintf + default, so an outage, missing migration, or

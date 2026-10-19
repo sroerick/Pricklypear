@@ -43,6 +43,7 @@
     todo/item/branch-kind
     todo/item/cycle
     todo/item/delete
+      todo/item/for-list-from
     todo/item/get
     todo/item/kind
     todo/item/list-id
@@ -1525,6 +1526,16 @@
               (if (string-eq fl "") (string-eq lid inbox-id) #f))))
         (todo/item/all)))))
 
+;; ops incident (card bf2d6e46, 2026-10-18): a habitat /todos dispatch
+;; called todo/item/for-list-from, which no branch bound (no caller in
+;; git; the call site is store content on another identity's branch).
+;; Same contract as todo/item/for-list; boot seed re-binds the name
+;; additively on system/main so the call site resolves chain-wide.
+(define todo/item/for-list-from
+  (lambda
+    (list-id)
+    (todo/item/for-list list-id)))
+
 (define todo/item/for-user
   (lambda
     (user)
@@ -1825,11 +1836,70 @@
               3
               4)))))))
 
+(define todo/item/prio-decorate
+  (lambda
+    (row)
+    "Decorate a row with its precomputed sort keys: (rank pos . row)."
+    (cons
+      (todo/item/prio-rank (cdr row))
+      (cons
+        (todo/item/prio-pos (cdr row))
+        row))))
+
+(define todo/item/prio-undecorate
+  (lambda
+    (e)
+    "Strip the precomputed keys from a decorated row."
+    (cdr (cdr e))))
+
+(define todo/item/prio-key-le?
+  (lambda
+    (a b)
+    "Cheap comparator on decorated rows: rank and position are precomputed
+     numbers, so only the id tiebreak touches strings."
+    (if
+      (< (car a) (car b))
+      #t
+      (if
+        (> (car a) (car b))
+        #f
+        (if
+          (< (car (cdr a)) (car (cdr b)))
+          #t
+          (if
+            (> (car (cdr a)) (car (cdr b)))
+            #f
+            (string<=? (car (cdr (cdr a))) (car (cdr (cdr b))))))))))
+
+(define todo/item/prio-key-insert
+  (lambda
+    (sorted e)
+    "Insertion step over decorated rows."
+    (if
+      (null? sorted)
+      (list e)
+      (if
+        (todo/item/prio-key-le? e (car sorted))
+        (cons e sorted)
+        (cons (car sorted) (todo/item/prio-key-insert (cdr sorted) e))))))
+
 (define todo/item/prio-sorted
   (lambda
     (rows)
-    "Rows ordered by priority rank, then position, then id (insertion sort; no sort prim in-image)."
-    (list/foldl todo/item/prio-insert () rows)))
+    "Rows ordered by priority rank, then position, then id. Decorates each
+     row once (rank + position computed per row), insertion-sorts on the
+     precomputed keys, then strips them. The old version recomputed BOTH
+     rows' rank and position on every comparison - O(n^2) expensive
+     comparisons blew the eval budget at ~60 eligible rows (supervisor
+       boot scan budget exceeded, 10-18). Same ordering semantics. Ships
+         via the hook's guarded pp-sync reseed - the boot seed is additive
+       and cannot refresh an existing define's body."
+    (list/map
+      todo/item/prio-undecorate
+      (list/foldl
+        todo/item/prio-key-insert
+        ()
+        (list/map todo/item/prio-decorate rows)))))
 
 (define todo/item/priority
   (lambda
@@ -3230,6 +3300,67 @@
     (t id)
     (seq (tree/delete (node-path t (as-str id))) id)))
 
+(define todo/tree/row-id?
+  (lambda
+    (nj id)
+    "Does node nj encode datum id? O(1): the stored path must END with the
+     id as its final dot-segment (path tail = \".\" + id), or the legacy
+     redash form of the path tail matches (in-flight ids minted before
+     the 10-18 path-id fix). Replaces the path-id char-loop comparison,
+     whose per-node cost blew the eval budget when the fallback scan ran
+     over the full shared listing (10-18: find-node-scan returned empty
+     on prod while the same listing matched instantly with this check)."
+    (let
+      ((p (as-str (dict-get nj "path"))))
+      (let
+        ((n (string-length (as-str id))))
+        (if
+          (< (string-length p) (+ n 1))
+          #f
+          (or
+            (string-eq
+              (substring p (- (string-length p) (+ n 1)) (string-length p))
+              (string-append "." (as-str id)))
+            (string-eq (todo/tree/redash (todo/tree/tail p)) (as-str id))))))))
+
+(define todo/tree/find-node-scan
+  (lambda
+    (t id)
+    "Bounded scan fallback for datum rows whose STORED path diverges from
+     node-path's computed form (dashed id segments, spaces moved after the
+     row was written): scan the type's caller prefix, then the shared
+     data.s root (type-checked there, since that scan crosses every datum
+     type). Returns the first matching node dict, (list) when nothing
+     matches. Same 5000-node caps the enumeration paths already pay."
+    (let
+      ((g
+        (list/foldl
+          (lambda
+            (acc nj)
+            (if
+              (null? acc)
+              (if (todo/tree/row-id? nj id) nj acc)
+              acc))
+          (list)
+          (tree/list (todo/tree/prefix t) 1 5000))))
+      (if
+        (null? g)
+        (list/foldl
+          (lambda
+            (acc nj)
+            (if
+              (null? acc)
+              (if
+                (and
+                  (string-eq (as-str (dict-get nj "type")) (as-str t))
+                  (todo/tree/row-id? nj id))
+                nj
+                acc)
+              acc))
+          (list)
+          (tree/list (todo/tree/shared-prefix) 3 5000))
+        g))))
+
 (define todo/tree/get
   (lambda
     (t id)
@@ -3238,7 +3369,12 @@
       (list)
       (let
         ((n (tree/get (node-path t (as-str id)))))
-        (if (null? n) (list) (dict-get n "body"))))))
+        (if
+          (null? n)
+          (let
+            ((hit (todo/tree/find-node-scan t (as-str id))))
+            (if (null? hit) (list) (dict-get hit "body")))
+          (dict-get n "body"))))))
 
 (define todo/tree/insert-by-created
   (lambda
@@ -3255,12 +3391,63 @@
           (car sorted)
           (todo/tree/insert-by-created nj (cdr sorted)))))))
 
+(define todo/tree/path-segment
+  (lambda
+    (p)
+    "The id segment of a stored node path: everything after the last dot
+     (paths are dot-separated labels; the datum id is the final one)."
+    (todo/tree/path-segment* (as-str p) 0 -1)))
+
+(define todo/tree/path-segment*
+  (lambda
+    (s i seen)
+    (if
+      (< i (string-length s))
+      (todo/tree/path-segment*
+        s
+        (+ i 1)
+        (if (string-eq (substring s i (+ i 1)) ".") i seen))
+      (if
+        (< seen 0)
+        s
+        (substring s (+ seen 1) (string-length s))))))
+
+(define todo/tree/path-id
+  (lambda
+    (p)
+    "The item id a stored node path encodes. A 32-char undashed final
+     segment is a dash-stripped UUID: re-dash it (legacy redash form).
+     Anything else is the id VERBATIM (rows stored with a dashed id
+     segment - e.g. the shared Board card
+     7e60c6a9-2222-4444-8666-abcde0604e60 - must emit their true id so
+     todo/item/get resolves them; ghost-card churn 10-18). O(1) probes:
+     the char before a 32-char tail (n-33) or a 36-char tail (n-37) must
+     be the boundary dot; anything else falls back to the path-segment
+     char loop. The old always-loop version cost ~600 steps per node and
+     blew the supervisor scan's eval budget (boot scan budget exceeded,
+     10-18). The 32-char check runs FIRST: a dashed UUID has no dot at
+     n-33, but a short type label can put a dot at n-37."
+    (let
+      ((s (as-str p)))
+      (let
+        ((n (string-length s)))
+        (if
+          (< n 33)
+          (todo/tree/path-segment s)
+          (if
+            (string-eq (substring s (- n 33) 1) ".")
+            (todo/tree/redash (substring s (- n 32) n))
+            (if
+              (and (< 36 n) (string-eq (substring s (- n 37) 1) "."))
+              (substring s (- n 36) n)
+              (todo/tree/path-segment s))))))))
+
 (define todo/tree/node->pair
   (lambda
     (nj)
-    (cons
-      (todo/tree/redash (todo/tree/tail (dict-get nj "path")))
-      (dict-get nj "body"))))
+      (cons
+        (todo/tree/path-id (dict-get nj "path"))
+        (dict-get nj "body"))))
 
 (define todo/tree/path-ok?
   (lambda
@@ -3309,9 +3496,22 @@
 (define todo/tree/save
   (lambda
     (t id fields)
-    (seq
-      (tree/upsert (node-path t (as-str id)) "datum" t fields)
-      id)))
+    (let
+      ((nid (as-str id)))
+      (let
+        ((p (node-path t nid)))
+        (seq
+          (tree/upsert
+            (if
+              (null? (tree/get p))
+              (let
+                ((hit (todo/tree/find-node-scan t nid)))
+                (if (null? hit) p (as-str (dict-get hit "path"))))
+              p)
+            "datum"
+            t
+            fields)
+          id)))))
 
 (define todo/tree/set-field
   (lambda
