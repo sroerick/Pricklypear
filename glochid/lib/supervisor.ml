@@ -1,23 +1,42 @@
 (* PP run-primitive supervisor — borge/run-primitive.borg supervisor-tick,
-   PHASE 2 (the glochid app contract).
+   PHASE 2 (the glochid app contract) + the PHASE 3 native runner seam.
 
    One run = one attempt to advance one card one gate, executed by a
-   SUPERVISED SIDECAR RUNNER outside this process:
-   scripts/pp-flow.sh --run <card-id> --supervised (which runs the autolith
-   adapter). The supervisor owns claims, budgets, transitions, and evidence;
-   PP rows (data.s.run.* via the workstreams run-rows prim set) are the
-   queue; the LLM loop NEVER runs inside the PP runtime process.
+   SUPERVISED RUNNER outside this process. TWO RUNNER KINDS, one decision
+   path:
+
+     - "pp-flow" (DEFAULT, phase 2): scripts/pp-flow.sh --run <card-id>
+       --supervised (which runs the autolith adapter). Harvest reads the
+       PPFLOW-* verdict/usage lines out of the driver log — usage there is
+       a SELF-REPORT scraped from terminal text.
+     - "native" (OPT-IN, phase 3): this same executable's --run-brief
+       entry runs ONE executor turn in-process and writes ONE structured
+       result file (schema pp-native-run/1). Harvest reads that file, so
+       usage is PROVIDER-STRUCTURED (counts arrive through Loop.run's
+       on_usage from the provider's own responses) instead of scraped.
+       Opt in with SUPERVISOR_RUNNER_KIND=native. Per the recorded flip
+       gate, the default does NOT change until the loop has survived real
+       overnight cards.
+
+   Both kinds converge on the SAME harvest split (harvest_success /
+   harvest_failure), so a native run and a sidecar run advance a card by
+   exactly the same rules and cannot drift; only the child command and the
+   result SOURCE differ.
+
+   The supervisor owns claims, budgets, transitions, and evidence; PP rows
+   (data.s.run.* via the workstreams run-rows prim set) are the queue; the
+   LLM loop NEVER runs inside the PP runtime process.
 
    The tick (every tick_s, default 30s — the chapter's PROPOSED default):
      1. HEARTBEAT: bump claim_heartbeat_at + claim_deadline for every run
-        row we hold with a live sidecar. Under the ratified
+        row we hold with a live child. Under the ratified
         single-supervisor design the run-row claim IS the supervisor lease;
         no separate supervisor datum exists in phase 2.
      2. REAP: rows whose claim expired are TAKEN OVER from the step pointer
-        (never restarted from scratch, resume-semantics 3). The phase-2 step
-        list is a single sidecar step, so takeover re-dispatches THE SAME
-        step without burning attempts. A row that expires twice in one boot
-        is finished dead instead of respawned forever.
+        (never restarted from scratch, resume-semantics 3). The step list
+        is a single runner step, so takeover re-dispatches THE SAME step
+        without burning attempts. A row that expires twice in one boot is
+        finished dead instead of respawned forever.
      3. FILL THE QUEUE: cards from todo/item/queue (ORDER owned by the prim)
         minus the eligibility filter (actionable states, excluded kinds, no
         live card lease, no open run row) -> run-new (queued).
@@ -26,25 +45,28 @@
         -> ONE claim-time eval (state + brief + columns + assignee, the
         state_brief_cols discipline) -> brief_hash patch -> card lease
         mirror (assignee run:<run-id>, the session-lease amendment shape)
-        -> run-start -> spawn the sidecar under the concurrency cap
+        -> run-start -> spawn the child under the concurrency cap
         (default 2, POLICY-4). Due retries (POLICY-2 backoff, 2^n capped
         60s) re-dispatch the SAME step from the stored brief.
      5. PUBLISH: one stderr count line when the shape changes.
 
-   Sidecar completion is harvested by the child's own fiber (lower latency
-   than waiting for the next tick): parse the PPFLOW-* verdict/usage lines
-   from the driver log -> run-usage-set + run-result (THE USAGE
-   PASS-THROUGH: the adapter's :INPUT-TOKENS / :OUTPUT-TOKENS /
-   :PROVIDER-REQUESTS finally land on the row instead of being dropped) ->
-   write-back (ONE batched eval, pp-flow's advance_batch/dest_batch
-   discipline; POLICY-3 no-verdict fail-safe VERBATIM) or re-dispatch with
-   backoff, or dead/failed/timed_out with a card comment.
+   Child completion is harvested by the child's own fiber (lower latency
+   than waiting for the next tick): resolve the verdict + usage from the
+   runner's own surface -> run-usage-set + run-result (THE USAGE
+   PASS-THROUGH) -> write-back (ONE batched eval, pp-flow's
+   advance_batch/dest_batch discipline; POLICY-3 no-verdict fail-safe
+   VERBATIM) or re-dispatch with backoff, or dead/failed/timed_out with a
+   card comment. For the native kind, a MISSING result file is the only
+   step failure this side recognises — a result saying the step failed is
+   still a result, and a FAIL verdict is a SUCCESSFUL STEP (the exit code
+   reports whether the step RAN, not whether the card passed).
 
-   USAGE IS A SELF-REPORT (RATIFIED): the pre-dispatch budget gate is
-   ADVISORY until provider-structured usage lands; a crashed or lying
-   executor reports zero. THE EXECUTOR NEVER TOUCHES THE BOARD in
-   supervised mode: pp-flow --supervised skips claim/brief-render/write-back
-   entirely; every card write flows through here. Transcripts stay local
+   USAGE: with the native runner it is provider-structured; with the
+   sidecar it remains a SELF-REPORT (RATIFIED: the pre-dispatch budget gate
+   is ADVISORY, since a crashed or lying executor reports zero). THE
+   EXECUTOR NEVER TOUCHES THE BOARD in supervised mode: pp-flow
+   --supervised skips claim/brief-render/write-back entirely; every card
+   write flows through here. Transcripts stay local
    (.ralph/supervisor/<run-id>/), never in rows. *)
 
 open Eio_unix.Stdenv
@@ -75,6 +97,8 @@ type t = {
   max_tokens : int;                   (* advisory; 0 = unlimited *)
   max_requests : int;                 (* advisory; 0 = unlimited *)
   runner : string;                    (* when set: child PP_FLOW_PI *)
+  runner_kind : string;               (* "pp-flow" (sidecar) | "native" *)
+  native_bin : string;                (* native runner executable ("" = self) *)
 }
 
 let env_nonneg (default : int) (name : string) : int =
@@ -123,6 +147,16 @@ let config () : t =
     max_tokens = env_nonneg 0 "SUPERVISOR_MAX_TOKENS";
     max_requests = env_nonneg 0 "SUPERVISOR_MAX_REQUESTS";
     runner = env_str "" "SUPERVISOR_RUNNER";
+    (* PHASE 3: the runner KIND is explicit and defaults to the phase-2
+       sidecar, so nothing changes until an operator opts in. The
+       workstreams.borg/run-primitive.borg rule that gates the flip is
+       "do NOT flip the default until the loop has survived real
+       overnight cards", so "native" here is an opt-in, never a default. *)
+    runner_kind = env_str "pp-flow" "SUPERVISOR_RUNNER_KIND";
+    (* Where the native runner lives. Empty = this same executable
+       (re-exec --run-brief), which is the honest default: the supervisor
+       IS the glochid binary. *)
+    native_bin = env_str "" "SUPERVISOR_NATIVE_BIN";
   }
 
 (* ------------------------------------------------------------------ *)
@@ -454,10 +488,15 @@ let norm_status (s : string) : string = String.lowercase_ascii (norm_colon s)
 
 let steps_doc (cfg : t) ~(state : string) ~(attempts : int) ~(error : string) :
     string =
+  (* The step name records WHICH runner produced it, so a row read months
+     later says honestly whether it came from the phase-2 sidecar or the
+     phase-3 native runner. run-primitive.borg budget-accounting requires
+     provider-structured usage on the row; the native runner supplies real
+     counts, the sidecar supplies the adapter's parse. *)
   let step =
     `Assoc
-      [ ("name", `String "sidecar");
-        ("kind", `String "provider");
+      [ ("name", `String (if cfg.runner_kind = "native" then "native" else "sidecar"));
+        ("kind", `String (if cfg.runner_kind = "native" then "native" else "provider"));
         ("state", `String state);
         ("attempts", `Int attempts);
         ("max_attempts", `Int cfg.attempts_transient);
@@ -523,12 +562,24 @@ let run_usage_expr (run_id : string) (v : verdict) : string =
   Printf.sprintf "(workstreams/run-usage-set %s %d %d %d %d %d)"
     (q run_id) v.v_requests v.v_input v.v_cached v.v_output v.v_wall
 
-let run_result_expr (run_id : string) (v : verdict) (fallback_msg : string) :
-    string =
-  let status = if v.v_status = "" then "crashed" else norm_status v.v_status in
+(* The run row's result_status/error_class/error_message. [v_status] is the
+   SIDECAR's terminal keyword (empty = no PPFLOW-STATUS line); a native run
+   has no such keyword and passes an explicit [status] instead, so the
+   native path never inherits the sidecar's "empty means crashed" reading.
+   [ok] names the success case outright: a native step that SUCCEEDED has
+   an empty v_status, which would otherwise be recorded as a crash on the
+   row after the run had already been marked succeeded. *)
+let run_result_expr ?(status : string option) ?(ok = false) (run_id : string)
+    (v : verdict) (fallback_msg : string) : string =
+  let status =
+    match status with
+    | Some s -> s
+    | None -> if v.v_status = "" then "crashed" else norm_status v.v_status
+  in
   let category =
-    if v.v_category = "" then
-      (if v.v_status = "" then "sidecar-failure" else "")
+    if ok then ""
+    else if v.v_category = "" then
+      if v.v_status = "" && status = "crashed" then "sidecar-failure" else ""
     else norm_colon v.v_category
   in
   let msg = if v.v_message = "" then fallback_msg else v.v_message in
@@ -576,7 +627,7 @@ let runs_scan_expr () : string =
       fields
   in
   Printf.sprintf
-      "(begin (load-library \"todo\") (let ((cid (lambda (p) (let ((s (as-str p))) (let ((n (string-length s))) (if (< n 33) (todo/tree/path-segment s) (if (string-eq (substring s (- n 33) 1) \".\") (todo/tree/redash (substring s (- n 32) 32)) (if (and (< 36 n) (string-eq (substring s (- n 37) 1) \".\")) (substring s (- n 36) 36)(todo/tree/path-segment s))))))))) (json-emit (list/map (lambda (nj) (let ((b (dict-get nj \"body\"))) (dict-set* \"{}\" (list \"id\" (cid (dict-get nj \"path\")) %s)))) (list/filter (lambda (nj) (let ((st (as-str (dict-get (dict-get nj \"body\") \"state\")))) (and (string-eq (as-str (dict-get nj \"type\")) \"run\") (or (string-eq st \"queued\") (string-eq st \"claimed\") (string-eq st \"running\") (string-eq st \"parked\"))))) (tree/list \"data.s\" 3 2000))))))"
+      "(begin (let ((cid (lambda (p) (let ((s (as-str p))) (let ((n (string-length s))) (if (< n 33) (todo/tree/path-segment s) (if (string-eq (substring s (- n 33) 1) \".\") (todo/tree/redash (substring s (- n 32) 32)) (if (and (< 36 n) (string-eq (substring s (- n 37) 1) \".\")) (substring s (- n 36) 36)(todo/tree/path-segment s))))))))) (json-emit (list/map (lambda (nj) (let ((b (dict-get nj \"body\"))) (dict-set* \"{}\" (list \"id\" (cid (dict-get nj \"path\")) %s)))) (list/filter (lambda (nj) (let ((st (as-str (dict-get (dict-get nj \"body\") \"state\")))) (and (string-eq (as-str (dict-get nj \"type\")) \"run\") (or (string-eq st \"queued\") (string-eq st \"claimed\") (string-eq st \"running\") (string-eq st \"parked\"))))) (tree/list \"data.s\" 3 2000))))))"
       (String.concat " " gets)
 
 let queue_eligible_expr (cfg : t) : string =
@@ -588,7 +639,7 @@ let queue_eligible_expr (cfg : t) : string =
      mirrored OCaml-side in the tick - POLICY-6: the same key, the
      supervisor never invents an order. *)
   Printf.sprintf
-      {|(begin (load-library "todo") (let ((states (json-parse %s)) (excl (json-parse %s)) (want-list %s)) (let ((in? (lambda (x xs) (list/foldl (lambda (a c) (if (string-eq (as-str c) (as-str x)) #t a)) #f xs)))) (json-emit (list/map (lambda (row) (let ((b (cdr row))) (dict-set* "{}" (list "id" (as-str (car row)) "state" (as-str (todo/item/state b)) "title" (as-str (todo/item/title b)) "list_id" (as-str (todo/item/list-id b)) "kind" (as-str (dict-get b "kind")) "priority" (as-str (dict-get b "priority")) "position" (as-str (dict-get b "position")))))) (list/filter (lambda (row) (let ((b (cdr row))) (and (string-eq (todo/item/assignee b) "") (or (string-eq want-list "") (string-eq (todo/item/list-id b) want-list)) (in? (todo/item/state b) states) (or (null? excl) (not (in? (as-str (dict-get b "kind")) excl)))))) (todo/item/active (todo/item/all))))))))|}
+      {|(begin (let ((states (json-parse %s)) (excl (json-parse %s)) (want-list %s)) (let ((in? (lambda (x xs) (list/foldl (lambda (a c) (if (string-eq (as-str c) (as-str x)) #t a)) #f xs)))) (json-emit (list/map (lambda (row) (let ((b (cdr row))) (dict-set* "{}" (list "id" (as-str (car row)) "state" (as-str (todo/item/state b)) "title" (as-str (todo/item/title b)) "list_id" (as-str (todo/item/list-id b)) "kind" (as-str (dict-get b "kind")) "priority" (as-str (dict-get b "priority")) "position" (as-str (dict-get b "position")))))) (list/filter (lambda (row) (let ((b (cdr row))) (and (string-eq (todo/item/assignee b) "") (or (string-eq want-list "") (string-eq (todo/item/list-id b) want-list)) (in? (todo/item/state b) states) (or (null? excl) (not (in? (as-str (dict-get b "kind")) excl)))))) (todo/item/active (todo/item/all))))))))|}
     (q (csv_to_json cfg.states)) (q (csv_to_json cfg.exclude_kinds))
     (q cfg.list_id)
 
@@ -596,44 +647,63 @@ let queue_eligible_expr (cfg : t) : string =
    per row. The tick's scan rows are active-only now, so terminal counts
    for the standup summary come from here. *)
 let runs_tally_expr () : string =
-  {|(begin (load-library "todo") (json-emit (list/map (lambda (nj) (as-str (dict-get (dict-get nj "body") "state"))) (list/filter (lambda (nj) (string-eq (as-str (dict-get nj "type")) "run")) (tree/list "data.s" 3 2000)))))|}
+  {|(begin (json-emit (list/map (lambda (nj) (as-str (dict-get (dict-get nj "body") "state"))) (list/filter (lambda (nj) (string-eq (as-str (dict-get nj "type")) "run")) (tree/list "data.s" 3 2000)))))|}
 
 (* ---- card writes (pp-flow's batched-eval discipline, ONE round trip) ---- *)
 
+(* NO (load-library "todo") IN THESE EXPRESSIONS (2026-10-18 perf fix).
+   Every supervisor eval used to open with (begin (load-library "todo") ...),
+   added when the loop was new out of a fear that "a fresh session still has
+   the lib". That fear was unfounded and expensive: the session registry
+   keeps ONE Session.t per identity (image.per-identity-sessions, never
+   expired), and package names bind LAZILY from the branch chain
+   (image.lazy-env-load) — the first (todo/...) lookup forces the def. So
+   the wrapper only re-evaluated libs/todo/lib.pp (hundreds of defines) onto
+   the runner's branch on EVERY call, re-pinning them and paying a full
+   load-library each round trip.
+
+   Measured on prod 2026-10-18 against a fresh identity:
+     (count (todo/item/all))                       23 ms
+     (begin (load-library "todo") (count ...))  1600 ms   (~70x)
+   It was also the source of the endless "[load-library] todo onto non-main
+   branch admin/agent (pin warning)" spam. AGENTS.md is explicit: load-library
+   is a DEPLOY tool, not a session step. Keep these expressions bare. *)
+
+
 let probe_expr (card : string) : string =
   Printf.sprintf
-    {|(begin (load-library "todo") (if (null? (todo/item/get %s)) "missing" (string-append "ok|" (as-str (todo/item/state (todo/item/get %s))))))|}
+    {|(if (null? (todo/item/get %s)) "missing" (string-append "ok|" (as-str (todo/item/state (todo/item/get %s)))))|}
     (q card) (q card)
 
 let advance_expr (card : string) (msg : string) : string =
   Printf.sprintf
-    {|(begin (load-library "todo") (string-append (as-str (todo/cycle %s)) "|" (as-str (todo/comment/add %s %s)) "|" (as-str (todo/item/state (todo/item/get %s))) "|" (as-str (todo/item/unassign %s))))|}
+    {|(string-append (as-str (todo/cycle %s)) "|" (as-str (todo/comment/add %s %s)) "|" (as-str (todo/item/state (todo/item/get %s))) "|" (as-str (todo/item/unassign %s)))|}
     (q card) (q card) (q msg) (q card) (q card)
 
 let dest_expr (card : string) (msg : string) (dest : string) : string =
   Printf.sprintf
-    {|(begin (load-library "todo") (string-append (as-str (todo/set-state %s %s)) "|" (as-str (todo/comment/add %s %s)) "|" (as-str %s) "|" (as-str (todo/item/unassign %s))))|}
+    {|(string-append (as-str (todo/set-state %s %s)) "|" (as-str (todo/comment/add %s %s)) "|" (as-str %s) "|" (as-str (todo/item/unassign %s)))|}
     (q card) (q dest) (q card) (q msg) (q dest) (q card)
 
 let comment_only_expr (card : string) (msg : string) : string =
   Printf.sprintf
-    {|(begin (load-library "todo") (string-append (as-str (todo/comment/add %s %s)) "|" (as-str (todo/item/unassign %s))))|}
+    {|(string-append (as-str (todo/comment/add %s %s)) "|" (as-str (todo/item/unassign %s)))|}
     (q card) (q msg) (q card)
 
 let unassign_expr (card : string) : string =
-  Printf.sprintf {|(begin (load-library "todo") (todo/item/unassign %s))|} (q card)
+  Printf.sprintf {|(todo/item/unassign %s)|} (q card)
 
 let assign_expr (card : string) (lease : string) : string =
-  Printf.sprintf {|(begin (load-library "todo") (todo/item/assign %s %s))|} (q card)
+  Printf.sprintf {|(todo/item/assign %s %s)|} (q card)
     (q lease)
 
 let card_comment_expr (card : string) (msg : string) : string =
   Printf.sprintf
-    {|(begin (load-library "todo") (todo/comment/add %s %s) (todo/item/unassign %s))|}
+    {|(begin (todo/comment/add %s %s) (todo/item/unassign %s))|}
     (q card) (q msg) (q card)
 
 let restore_state_expr (card : string) (state : string) : string =
-  Printf.sprintf {|(begin (load-library "todo") (todo/set-state %s %s))|} (q card)
+  Printf.sprintf {|(todo/set-state %s %s)|} (q card)
     (q state)
 
 (* ONE claim-time eval: claimed state + brief + columns + assignee (the
@@ -642,7 +712,7 @@ let restore_state_expr (card : string) (state : string) : string =
 let claim_facts_expr (card : string) (mark : string) (colsep : string)
     (mark2 : string) : string =
   Printf.sprintf
-    {|(begin (load-library "todo") (if (null? (todo/item/get %s)) "missing" (let ((it (todo/item/get %s))) (string-append (as-str (todo/item/state it)) "\n%s\n" (as-str (todo/flow-brief %s)) "\n%s\n" (list/foldl (lambda (a c) (string-append a "," (as-str c))) "" (todo/state/columns-for-list (as-str (todo/item/list-id it)))) "\n%s\n" (as-str (todo/item/assignee it))))))|}
+    {|(if (null? (todo/item/get %s)) "missing" (let ((it (todo/item/get %s))) (string-append (as-str (todo/item/state it)) "\n%s\n" (as-str (todo/flow-brief %s)) "\n%s\n" (list/foldl (lambda (a c) (string-append a "," (as-str c))) "" (todo/state/columns-for-list (as-str (todo/item/list-id it)))) "\n%s\n" (as-str (todo/item/assignee it)))))|}
     (q card) (q card) mark (q card) colsep mark2
 
 (* ------------------------------------------------------------------ *)
@@ -845,8 +915,118 @@ let claim_facts (st : st) ~(card : string) : facts option =
 (* Sidecar harvest (per-child fiber; the tick never waits on children) *)
 (* ------------------------------------------------------------------ *)
 
-let harvest (st : st) ~(child : child) ~(ctx : ctx) ~(rc : int) : unit =
+let harvest_failure (st : st) ~(child : child) ~(ctx : ctx) ~(rc : int)
+    ~(status : string) ~(category : string) ~(message : string)
+    ?(transient : bool option) () : unit =
   let cfg = st.cfg in
+  let run_id = child.c_run in
+  let attempts = ctx.x_attempts in
+  (* The transient decision. The sidecar's vocabulary is status/category
+     keywords, so [transient_failure] reads those. The NATIVE runner
+     already classified its own error (Native_run.classify_error, the
+     ratified class set), so it passes the answer in rather than having
+     this layer re-derive it from text it did not produce. Passing
+     [None] keeps the sidecar path byte-for-byte unchanged. *)
+  let transient =
+    match transient with
+    | Some b -> b
+    | None -> transient_failure ~status ~category ~message
+  in
+  ignore (eval_ok st
+            (run_step_expr cfg run_id ~state:"failed" ~attempts
+               ~error:(category ^ " " ^ message)));
+  if ctx.x_wall_exceeded then begin
+    ignore (eval_ok st
+              (card_comment_expr ctx.x_card
+                 (Printf.sprintf
+                    "pp-flow(supervisor): run %s TIMED OUT at the run wall (%ds); card NOT advanced. Log: %s"
+                    run_id cfg.run_wall_s ctx.x_dir)));
+    ignore (eval_ok st
+              (run_finish_expr run_id "timed_out" "run-wall"
+                 (Printf.sprintf "run wall %ds exceeded" cfg.run_wall_s)));
+    Hashtbl.remove st.ctxs run_id
+  end
+  else if transient && attempts < cfg.attempts_transient then begin
+    (* POLICY-2: re-dispatch THE SAME step (never the whole run) after
+       the 2^n capped backoff; the row stays live. *)
+    Hashtbl.replace st.retry_at run_id
+      (Unix.gettimeofday () +. float_of_int (backoff_s attempts));
+    log "run %s attempt %d/%d failed transiently (%s %s); retry in %ds"
+      run_id attempts cfg.attempts_transient category message
+      (backoff_s attempts)
+  end
+  else begin
+    (* deterministic classes fail ONCE; transient attempts exhausted ->
+       dead. Terminal runs never auto-retry. *)
+    let driver = read_file (Filename.concat ctx.x_dir "driver.log") in
+    ignore (eval_ok st
+              (card_comment_expr ctx.x_card
+                 (Printf.sprintf
+                    "pp-flow(supervisor): run %s FAILED (rc=%d, %s %s) after %d attempt(s); card NOT advanced. Log: %s. Tail: %s"
+                    run_id rc category message attempts ctx.x_dir
+                    (log_tail driver 300))));
+    ignore (eval_ok st
+              (run_finish_expr run_id "dead" category
+                 (Printf.sprintf "rc=%d %s" rc message)));
+    log "run %s: dead (%s) after %d attempt(s)" run_id category attempts;
+    Hashtbl.remove st.ctxs run_id
+  end
+
+(* ------------------------------------------------------------------ *)
+(* Sidecar spawn (ONE pp-flow --run --supervised child per attempt)    *)
+(* ------------------------------------------------------------------ *)
+let harvest_success (st : st) ~(ctx : ctx) ~(run_id : string)
+    ~(v : verdict) ~(attempts : int) : unit =
+  let cfg = st.cfg in
+  let noverdict = noverdict_column ctx.x_claimed_state && v.v_dest = "" in
+  let evid =
+    if noverdict then
+      (* POLICY-3 (SET, gregor), VERBATIM: the no-verdict fail-safe toward
+         the human survives; the advance stays the conservative one-column
+         step. *)
+      "pp-flow: [NO VERDICT RENDERED — the reviewer did not name a DESTINATION. Advanced one column conservatively; read the summary below and re-run if a decision is needed.] "
+      ^ v.v_evid
+    else v.v_evid
+  in
+  match
+    write_back st ~card:ctx.x_card ~claimed_state:ctx.x_claimed_state
+      ~dest:v.v_dest ~msg:evid
+  with
+  | Ok newstate ->
+      ignore (eval_ok st
+                (run_step_expr cfg run_id ~state:"done" ~attempts ~error:""));
+      ignore (eval_ok st (run_finish_expr run_id "succeeded" "" ""));
+      log "run %s: write-back ok, card %s -> %s%s" run_id ctx.x_card newstate
+        (if noverdict then " (NO VERDICT: conservative advance)" else "")
+  | Error eclass ->
+      ignore (eval_ok st
+                (run_step_expr cfg run_id ~state:"failed" ~attempts
+                   ~error:eclass));
+      (match eclass with
+       | "card-terminal" ->
+           ignore (eval_ok st
+                     (run_finish_expr run_id "failed" "card-terminal"
+                        "card already closed; not advanced"));
+           log "run %s: card %s already terminal; not advanced" run_id
+             ctx.x_card
+       | "card-missing" ->
+           ignore (eval_ok st
+                     (run_finish_expr run_id "failed" "card-missing"
+                        "card vanished before write-back"))
+       | _ ->
+           ignore (eval_ok st
+                     (run_finish_expr run_id "failed" eclass
+                        "write-back failed; evidence preserved in the run row + log"));
+           ignore (eval_ok st
+                     (card_comment_expr ctx.x_card
+                        (Printf.sprintf
+                           "pp-flow(supervisor): write-back failed for run %s (%s); evidence preserved below: %s"
+                           run_id eclass evid))));
+      Hashtbl.remove st.ctxs run_id
+
+(* The FAILURE half: timeout -> retry -> dead, in that order. Shared by
+   both runners (the native runner passes its own error class through). *)
+let harvest (st : st) ~(child : child) ~(ctx : ctx) ~(rc : int) : unit =
   let run_id = child.c_run in
   let driver = read_file (Filename.concat ctx.x_dir "driver.log") in
   let v = parse_verdict driver in
@@ -860,106 +1040,20 @@ let harvest (st : st) ~(child : child) ~(ctx : ctx) ~(rc : int) : unit =
                "no PPFLOW-STATUS line (sidecar setup failure)"));
   let attempts = ctx.x_attempts + 1 in
   ctx.x_attempts <- attempts;
-  if rc = 0 then begin
-    let noverdict = noverdict_column ctx.x_claimed_state && v.v_dest = "" in
-    let evid =
-      if noverdict then
-        (* POLICY-3 (SET, gregor), VERBATIM: the no-verdict fail-safe toward
-           the human survives; the advance stays the conservative
-           one-column step. *)
-        "pp-flow: [NO VERDICT RENDERED — the reviewer did not name a DESTINATION. Advanced one column conservatively; read the summary below and re-run if a decision is needed.] "
-        ^ v.v_evid
-      else v.v_evid
-    in
-    match
-      write_back st ~card:ctx.x_card ~claimed_state:ctx.x_claimed_state
-        ~dest:v.v_dest ~msg:evid
-    with
-    | Ok newstate ->
-        ignore (eval_ok st
-                  (run_step_expr cfg run_id ~state:"done" ~attempts ~error:""));
-        ignore (eval_ok st (run_finish_expr run_id "succeeded" "" ""));
-        log "run %s: write-back ok, card %s -> %s%s" run_id ctx.x_card
-          newstate
-          (if noverdict then " (NO VERDICT: conservative advance)" else "")
-    | Error eclass ->
-        ignore (eval_ok st
-                  (run_step_expr cfg run_id ~state:"failed" ~attempts
-                     ~error:eclass));
-        (match eclass with
-         | "card-terminal" ->
-             ignore (eval_ok st
-                       (run_finish_expr run_id "failed" "card-terminal"
-                          "card already closed; not advanced"));
-             log "run %s: card %s already terminal; not advanced" run_id
-               ctx.x_card
-         | "card-missing" ->
-             ignore (eval_ok st
-                       (run_finish_expr run_id "failed" "card-missing"
-                          "card vanished before write-back"))
-         | _ ->
-             ignore (eval_ok st
-                       (run_finish_expr run_id "failed" eclass
-                          "write-back failed; evidence preserved in the run row + log"));
-             ignore (eval_ok st
-                       (card_comment_expr ctx.x_card
-                          (Printf.sprintf
-                             "pp-flow(supervisor): write-back failed for run %s (%s); evidence preserved below: %s"
-                             run_id eclass evid))));
-        Hashtbl.remove st.ctxs run_id
-  end
-  else begin
+  if rc = 0 then harvest_success st ~ctx ~run_id ~v ~attempts
+  else
+    (* The status ladder. An empty v_status means the sidecar never emitted
+       a STATUS line (setup failure / crash). *)
     let status = if v.v_status = "" then "crashed" else norm_status v.v_status in
     let category =
       if v.v_status = "" then "sidecar-failure" else norm_colon v.v_category
     in
-    let transient =
-      transient_failure ~status ~category ~message:v.v_message
-    in
-    ignore (eval_ok st
-              (run_step_expr cfg run_id ~state:"failed" ~attempts
-                 ~error:(category ^ " " ^ v.v_message)));
-    if ctx.x_wall_exceeded then begin
-      ignore (eval_ok st
-                (card_comment_expr ctx.x_card
-                   (Printf.sprintf
-                      "pp-flow(supervisor): run %s TIMED OUT at the run wall (%ds); card NOT advanced. Log: %s"
-                      run_id cfg.run_wall_s ctx.x_dir)));
-      ignore (eval_ok st
-                (run_finish_expr run_id "timed_out" "run-wall"
-                   (Printf.sprintf "run wall %ds exceeded" cfg.run_wall_s)));
-      Hashtbl.remove st.ctxs run_id
-    end
-    else if transient && attempts < cfg.attempts_transient then begin
-      (* POLICY-2: re-dispatch THE SAME step (never the whole run) after
-         the 2^n capped backoff; the row stays live. *)
-      Hashtbl.replace st.retry_at run_id
-        (Unix.gettimeofday () +. float_of_int (backoff_s attempts));
-      log "run %s attempt %d/%d failed transiently (%s %s); retry in %ds"
-        run_id attempts cfg.attempts_transient category v.v_message
-        (backoff_s attempts)
-    end
-    else begin
-      (* deterministic classes fail ONCE; transient attempts exhausted ->
-         dead. Terminal runs never auto-retry. *)
-      ignore (eval_ok st
-                (card_comment_expr ctx.x_card
-                   (Printf.sprintf
-                      "pp-flow(supervisor): run %s FAILED (rc=%d, %s %s) after %d attempt(s); card NOT advanced. Log: %s. Tail: %s"
-                      run_id rc category v.v_message attempts ctx.x_dir
-                      (log_tail driver 300))));
-      ignore (eval_ok st
-                (run_finish_expr run_id "dead" category
-                   (Printf.sprintf "rc=%d %s" rc v.v_message)));
-      log "run %s: dead (%s) after %d attempt(s)" run_id category attempts;
-      Hashtbl.remove st.ctxs run_id
-    end
-  end
+    harvest_failure st ~child ~ctx ~rc ~status ~category ~message:v.v_message ()
 
-(* ------------------------------------------------------------------ *)
-(* Sidecar spawn (ONE pp-flow --run --supervised child per attempt)    *)
-(* ------------------------------------------------------------------ *)
-
+(* The SUCCESS half of the shared decision path: write back the verdict,
+   then finish the step either way. Both runners call this with their own
+   verdict shape, so a native run and a sidecar run advance a card by
+   exactly the same rules (POLICY-3 no-verdict fail-safe included). *)
 let spawn_sync (env : Eio_unix.Stdenv.base) (cmd : string) : int =
   let proc_mgr = Eio.Stdenv.process_mgr env in
   Eio.Switch.run (fun sw ->
@@ -968,7 +1062,139 @@ let spawn_sync (env : Eio_unix.Stdenv.base) (cmd : string) : int =
       | `Exited c -> c
       | `Signaled _ -> 144)
 
-let spawn_run (st : st) ~(run_id : string) ~(ctx : ctx) : unit =
+(* ------------------------------------------------------------------ *)
+(* NATIVE RUNNER dispatch (borge/run-primitive.borg PHASE 3)           *)
+(*                                                                     *)
+(* Same shape as the sidecar dispatch: ONE child per attempt, harvested *)
+(* by its own fiber. The difference is the CONTRACT: instead of scraping *)
+(* PPFLOW-* lines out of stdout, the child writes ONE structured result  *)
+(* file (schema pp-native-run/1) carrying PROVIDER-STRUCTURED usage.    *)
+(*                                                                     *)
+(* This is opt-in (SUPERVISOR_RUNNER_KIND=native); the phase-2 sidecar  *)
+(* stays the default until the loop has survived real overnight cards   *)
+(* (the recorded flip gate).                                           *)
+(* ------------------------------------------------------------------ *)
+
+(* Expose the native-runner result file to the harvest path: set to the
+   file this attempt WILL write. [None] = the child never wrote one, which
+   is a STEP FAILURE (the crash case), never a silent zero. *)
+let native_result_path (ctx : ctx) : string =
+  Filename.concat ctx.x_dir "result.json"
+
+(* Harvest a NATIVE attempt. The contract (run-primitive.borg PHASE 3):
+   the child wrote ONE structured result file. Its ABSENCE is the only
+   step failure this path knows - a result file saying the step failed is
+   still a result, and a FAIL verdict is a SUCCESSFUL STEP (the exit code
+   reports whether the step RAN, not whether the card passed; POLICY-3's
+   no-verdict fail-safe lives below, in the shared write-back).
+
+   The shared tail (usage -> run-usage-set, result -> run-result,
+   write-back / retry / dead) is EXACTLY the sidecar's, so both runners
+   converge on one decision path and cannot drift. *)
+let harvest_native (st : st) ~(child : child) ~(ctx : ctx) ~(rc : int) : unit =
+  let run_id = child.c_run in
+  let driver = read_file (Filename.concat ctx.x_dir "driver.log") in
+  let path = native_result_path ctx in
+  let result_opt =
+    if not (Sys.file_exists path) then None
+    else
+      match Yojson.Safe.from_string (read_file path) with
+      | j -> Native_run.result_of_json j
+      | exception _ -> None
+  in
+  match result_opt with
+  | None ->
+      (* NO RESULT FILE: the runner never reported. This is the phase-3
+         analogue of a sidecar crash with no PPFLOW-STATUS line, so it
+         reuses the same failure ladder via an empty verdict + a
+         transient-classified message. *)
+      log "native run %s produced no result file (rc=%d); treating as crash"
+        run_id rc;
+      let msg =
+        let tail = log_tail driver 300 in
+        if tail = "" then Printf.sprintf "rc=%d, no result file" rc
+        else Printf.sprintf "rc=%d, no result file; tail: %s" rc tail
+      in
+      harvest_failure st ~child ~ctx ~rc ~status:"crashed"
+        ~category:"native-no-result" ~message:msg ~transient:true ()
+  | Some res ->
+      let v : verdict =
+        { v_dest = res.Native_run.r_verdict.Native_run.v_destination;
+          v_evid = res.Native_run.r_verdict.Native_run.v_evidence;
+          v_status = "";
+          v_category = res.Native_run.r_error_class;
+          v_trace = "";
+          v_message = res.Native_run.r_error_message;
+          v_requests = res.Native_run.r_usage.Native_run.requests;
+          v_input = res.Native_run.r_usage.Native_run.input_tokens;
+          v_cached = res.Native_run.r_usage.Native_run.cached_tokens;
+          v_output = res.Native_run.r_usage.Native_run.output_tokens;
+          v_wall = int_of_float res.Native_run.r_usage.Native_run.wall_s }
+      in
+      (* PROVIDER-STRUCTURED USAGE: these counts came from the provider's own
+         responses through Loop.run's on_usage, NOT from terminal scraping
+         (the thing run-primitive.borg budget-accounting said was honest
+         only until phase 3). *)
+      ignore (eval_ok st (run_usage_expr run_id v));
+      ignore (eval_ok st
+                (run_result_expr ~ok:(res.Native_run.r_step_state = "done")
+                   ~status:
+                     (if res.Native_run.r_step_state = "done" then "succeeded"
+                      else "failed")
+                   run_id v
+                   (Printf.sprintf "native %s/%s" res.Native_run.r_outcome
+                      res.Native_run.r_step_state)));
+      let attempts = ctx.x_attempts + 1 in
+      ctx.x_attempts <- attempts;
+      if res.Native_run.r_step_state = "done" then
+        harvest_success st ~ctx ~run_id ~v ~attempts
+      else
+        harvest_failure st ~child ~ctx ~rc ~status:"failed"
+          ~category:
+            (if res.Native_run.r_error_class = "" then "native-step-failed"
+             else res.Native_run.r_error_class)
+          ~message:res.Native_run.r_error_message
+          (* Native_run.classify_error is the ratified class set:
+             "transient" and "timeout" may be re-dispatched, everything
+             else attempts once. Passing it explicitly keeps the native
+             runner's own classification authoritative instead of
+             re-deriving it from text this layer did not produce. *)
+          ~transient:
+            (res.Native_run.r_error_class = "transient"
+            || res.Native_run.r_error_class = "timeout")
+          ()
+
+let spawn_native (st : st) ~(run_id : string) ~(ctx : ctx) : unit =
+  let cfg = st.cfg in
+  let driver_log = Filename.concat ctx.x_dir "driver.log" in
+  let result_json = native_result_path ctx in
+  (* Empty native_bin = re-exec this same executable. That is the honest
+     default: the supervisor IS the glochid binary, and the native runner
+     is its --run-brief entry. *)
+  let bin =
+    if cfg.native_bin <> "" then cfg.native_bin
+    else (try Sys.executable_name with _ -> "glochid")
+  in
+  let cmd =
+    Printf.sprintf
+      "cd %s && exec %s --run-brief %s --result-json %s >%s 2>&1"
+      (sh_quote cfg.cwd) (sh_quote bin) (sh_quote ctx.x_brief)
+      (sh_quote result_json) (sh_quote driver_log)
+  in
+  let child =
+    { c_run = run_id; c_card = ctx.x_card; c_started = Unix.gettimeofday () }
+  in
+  Hashtbl.replace st.live run_id child;
+  log "dispatch run %s card %s [%s] (attempt %d, native)" run_id ctx.x_card
+    ctx.x_claimed_state ctx.x_attempts;
+  Eio.Fiber.fork ~sw:st.sw (fun () ->
+      let rc = spawn_sync st.sess.env cmd in
+      (try harvest_native st ~child ~ctx ~rc
+       with e ->
+         log "native harvest run %s failed: %s" run_id (Printexc.to_string e));
+      Hashtbl.remove st.live run_id)
+
+let spawn_run_sidecar (st : st) ~(run_id : string) ~(ctx : ctx) : unit =
   let cfg = st.cfg in
   let driver_log = Filename.concat ctx.x_dir "driver.log" in
   let runner =
@@ -994,6 +1220,13 @@ let spawn_run (st : st) ~(run_id : string) ~(ctx : ctx) : unit =
       (try harvest st ~child ~ctx ~rc
        with e -> log "harvest run %s failed: %s" run_id (Printexc.to_string e));
       Hashtbl.remove st.live run_id)
+
+(* THE DISPATCH SEAM (PHASE 3). Exactly one place chooses a runner, so a
+   future runner kind is one arm here and nothing else. Both arms share the
+   harvest split above, so the decision path cannot drift between them. *)
+let spawn_run (st : st) ~(run_id : string) ~(ctx : ctx) : unit =
+  if st.cfg.runner_kind = "native" then spawn_native st ~run_id ~ctx
+  else spawn_run_sidecar st ~run_id ~ctx
 
 (* ------------------------------------------------------------------ *)
 (* Queue fill + dispatch + reap                                        *)
@@ -1340,9 +1573,9 @@ let run ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t) : unit =
           ghosts = Hashtbl.create 8; last_summary = "" }
       in
       log
-        "starting: tick=%ds concurrency=%d states=%s exclude=%s list=%s script=%s cwd=%s identity=%s instance=%s"
+        "starting: tick=%ds concurrency=%d states=%s exclude=%s list=%s runner=%s script=%s cwd=%s identity=%s instance=%s"
         cfg.tick_s cfg.concurrency cfg.states cfg.exclude_kinds cfg.list_id
-        cfg.flow_script cfg.cwd cfg.identity cfg.instance_id;
+        cfg.runner_kind cfg.flow_script cfg.cwd cfg.identity cfg.instance_id;
       (try boot_pass st with e -> log "boot pass failed: %s" (Printexc.to_string e));
       let clock = Eio.Stdenv.clock env in
       while true do

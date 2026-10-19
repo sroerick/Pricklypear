@@ -25,7 +25,11 @@ let parse_mock_script script_path : Provider.reply list =
                  cs
            | _ -> []
          in
-         { Provider.text; calls; stop_reason = "stop"; raw = `Assoc [ ("role", `String "assistant"); ("content", `String text) ] })
+          { Provider.text; calls; stop_reason = "stop";
+            raw = `Assoc [ ("role", `String "assistant"); ("content", `String text) ];
+            (* A canned script has no provider behind it, so it reports NO usage
+               (None, not zeros): the accumulation path stays honest. *)
+            usage = None })
 
 (* The [Loop.run] [complete] implementation over a canned script cell:
    pops the next reply (mirroring the real provider's streaming
@@ -46,7 +50,8 @@ let complete ~(script_cell : Provider.reply list ref)
   | [] ->
       on_delta (Provider.Text "");
       on_delta Provider.Done;
-      Ok { Provider.text = ""; calls = []; stop_reason = "end_turn"; raw = `Null }
+      Ok { Provider.text = ""; calls = []; stop_reason = "end_turn"; raw = `Null;
+           usage = None }
   | r :: rest ->
       script_cell := rest;
       let r : Provider.reply = r in

@@ -33,12 +33,21 @@ type delta = Text of string | Done | Reasoning of string
    it into the collapsible "thinking + tools" zone instead of the reply
    bubble. *)
 
+(** Provider-reported usage, named here so hosts ([Loop.run]'s callers) never
+    reach across libraries for it. The wire shape + the parser live in the
+    shared codec (common/lib/llm_codec.ml), beside the other OpenAI-shape
+    handling. *)
+type usage = Pricklypear_common.Llm_codec.usage
 type reply = {
   text : string;
   calls : tool_call list;
   stop_reason : string;
   raw : Yojson.Safe.t;       (* assistant message in provider shape,
                                 for appending to history verbatim *)
+  usage : usage option;      (* PROVIDER-STRUCTURED usage for this ONE request
+                                (borge/run-primitive.borg budget-accounting):
+                                the provider's own counts, never a stdout
+                                scrape. None = the provider reported none. *)
 }
 
 type cfg = {
@@ -146,7 +155,18 @@ module Openai = struct
            ("model", `String cfg.model);
            ("messages", `List msgs);
          ]
-         @ (if stream then [ ("stream", `Bool true) ] else [])
+         @ (if stream then
+              [ ("stream", `Bool true) ]
+              @ (if Sys.getenv_opt "PP_STREAM_USAGE" = Some "0" then []
+                 else
+                   (* stream_options.include_usage makes the provider emit a
+                      FINAL SSE chunk carrying the usage object; WITHOUT it no
+                      usage reaches us at all, which is why the run row's
+                      tokens used to be a stdout scrape. PP_STREAM_USAGE=0 is
+                      the escape hatch for a gateway that rejects the field. *)
+                   [ ("stream_options",
+                       `Assoc [ ("include_usage", `Bool true) ]) ])
+            else [])
          @ (match tools with [] -> [] | ts -> [ ("tools", `List (List.map tool_json ts)) ])))
 
   let parse_reply (j : Yojson.Safe.t) : reply =
@@ -176,13 +196,15 @@ module Openai = struct
     in
     match Llm_codec.parse_turn_response_json j with
     | Llm_codec.Turn_error e -> raise (Failure e)
-    | Llm_codec.Final { content; raw } ->
-        { text = content; calls = []; stop_reason; raw }
-    | Llm_codec.Need_tools { content; tool_calls; raw } ->
-        { text = Option.value content ~default:""
-        ; calls = List.map map_call tool_calls
-        ; stop_reason = (if tool_calls = [] then stop_reason else "tool_calls")
-        ; raw }
+      | Llm_codec.Final { content; raw } ->
+          { text = content; calls = []; stop_reason; raw;
+            usage = Llm_codec.usage_of_response_json j }
+      | Llm_codec.Need_tools { content; tool_calls; raw } ->
+          { text = Option.value content ~default:""
+          ; calls = List.map map_call tool_calls
+          ; stop_reason = (if tool_calls = [] then stop_reason else "tool_calls")
+          ; raw
+          ; usage = Llm_codec.usage_of_response_json j }
 
   (* Reconstruct a [reply] from the list of SSE [data:] payloads in a
      streaming response. The accumulation engine (text/reasoning deltas,
