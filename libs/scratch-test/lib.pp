@@ -33,7 +33,7 @@
         (html/h2 "OSINT corner")
         (html/p*
           (html/attr "class" "muted")
-          "497 nuclear explosions M4.5+ sit in the catalog as a distinct type - Kazakhstan, Nevada, Russia, French Polynesia; tail = 2017 DPRK."))))))
+          "497 nuclear explosions M4.5+ sit in the catalog as a distinct type - Kazakhstan, Nevada, Russia, French Polynesia; tail = 2017 DPRK.")))))
 
 (define st/bar
   (lambda (pairs title unit)
