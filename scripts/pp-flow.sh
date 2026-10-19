@@ -273,7 +273,7 @@ drain_pick() { # $1 list-id-expr (or "")  $2 states-expr  $3 exclude-kinds-expr
                         (in? (todo/item/state b) states)
                         (or (null? excl)
                             (not (in? (as-str (dict-get b "kind")) excl))))))
-               (todo/item/queue ""))))
+               (todo/item/active (todo/item/all))))))
         (let ((first (car eligible)))
           (if (null? first)
               ""
