@@ -81,6 +81,8 @@
     todo/node/row-of
     todo/node/unpromoted
     todo/page
+    todo/page/cap
+    todo/page/more-note
     todo/promote-handler
     todo/promote-node
     todo/recipe
@@ -1509,10 +1511,6 @@
 (define todo/item/for-list
   (lambda
     (list-id)
-    (todo/item/for-list-from (as-str list-id) (todo/item/all))))
-(define todo/item/for-list-from
-  (lambda
-    (list-id items)
     (let
       ((lid (as-str list-id))
         (inbox-id (todo/list/ensure-inbox)))
@@ -1525,10 +1523,7 @@
               (string-eq fl lid)
               #t
               (if (string-eq fl "") (string-eq lid inbox-id) #f))))
-        items)))
-  "todo/item/for-list over a CALLER-SUPPLIED card snapshot, so a page that
-     already read todo/item/all never scans the board a second time
-     (2026-10-18 budget fix; todo/item/all is ~40k steps per scan).")
+        (todo/item/all)))))
 
 (define todo/item/for-user
   (lambda
@@ -1546,44 +1541,44 @@
   (lambda (id) (todo/tree/get "todo-item" id)))
 
 ;; KIND field precedes; item/html follows.
+;; ARITY PRESERVED (2026-10-18 budget fix): (view) stays 1-arg on purpose.
+;; Other identities pin this name on their gardens (gregor's is a diverged
+;; own pin), and a shared-main arity change would break them the moment
+;; they inherit the new todo/ui/main. The expensive duplication this fix
+;; targets was 'everything' scanning the board AND the note scrape
+;; repeatedly — todo/ui/main now owns the smart view and calls this only
+;; for the archived / single-list arms, each of which scans ONCE.
 (define todo/item/html
   (lambda
-    (view items)
+    (view)
     (if
-      (string-eq view "from-notes")
-      (todo/from-notes-html view items)
-      (if
-        (string-eq view "archived")
-        (html/ul
-          (html/attr "class" "card todo-list")
-          (list/foldl
-            (lambda
-              (acc row)
-              (string-append acc (todo/item/list-li row view)))
-            ""
-            (list/take
-              (list/filter
-                (lambda (row)
-                  (todo/state/archived? (todo/item/state (cdr row))))
-                items)
-              80)))
-        (html/ul
-          (html/attr "class" "card todo-list")
-          (list/foldl
-            (lambda
-              (acc row)
-              (string-append acc (todo/item/list-li row view)))
-            ""
-            (list/take
-              (todo/item/active (todo/item/for-list-from view items))
-              150))))))
-  "Render a view's CARD rows over the page's ONE card snapshot (items).
-     OBITUARY (2026-10-18 budget fix): the 'everything' arm used to rebuild
-     the whole smart view inline — Lists heading + 80 rows + the from-notes
-     sections — which re-read the board (todo/item/all) and the note scrape
-     per section. todo/ui/main now assembles the smart view ONCE and calls
-     this for the plain-list / archived arms only; 'everything'/'from-notes'
-     never reach the old duplicate render.")
+      (string-eq view "archived")
+      (html/ul
+        (html/attr "class" "card todo-list")
+        (list/foldl
+          (lambda
+            (acc row)
+            (string-append acc (todo/item/list-li row view)))
+          ""
+          (list/take
+            (todo/item/active (todo/item/archived))
+            todo/page/cap)))
+      (html/ul
+        (html/attr "class" "card todo-list")
+        (list/foldl
+          (lambda
+            (acc row)
+            (string-append acc (todo/item/list-li row view)))
+          ""
+          (list/take
+            (todo/item/active (todo/item/for-list view))
+            todo/page/cap)))))
+  "Render a view's CARD rows. OBITUARY (2026-10-18 budget fix): the
+     'everything' arm used to live HERE and rebuilt the whole smart view
+     inline — heading + rows + the from-notes sections — so the page paid
+     the card scan three times and the note scrape twice, blowing the 400k
+     request budget (500). todo/ui/main now assembles the smart view ONCE
+     and calls this for the archived / single-list arms only.")
 
 ;; kind field — borge/workstreams.borg pipeline-model issues-convergence:
 ;; a todo-item with a kind tag (BUG/DESIGN/SMELL/CLEANUP) is READ AS AN
@@ -3990,16 +3985,35 @@
      prim, exactly like the full-index path it replaces.")
 (define todo/node/slug-map
   (lambda
-    ()
+    (marked)
     (list/foldl
-      (lambda (acc r)
-        (dict-set acc
-          (as-str (dict-get (cdr r) "_path"))
-          (as-str (dict-get (cdr r) "slug"))))
+      (lambda (acc nj)
+        (let*
+          ((p (as-str (dict-get nj "path")))
+           (notep (car (string-split p ".h."))))
+          (if
+            (dict-get acc notep)
+            acc
+            (let
+              ((r (tree/get notep)))
+              (if
+                (null? r)
+                acc
+                (let
+                  ((slug (dict-get (dict-get r "body") "slug")))
+                  (if
+                    (null? slug)
+                    acc
+                    (dict-set acc notep (as-str slug)))))))))
       "{}"
-      (tree/note-index (notes/tree/root) 5000)))
-  "path -> slug over the LIGHT note index (outline stays \"[]\", so the
-     rows are cheap). The join key for marked headings -> note slug.")
+      marked))
+  "path -> slug for the notes that OWN a marked heading, resolved from the
+     MARKED ROWS themselves. DISTINCT-PATH LAZY (2026-10-18): the first
+     version folded the whole light note index (tree/note-index, 3385 rows
+     on prod) just to look up ~10 paths — 105k steps of pure binding for a
+     10-entry join. Resolving one tree/get per DISTINCT marked note is
+     ~4.5k steps total and scales with MARKED notes, not with garden size.
+     Only headings of notes that actually carry a mark are ever read.")
 (define todo/node/row-of
   (lambda
     (smap nj)
@@ -4017,16 +4031,16 @@
      the owning note path, which is the slug-map key.")
 (define todo/node/unpromoted
   (lambda
-    (items)
-    (let
+    ()
+    (let*
       ((promoted
           (list/filter
             (lambda (r) (not (string-eq r "")))
             (list/map
               (lambda (row) (todo/item/origin-ref (cdr row)))
-              items)))
-        (smap (todo/node/slug-map))
-        (marked (todo/node/marked-rows)))
+              (todo/item/all))))
+        (marked (todo/node/marked-rows))
+        (smap (todo/node/slug-map marked)))
       (list/filter
         (lambda
           (t)
@@ -4110,14 +4124,10 @@
   "One unpromoted node row with a promote button (POST action=promote-node).")
 (define todo/from-notes-html
   (lambda
-    (view items)
+    (view)
     (let
-      ((cards
-          (list/filter
-            (lambda (row)
-              (string-eq (todo/item/origin-kind (cdr row)) "note"))
-            items))
-        (unpromoted (todo/node/unpromoted items)))
+      ((cards (todo/from-notes-items))
+        (unpromoted (todo/node/unpromoted)))
       (html/join
         (list
           (html/h2 "From notes")
@@ -4136,26 +4146,60 @@
                     (todo/item/list-li row view)
                     (todo/node/back-link (cdr row))))
                 ""
-                (list/take (todo/item/active cards) 80))))
+                (list/take (todo/item/active cards) todo/page/cap))))
           (html/h2 "Notes (unpromoted)")
           (if
             (null? unpromoted)
             (html/p*
               (html/attr "class" "muted")
               "Every marked note node is on the board.")
-            (html/ul
-              (html/attr "class" "card todo-list")
-              (list/foldl
-                (lambda
-                  (acc t)
-                  (string-append acc (todo/node/promote-form t)))
-                ""
-                (list/take unpromoted 80))))))))
+            (html/join
+              (list
+                (html/ul
+                  (html/attr "class" "card todo-list")
+                  (list/foldl
+                    (lambda
+                      (acc t)
+                      (string-append acc (todo/node/promote-form t)))
+                    ""
+                    (list/take unpromoted todo/page/cap)))
+                (todo/page/more-note (length unpromoted)))))))))
   "The 'from notes' view: promoted cards (shared, workable) plus the
      unpromoted nodes that are NOT on the board yet (note-todos clause 4).
      Replaces the scrape-cache notes block, which showed every node as if
      it were a board item. Takes the page's ONE card snapshot (items) so
-     the view never re-scans the board.")
+     the view never re-scans the board.
+
+     WINDOWED (2026-10-18 budget fix, part 2): rows are capped at
+     todo/page/cap (40) and the remainder is reported as a COUNT via
+     todo/page/more-note (the spec's own 'point, don't list' decision from
+     the package-index budget fix). An uncapped render is ~2.5k steps per
+     row: prod's 106 unpromoted rows cost 107k just to lay out, and the
+     Lists section another 205k, which together blew the 400k request
+     budget even after the scrape itself was made 3x cheaper. The cap
+     keeps the honest total visible without paying per-row cost for rows
+     nobody reads above the fold.")
+(define todo/page/cap
+  40
+  "Rows rendered per section of /todos before the 'more' pointer takes
+     over. Chosen from the measured per-row cost (~2.5k steps) against the
+     400k budget: 40 rows/section leaves room for nav, the add form and
+     the other sections (2026-10-18 page-latency budget fix).")
+(define todo/page/more-note
+  (lambda
+    (total)
+    (if
+      (<= total todo/page/cap)
+      ""
+      (html/p*
+        (html/attr "class" "muted")
+        (string-append
+          "…and "
+          (as-str (- total todo/page/cap))
+          " more. "
+          "Marking is free and private; promote what you are working on."))))
+  "Honest truncation pointer: how many rows the cap left unrendered.
+     A capped list must SAY it is capped (never a silent partial view).")
 (define todo/promote-handler
   (lambda
     ()
@@ -4199,8 +4243,7 @@
                       (html/attr "class" "todo-body")
                       (todo/ui/detail (as-str id-param) view))))))))
         (let*
-          ((items (todo/item/all))
-            (list-id
+          ((list-id
               (if
                 (string-eq view "everything")
                 (todo/list/ensure-inbox)
@@ -4209,21 +4252,28 @@
                   ""
                   (if (string-eq view "archived") "" view))))
             (body
-              (if
-                (string-eq view "everything")
-                (html/join
-                  (list
-                    (html/h2 "Lists")
-                    (html/ul
-                      (html/attr "class" "card todo-list")
-                      (list/foldl
-                        (lambda
-                          (acc row)
-                          (string-append acc (todo/item/list-li row view)))
-                        ""
-                        (list/take (todo/item/active items) 80)))
-                    (todo/from-notes-html view items)))
-                (todo/item/html view items))))
+              (cond
+                ((string-eq view "everything")
+                  (let
+                    ((items (todo/item/all)))
+                    (let
+                      ((active (todo/item/active items)))
+                      (html/join
+                        (list
+                          (html/h2 "Lists")
+                          (html/ul
+                            (html/attr "class" "card todo-list")
+                            (list/foldl
+                              (lambda
+                                (acc row)
+                                (string-append acc (todo/item/list-li row view)))
+                              ""
+                              (list/take active todo/page/cap)))
+                          (todo/page/more-note (length active))
+                          (todo/from-notes-html view))))))
+                ((string-eq view "from-notes")
+                  (todo/from-notes-html view))
+                (#t (todo/item/html view)))))
           (html/div
             (html/attr "id" "todo-main")
             (html/join
@@ -4234,7 +4284,7 @@
                     (list
                       (html/div
                         (html/attr "class" "todo-side")
-                        (todo/ui/nav view items))
+                        (todo/ui/nav view))
                       (html/div
                         (html/attr "class" "todo-body")
                         (html/join
@@ -4242,18 +4292,20 @@
                             (todo/ui/add-form view list-id)
                             body)))))))))))))
   "The /todos main region for a view. Reads the board ONCE (items) and
-     threads that snapshot through nav, the row lists and the from-notes
-     view. OBITUARY (2026-10-18 budget fix): each of those used to call
-     todo/item/all itself, so /todos?view=everything paid the card scan
-     three times and the note scrape twice — 500 budget-exceeded. The
-     'everything' smart view is now assembled HERE (Lists + from-notes)
-     rather than nested inside todo/item/html.")
+     threads that snapshot through the smart view. OBITUARY (2026-10-18
+     budget fix): the 'everything' view used to be assembled inside
+     todo/item/html, whose sections each re-read the board (todo/item/all)
+     and the note scrape — three card scans and two scrapes per page, 500
+     budget-exceeded on prod. The smart view is assembled HERE now, from
+     ONE snapshot. todo/ui/nav keeps its 1-arg signature for cross-branch
+     safety (see todo/item/html's arity note).")
 
 (define todo/ui/nav
   (lambda
-    (view items)
+    (view)
     (let
       ((lists (todo/list/all))
+        (items (todo/item/all))
         (inbox (todo/list/ensure-inbox)))
       (let
         ((arch-n
