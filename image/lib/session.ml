@@ -60,17 +60,21 @@ let persist_budget_stats (t : t) ~(budget : Pricklypear_lisp.Eval.budget)
 (* Budgeted variant (jobs.borg runner, 2026-09-05): the job runner passes
    a max_int-step budget so long-running ingest/analytics ticks (400+ DB
    ops) don't die on the 100k request budget. Same rim + label logic as
-   eval_string_rim; callers that don't care use eval_string_rim. *)
-let eval_string_rim_budgeted (t : t) (input : string)
+   eval_string_rim; callers that don't care use eval_string_rim. ~env
+   evaluates in an explicit env — call_handler passes the per-request
+   snapshot env so the handler lookup and the eval cannot diverge when a
+   concurrent rehydrate swaps t.eval_state.env mid-request. *)
+let eval_string_rim_budgeted (t : t) ?env (input : string)
     (budget : Pricklypear_lisp.Eval.budget) : Pricklypear_lisp.Ast.value =
   (* Publish this request's eval budget to the /timing fiber slot
      (i-1788670103-5) BEFORE the eval so a failed handler still samples
      its partial DB accumulators. *)
   Timing.note_eval_budget budget;
-  let v =
-    eval_under_rim t (fun () ->
-        Pricklypear_lisp.Eval.eval_string_direct
-          ~budget ~prims:Pricklypear_lisp.Eval.empty_prims t.eval_state.env input)
+    let v =
+      eval_under_rim t (fun () ->
+          Pricklypear_lisp.Eval.eval_string_direct
+            ~budget ~prims:Pricklypear_lisp.Eval.empty_prims
+            (Option.value env ~default:t.eval_state.env) input)
   in
   (* Best-effort label: top-level (name) call *)
   let label =
@@ -91,8 +95,8 @@ let eval_string_rim_budgeted (t : t) (input : string)
   then persist_budget_stats t ~budget ~label;
   v
 
-let eval_string_rim (t : t) (input : string) : Pricklypear_lisp.Ast.value =
-  eval_string_rim_budgeted t input (Pricklypear_lisp.Eval.make_budget ())
+let eval_string_rim (t : t) ?env (input : string) : Pricklypear_lisp.Ast.value =
+  eval_string_rim_budgeted t ?env input (Pricklypear_lisp.Eval.make_budget ())
 
 (* habitat-book.eval-examples: shared engine for the (example-eval …)
    prim and the POST /book/eval-example endpoint. Restriction lives in
@@ -2316,10 +2320,16 @@ let call_handler (t : t) ?request (handler_name : string)
       let public_gate_result = ref (Ok ()) in
       let run () =
         (try
-      let v =
-               eval_string_rim t ("(" ^ handler_name ^ ")")
-             in
-             (Handler_ok v)
+        let v =
+                 (* Eval in the SAME env the lookup resolved against (the
+                    per-request snapshot, image.per-request-context): a
+                    concurrent rehydrate can swap t.eval_state.env to
+                    system/main mid-request, and evaluating the found handler
+                    in the live env then dies "unbound: <handler>" — the
+                    "[ops] handler: unbound: marked" incident class. *)
+                 eval_string_rim t ~env ("(" ^ handler_name ^ ")")
+               in
+               (Handler_ok v)
     with exn ->
       let msg = pp_interp_exn exn in
              Ops_incidents.emit_and_maybe_file t
@@ -2477,7 +2487,7 @@ let () =
             (fun () ->
               try
                 let _v =
-                  eval_string_rim_budgeted t ("(" ^ handler ^ ")") budget
+                    eval_string_rim_budgeted t ~env ("(" ^ handler ^ ")") budget
                 in
                 `Ok
               with
