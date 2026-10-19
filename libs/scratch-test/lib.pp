@@ -1,4 +1,4 @@
-;; scratch-test - minimal shapes for the loader's define gate
+;; scratch-test round 2 - docstring-after-lambda define shape
 (package scratch-test
 
 (define st/data
@@ -8,6 +8,7 @@
 
 (define st/fn
   (lambda ()
-    "ok"))
+    "ok")
+  "Returns ok - docstring after the lambda body.")
 
 (route "/scratch-test" "st/fn"))
