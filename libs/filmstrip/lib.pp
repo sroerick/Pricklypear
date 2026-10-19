@@ -4243,3 +4243,25 @@ declared behavior data, never its own markup.")
 (route "/filmstrip/tree/collapse" "filmstrip/tree-collapse")
 (route "/filmstrip/destroy" "filmstrip/destroy")
 (route "/filmstrip/desktop" "filmstrip/desktop-set")
+
+(define filmstrip/shell-user?
+  (lambda
+    ()
+    (not (null? (nth (filmstrip/row) 1))))
+  "True when this user has persisted filmstrip panes (a returning shell user).")
+
+(define filmstrip/page-with-open
+  (lambda
+    (r)
+    (let*
+      ((row (filmstrip/row))
+        (cascade (nth row 0))
+        (panes (nth row 1))
+        (focus (nth row 2))
+        (res (filmstrip/open-apply panes r))
+        (panes2 (nth res 0))
+        (focus2 (nth res 1)))
+        (seq
+          (filmstrip/save-all cascade panes2 focus2)
+            (render-html (filmstrip/shell-html cascade panes2 focus2)))))
+    "Full-shell GET with route r opened-or-focused first (bare app URL re-entry: a refresh of an app URL lands back in filmstrip at that URL). Persists the pane like POST /filmstrip/open.")

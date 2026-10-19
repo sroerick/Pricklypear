@@ -222,14 +222,17 @@
                 (string-eq (as-str inter) "")
                 ""
                 (string-append "&inter=" (as-str inter)))))))
-      (if
-        (hx-request?)
-        (dabar/panel-for-request)
-        (html/page
-          (list
-            (html/div
-              (html/attr "id" "dabar-panel")
-              (dabar/panel-for-request))))))))
+        (if
+          (hx-request?)
+          (dabar/panel-for-request)
+          (if
+            (filmstrip/shell-user?)
+            (filmstrip/page-with-open (dabar/current-url))
+            (html/page
+              (list
+                (html/div
+                  (html/attr "id" "dabar-panel")
+                      (dabar/panel-for-request)))))))))
 
 (define dabar/panel
   (lambda
@@ -422,3 +425,55 @@
             (list
               (bible/go-form book chapter verse)
               (dabar/verse-study book chapter verse))))))))
+
+(define dabar/current-url
+  (lambda
+    ()
+    (let
+      ((q (dabar/join-pairs
+            (dabar/param-pairs
+              (list "book" "chapter" "verse" "inter" "ref" "q" "random")))))
+      (if
+        (string-eq q "")
+        (request-path)
+        (string-append (request-path) "?" q))))
+  "The current /dabar URL (path + reconstructed query) for shell re-entry.")
+
+(define dabar/join-pairs
+  (lambda
+    (ps)
+    (if
+      (null? ps)
+      ""
+      (if
+        (null? (cdr ps))
+        (car ps)
+        (string-append (car ps) "&" (dabar/join-pairs (cdr ps))))))
+  "Join query k=v strings with &.")
+
+(define dabar/param-pairs
+  (lambda
+    (names)
+    (if
+      (null? names)
+      ()
+      (let
+        ((v (request-param (car names))))
+        (if
+          (or (null? v) (string-eq (as-str v) ""))
+          (dabar/param-pairs (cdr names))
+          (cons
+            (string-append (as-str (car names)) "=" (as-str v))
+            (dabar/param-pairs (cdr names)))))))
+  "Query k=v strings for the named params of the current request, skipping absent/empty ones.")
+
+(define dabar/next
+  (lambda
+    ()
+    (bible/chapter-panel
+      (if (null? (request-param "book")) "John" (as-str (request-param "book")))
+      (if (null? (request-param "chapter")) "1" (as-str (request-param "chapter")))
+      ()))
+  "Fragment route for the reader sentinel: just the requested chapter panel (which carries its own next sentinel).")
+
+(route "/dabar/next" "dabar/next")

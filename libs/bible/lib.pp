@@ -25,29 +25,40 @@
       (bible/books)))
   "Look up a bible-book row by its canonical ordinal (1-66); () if out of range.")
 
-(define bible/book-options
+(define bible/book-options-from
   (lambda
-    (current)
-    (list/foldl
-      (lambda
-        (acc row)
-        (let
-          ((f (cdr row)))
-          (let
-            ((name (dict-get f "name"))
-              (abbrev (dict-get f "abbrev")))
+    (i current acc)
+    (if
+      (> i 66)
+      acc
+      (let
+        ((f (bible/book-by-ordinal i)))
+        (bible/book-options-from
+          (+ i 1)
+          current
+          (if
+            (null? f)
+            acc
             (string-append
               acc
               (html/option
-                (as-str abbrev)
-                (as-str name)
+                (as-str (dict-get f "abbrev"))
+                (as-str (dict-get f "name"))
                 (if
-                  (string-eq (as-str current) (as-str abbrev))
+                  (string-eq (as-str current) (as-str (dict-get f "abbrev")))
                   #t
-                  (string-eq (as-str current) (as-str name))))))))
-      ""
-      (bible/books)))
-  "HTML <option> list of all books, with `current` selected (empty string selects none).")
+                    (string-eq (as-str current) (as-str (dict-get f "name")))))
+              ))
+            )
+          )
+          ))
+    "Worker for book-options: emit <option>s for canonical ordinals i..66, in canonical order.")
+
+(define bible/book-options
+  (lambda
+    (current)
+    (bible/book-options-from 1 current ""))
+  "HTML <option> list of all books in CANONICAL order (Genesis..Revelation), with `current` selected (empty string selects none).")
 
 (define bible/book-ordinal
   (lambda
@@ -207,6 +218,27 @@
               ""
               rows))
           (bible/nav-links ab ch)
+            (let
+              ((nxt (bible/next-ref book ch)))
+              (if
+                (null? nxt)
+                ""
+                (html/tag
+                  "div"
+                  (html/attrs
+                    (list
+                      (html/attr "class" "bible-next-sentinel")
+                        (html/attr "hx-get"
+                          (string-append
+                            "/dabar/next?book="
+                            (as-str (car nxt))
+                            "&chapter="
+                            (as-str (car (cdr nxt)))))
+                        (html/attr "hx-trigger" "revealed")
+                        (html/attr "hx-swap" "outerHTML")))
+                  (html/p*
+                    (html/attr "class" "muted")
+                    (string-append "loading " (as-str (car nxt)) " " (as-str (car (cdr nxt))))))))
           (if
             (null? focus-verse)
             ""
