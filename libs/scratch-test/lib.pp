@@ -42,3 +42,4 @@
     "<svg/>"))
 
 (route "/scratch-test" "quake/page"))
+)
