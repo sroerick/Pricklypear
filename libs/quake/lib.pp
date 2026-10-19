@@ -38,9 +38,9 @@
                  (let* ((p (list-ref pairs i))
                         (label (as-str (car p)))
                         (v (car (cdr p)))
-                        (bh (div (* v (- h padb 20)) maxv))
+                        (bh (div (* v (- (- h padb) 20)) maxv))
                         (x (+ padl (* i gapw) (div (- gapw barw) 2)))
-                        (y (- h padb bh))
+                        (y (- (- h padb) bh))
                         (bar (string-append
                                "<rect x='" (as-str x) "' y='" (as-str y)
                                "' width='" (as-str barw) "' height='" (as-str bh)
