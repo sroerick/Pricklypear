@@ -3114,7 +3114,7 @@ retires; this framework body is the one residence).")
             (html/attr "hx-vals" vals)
             (html/attr "hx-trigger" trigger)
             (html/attr "hx-target" "#fs-sink")
-            (html/attr "hx-swap" "innerHTML") extra)))
+              (html/attr "hx-swap" "innerHTML")) extra))
       ""))
   "Invisible trigger element: an htmx key filter on the body that POSTs a
 shell event (vals carries the dir param). Zero javascript files (D3) --

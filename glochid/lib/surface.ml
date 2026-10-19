@@ -204,7 +204,7 @@ let surface_source = {pp|
       (render-html body)
       (render-html
         (string-append
-          "<!doctype html><html><head><meta charset=utf-8><title>" title "</title>"
+            "<!doctype html><html lang=en><head><meta charset=utf-8><title>" title "</title>"
           ;; CodeMirror for the /code file arm (BORGE-1789581611): CSS in
           ;; head, lib + modes + boot before </body> — boot-all benches
           ;; page pres; observer boots swapped-in pane pres later.
@@ -261,7 +261,7 @@ let surface_source = {pp|
     " · "
     (filmstrip/app-link "/settings" "/settings")
     " · model: "
-    "<select name=\"model\" class=\"fs-modelsel\" hx-post=\"/settings\" hx-trigger=\"change\" hx-swap=\"none\">"
+      "<select name=\"model\" aria-label=\"model\" class=\"fs-modelsel\" hx-post=\"/settings\" hx-trigger=\"change\" hx-swap=\"none\">"
     (settings/model-options (glochid/model) (glochid/models))
     "</select></span></h1>"))
 
@@ -294,7 +294,7 @@ app-link/button twins (POST /filmstrip/new, open-or-focus /sessions)."
       "</div>"
       "<form id=\"f\" hx-post=\"/chat\" hx-target=\"#log\" hx-swap=\"beforeend\" hx-ext=\"hx-multipart\""
       " hx-config='{\"timeout\":0}' hx-on::before:request=\"this.reset()\">"
-      "<input id=\"msg\" name=\"msg\" type=\"text\" placeholder=\"prompt…\" autocomplete=\"off\" autofocus>"
+        "<input id=\"msg\" name=\"msg\" type=\"text\" placeholder=\"prompt…\" autocomplete=\"off\" autofocus aria-label=\"prompt\">"
       "<button>send</button>"
       "</form></div>")))
 
@@ -1843,7 +1843,7 @@ reload keeps the pane). Bad routes fall back to the plain row.")
       (render-html shell)
       (render-html
         (string-append
-          "<!doctype html><html><head><meta charset=utf-8><title>glochid shell</title>"
+            "<!doctype html><html lang=en><head><meta charset=utf-8><title>glochid shell</title>"
           ;; CM ride (BORGE-1789581611) — code panes boot wherever they
           ;; end up (boot-all + observer in pp-cm.js).
           "<link rel=stylesheet href=\"/assets/codemirror.min.css\">"
