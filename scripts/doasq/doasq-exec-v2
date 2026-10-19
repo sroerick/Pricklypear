@@ -7,10 +7,10 @@ API using hollis's DATA-ONLY token (the delegation model: the agent's
 credential touches data; the execution is the root helper's job).
 
 Per card: verify the sha recorded at submission still matches the
-command bytes (tamper = refuse); verify the card state is APPROVED and
-the transition was made by roerick (the event log); run via ksh -c;
-post the output as a card comment; move the card to DONE. One-shot by
-state: DONE cards are never re-run.
+  command bytes (tamper = refuse); verify the card state is APPROVED and
+  the transition was made by the configured approver (the event log);
+  run via ksh -c; post the output as a card comment; move the card to
+  DONE. One-shot by state: DONE cards are never re-run.
 
 The audit = the card's event/comment trail + the activity ledger —
 the house's native audit, not a bespoke log.
@@ -20,7 +20,10 @@ import base64, hashlib, json, subprocess, sys, urllib.request
 BASE = "https://pricklypear.rocks"
 TOKEN = open("/home/hollis/secrets/ppdesignate").read().strip()
 LIST_ID = open("/var/lib/doasq/list-id").read().strip() if __import__("os").path.exists("/var/lib/doasq/list-id") else "19eba8e4-87c8-48a8-b04f-4da6f499a180"
-APPROVER = "roerick"
+# The approver is configuration, not a hardcoded name:
+# /var/lib/doasq/approver (one username — the event-log author whose
+# APPROVED transitions the runner will honor). Default: roerick.
+APPROVER = open("/var/lib/doasq/approver").read().strip() if __import__("os").path.exists("/var/lib/doasq/approver") else "roerick"
 
 def api(expr, timeout=120):
     req = urllib.request.Request(BASE + "/api/eval",
@@ -37,14 +40,32 @@ def die(msg):
 def sha_of(text):
     return hashlib.sha256(text.encode()).hexdigest()
 
+
+def approved_by(events, approver):
+    """The attribution check: author rides the event ROW METADATA
+    (top-level "author" on the node-JSON), the transition rides the
+    body (to_state). A substring scan of the whole event JSON would
+    credit a mention of the name, not an authored approval."""
+    return any(
+        str((e.get("body") or {}).get("to_state", "")) == "APPROVED"
+        and str(e.get("author", "")) == approver
+        for e in events)
+
 # -- gather the list's cards --
-rows = api('(tree/list "data.s.Ym9hcmQ1.dG9kby1pdGVt0" 0 200)').get("value", [])
+# The queue lives in the SHARED data space (data.s): a Board on ANY seat may
+# hold the doasq-requests list and its cards. Scan the shared root at type
+# depth — the same walk as the habitat face (doasq/items in
+# libs/doasq/lib.pp) — instead of one hardcoded seat subtree, which
+# silently dropped cards filed from other seats.
+rows = api('(tree/list "data.s" 3 5000)').get("value", [])
 list_row = next((r for r in rows
                  if r.get("type") == "todo-list"
                  and (r.get("body") or {}).get("title") == "doasq-requests"), None)
-if list_row is None:
-    die("the doasq-requests list is missing from the shared space")
-list_id = list_row["id"].replace("-", "")  # path tail form
+if list_row is not None:
+    list_id = str(list_row["id"]).replace("-", "")  # path tail form
+else:
+    # fall back to the pinned list id (the bootstrap's config file)
+    list_id = LIST_ID.replace("-", "")
 items = [r for r in rows
          if r.get("type") == "todo-item"
          and str((r.get("body") or {}).get("list_id", "")).replace("-", "") == list_id]
@@ -75,10 +96,9 @@ for it in approved:
         continue
 
     # 2. the transition to APPROVED must exist in the card's event log,
-    #    made by roerick (the attribution check)
+    #    authored by the configured approver (the attribution check)
     ev = api(f'(todo/event/list "{iid}")').get("value", [])
-    ev_text = json.dumps(ev)
-    if "APPROVED" not in ev_text or APPROVER not in ev_text:
+    if not approved_by(ev, APPROVER):
         print(f"doasq-exec: SKIP {iid} — no {APPROVER} approval transition in the event log")
         continue
 
