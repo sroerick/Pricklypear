@@ -1,8 +1,6 @@
 (package scratch-test
 
 (define st/bar
-  (lambda ()
+  (lambda (pairs title unit)
     "<svg/>")
-  "Stub docstring.")
-
-(route "/scratch-test" "st/bar"))
+  "Stub docstring."))
