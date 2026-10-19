@@ -29,7 +29,7 @@
            (padl 46)
            (padb 34)
            (n (length pairs))
-           (maxv (list/foldl (lambda (acc p) (if (> (list-ref p 1) acc) (list-ref p 1) acc)) 1 pairs))
+           (maxv (list/foldl (lambda (acc p) (if (> (car (cdr p)) acc) (car (cdr p)) acc)) 1 pairs))
            (gapw (div (- w padl 10) n))
            (barw (div (* gapw 7) 10))
            (bars
@@ -37,7 +37,7 @@
                (lambda (i)
                  (let* ((p (list-ref pairs i))
                         (label (as-str (car p)))
-                        (v (list-ref p 1))
+                        (v (car (cdr p)))
                         (bh (div (* v (- h padb 20)) maxv))
                         (x (+ padl (* i gapw) (div (- gapw barw) 2)))
                         (y (- h padb bh))
@@ -54,7 +54,7 @@
                               label "</text>")
                             "")))
                    (string-append bar tick)))
-               (list/range n))))
+               (quake/range 0 n))))
       (string-append
         "<svg viewBox='0 0 " (as-str w) " " (as-str h)
         "' width='100%' role='img'><text x='10' y='16' font-size='12'>"
