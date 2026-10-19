@@ -1,4 +1,4 @@
-;; scratch-test r18: data + range + FULL page + stub
+;; r19: yearly(52) + full page + stub
 (package scratch-test
 
 (define quake/yearly
@@ -53,37 +53,6 @@
 ("2022" 7766)
 ("2023" 7651)
 ("2024" 6397))))
-
-(define quake/depth-buckets
-  (quote
-    (("shallow" 210304)
-("intermediate" 48676)
-("deep" 4801)
-("very-deep" 9513))))
-
-(define quake/regions-m7
-  (quote
-    (("Indonesia" 73)
-("Papua New Guinea" 49)
-("Vanuatu" 39)
-("Philippines" 38)
-("Japan" 35)
-("Russia" 29)
-("Chile" 26)
-("Solomon Islands" 26)
-("Peru" 23)
-("Mexico" 22)
-("Alaska" 20)
-("New Zealand" 20))))
-
-(define quake/range
-  (lambda
-    (lo hi)
-    (if
-      (>= lo hi)
-      ()
-      (cons lo (quake/range (+ lo 1)))))
-  "Integers lo..hi-1.")
 
 (define quake/page
   (lambda ()
