@@ -1,14 +1,27 @@
-;; scratch-test round 2 - docstring-after-lambda define shape
+;; scratch-test round 3 - replicate quake shapes
 (package scratch-test
 
 (define st/data
   (quote
-    (("a" 1)
-     ("b" 2))))
+    (("1975" 3344)
+     ("1976" 3631))))
 
-(define st/fn
+(define st/range
+  (lambda
+    (lo hi)
+    (if
+      (>= lo hi)
+      ()
+      (cons lo (st/range (+ lo 1)))))
+  "Integers lo..hi-1.")
+
+(define st/page
   (lambda ()
-    "ok")
-  "Returns ok - docstring after the lambda body.")
+    (list
+      (html/h1 "T")
+      (html/p*
+        (html/attr "class" "muted")
+        "body text")))
+  "Page fn.")
 
-(route "/scratch-test" "st/fn"))
+(route "/scratch-test" "st/page"))
