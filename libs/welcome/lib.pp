@@ -456,7 +456,9 @@
               (html/text " · ")
               (html/a "/agent.txt" (html/text "agent instructions"))
               (html/text " · ")
-              (html/a "/about" (html/text "concepts (after login)")))))))))
+              (html/a "/about" (html/text "concepts (after login)"))
+              (html/text " · ")
+              (html/a "mailto:roerick@wyo.town" (html/text "roerick@wyo.town")))))))))
 
 (define welcome/roadmap
   (lambda
