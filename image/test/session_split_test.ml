@@ -175,6 +175,42 @@ let test_handler_evals_in_snapshot_env () =
       | S.Handler_error msg ->
           Alcotest.fail (Printf.sprintf "handler died after env divergence: %s" msg))
 
+(** Regression (card 0eaf31d5, "[ops] handler: unbound: todo/ensure-space"):
+    the same request-snapshot divergence as d93d8292, but the unbound name
+    is a CALLEE inside the handler body — todo/ensure-space tops every todo
+    entry point (todo/page, kanban/page, workstreams/page) and
+    notes/issues/page; no route dispatches it directly, so the incident's
+    fingerprint names the callee, not the handler. The handler resolves in
+    both envs; its body used to run in the swapped live env and died
+    "unbound: todo/ensure-space". Dispatch must run the whole handler —
+    body callees included — in the snapshot env it looked the handler up
+    in. *)
+let test_handler_body_callee_evals_in_snapshot_env () =
+  let t = anon_session () in
+  ignore (eval_value t "(define (todo/ensure-space) \"space-ok\")");
+  ignore (eval_value t "(define (issues-page) (todo/ensure-space))");
+  let snapshot_env = S.env t in
+  (* Simulate the rehydrate: the live env moves to a fresh record holding
+     neither the handler nor its callee; the request context keeps the
+     snapshot env. Pre-77a3742 the body ran here and died unbound. *)
+  t.eval_state.env <- Pricklypear_lisp.Env.create ();
+  let ctx =
+    Pricklypear_image_lib.Request_context.make
+      ~manifest:(S.manifest t)
+      ~env:snapshot_env
+      ~is_admin:false
+      ~routes:(Pricklypear_image_lib.Request_context.copy_routes (S.routes t))
+      ~source_ip:None
+  in
+  Pricklypear_image_lib.Request_context.with_current ctx (fun () ->
+      match S.call_handler t "issues-page" with
+      | S.Handler_ok _ -> ()
+      | S.Handler_unbound ->
+          Alcotest.fail "handler bound in the snapshot env resolved as unbound"
+      | S.Handler_error msg ->
+          Alcotest.fail
+            (Printf.sprintf "body callee died after env divergence: %s" msg))
+
 (* Control_rim captures Eio effects, so eval-touching cases run inside
    the Eio scheduler (rls_floor_test precedent). *)
 let in_eio f = Eio_main.run (fun _ -> f ())
@@ -190,6 +226,8 @@ let () =
             (fun () -> in_eio test_control_prim_guards_through_seam)
           ; Alcotest.test_case "handler evals in the snapshot env" `Quick
               (fun () -> in_eio test_handler_evals_in_snapshot_env)
+          ; Alcotest.test_case "handler body callee evals in the snapshot env" `Quick
+              (fun () -> in_eio test_handler_body_callee_evals_in_snapshot_env)
         ; Alcotest.test_case "boot seed re-exports" `Quick
             test_boot_seed_reexports
         ]) ]
