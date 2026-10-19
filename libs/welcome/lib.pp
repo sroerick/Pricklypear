@@ -437,7 +437,9 @@
                     " "
                     (layout/cta "/agent.txt" "Agent instructions")
                     " "
-                    (layout/cta "/login" "Sign in")))))))
+                    (layout/cta "/login" "Sign in")
+                    " "
+                    (layout/cta "/contacts" "Talk to us")))))))
         (html/div
           (html/attr "class" "layout-foot")
           (html/join
