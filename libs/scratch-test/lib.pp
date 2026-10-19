@@ -5,9 +5,5 @@
     "<svg/>")
   "Stub docstring.")
 
-(define st/page
-  (lambda ()
-    (html/page (list (html/h1 "T"))))
-
-(route "/scratch-test" "st/page"))
+(route "/scratch-test" "st/bar"))
 )
