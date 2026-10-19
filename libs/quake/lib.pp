@@ -1,11 +1,11 @@
 ;; package quake - USGS earthquake exploration (Track B probe, data-value
 ;; program card 64b0af4e). Static aggregates from the USGS FDSN catalog:
-;; 273,294 events M4.5+, 1975-2026 (25 two-year API windows). v1 = baked
-;; aggregates + server-rendered SVG charts (no JS, no CDN - house
-;; discipline). Data refreshed by re-running the extract + re-releasing.
+;; 273,294 events M4.5+, 1975-2026. v1 = baked aggregates + server-rendered
+;; SVG charts (no JS, no CDN). Refresh = re-extract + re-release.
 
 (package quake
 
+;; M4.5+ event counts per year, USGS FDSN catalog 1975-2026.
 (define quake/yearly
   (quote
     (("1975" 3344)
@@ -58,15 +58,15 @@
     ("2022" 7766)
     ("2023" 7651)
     ("2024" 6397))))
-  ;; M4.5+ event counts per year, USGS FDSN catalog 1975-2026.
+
 
 (define quake/depth-buckets
   (quote
     ((shallow 210304)
      (intermediate 48676)
      (deep 4801)
-     (very-deep 9513))))
-  ;; Event counts by depth band (km): shallow <=70, intermediate <=300, deep <=500, very-deep >500.
+     (very-deep 9513)))))
+
 
 (define quake/regions-m7
   (quote
@@ -82,7 +82,10 @@
     ("Mexico" 22)
     ("Alaska" 20)
     ("New Zealand" 20))))
-  ;; M7+ event counts by region, top 12, 1975-2026 (693 M7+ events total).
+
+
+;; depth bands (km): shallow <=70, intermediate <=300, deep <=500, very-deep >500.
+;; M7+ total 693 (1975-2026).
 
 (define quake/range
   (lambda
@@ -90,8 +93,8 @@
     (if
       (>= lo hi)
       ()
-      (cons lo (quake/range (+ lo 1) hi))))
-  "Integers lo..hi-1 (no kernel range prim; local helper).")
+      (cons lo (quake/range (+ lo 1)))))
+  "Integers lo..hi-1.")
 
 (define quake/bar-svg
   (lambda
@@ -120,14 +123,14 @@
                 (x (+ pad-l (* i gap) (div (- gap bw) 2)))
                 (y (- h pad-b bh))
                 (label (car p)))
-             (string-append
-               "<rect x=\"" (as-str x) "\" y=\"" (as-str y)
-               "\" width=\"" (as-str bw) "\" height=\"" (as-str bh)
-               "\" fill=\"#7aa2f7\"><title>" label ": " (as-str v) " " unit "</title></rect>"
-               (if (= (mod i 5) 0)
-                   (string-append "<text x=\"" (as-str x) "\" y=\"" (as-str (- h 10))
-                     "\" font-size=\"9\" fill=\"#6b7080\" text-anchor=\"middle\">" label "</text>")
-                   ""))))
+               (string-append
+                 "<rect x=\"" (as-str x) "\" y=\"" (as-str y)
+                 "\" width=\"" (as-str bw) "\" height=\"" (as-str bh)
+                 "\" fill=\"#7aa2f7\"><title>" label ": " (as-str v) " " unit "</title></rect>"
+                 (if (= (mod i 5) 0)
+                     (string-append "<text x=\"" (as-str x) "\" y=\"" (as-str (- h 10))
+                       "\" font-size=\"9\" fill=\"#6b7080\" text-anchor=\"middle\">" label "</text>")
+                     ""))))
            (quake/range 0 (- n 1)))))
       (string-append
         "<svg viewBox=\"0 0 " (as-str w) " " (as-str h)
@@ -136,7 +139,7 @@
         (html/join bars)
         "<line x1=\"" (as-str pad-l) "\" y1=\"" (as-str (- h pad-b))
         "\" x2=\"" (as-str w) "\" y2=\"" (as-str (- h pad-b)) "\" stroke=\"#2a2e3a\"/></svg>"))))
-  "Server-rendered SVG bar chart from (label . count) pairs. No JS.")
+  "Server-rendered SVG bar chart from (label . count) pairs. No JS.)
 
 (define quake/page
   (lambda
@@ -153,7 +156,7 @@
           (quake/bar-svg quake/yearly "M4.5+ events per year, 1975-2026" "events"))
         (html/p*
           (html/attr "class" "muted")
-          "Counts RISE over time because the detection network grows, not because the planet shakes more - any rate model must account for the instruments.")
+          "Counts rise over time because the detection network grows, not because the planet shakes more - any rate model must account for the instruments.")
         (html/h2 "Depth distribution")
         (html/div
           (html/attr "style" "max-width:960px")
@@ -172,6 +175,6 @@
         (html/h2 "OSINT corner")
         (html/p*
           (html/attr "class" "muted")
-          "497 nuclear explosions M4.5+ appear in the catalog as a distinct type (Kazakhstan, Nevada, Russia, French Polynesia; tail = 2017 DPRK).")))
+          "497 nuclear explosions M4.5+ appear in the catalog as a distinct type (Kazakhstan, Nevada, Russia, French Polynesia; tail = 2017 DPRK)."))))
 
-(route "/quake" "quake/page")
+(route "/quake" "quake/page"))
