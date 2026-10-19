@@ -13,12 +13,12 @@ let test_covers_catalog () =
     Prims_pure.catalog_names
 
 (* Image-only extras (layered ON TOP of the shared catalog):
-   wall-clock prims (prims_time.ml reads Unix), sha1 (prims_crypto.ml),
-   and the Mirage_crypto random-uuid shadow (the browser client keeps
-   the pure MT19937 version). *)
+   wall-clock prims (prims_time.ml reads Unix), sha1 + sha256
+   (prims_crypto.ml), and the Mirage_crypto random-uuid shadow (the
+   browser client keeps the pure MT19937 version). *)
 let extras =
   [ "date-today"; "now"; "now-ms"; "date-weekday"; "date-format"
-  ; "date-add-days"; "date-diff-days"; "sha1"; "random-uuid" ]
+  ; "date-add-days"; "date-diff-days"; "sha1"; "sha256"; "random-uuid" ]
 
 let test_extras_on_top () =
   let t = table () in
