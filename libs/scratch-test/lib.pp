@@ -1,9 +1,5 @@
-;; scratch-test round 7 - quake/page verbatim
+;; scratch-test round 8 - page alone with stub
 (package scratch-test
-
-(define st/data
-  (quote
-    (("a" 1))))
 
 (define quake/page
   (lambda ()
@@ -16,21 +12,21 @@
         (html/h2 "Events per year")
         (html/div
           (html/attr "style" "max-width:960px")
-          (st/bar-svg st/data "M4.5+ events per year" "events"))
+          (st/bar quake/yearly "M4.5+ events per year" "events"))
         (html/p*
           (html/attr "class" "muted")
           "Counts rise with time because the detection network grows - any rate model must account for the instruments.")
         (html/h2 "Depth distribution")
         (html/div
           (html/attr "style" "max-width:960px")
-          (st/bar-svg st/data "Events by depth band (km)" "events"))
+          (st/bar quake/depth-buckets "Events by depth band (km)" "events"))
         (html/p*
           (html/attr "class" "muted")
           "9,513 events deeper than 500km - mostly the Fiji/Tonga slab, Earth's most active deep-subduction system.")
         (html/h2 "M7+ by region")
         (html/div
           (html/attr "style" "max-width:960px")
-          (st/bar-svg st/data "M7+ events by region, top 12 of 693" "M7+ events"))
+          (st/bar quake/regions-m7 "M7+ events by region, top 12 of 693" "M7+ events"))
         (html/h2 "Gutenberg-Richter check")
         (html/p*
           (html/attr "class" "muted")
@@ -40,9 +36,9 @@
           (html/attr "class" "muted")
           "497 nuclear explosions M4.5+ sit in the catalog as a distinct type (Kazakhstan, Nevada, Russia, French Polynesia; tail = 2017 DPRK)."))))
 
-(define st/bar-svg
+(define st/bar
   (lambda (pairs title unit)
-    "<svg><rect/></svg>"))
+    "<svg/>"))
 
 (route "/scratch-test" "quake/page"))
 )
