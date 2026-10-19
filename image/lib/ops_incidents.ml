@@ -179,6 +179,12 @@ let record_event (session : Session_types.t) (ev : Ops_log.event)
       Ops_stats.note_error ~fatal:(ev.level = Ops_log.Fatal);
       let store = session.store in
       let now = iso_now () in
+        let ctx_str =
+          if ev.context = [] then "(none)"
+          else
+            String.concat " "
+              (List.map (fun (k, v) -> k ^ "=" ^ v) ev.context)
+        in
       let existing = find_open_incident store ~fingerprint:ev.fingerprint in
       (match existing with
        | Some (id, fields) ->
@@ -190,6 +196,7 @@ let record_event (session : Session_types.t) (ev : Ops_log.event)
                   ; ("level", `String (Ops_log.level_to_string ev.level))
                   ; ("severity", `String "reliability")
                   ; ("component", `String ev.component)
+                    ; ("context", `String ctx_str)
                   ; ("count", `Int count)
                   ; ("first_seen", `String (json_get fields "first_seen"))
                   ; ("last_seen", `String now)
@@ -209,19 +216,20 @@ let record_event (session : Session_types.t) (ev : Ops_log.event)
                (let m = ev.msg in
                 if String.length m > 72 then String.sub m 0 72 ^ "…" else m)
            in
-           let body =
-             Printf.sprintf
-               "Reliability incident (auto-filed)\n\n\
-                fingerprint: %s\n\
-                component: %s\n\
-                level: %s\n\
-                first_seen: %s\n\
-                sample: %s\n\n\
-                Filed as a TODO so it can be fixed. Deduped by fingerprint."
-               ev.fingerprint ev.component
-               (Ops_log.level_to_string ev.level)
-               now ev.msg
-           in
+            let body =
+              Printf.sprintf
+                "Reliability incident (auto-filed)\n\n\
+                 fingerprint: %s\n\
+                 component: %s\n\
+                 context: %s\n\
+                 level: %s\n\
+                 first_seen: %s\n\
+                 sample: %s\n\n\
+                 Filed as a TODO so it can be fixed. Deduped by fingerprint."
+                ev.fingerprint ev.component ctx_str
+                (Ops_log.level_to_string ev.level)
+                now ev.msg
+            in
            let todo_id = file_todo_and_note session ~title ~body in
            let fields_json =
              Yojson.Safe.to_string
@@ -230,6 +238,7 @@ let record_event (session : Session_types.t) (ev : Ops_log.event)
                   ; ("level", `String (Ops_log.level_to_string ev.level))
                   ; ("severity", `String "reliability")
                   ; ("component", `String ev.component)
+                    ; ("context", `String ctx_str)
                   ; ("count", `Int 1)
                   ; ("first_seen", `String now)
                   ; ("last_seen", `String now)
