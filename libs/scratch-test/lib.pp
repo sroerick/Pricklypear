@@ -9,10 +9,6 @@
 
 (define quake/yearly (quote (("1975" 3344) ("1976" 3631) ("1977" 3614) ("1978" 3348) ("1979" 3327))))
 
-(define quake/depth-buckets (quote (("shallow" 210304) ("intermediate" 48676) ("deep" 4801) ("very-deep" 9513))))
-
-(define quake/regions-m7 (quote (("Indonesia" 73) ("Papua New Guinea" 49) ("Vanuatu" 39) ("Philippines" 38) ("Japan" 35) ("Russia" 29) ("Chile" 26) ("Solomon Islands" 26) ("Peru" 23) ("Mexico" 22) ("Alaska" 20) ("New Zealand" 20))))
-
 (define quake/bar-svg
   (lambda (pairs title unit)
     "<svg/>")
