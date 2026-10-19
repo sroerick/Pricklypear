@@ -2,15 +2,17 @@
 
 (define st/d (quote (("a" 1))))
 
-(define quake/page
+(define quake/range
+  (lambda
+    (lo hi)
+    (if
+      (>= lo hi)
+      ()
+      (cons lo (quake/range (+ lo 1)))))
+)
+
+(define st/page
   (lambda ()
-    (html/page
-      (list
-        (html/h1 "T")
-        (html/p* (html/attr "class" "muted") "body")))))
+    (html/page (list (html/h1 "T")))))
 
-(define st/bar
-  (lambda (pairs title unit)
-    "<svg/>"))
-
-(route "/scratch-test" "quake/page"))
+(route "/scratch-test" "st/page"))
