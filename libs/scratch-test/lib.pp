@@ -53,10 +53,10 @@
      ("2021" 8959)
      ("2022" 7766)
      ("2023" 7651)
-     ("2024" 6397)))))
-
-(route "/scratch-test" "st/fn"))
+     ("2024" 6397))))
 
 (define st/fn
   (lambda ()
     "ok"))
+
+(route "/scratch-test" "st/fn"))
