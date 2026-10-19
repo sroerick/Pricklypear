@@ -13,15 +13,6 @@
 
 (define quake/regions-m7 (quote (("Indonesia" 73) ("Papua New Guinea" 49) ("Vanuatu" 39) ("Philippines" 38) ("Japan" 35) ("Russia" 29) ("Chile" 26) ("Solomon Islands" 26) ("Peru" 23) ("Mexico" 22) ("Alaska" 20) ("New Zealand" 20))))
 
-(define quake/range
-  (lambda
-    (lo hi)
-    (if
-      (>= lo hi)
-      ()
-      (cons lo (quake/range (+ lo 1)))))
-  "Integers lo..hi-1.")
-
 (define quake/bar-svg
   (lambda (pairs title unit)
     "<svg/>")
