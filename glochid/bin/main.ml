@@ -110,6 +110,8 @@ let () =
   let do_stop = ref false in
   let do_reload = ref false in
     let supervisor = ref false in
+    let run_brief = ref None in
+    let result_json = ref None in
   let anon (_ : string) = () in
   let speclist =
     Arg.align
@@ -128,6 +130,10 @@ let () =
         ("--reload", Arg.Set do_reload, "send SIGHUP to the running --serve process to reload surface + plugins");
         ("--supervisor", Arg.Set supervisor,
          "run the PP run-primitive supervisor tick loop alongside --serve (GLOCHID_SUPERVISOR=1 also enables)");
+          ("--run-brief", Arg.String (fun s -> run_brief := Some s),
+           "FILE run ONE executor brief through the harness (the PP native runner, borge/run-primitive.borg phase 3) and print the result JSON");
+          ("--result-json", Arg.String (fun s -> result_json := Some s),
+           "FILE with --run-brief: also write the structured result to this path");
         ("-p", Arg.String (fun s -> pipe_expr := Some s), "EXPR eval and exit");
       ]
   in
@@ -272,8 +278,14 @@ let () =
         Eio.Fiber.fork ~sw watcher;
         (* PP run-primitive supervisor (borge/run-primitive.borg phase 2):
            the glochid app contract — Q6 rides this existing service, no
-           filmstrip dependency. One scan/tick over data.s.run.*; sidecar
-           children are pp-flow --run --supervised processes. *)
+           filmstrip dependency. One scan/tick over data.s.run.*; children
+           are one runner per attempt, chosen by SUPERVISOR_RUNNER_KIND:
+             pp-flow (default)  pp-flow.sh --run --supervised (the autolith
+                                adapter); usage is scraped from its log
+             native  (phase 3)  this binary's --run-brief entry; usage is
+                                provider-structured (the result file)
+           The native kind is OPT-IN: the recorded flip gate is "do NOT flip
+           the default until the loop has survived real overnight cards". *)
         if !supervisor || envget "SUPERVISOR" "0" = "1" then
           Eio.Fiber.fork ~sw (fun () -> Supervisor.run ~env ~sw);
         Fun.protect
@@ -295,6 +307,93 @@ let () =
                 fibers have nothing left to finish. *)
              exit 0)
       end
+        else if Option.is_some !run_brief then (
+          (* NATIVE RUNNER (borge/run-primitive.borg PHASE 3): run ONE executor
+             brief in-process and hand back a structured result. stdout is one
+             machine-readable JSON object. NOTHING here touches the board - the
+             supervisor owns every card write - and a FAIL verdict is still a
+             SUCCESSFUL STEP, so the exit code reports whether the step RAN,
+             never whether the card passed. *)
+          let brief_path = Option.get !run_brief in
+          let brief =
+            try
+              let ic = open_in_bin brief_path in
+              let n = in_channel_length ic in
+              let s = really_input_string ic n in
+              close_in ic;
+              s
+            with e ->
+              Printf.eprintf "native-runner: cannot read brief %s: %s\n%!"
+                brief_path (Printexc.to_string e);
+              exit 2
+          in
+          let usage = ref Native_run.zero_usage in
+          let tool_counts : (string, int) Hashtbl.t = Hashtbl.create 8 in
+          let reply_text = Buffer.create 1024 in
+          let on_event = function
+            | Loop.Tool_begin (name, _) ->
+                Hashtbl.replace tool_counts name
+                  (1 + (try Hashtbl.find tool_counts name with Not_found -> 0));
+                (* the verdict lives in the LAST assistant message: after a
+                   tool call the model speaks again, so the buffer restarts *)
+                Buffer.clear reply_text
+            | Loop.Assistant_text s -> Buffer.add_string reply_text s
+            | Loop.Reasoning_text _ | Loop.Tool_end _ -> ()
+            | Loop.Turn_error e ->
+                Printf.eprintf "native-runner: turn error: %s\n%!" e
+          in
+          let t0 = Unix.gettimeofday () in
+          let history : Provider.message list ref = ref [] in
+          let outcome =
+            Loop.run ~env ~sw ~host:(Runtime.loop_host rt) ~cfg ~complete
+              ~max_turns:(Config.max_turns ())
+              ~on_usage:(fun u -> usage := Native_run.add_usage !usage u)
+              ~on_event history brief
+          in
+          let wall_s = Unix.gettimeofday () -. t0 in
+          let captured : Native_run.usage = { !usage with wall_s } in
+          let v = Native_run.parse_verdict (Buffer.contents reply_text) in
+          let step_state, err_class, err_msg =
+            match outcome with
+            | Ok () -> ("done", "", "")
+            | Error e -> ("failed", Native_run.classify_error e, e)
+          in
+          let result =
+            { Native_run.r_schema = Native_run.schema;
+              r_step_name =
+                (match Sys.getenv_opt "PP_RUN_STEP" with
+                 | Some s when s <> "" -> s
+                 | _ -> "executor");
+              r_step_state = step_state;
+              r_attempts =
+                (match Sys.getenv_opt "PP_RUN_ATTEMPT" with
+                 | Some s -> (try int_of_string s with _ -> 1)
+                 | None -> 1);
+              r_outcome = Native_run.outcome_of_state step_state v;
+              r_verdict = v;
+              r_usage = captured;
+              r_tool_total = Hashtbl.fold (fun _ n acc -> acc + n) tool_counts 0;
+              r_tools = Hashtbl.fold (fun k n acc -> (k, n) :: acc) tool_counts [];
+              r_turns = captured.Native_run.requests;
+              r_model = cfg_model;
+              r_error_class = err_class;
+              r_error_message = err_msg;
+              r_transcript_ref =
+                (match !result_json with Some p -> p | None -> "") }
+          in
+          let json = Native_run.to_json result in
+          (match !result_json with
+           | Some path -> (
+               try
+                 let oc = open_out path in
+                 output_string oc (Yojson.Safe.to_string json);
+                 close_out oc
+               with e ->
+                 Printf.eprintf "native-runner: cannot write %s: %s\n%!" path
+                   (Printexc.to_string e))
+           | None -> ());
+          print_endline (Yojson.Safe.to_string json);
+          exit (if step_state = "done" then 0 else 1))
       else if pipe_mode then (
         (* Piped-turn smoke: read ALL of stdin as the prompt, run ONE
            full turn, print the final assistant text, exit 0 on Ok.

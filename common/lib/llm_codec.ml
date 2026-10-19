@@ -373,12 +373,80 @@ let sse_data_payload (line : string) : string option =
     here, [Openai.parse_reply] in the standalone agent) and inherit the
     XML-fallback / reasoning_content handling and history [raw] shape
     unchanged. *)
+(** Provider-STRUCTURED token usage for ONE provider request, as the
+    OpenAI-compatible wire reports it. borge/run-primitive.borg
+    budget-accounting asks for exactly this: the run row's usage used to be a
+    SELF-REPORT scraped out of the executor's stdout, which cannot be enforced
+    on; these numbers come from the provider's own response body.
+    [cached_tokens] rides [prompt_tokens_details.cached_tokens] on the
+    gateways that report it; a missing field means 0, never "unknown". *)
+type usage = {
+  input_tokens : int;   (* usage.prompt_tokens *)
+  cached_tokens : int;  (* usage.prompt_tokens_details.cached_tokens *)
+  output_tokens : int;  (* usage.completion_tokens *)
+}
+
+let usage_int (j : Yojson.Safe.t) : int =
+  match j with
+  | `Int i -> i
+  | `Intlit s -> (try int_of_string s with _ -> 0)
+  | `Float f -> int_of_float f
+  | _ -> 0
+
+(** Read the [usage] object of a full chat-completions response - or of one
+    streaming chunk: with [stream_options.include_usage] the provider emits a
+    FINAL chunk that carries usage and no choices. None when the body has no
+    usage object at all, so a caller can tell "not reported" from "zero".
+
+    TOTAL, and that is load-bearing. A real provider omits the optional
+    sub-objects entirely (Synthetic sends no [prompt_tokens_details] on the
+    first chunk and ["prompt_tokens_details": null] later), and
+    [Yojson.Safe.Util.member] RAISES a [Type_error] on a null/missing
+    member. The reassembly loop calls this per chunk inside a
+    [with _ -> ()] "malformed line, skip" guard, so a raise here did not
+    skip a malformed line - it threw away a VALID chunk's content, and a
+    whole streamed reply came back empty ("LLM: empty content
+    (finish=stop)"). Read every optional field defensively: a missing
+    detail is 0, never an exception. (2026-10-18: this silently broke every
+    streamed turn on a provider that nulls the details object.) *)
+let usage_of_response_json (json : Yojson.Safe.t) : usage option =
+  (* Every read is defensive: member lookup on a null/missing/non-object
+     yields 0, never an exception. *)
+  let field obj k =
+    match obj with
+    | `Assoc kv -> (match List.assoc_opt k kv with Some v -> v | None -> `Null)
+    | _ -> `Null
+  in
+  match field json "usage" with
+  | `Assoc _ as u ->
+      Some
+        { input_tokens = usage_int (field u "prompt_tokens");
+          cached_tokens =
+            usage_int (field (field u "prompt_tokens_details") "cached_tokens");
+          output_tokens = usage_int (field u "completion_tokens") }
+  | _ -> None
+
+(** Re-encode [usage] in wire shape, so a REASSEMBLED streaming response
+    carries the same [usage] object a non-streamed one does and every host
+    parser ([parse_turn_response_json] here, [Provider.Openai.parse_reply] in
+    the standalone agent) reads it without a special case. *)
+let usage_to_json (u : usage) : Yojson.Safe.t =
+  `Assoc
+    [ ("prompt_tokens", `Int u.input_tokens);
+      ("completion_tokens", `Int u.output_tokens);
+      ("total_tokens", `Int (u.input_tokens + u.output_tokens));
+      ("prompt_tokens_details", `Assoc [ ("cached_tokens", `Int u.cached_tokens) ]) ]
+
 type stream_result = {
   text : string;
   reasoning : string;
   tool_calls : tool_call list;  (* arguments = concatenated fragments *)
   finish : string;
   response : Yojson.Safe.t;
+  usage : usage option;
+      (* PROVIDER-STRUCTURED usage for this one request when the provider
+         reported it; None = the body carried no usage object, which is not
+         the same as zero. *)
 }
 
 (** Reassemble [lines] (the SSE [data:] payloads of one streaming
@@ -396,11 +464,15 @@ let reassemble_stream ?(on_text : string -> unit = fun _ -> ())
   (* index -> accumulated tool-call fragment {id; name; arguments buf} *)
   let tool_bufs : (int, string * string * Buffer.t) Hashtbl.t = Hashtbl.create 4 in
   let finish = ref "stop" in
+    let usage = ref None in
   List.iter
     (fun data ->
       if data <> "[DONE]" then
         (try
            let json = Yojson.Safe.from_string data in
+             (match usage_of_response_json json with
+              | Some u -> usage := Some u
+              | None -> ());
            match json |> member "choices" |> to_list with
            | choice :: _ ->
                (match choice |> member "finish_reason" |> to_string_option with
@@ -463,7 +535,19 @@ let reassemble_stream ?(on_text : string -> unit = fun _ -> ())
                       tcs
                 | _ -> ())
            | [] -> ()
-         with _ -> ()) (* malformed data line -> skip, lenient *))
+         (* Lenient on the wire, but NOT silently lossy. Only a genuinely
+            unparseable payload is skipped; anything else is a defect in
+            this function and must not be mistaken for a malformed line.
+            (2026-10-18: a raising optional-field read inside the per-chunk
+            body was swallowed here, discarding every CONTENT chunk of a
+            valid streamed reply - the reply came back empty with
+            finish=stop. If this handler widens again, that bug returns as
+            an empty answer.) *)
+         with
+         | Yojson.Json_error _ -> ()
+         | e ->
+             Printf.eprintf "[llm_codec] reassemble_stream: dropped chunk (%s)\n%!"
+               (Printexc.to_string e)))
     lines;
   let text = Buffer.contents text_buf in
   let reasoning = Buffer.contents reasoning_buf in
@@ -510,16 +594,19 @@ let reassemble_stream ?(on_text : string -> unit = fun _ -> ())
   in
   let response =
     `Assoc
-      [
-        ( "choices",
-          `List
-            [
-              `Assoc
-                [ ("message", msg); ("finish_reason", `String !finish) ];
-            ] );
-      ]
+      ([
+          ( "choices",
+            `List
+              [
+                `Assoc
+                  [ ("message", msg); ("finish_reason", `String !finish) ];
+              ] );
+        ]
+       @ (match !usage with
+          | None -> []
+          | Some u -> [ ("usage", usage_to_json u) ]))
   in
-  { text; reasoning; tool_calls; finish = !finish; response }
+  { text; reasoning; tool_calls; finish = !finish; response; usage = !usage }
 
 (** Extract delta content from one streaming SSE JSON payload ([DONE]
     or a [choices[0].delta.content] chunk). *)

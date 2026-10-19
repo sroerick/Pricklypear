@@ -49,6 +49,7 @@ let complete_with_tool_call name input =
           calls = [ { id = "t1"; name; input } ];
           stop_reason = "tool_use";
           raw = `Assoc [ ("role", `String "assistant"); ("content", `String "") ];
+            usage = None;
         }
     else
       Ok
@@ -57,6 +58,7 @@ let complete_with_tool_call name input =
           calls = [];
           stop_reason = "stop";
           raw = `Assoc [ ("role", `String "assistant"); ("content", `String "done") ];
+            usage = None;
         }
 
 (** The thesis test: a Nopales plugin tool registered with
@@ -169,6 +171,7 @@ let test_tool_call_hook_blocks ~env ~sw () =
                 input = `Assoc [ ("command", `String "rm -rf /") ] } ];
           stop_reason = "tool_use";
           raw = `Assoc [ ("role", `String "assistant"); ("content", `String "") ];
+            usage = None;
         })
     else
       Ok
@@ -177,6 +180,7 @@ let test_tool_call_hook_blocks ~env ~sw () =
           calls = [];
           stop_reason = "stop";
           raw = `Assoc [ ("role", `String "assistant"); ("content", `String "ok") ];
+            usage = None;
         }
   in
   (match

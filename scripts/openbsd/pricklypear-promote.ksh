@@ -214,6 +214,30 @@ EOF
 }
 install_login_class
 
+# ---------------------------------------------------------------------------
+# newsyslog entry for the image log. The image writes /var/log/pricklypear/
+# image.log, and nothing rotated it: by 2026-10-18 it held 137 MB, mostly
+# PP_TRACE_DB slow-query lines (the very log grepped for the latency
+# incident). OpenBSD newsyslog(8) reads ONLY /etc/newsyslog.conf (no
+# *.conf.d drop-in on this host — verified), so append a line unless one for
+# this path already exists. Idempotent; never reorders or rewrites the
+# operator's existing entries.
+# ---------------------------------------------------------------------------
+install_log_rotation() {
+  nc=/etc/newsyslog.conf
+  [ -f "${nc}" ] || { log "no ${nc}; skipping log rotation"; return 0; }
+  if grep -q "^/var/log/pricklypear/image.log" "${nc}" 2>/dev/null; then
+    log "log rotation for image.log present; leaving as-is"
+    return 0
+  fi
+  cat >> "${nc}" <<'EOF'
+# Pricklypear image log (added by pricklypear-promote; keep 5, 50MB, compress)
+/var/log/pricklypear/image.log	_pricklypear:_pricklypear	640	5	51200	*	Z
+EOF
+  log "appended image.log rotation to ${nc}"
+}
+install_log_rotation
+
 if [ -L "${current_link}" ]; then
   previous_target="$(readlink "${current_link}")"
   [ -n "${previous_target}" ] && ln -sfn "${previous_target}" "${previous_link}"

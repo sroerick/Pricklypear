@@ -2,7 +2,7 @@
  (name pricklypear_glochid_lib)
  (public_name pricklypear-glochid.lib)
  (wrapped false)
- (modules runtime plugins http_ui surface assets libs_source config lifecycle sessions habitat supervisor)
+ (modules runtime plugins http_ui surface assets libs_source config lifecycle sessions habitat supervisor native_run)
  (libraries
   pricklypear-hostkit
   pricklypear-llm
