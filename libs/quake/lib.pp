@@ -58,7 +58,7 @@
     ("2022" 7766)
     ("2023" 7651)
     ("2024" 6397))))
-  "M4.5+ event counts per year, USGS FDSN catalog 1975-2026.")
+  ;; M4.5+ event counts per year, USGS FDSN catalog 1975-2026.
 
 (define quake/depth-buckets
   (quote
@@ -66,7 +66,7 @@
      (intermediate 48676)
      (deep 4801)
      (very-deep 9513))))
-  "Event counts by depth band (km): shallow <=70, intermediate <=300, deep <=500, very-deep >500.")
+  ;; Event counts by depth band (km): shallow <=70, intermediate <=300, deep <=500, very-deep >500.
 
 (define quake/regions-m7
   (quote
@@ -82,7 +82,7 @@
     ("Mexico" 22)
     ("Alaska" 20)
     ("New Zealand" 20))))
-  "M7+ event counts by region, top 12, 1975-2026 (693 M7+ events total).")
+  ;; M7+ event counts by region, top 12, 1975-2026 (693 M7+ events total).
 
 (define quake/range
   (lambda
