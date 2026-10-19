@@ -65,7 +65,7 @@
     ((shallow 210304)
      (intermediate 48676)
      (deep 4801)
-     (very-deep 9513)))))
+     (very-deep 9513))))
 
 
 (define quake/regions-m7
@@ -178,3 +178,4 @@
           "497 nuclear explosions M4.5+ appear in the catalog as a distinct type (Kazakhstan, Nevada, Russia, French Polynesia; tail = 2017 DPRK)."))))
 
 (route "/quake" "quake/page"))
+)
