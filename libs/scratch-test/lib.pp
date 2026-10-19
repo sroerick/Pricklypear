@@ -1,4 +1,4 @@
-;; scratch-test round 12 - page full
+;; scratch-test round 13 - page: r11 + next 3 elements
 (package scratch-test
 
 (define quake/page
@@ -19,27 +19,10 @@
         (html/h2 "Depth distribution")
         (html/div
           (html/attr "style" "max-width:960px")
-          (st/bar quake/depth-buckets "Events by depth band in km" "events"))
-        (html/p*
-          (html/attr "class" "muted")
-          "9,513 events deeper than 500km - mostly the Fiji/Tonga slab, Earth's most active deep-subduction system.")
-        (html/h2 "M7+ by region")
-        (html/div
-          (html/attr "style" "max-width:960px")
-          (st/bar quake/regions-m7 "M7+ events by region, top 12 of 693" "M7+ events"))
-        (html/h2 "Gutenberg-Richter check")
-        (html/p*
-          (html/attr "class" "muted")
-          "log10 cumulative count vs magnitude is linear: b = 1.03 over M5-7.5, textbook. The ETL self-validates.")
-        (html/h2 "OSINT corner")
-        (html/p*
-          (html/attr "class" "muted")
-          "497 nuclear explosions M4.5+ sit in the catalog as a distinct type - Kazakhstan, Nevada, Russia, French Polynesia; tail = 2017 DPRK."))))
-
+          (st/bar quake/depth-buckets "Events by depth band in km" "events"))))))
 
 (define st/bar
   (lambda (pairs title unit)
     "<svg/>"))
 
 (route "/scratch-test" "quake/page"))
-)
