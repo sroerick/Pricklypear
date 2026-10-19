@@ -29,7 +29,7 @@
            (padl 46)
            (padb 34)
            (n (length pairs))
-           (maxv (list/foldl (lambda (acc p) (if (> (cdr p) acc) (cdr p) acc)) 1 pairs))
+           (maxv (list/foldl (lambda (acc p) (if (> (list-ref p 1) acc) (list-ref p 1) acc)) 1 pairs))
            (gapw (div (- w padl 10) n))
            (barw (div (* gapw 7) 10))
            (bars
@@ -37,7 +37,7 @@
                (lambda (i)
                  (let* ((p (list-ref pairs i))
                         (label (as-str (car p)))
-                        (v (cdr p))
+                        (v (list-ref p 1))
                         (bh (div (* v (- h padb 20)) maxv))
                         (x (+ padl (* i gapw) (div (- gapw barw) 2)))
                         (y (- h padb bh))
