@@ -1,7 +1,5 @@
 (package scratch-test
 
-(define st/d (quote (("a" 1))))
-
 (define st/bar
   (lambda (pairs title unit)
     "<svg/>")
