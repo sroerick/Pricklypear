@@ -112,6 +112,52 @@
           (html/attr "href" href)))
       (html/text label))))
 
+(define layout/cta/examples
+  (lambda
+    ()
+    (lb/obj
+      (list
+        "name" "layout/cta"
+        "doc" "One call-to-action link (class layout-cta): the site's button-shaped anchor. Compose pages by calling it with href + label."
+        "file" "libs/layout/lib.pp"
+        "formals" (json-emit (list "href" "label"))
+        "variants" (json-emit
+                     (list
+                       (lb/obj (list "href" "/contacts" "label" "Talk to us"))
+                       (lb/obj (list "href" "/login" "label" "Sign in"))))
+        "source"
+        "(layout/cta href label) -> an anchor: html/tag a, class layout-cta, href, text label")))
+  "One lookbook card for layout/cta: this def IS the element's declaration.")
+
+(define layout/mailto
+  (lambda
+    (email)
+    "The site's contact email as a real mailto anchor."
+    (html/a (string-append "mailto:" email) (html/text email))))
+
+(define layout/mailto/examples
+  (lambda
+    ()
+    (lb/obj
+      (list
+        "name" "layout/mailto"
+        "doc" "The site's contact email as a real mailto anchor: href mailto:<email>, text <email>. Compose public page footers by calling it with the address."
+        "file" "libs/layout/lib.pp"
+        "formals" (json-emit (list "email"))
+        "variants" (json-emit
+                     (list
+                       (lb/obj (list "email" "roerick@wyo.town"))))
+        "source"
+        "(layout/mailto email) -> an anchor: html/a mailto:<email>, html/text <email>")))
+  "One lookbook card for layout/mailto: this def IS the element's declaration.")
+
+(define lookbook/elements
+  (lambda () (append (lookbook/base-elements) (list "layout/cta" "layout/mailto")))
+  "Layout package registration on the lookbook seam (libs/lookbook): the
+package vocabulary appends to lookbook/base-elements -- never a captured
+snapshot of the seam itself (the cyclic-thunk-force rule). Every entry
+answers a <name>/examples card.")
+
 (define layout/hero
   (lambda
     (title tagline actions-html)

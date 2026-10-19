@@ -671,6 +671,229 @@ let test_calendar_day_pane_local ~rt () =
     (Ast.VStr "calendar/nav-a")
     (eval_or_fail "examples card"
        {|(lb/get (calendar/nav-a/examples) "name")|})
+(** welcome index (card e25d8165 SITE 9): the closing section's CTA
+    row links to the contact page. Loads the public libs the way the
+    site boots them (html + css + hyper + lookbook + layout +
+    welcome), binds /, and asserts: (1) hyper/expect over the changed
+    route -- GET / serves the index whose hero title is the site name;
+    (2) the closing CTA row carries the Talk to us link to /contacts;
+    (3) lookbook evidence: layout/cta answers its examples card and is
+    registered in (lookbook/elements). *)
+let test_welcome_index_cta ~rt () =
+  let rec find_libs_dir dir =
+    let cand = Filename.concat dir "libs/hyper/lib.pp" in
+    if Sys.file_exists cand then dir
+    else
+      let parent = Filename.dirname dir in
+      if parent = dir then "libs"
+      else find_libs_dir parent
+  in
+  let libs_dir =
+    let root = find_libs_dir (Sys.getcwd ()) in
+    Filename.concat root "libs"
+  in
+  let load name =
+    let p = Filename.concat (Filename.concat libs_dir name) "lib.pp" in
+    let ic = open_in p in
+    let n = in_channel_length ic in
+    let txt = really_input_string ic n in
+    close_in ic;
+    (* The (package ...) export header is production-runtime sugar;
+       strip it so the thin test runtime can load the lib. *)
+    let stripped =
+      match Str.search_forward (Str.regexp_string "(package ") txt 0 with
+      | exception Not_found -> txt
+      | pos ->
+        let rec skip i depth =
+          if depth = 0 then i
+          else
+            match txt.[i] with
+            | '(' -> skip (i + 1) (depth + 1)
+            | ')' -> skip (i + 1) (depth - 1)
+            | _ -> skip (i + 1) depth
+        in
+        let stop = skip (pos + 1) 1 in
+        String.sub txt 0 pos
+        ^ String.sub txt stop (String.length txt - stop)
+    in
+    let tmp =
+      Filename.concat (Filename.get_temp_dir_name ())
+        ("pp-test-" ^ name ^ ".lib.pp") in
+    let oc = open_out tmp in
+    output_string oc stripped;
+    close_out oc;
+    match Runtime.load_file ~rt tmp with
+    | Ok () -> ()
+    | Error e -> Alcotest.fail (name ^ ": " ^ e)
+  in
+  let eval_or_fail what s =
+    match Runtime.eval_string ~rt s with
+    | v -> v
+    | exception Ast.Interp_error (Ast.Prim_error (k, n, m)) ->
+      Alcotest.fail (what ^ ": prim " ^ k ^ "/" ^ n ^ ": " ^ m)
+    | exception Ast.Interp_error (Ast.Unbound_var s) ->
+      Alcotest.fail (what ^ ": unbound " ^ s)
+    | exception e -> Alcotest.fail (what ^ ": " ^ Printexc.to_string e)
+  in
+  List.iter load ["html"; "css"; "hyper"; "lookbook"; "layout"; "welcome"];
+  ignore (eval_or_fail "route" {|(route "/" "welcome/page")|});
+  (* Dispatch the changed route the way a browser's first nav does: a
+     full-page GET with no HX-Request header. *)
+  let page_html =
+    match Runtime.dispatch_route ~rt ~handler:"welcome/page" ~method_:"GET"
+            ~path:"/" ~params:[] ~headers:[] ~body:"" with
+    | Ast.VStr html -> html
+    | other -> Alcotest.fail ("welcome/page: " ^ Ast.pp_value_short other)
+    | exception e -> Alcotest.fail ("welcome/page dispatch: " ^ Printexc.to_string e)
+  in
+  Runtime.add_prim rt "welcome-index-html" (fun _ -> Ast.VStr page_html);
+  ignore (eval_or_fail "parse" {|(define pg (soup/parse (welcome-index-html)))|});
+  (* (1) hyper/expect over the changed route: GET / serves the index. *)
+  Alcotest.check pp_value_testable "index hero via hyper/expect"
+    (Ast.VBool true)
+    (eval_or_fail "hyper/expect h1" {|(hyper/expect pg "h1" "Pricklypear")|});
+  (* (2) the closing section's CTA row links to the contact page. *)
+  Alcotest.(check bool) "index CTA links to /contacts" true
+    (match
+       eval_or_fail "cta href"
+         {|(string-contains? (hyper/html pg) "href=\"/contacts\"")|}
+     with
+     | Ast.VBool b -> b
+     | other -> Alcotest.fail ("cta href: " ^ Reader.pp_value other));
+  Alcotest.(check bool) "index CTA says Talk to us" true
+    (match
+       eval_or_fail "cta label"
+         {|(string-contains? (hyper/html pg) ">Talk to us</a>")|}
+     with
+     | Ast.VBool b -> b
+     | other -> Alcotest.fail ("cta label: " ^ Reader.pp_value other));
+  (* (3) lookbook evidence for the reused element. *)
+  Alcotest.(check bool) "lookbook inventory registers layout/cta" true
+    (match
+       eval_or_fail "lookbook inventory"
+         {|(string-contains? (json-emit (lookbook/elements)) "layout/cta")|}
+     with
+     | Ast.VBool b -> b
+     | other -> Alcotest.fail ("lookbook inventory: " ^ Reader.pp_value other));
+  Alcotest.check pp_value_testable "layout/cta examples card"
+    (Ast.VStr "layout/cta")
+    (eval_or_fail "examples card" {|(lb/get (layout/cta/examples) "name")|})
+
+
+(** welcome site (card 93434fb0 SITE 7): roerick@wyo.town is the site's
+    contact email as a REAL mailto anchor from the declared layout/mailto
+    element (libs/layout). Binds the public routes, dispatches them the
+    way a browser's first nav does, and asserts: (1) GET / serves the
+    index whose footer carries href="mailto:roerick@wyo.town";
+    (2) the other public footers (background, roadmap, book) render the
+    same real mailto; (3) lookbook evidence: layout/mailto answers its
+    examples card and is registered in (lookbook/elements). *)
+let test_welcome_mailto_footers ~rt () =
+  let rec find_libs_dir dir =
+    let cand = Filename.concat dir "libs/hyper/lib.pp" in
+    if Sys.file_exists cand then dir
+    else
+      let parent = Filename.dirname dir in
+      if parent = dir then "libs"
+      else find_libs_dir parent
+  in
+  let libs_dir =
+    let root = find_libs_dir (Sys.getcwd ()) in
+    Filename.concat root "libs"
+  in
+  let load name =
+    let p = Filename.concat (Filename.concat libs_dir name) "lib.pp" in
+    let ic = open_in p in
+    let n = in_channel_length ic in
+    let txt = really_input_string ic n in
+    close_in ic;
+    (* The (package ...) export header is production-runtime sugar;
+       strip it so the thin test runtime can load the lib. *)
+    let stripped =
+      match Str.search_forward (Str.regexp_string "(package ") txt 0 with
+      | exception Not_found -> txt
+      | pos ->
+        let rec skip i depth =
+          if depth = 0 then i
+          else
+            match txt.[i] with
+            | '(' -> skip (i + 1) (depth + 1)
+            | ')' -> skip (i + 1) (depth - 1)
+            | _ -> skip (i + 1) depth
+        in
+        let stop = skip (pos + 1) 1 in
+        String.sub txt 0 pos
+        ^ String.sub txt stop (String.length txt - stop)
+    in
+    let tmp =
+      Filename.concat (Filename.get_temp_dir_name ())
+        ("pp-test-" ^ name ^ ".lib.pp") in
+    let oc = open_out tmp in
+    output_string oc stripped;
+    close_out oc;
+    match Runtime.load_file ~rt tmp with
+    | Ok () -> ()
+    | Error e -> Alcotest.fail (name ^ ": " ^ e)
+  in
+  let eval_or_fail what s =
+    match Runtime.eval_string ~rt s with
+    | v -> v
+    | exception Ast.Interp_error (Ast.Prim_error (k, n, m)) ->
+      Alcotest.fail (what ^ ": prim " ^ k ^ "/" ^ n ^ ": " ^ m)
+    | exception Ast.Interp_error (Ast.Unbound_var s) ->
+      Alcotest.fail (what ^ ": unbound " ^ s)
+    | exception e -> Alcotest.fail (what ^ ": " ^ Printexc.to_string e)
+  in
+  let dispatch path handler =
+    match Runtime.dispatch_route ~rt ~handler ~method_:"GET"
+            ~path ~params:[] ~headers:[] ~body:"" with
+    | Ast.VStr html -> html
+    | other -> Alcotest.fail (handler ^ ": " ^ Ast.pp_value_short other)
+    | exception e -> Alcotest.fail (handler ^ " dispatch: " ^ Printexc.to_string e)
+  in
+  List.iter load ["html"; "css"; "hyper"; "lookbook"; "layout"; "welcome"];
+  List.iter
+    (fun (path, handler) ->
+       ignore (eval_or_fail "route" (Printf.sprintf "(route %S %S)" path handler)))
+    [ ("/", "welcome/page"); ("/background", "welcome/background");
+      ("/roadmap", "welcome/roadmap"); ("/book", "welcome/book") ];
+  (* (1) hyper/expect-adjacent over the changed route: GET / footer. *)
+  let page_html = dispatch "/" "welcome/page" in
+  Runtime.add_prim rt "welcome-site-html" (fun _ -> Ast.VStr page_html);
+  ignore (eval_or_fail "parse" {|(define pg (soup/parse (welcome-site-html)))|});
+  Alcotest.check pp_value_testable "index renders via hyper/expect"
+    (Ast.VBool true)
+    (eval_or_fail "hyper/expect h1" {|(hyper/expect pg "h1" "Pricklypear")|});
+  Alcotest.(check bool) "index footer carries the real mailto" true
+    (match
+       eval_or_fail "index mailto"
+         {|(string-contains? (hyper/html pg) "href=\"mailto:roerick@wyo.town\"")|}
+     with
+     | Ast.VBool b -> b
+     | other -> Alcotest.fail ("index mailto: " ^ Reader.pp_value other));
+  (* (2) the other public footers render the same real mailto. *)
+  List.iter
+    (fun (name, path, handler) ->
+       let html = dispatch path handler in
+       Alcotest.(check bool) (name ^ " footer carries the real mailto") true
+         (try let _ = Str.search_forward
+                 (Str.regexp_string "href=\"mailto:roerick@wyo.town\"") html 0 in true
+          with Not_found -> false))
+    [ ("background", "/background", "welcome/background");
+      ("roadmap", "/roadmap", "welcome/roadmap");
+      ("book", "/book", "welcome/book") ];
+  (* (3) lookbook evidence for the declared element. *)
+  Alcotest.(check bool) "lookbook inventory registers layout/mailto" true
+    (match
+       eval_or_fail "lookbook inventory"
+         {|(string-contains? (json-emit (lookbook/elements)) "layout/mailto")|}
+     with
+     | Ast.VBool b -> b
+     | other -> Alcotest.fail ("lookbook inventory: " ^ Reader.pp_value other));
+  Alcotest.check pp_value_testable "layout/mailto examples card"
+    (Ast.VStr "layout/mailto")
+    (eval_or_fail "examples card" {|(lb/get (layout/mailto/examples) "name")|})
+
 (** surfaces: the chat + code pages are Nopales route-table handlers
     (rendered via libs/html), redefinable live; a consumed turn's captured
     parts replay through hyper/stream. Loads the embedded surface the
@@ -2019,6 +2242,12 @@ let () =
         ( "calendar-faces",
           [ Alcotest.test_case "day-click-pane-local" `Quick
               (test_calendar_day_pane_local ~rt) ] );
+        ( "welcome-faces",
+          [ Alcotest.test_case "index-cta" `Quick
+                (test_welcome_index_cta ~rt)
+            ; Alcotest.test_case "mailto-footers" `Quick
+                (test_welcome_mailto_footers ~rt) ] );
+
       ( "surfaces",
         [ Alcotest.test_case "nopales-routes" `Quick
             (test_surfaces_nopales_routes ~rt)
