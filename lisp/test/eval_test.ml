@@ -1218,6 +1218,39 @@ let dialect_tests = [
     (match Eval.parse_top_define (Reader.read_one "(define (hi) \"hello\")") with
      | Some { doc = None; _ } -> ()
      | _ -> Alcotest.fail "lone string must not be docstring"));
+    ("parse_top_define docstring error names the define (2cd8042e)", `Quick, fun () ->
+      let raised =
+        try
+          ignore (Eval.parse_top_define (Reader.read_one "(define bad 1 2)"));
+          false
+        with Ast.Interp_error (Ast.User_error (m, _)) ->
+          String.starts_with ~prefix:"define bad:" m
+      in
+      Alcotest.(check bool) "docstring error names define" true raised);
+    ("parse_top_define params error names the define (2cd8042e)", `Quick, fun () ->
+      let raised =
+        try
+          ignore (Eval.parse_top_define (Reader.read_one "(define (f 3) x)"));
+          false
+        with Ast.Interp_error (Ast.User_error (m, _)) ->
+          String.starts_with ~prefix:"define f:" m
+      in
+      Alcotest.(check bool) "params error names define" true raised);
+    ("parse_top_define dotted error names the define (2cd8042e)", `Quick, fun () ->
+      let e =
+        Ast.App
+          ( Ast.Var "define",
+            [ Ast.App (Ast.Var "f", [ Ast.Var "x"; Ast.Var "." ]);
+              Ast.Var "x" ] )
+      in
+      let raised =
+        try
+          ignore (Eval.parse_top_define e);
+          false
+        with Ast.Interp_error (Ast.User_error (m, _)) ->
+          String.starts_with ~prefix:"define f:" m
+      in
+      Alcotest.(check bool) "dotted error names define" true raised);
   ("begin multi-body", `Quick, fun () ->
     let prims = Eval.make_prim_table () in
     let env = Env.create () in

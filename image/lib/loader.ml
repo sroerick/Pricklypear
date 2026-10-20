@@ -81,6 +81,20 @@ let strip_line_comments (s : string) : string =
   in
   loop 0 false
 
+(** card 2cd8042e: names of the top-level defines a form introduces — the
+    define itself, define sugar, or defines on a begin/seq spine (the
+    pp-flow/seed load shapes). Load errors name them: the head-80 snippet
+    of a begin-wrapped load only shows the FIRST define, so a failing
+    define deep in the spine was unfindable. Capped: the error needs
+    pointers, not an inventory. *)
+let rec define_names_in (e : expr) : string list =
+  match e with
+  | Define (name, _) -> [ name ]
+  | App (Var "define", Var name :: _) -> [ name ]
+  | App (Var "define", App (Var name, _) :: _) -> [ name ]
+  | App (Var ("begin" | "seq"), args) -> List.concat_map define_names_in args
+  | Seq (a, b) -> define_names_in a @ define_names_in b
+  | _ -> []
 let load_string
     ~(eval_form : expr -> value)
     (src : string)
@@ -122,14 +136,29 @@ let load_string
                      | _ -> Printexc.to_string exn)
                 | _ -> Printexc.to_string exn
               in
-              let snippet =
-                try String.sub (Pricklypear_lisp.Reader.pp_expr e) 0
-                      (min 80 (String.length (Pricklypear_lisp.Reader.pp_expr e)))
-                with _ -> "?"
-              in
-              (Error
-                   (Printf.sprintf "form %d failed: %s\n  in: %s" (i + 1) msg
-                      snippet)))
+                let snippet_src =
+                  try Pricklypear_lisp.Reader.pp_expr e with _ -> "?"
+                in
+                let snippet =
+                  String.sub snippet_src 0 (min 80 (String.length snippet_src))
+                in
+                (* card 2cd8042e: name what the failing form defines, so a
+                   define-shape failure in a big load is findable. *)
+                let names = define_names_in e in
+                let define_line =
+                  match names with
+                  | [] -> ""
+                  | [ n ] -> Printf.sprintf "\n  define: %s" n
+                  | ns ->
+                      Printf.sprintf "\n  defines: %s"
+                        (String.concat ", "
+                           (if List.length ns > 8 then
+                              List.filteri (fun i _ -> i < 8) ns @ [ "…" ]
+                            else ns))
+                in
+                (Error
+                   (Printf.sprintf "form %d failed: %s\n  in: %s%s" (i + 1) msg
+                      snippet define_line)))
     in
     go 0 forms
   with
