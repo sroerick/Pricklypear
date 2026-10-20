@@ -33,12 +33,17 @@
           (html/hidden "action" "add-card")
           (html/hidden "list" list-id)
           (html/hidden "state" state)
-          (html/text-input "title"
-            (html/attrs
-              (list
-                (html/attr "placeholder" "+ add card")
-                (html/attr "class" "kb-add-input"))))
-          (html/button (html/attr "type" "submit") "↵"))))))
+            (html/text-input "title"
+              (html/attrs
+                (list
+                  (html/attr "placeholder" "+ add card")
+                  (html/attr "class" "kb-add-input"))))
+            (html/text-input "assignee"
+              (html/attrs
+                (list
+                  (html/attr "placeholder" "@who")
+                  (html/attr "class" "kb-add-input kb-assignee-input"))))
+            (html/button (html/attr "type" "submit") "↵"))))))
 
 ;; ------------------------------------------------------------------
 ;; column mutation (add / remove / rename)
@@ -105,8 +110,9 @@
        pass blocked-set membership, the delegating card-html passes a fresh
        todo/dep/blocked? check. Blocked = at least one OPEN blocked-by edge."
     (let ((id (as-str (car row))) (fields (cdr row)))
-      (let ((title (as-str (dict-get fields "title")))
-            (state (as-str (dict-get fields "state"))))
+        (let ((title (as-str (dict-get fields "title")))
+              (state (as-str (dict-get fields "state")))
+              (who (as-str (dict-get fields "assignee"))))
         (html/tag "article"
           (html/attrs
             (list
@@ -117,21 +123,28 @@
           (html/join
             (list
               (html/div (html/attr "class" "kb-card-title") (html/text title))
-              (html/div (html/attr "class" "kb-card-meta")
-                (if blocked?
+                (html/div (html/attr "class" "kb-card-meta")
                   (html/join
                     (list
-                      (html/text state)
-                      (html/span (html/attr "class" "kb-blocked")
-                        (html/text "blocked"))))
-                  (html/text state)))
-              (html/div (html/attr "class" "kb-card-controls")
-                (html/join
-                  (list
-                    (kanban/move-btn id list-id "left" "←")
-                    (kanban/move-btn id list-id "up" "↑")
-                    (kanban/move-btn id list-id "down" "↓")
-                      (kanban/move-btn id list-id "right" "→")))))))))))
+                      (if blocked?
+                        (html/join
+                          (list
+                            (html/text state)
+                            (html/span (html/attr "class" "kb-blocked")
+                              (html/text "blocked"))))
+                        (html/text state))
+                      (if (string-eq who "")
+                        ""
+                        (html/span (html/attr "class" "kb-assignee")
+                          (html/text (string-append " @" who)))))))
+                (html/div (html/attr "class" "kb-card-controls")
+                  (html/join
+                    (list
+                      (kanban/move-btn id list-id "left" "←")
+                      (kanban/move-btn id list-id "up" "↑")
+                      (kanban/move-btn id list-id "down" "↓")
+                      (kanban/move-btn id list-id "right" "→")
+                      (kanban/assign-btn id)))))))))))
 
 (define kanban/cards-html
   (lambda (list-id cards columns)
@@ -372,7 +385,8 @@
             (state (let ((x (request-param "state"))) (if (null? x) "" (as-str x))))
             (index (let ((x (request-param "index"))) (if (null? x) "" (as-str x))))
             (name (let ((x (request-param "name"))) (if (null? x) "" (as-str x))))
-            (title (let ((x (request-param "title"))) (if (null? x) "" (as-str x)))))
+              (title (let ((x (request-param "title"))) (if (null? x) "" (as-str x))))
+              (assignee (let ((x (request-param "assignee"))) (if (null? x) "" (as-str x)))))
         (if (string-eq action "move")
           (kanban/move-card id state (kanban/parse-index index))
           (if (string-eq action "up")
@@ -383,15 +397,20 @@
                 (kanban/shift-col id list-id -1)
                 (if (string-eq action "right")
                   (kanban/shift-col id list-id 1)
-                  (if (string-eq action "add-card")
-                    (kanban/add-card list-id title state)
-                    (if (string-eq action "add-column")
-                      (kanban/add-column list-id name)
-                      (if (string-eq action "remove-column")
-                        (kanban/remove-column list-id name)
-                        (if (string-eq action "rename-column")
-                          (kanban/rename-column list-id name state)
-                          "unknown action")))))))))))))
+                    (if (string-eq action "add-card")
+                      (let ((new-id (kanban/add-card list-id title state)))
+                        (if (string-eq assignee "")
+                          new-id
+                          (kanban/assign new-id assignee)))
+                      (if (string-eq action "add-column")
+                        (kanban/add-column list-id name)
+                        (if (string-eq action "remove-column")
+                          (kanban/remove-column list-id name)
+                          (if (string-eq action "rename-column")
+                            (kanban/rename-column list-id name state)
+                            (if (string-eq action "assign")
+                              (kanban/assign id assignee)
+                                "unknown action"))))))))))))))
 
 (define kanban/in-columns?
   (lambda (columns state)
@@ -992,3 +1011,96 @@ function kbDrop(ev){
               "Intake (AUTO lane): this stream has no SPEC column and no human gate. If the card needs a spec decision first or touches UI, schema migrations, auth, store, or prod promote, it does NOT belong in this list — move it to the Board list (FACES/KERNEL) and comment why. Otherwise set the card to CODE and comment the placement."
               "LOGIC-REVIEW"
               "You are the LOGIC REVIEWER for Pricklypear on the AUTO lane (workstreams.borg stream-pipelines) — this stream has NO human gate: your PASS closes the card. Review the card's work on its target branch against its acceptance criteria: read the change, run dune build + dune runtest (lisp/common at minimum), check borge drift after any .borg edit, and independently re-verify the stated evidence (run the smoke/test yourself, do not trust the comment). PASS -> end with DESTINATION: DONE plus your verdict + evidence comment. FAIL -> end with DESTINATION: CODE and a comment listing exactly what to fix. ESCALATION: if the card thread (todo-events + comments) already shows two FAIL verdicts for the same defect, do not loop again — end with DESTINATION: HUMAN-REVIEW and a comment explaining the repeated failure.")))))))
+
+;; ------------------------------------------------------------------
+;; assignment: the write side of the assignee field. The supervisor's
+;; queue filter already skips cards with a non-empty assignee
+;; (queue_eligible_expr, glochid/lib/supervisor.ml), so an assigned card
+;; leaves the auto lane the moment it is assigned - assignment IS the
+;; human gate. /waiting-on is the per-person face over the same field.
+;; ------------------------------------------------------------------
+
+(define kanban/assign
+  (lambda (id assignee)
+    "Set the card's assignee field (empty string clears it). Tree action;
+     runs inside the caller's transaction (see kanban/move-card note)."
+    (let ((fields (get (quote todo-item) id)))
+      (if (null? fields)
+        "no such card"
+        (tree/upsert (node-path (quote todo-item) id) "datum" "todo-item"
+          (dict-set* fields (list "assignee" (as-str assignee))))))))
+
+(define kanban/assign-btn
+  (lambda (id)
+    "Compact per-card assign form: text input + submit; empty input clears."
+    (html/form "POST" "/kanban"
+      (html/attrs
+        (list
+          (html/attr "class" "kb-move-form kb-assign-form")
+          (html/attr "hx-post" "/kanban")
+          (html/attr "hx-target" "#kb-board")
+          (html/attr "hx-swap" "innerHTML")))
+      (html/join
+        (list
+          (html/hidden "action" "assign")
+          (html/hidden "id" id)
+          (html/text-input "assignee"
+            (html/attrs
+              (list
+                (html/attr "placeholder" "@who")
+                (html/attr "class" "kb-assign-input"))))
+          (html/button (html/attr "type" "submit") "↦"))))))
+
+(define kanban/waiting-li
+  (lambda (row)
+    "One waiting-on row: title, state, list title, truncated notes."
+    (let* ((f (cdr row))
+           (t (as-str (dict-get f "title")))
+           (st (as-str (todo/item/state f)))
+           (lid (as-str (todo/item/list-id f)))
+           (lf (get (quote todo-list) lid))
+           (lt (if (null? lf) "" (as-str (dict-get lf "title"))))
+           (nt (as-str (dict-get f "notes")))
+           (nts (if (> (string-length nt) 120)
+                  (string-append (substring nt 0 120) "...")
+                  nt)))
+      (html/li
+        (html/attr "class" "todo-item")
+        (html/join
+          (list
+            (html/span (html/attr "class" "todo-title") (html/text t))
+            (html/span (html/attr "class" "muted")
+              (html/text
+                (string-append " (" st
+                  (if (string-eq lt "") "" (string-append ", " lt)) ")")))
+            (html/span (html/attr "class" "muted")
+              (html/text (string-append " " nts)))))))))
+
+(define kanban/waiting-page
+  (lambda ()
+    "GET /waiting-on?who=NAME - open cards assigned to NAME (default roerick).
+     The 'everything waiting on me' face for humans and agents; reads
+     todo/item/all (garden + shared per the todo/list/all merge) and sorts
+     in work order (priority, position, id) via kanban/review-sorted."
+    (let ((who (let ((x (request-param "who"))) (if (null? x) "roerick" (as-str x)))))
+      (let ((rows (list/filter
+                    (lambda (row)
+                      (and (string-eq (as-str (todo/item/assignee (cdr row))) who)
+                           (todo/state/open? (todo/item/state (cdr row)))))
+                    (todo/item/all))))
+        (let ((sorted (kanban/review-sorted rows)))
+          (html/page
+            (list
+              (html/h1 (html/text (string-append "Waiting on " who)))
+              (html/p* (html/attr "class" "muted")
+                (string-append (as-str (length sorted))
+                  " open cards assigned to " who
+                  ". Assign with the @who box on any card."))
+              (html/ul
+                (html/attr "class" "card todo-list")
+                (list/foldl
+                  (lambda (acc row) (string-append acc (kanban/waiting-li row)))
+                  ""
+                  sorted)))))))))
+
+(route "/waiting-on" "kanban/waiting-page" "private")
