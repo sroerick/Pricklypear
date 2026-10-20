@@ -156,18 +156,24 @@ let parse_binding_pairs ~(label : string) (bindings_expr : expr)
            (User_error ("bad " ^ label ^ " bindings", "bad-args")))
 
 (** Extract parameter names from [define] sugar param exprs; an
-    [App (Var c, [_])] is accepted as an optional-with-default [c]. *)
-let params_of_define_sugar (param_exprs : expr list) : string list =
+    [App (Var c, [_])] is accepted as an optional-with-default [c].
+    [~name] is the define being parsed: define-shape load errors name it
+    (card 2cd8042e — an opaque "params must be names" inside a large
+    package load cost the quake build ~15 push cycles). *)
+let params_of_define_sugar ~(name : string) (param_exprs : expr list) :
+    string list =
   List.map
     (function
-     | Var p -> p
-     | App (Var p, [ _default ]) ->
-         (* optional with default: (c default) — allowed in define sugar *)
-         p
-     | _ ->
-         raise
-           (Interp_error
-              (User_error ("define function params must be names", "bad-args"))))
+      | Var p -> p
+      | App (Var p, [ _default ]) ->
+          (* optional with default: (c default) — allowed in define sugar *)
+          p
+      | _ ->
+          raise
+            (Interp_error
+               (User_error
+                  ("define " ^ name ^ ": function params must be names",
+                   "bad-args"))))
     param_exprs
 
 (** Rewrite a lambda-shaped expr so a leading multi-body docstring is removed
@@ -205,19 +211,23 @@ let parse_top_define (e : expr) : define_shape option =
       let body, _lam_doc = strip_lambda_doc body_expr in
       (* Trailing define docstring wins over lambda-internal. *)
       Some { name; body; doc = Some doc }
-  | App (Var "define", [ Var _; _; other ]) ->
-      let _ = other in
-      raise
-        (Interp_error
-           (User_error
-              ("define docstring must be a string literal \"…\"", "bad-args")))
-  | App (Var "define", App (Var name, param_exprs) :: bodies) ->
-      let doc, bodies' = peel_leading_doc bodies in
-      let params = params_of_define_sugar param_exprs in
-      if List.mem "." params then
+    | App (Var "define", [ Var name; _; _ ]) ->
         raise
           (Interp_error
-             (User_error ("dotted rest params not supported in define sugar", "bad-args")));
+             (User_error
+                ( "define " ^ name
+                  ^ ": docstring must be a string literal \"…\"",
+                  "bad-args" )))
+    | App (Var "define", App (Var name, param_exprs) :: bodies) ->
+        let doc, bodies' = peel_leading_doc bodies in
+        let params = params_of_define_sugar ~name param_exprs in
+        if List.mem "." params then
+          raise
+            (Interp_error
+               (User_error
+                  ( "define " ^ name
+                    ^ ": dotted rest params not supported in define sugar",
+                    "bad-args" )));
       let body = body_of_exprs bodies' in
       Some { name; body = Lambda (params, body); doc }
   | Define (name, body_expr) ->

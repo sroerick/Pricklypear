@@ -92,6 +92,26 @@ let test_load_unbound_form () =
       Alcotest.(check bool) "snippet present" true
         (contains_seq e "in: (nope 1)")
 
+(* L2b (card 2cd8042e): a failure inside a begin-wrapped load NAMES the
+   defines the form introduces — the head-80 snippet alone shows only the
+   first define, which is how a broken define stayed unfindable. *)
+let test_load_begin_wrapped_define_named () =
+  point_pp_libs_dir (real_libs_dir ());
+  let eval_form, _, _ = eval_form_of () in
+  match
+    Pricklypear_image_lib.Loader.load_string ~eval_form
+      "(begin (define good 1) (define bad (nope)))"
+  with
+  | Ok msg -> Alcotest.fail ("expected Error, got: " ^ msg)
+  | Error e ->
+      Alcotest.(check bool) "form index" true
+        (String.starts_with ~prefix:"form 1 failed" e);
+      Alcotest.(check bool) "unbound named" true
+        (contains_seq e "unbound: nope");
+      Alcotest.(check bool) "defines listed" true
+        (contains_seq e "defines: good, bad");
+      Alcotest.(check bool) "snippet present" true
+        (contains_seq e "in: (begin")
 (* L3: reader error shape. *)
 let test_load_reader_error () =
   point_pp_libs_dir (real_libs_dir ());
@@ -390,6 +410,7 @@ let () =
     [ ( "loader"
       , [ ("load-ok", `Quick, test_load_ok)
         ; ("load-unbound-form", `Quick, test_load_unbound_form)
+          ; ("load-begin-wrapped-define-named", `Quick, test_load_begin_wrapped_define_named)
         ; ("load-reader-error", `Quick, test_load_reader_error)
         ; ("strip-line-comments", `Quick, test_strip_line_comments)
         ; ("seed-priority-order", `Quick, test_seed_priority_order)
