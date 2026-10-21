@@ -650,42 +650,29 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
           (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("export-package", "need package-str", "bad-args")))));
 
   (* (code-history "name") / (code-history "name" "owner/branch")
-     → VStr JSON list newest-first. Spec: branching.code-history. *)
+     → VStr JSON list newest-first. Spec: branching.code-history.
+     Reads honor branch_read_scope like code-diff: refs outside the
+     session's readable set are denied BEFORE the lookup (authz-matrix
+     gap 3, 2026-10-21). *)
   Primitives.register tbl "code-history"
     (fun args ->
-      let resolve_branch_id ref_opt =
-        match ref_opt with
-        | None -> Store.current_branch_id t.store
-        | Some branch_ref ->
-            let owner, name =
-              match String.split_on_char '/' branch_ref with
-              | [ o; n ] when o <> "" && n <> "" -> (o, n)
-              | _ -> ("", branch_ref)
-            in
-            (match
-               Store.lookup_branch_id_by_name t.store ~owner ~name
-             with
-             | Some id -> id
-             | None -> "")
+      let run name branch_ref_opt =
+        (match branch_read_scope branch_ref_opt with
+         | `Current bid | `Found (bid, _) ->
+             (Pricklypear_lisp.Ast.VStr
+                (Store.list_code_history_json t.store ~branch_id:bid ~name))
+         | `Denied (r, o) ->
+             (Pricklypear_lisp.Ast.VStr
+                (Printf.sprintf "denied: branch %s is owned by %s" r o))
+         | `Missing r ->
+             (Pricklypear_lisp.Ast.VStr
+                (Printf.sprintf "code-history: no such branch: %s" r)))
       in
       match args with
-      | [ Pricklypear_lisp.Ast.VStr name ] ->
-          let bid = resolve_branch_id None in
-          if bid = "" then
-            (Pricklypear_lisp.Ast.VStr "[]")
-          else
-            (Pricklypear_lisp.Ast.VStr
-               (Store.list_code_history_json t.store ~branch_id:bid ~name))
+      | [ Pricklypear_lisp.Ast.VStr name ] -> run name None
       | [ Pricklypear_lisp.Ast.VStr name
         ; Pricklypear_lisp.Ast.VStr branch_ref ] ->
-          let bid = resolve_branch_id (Some branch_ref) in
-          if bid = "" then
-            (Pricklypear_lisp.Ast.VStr
-               (Printf.sprintf
-                  "code-history: no such branch: %s" branch_ref))
-          else
-            (Pricklypear_lisp.Ast.VStr
-               (Store.list_code_history_json t.store ~branch_id:bid ~name))
+          run name (Some branch_ref)
       | _ ->
           ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("code-history", "need name [owner/branch]", "bad-args"))))));
 
@@ -738,12 +725,12 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
   Primitives.register tbl "diff"
     (fun args ->
       let resolve ref_ =
-        let owner, name =
-          match String.split_on_char '/' ref_ with
-          | [ o; n ] when o <> "" && n <> "" -> (o, n)
-          | _ -> ("", ref_)
-        in
-        Store.lookup_branch_id_by_name t.store ~owner ~name
+        (* authz-matrix gap 3: diff reads honor branch_read_scope. *)
+        match branch_read_scope (Some ref_) with
+        | `Found (id, _) -> `Ok id
+        | `Denied (r, o) -> `Denied (r, o)
+        | `Missing r -> `Missing r
+        | `Current _ -> `Missing ref_
       in
       let to_ref = function
         | Pricklypear_lisp.Ast.VStr s -> Some s
@@ -755,7 +742,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
           (match to_ref a, to_ref b with
            | Some from_ref, Some to_ref ->
                (match resolve from_ref, resolve to_ref with
-                | Some from_id, Some to_id ->
+                | `Ok from_id, `Ok to_id ->
                     let rows = Store.diff_branches t.store ~from_id ~to_id in
                     let kind_s = function
                       | Store.DiffFn -> "fn"
@@ -776,10 +763,13 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
                     in
                     (Pricklypear_lisp.Ast.VList
                        (List.map (fun r -> Pricklypear_lisp.Ast.VStr (line r)) rows))
-                | _ ->
-                    (Pricklypear_lisp.Ast.VStr
-                       (Printf.sprintf "diff: no such branch pair (%s, %s)"
-                          from_ref to_ref)))
+              | `Denied (r, o), _ | _, `Denied (r, o) ->
+                  (Pricklypear_lisp.Ast.VStr
+                     (Printf.sprintf "denied: branch %s is owned by %s" r o))
+              | _ ->
+                  (Pricklypear_lisp.Ast.VStr
+                     (Printf.sprintf "diff: no such branch pair (%s, %s)"
+                        from_ref to_ref)))
            | _ ->
                (raise
                   (Pricklypear_lisp.Ast.Interp_error
