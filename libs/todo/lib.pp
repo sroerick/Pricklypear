@@ -4451,11 +4451,12 @@
                   (string-eq view "from-notes")
                   ""
                   (if (string-eq view "archived") "" view))))
+            (board-items (todo/item/all))
             (body
               (cond
                 ((string-eq view "everything")
                   (let
-                    ((items (todo/item/all)))
+                    ((items board-items))
                     (let
                       ((active (todo/item/active items)))
                       (html/join
@@ -4484,7 +4485,7 @@
                     (list
                       (html/div
                         (html/attr "class" "todo-side")
-                        (todo/ui/nav view))
+                        (todo/ui/nav view board-items))
                       (html/div
                         (html/attr "class" "todo-body")
                         (html/join
@@ -4497,15 +4498,15 @@
      todo/item/html, whose sections each re-read the board (todo/item/all)
      and the note scrape — three card scans and two scrapes per page, 500
      budget-exceeded on prod. The smart view is assembled HERE now, from
-     ONE snapshot. todo/ui/nav keeps its 1-arg signature for cross-branch
-     safety (see todo/item/html's arity note).")
+       ONE snapshot (board-items, now shared with todo/ui/nav; nav falls back
+       to its own fetch when passed an empty list).")
 
 (define todo/ui/nav
   (lambda
-    (view)
+      (view items)
     (let
       ((lists (todo/list/all))
-        (items (todo/item/all))
+          (items (if (null? items) (todo/item/all) items))
         (inbox (todo/list/ensure-inbox)))
       (let
         ((arch-n
@@ -4555,7 +4556,7 @@
                             (html/attr "required" "required")
                             (html/attr "class" "todo-new-list-input"))))
                       (html/button (html/attr "type" "submit") "+ list")))))))))))
-  "nav: ONE items fetch (archived count only); lists render without per-list ratios — dict-get JSON parses per item blew the route budget")
+    "nav: items snapshot comes from the caller (empty list fetches once here); archived count only; lists render without per-list ratios - dict-get JSON parses per item blew the route budget")
 
 (define todo/ui/nav-link
   (lambda
