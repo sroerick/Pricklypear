@@ -4133,14 +4133,15 @@
      node or note is missing. borge/workstreams.borg note-todos clause 2.")
 (define todo/from-notes-items
   (lambda
-    ()
+    (items)
     (list/filter
       (lambda
         (row)
         (string-eq (todo/item/origin-kind (cdr row)) "note"))
-      (todo/item/all)))
+      (if (null? items) (todo/item/all) items)))
   "Promoted cards (origin_kind = note) — the board's 'from notes' filter,
-     a filter over CARDS, never a second scrape of the note tree.")
+   a filter over CARDS, never a second scrape of the note tree. Takes the
+   page's ONE board snapshot (items); an empty list fetches its own.")
 (define todo/node/promoted-refs
   (lambda
     ()
@@ -4231,15 +4232,15 @@
      the owning note path, which is the slug-map key.")
 (define todo/node/unpromoted
   (lambda
-    ()
+    (items)
     (let*
       ((promoted
           (list/filter
             (lambda (r) (not (string-eq r "")))
             (list/map
               (lambda (row) (todo/item/origin-ref (cdr row)))
-              (todo/item/all))))
-        (marked (todo/node/marked-rows))
+              (if (null? items) (todo/item/all) items))))
+          (marked (todo/node/marked-rows))
         (smap (todo/node/slug-map marked)))
       (list/filter
         (lambda
@@ -4324,10 +4325,10 @@
   "One unpromoted node row with a promote button (POST action=promote-node).")
 (define todo/from-notes-html
   (lambda
-    (view)
+    (view items)
     (let
-      ((cards (todo/from-notes-items))
-        (unpromoted (todo/node/unpromoted)))
+      ((cards (todo/from-notes-items items))
+        (unpromoted (todo/node/unpromoted items)))
       (html/join
         (list
           (html/h2 "From notes")
@@ -4471,9 +4472,9 @@
                               ""
                               (list/take active todo/page/cap)))
                           (todo/page/more-note (length active))
-                          (todo/from-notes-html view))))))
+                          (todo/from-notes-html view board-items))))))
                 ((string-eq view "from-notes")
-                  (todo/from-notes-html view))
+                  (todo/from-notes-html view board-items))
                 (#t (todo/item/html view)))))
           (html/div
             (html/attr "id" "todo-main")
