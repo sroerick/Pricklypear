@@ -1384,21 +1384,59 @@ and load_library (t : t) (name : string) : (string, string) result =
       in
       r)
 
-(** branching.seed-policy: admin-only upsert of libs/<pkg>/lib.pp onto
-    system/main (full clobber for names in that file). Does not touch
-    personal/dev rows. seed_additive stays false so persist upserts. *)
-and reseed_package (t : t) (pkg : string) : (string, string) result =
-  let pkg = String.trim pkg in
-  (* spec_delegation: delegated sessions never reseed (a code write to
-     system/main; data, never for code). *)
-  if restricted t then
-    (Error "reseed-package: denied for delegated sessions and tenants")
-  else if pkg = "" then (Error "empty package name")
-  else if (not (Prims_db_common.is_verified_admin ~t ()))
-          && t.manifest.username <> "admin"
-          && t.manifest.username <> "system" then
-    (Error "requires admin")
-  else begin
+  (** branching.seed-policy: upsert of libs/<pkg>/lib.pp. system/main stays
+      admin-only (full clobber for names in that file; delegated sessions
+      never reseed main - spec_delegation: a code write to system/main;
+      data, never for code). ANY OTHER branch is open to every session:
+      agents reseed a review branch so a user can look at the code there
+      (roerick 10-21: "gate system/main but allow all reseeds to all other
+      branches"). Does not touch personal/dev rows. seed_additive stays
+      false so persist upserts. *)
+  and reseed_package (t : t) (pkg : string) (branch : string option) :
+      (string, string) result =
+    let pkg = String.trim pkg in
+    let main_id = Store.system_main_id in
+    let resolve () =
+      match branch with
+      | None -> Ok (main_id, "system/main", true)
+      | Some b ->
+          let b = String.trim b in
+          if b = "system/main" then Ok (main_id, "system/main", true)
+          else
+            (match String.index_opt b '/' with
+             | Some i when i > 0 && i < String.length b - 1 ->
+                 let owner = String.sub b 0 i in
+                 let name =
+                   String.sub b (i + 1) (String.length b - i - 1)
+                 in
+                 (match
+                    Store.lookup_branch_id_by_name t.store ~owner ~name
+                  with
+                  | Some id when id <> main_id -> Ok (id, b, false)
+                  | Some _ -> Ok (main_id, "system/main", true)
+                  | None -> Error ("no such branch: " ^ b))
+             | _ -> Error ("no such branch: " ^ b))
+    in
+    match resolve () with
+    | Error e -> Error e
+    | Ok (branch_id, label, is_main) ->
+        if is_main then begin
+          (* spec_delegation: delegated sessions never reseed main. *)
+          if restricted t then
+            (Error "reseed-package: denied for delegated sessions and tenants")
+          else if pkg = "" then (Error "empty package name")
+          else
+            if (not (Prims_db_common.is_verified_admin ~t ()))
+               && t.manifest.username <> "admin"
+               && t.manifest.username <> "system" then
+              (Error "requires admin")
+            else reseed_onto t pkg branch_id label
+        end
+        else if pkg = "" then (Error "empty package name")
+        else reseed_onto t pkg branch_id label
+
+  and reseed_onto (t : t) (pkg : string) (branch_id : string) (label : string) :
+      (string, string) result =
     t.seed_additive <- false;
     t.ui_shell.suppress_refresh_on_define <- true;
     let finally () =
@@ -1407,15 +1445,14 @@ and reseed_package (t : t) (pkg : string) : (string, string) result =
       ()
     in
     Fun.protect ~finally (fun () ->
-        Store.with_branch t.store ~branch_id:Store.system_main_id (fun () ->
+        Store.with_branch t.store ~branch_id (fun () ->
           let r = load_library t pkg in
           let () = rehydrate t in
           let () = refresh_ui_shell t in
           match r with
           | Ok msg ->
-              (Ok (Printf.sprintf "reseeded %s → system/main: %s" pkg msg))
+              (Ok (Printf.sprintf "reseeded %s → %s: %s" pkg label msg))
           | Error e -> (Error e)))
-  end
 
 and refresh_ui_shell (t : t) : unit =
   (* Product shell: nav HTML + theme CSS (image.product-theme).
@@ -1865,18 +1902,25 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
                (Pricklypear_lisp.Ast.VStr ("load-library: " ^ e)))
       | _ ->
           (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("load-library", "need 1 string", "bad-args")))));
-  (* (reseed-package pkg) — admin-only upsert libs/<pkg> onto system/main. *)
+  (* (reseed-package pkg [branch]) - upsert libs/<pkg> onto the vault.
+     No branch arg or "system/main": admin-only (delegated sessions never
+     reseed main). Any other branch: open to every session - agents reseed
+     a review branch so a user can look at the code there. *)
   Primitives.register prim_table "reseed-package"
     (fun args ->
       match args with
       | [ Pricklypear_lisp.Ast.VStr pkg ] ->
-          let r = reseed_package !t pkg in
-          (match r with
+          (match reseed_package !t pkg None with
+           | Ok msg -> (Pricklypear_lisp.Ast.VStr msg)
+           | Error e ->
+               (Pricklypear_lisp.Ast.VStr ("reseed-package: " ^ e)))
+      | [ Pricklypear_lisp.Ast.VStr pkg; Pricklypear_lisp.Ast.VStr branch ] ->
+          (match reseed_package !t pkg (Some branch) with
            | Ok msg -> (Pricklypear_lisp.Ast.VStr msg)
            | Error e ->
                (Pricklypear_lisp.Ast.VStr ("reseed-package: " ^ e)))
       | _ ->
-          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("reseed-package", "need package-str", "bad-args")))));
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("reseed-package", "need package-str [branch-str]", "bad-args")))));
   let final_prims = prim_table in
   let kernel_catalog = Primitives.catalog prim_table in
   (* i-1788670318: boot-time prim-classification assertion. Every

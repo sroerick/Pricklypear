@@ -213,6 +213,61 @@ let test_main_load_no_warning () =
         (not (contains_seq msg "WARNING"))
   | Error e -> Alcotest.fail ("std failed to load on main: " ^ e)
 
+
+(* D3b: reseed-package onto system/main stays denied for delegated
+   sessions even when the branch is named explicitly (named-main
+   anti-bypass resolves to the main id and hits the main gate). *)
+let test_delegated_reseed_main_named_denied () =
+  point_pp_libs_dir ();
+  let t = make_session ~delegated:true in
+  match S.eval_string_rim t "(reseed-package \"std\" \"system/main\")" with
+  | Ast.VStr msg ->
+      Alcotest.(check bool) "named-main reseed denial" true
+        (contains_seq msg "denied for delegated sessions")
+  | v ->
+      Alcotest.fail
+        (Printf.sprintf "expected denial, got: %s"
+           (Pricklypear_lisp.Reader.pp_value v))
+
+(* D3c: a self (non-admin) session still cannot reseed system/main. *)
+let test_self_reseed_main_denied () =
+  point_pp_libs_dir ();
+  let t = make_session ~delegated:false in
+  match S.eval_string_rim t "(reseed-package \"std\" \"system/main\")" with
+  | Ast.VStr msg ->
+      Alcotest.(check bool) "main requires admin" true
+        (contains_seq msg "requires admin")
+  | v ->
+      Alcotest.fail
+        (Printf.sprintf "expected denial, got: %s"
+           (Pricklypear_lisp.Reader.pp_value v))
+
+(* D3d: ANY branch other than system/main is open - a delegated session
+   reseeds a non-main branch with no admin gate (roerick 10-21: "gate
+   system/main but allow all reseeds to all other branches"). Pinned via
+   the internal path; the no-DB store cannot resolve named branches. *)
+let test_delegated_reseed_branch_allowed () =
+  point_pp_libs_dir ();
+  let t = make_session ~delegated:true in
+  match S.reseed_onto t "std" "00000000-0000-0000-0000-000000000003"
+           "tester/test" with
+  | Ok msg ->
+      Alcotest.(check bool) "branch reseed open" true
+        (contains_seq msg "reseeded std → tester/test")
+  | Error e -> Alcotest.fail ("branch reseed failed: " ^ e)
+
+(* D3e: no-DB resolution of a named non-main branch fails cleanly. *)
+let test_named_branch_unknown () =
+  point_pp_libs_dir ();
+  let t = make_session ~delegated:false in
+  match S.eval_string_rim t "(reseed-package \"std\" \"tester/personal\")" with
+  | Ast.VStr msg ->
+      Alcotest.(check bool) "unknown branch" true
+        (contains_seq msg "no such branch")
+  | v ->
+      Alcotest.fail
+        (Printf.sprintf "expected no-such-branch, got: %s"
+           (Pricklypear_lisp.Reader.pp_value v))
 (* D7: a plain (self) attach resets provenance — actor cleared, admin
    as given, no lock. Attach twice to prove re-attach (cookie +
    delegated interleave) cannot leave stale actor behind. *)
@@ -249,4 +304,12 @@ let () =
             (fun () -> in_eio test_nonmain_load_warns)
         ; Alcotest.test_case "system/main load-library stays silent" `Quick
             (fun () -> in_eio test_main_load_no_warning)
+          ; Alcotest.test_case "reseed named system/main denied (delegated)" `Quick
+              (fun () -> in_eio test_delegated_reseed_main_named_denied)
+          ; Alcotest.test_case "reseed named system/main requires admin" `Quick
+              (fun () -> in_eio test_self_reseed_main_denied)
+          ; Alcotest.test_case "reseed any other branch open" `Quick
+              (fun () -> in_eio test_delegated_reseed_branch_allowed)
+          ; Alcotest.test_case "named branch unknown fails cleanly" `Quick
+              (fun () -> in_eio test_named_branch_unknown)
         ] ) ]
