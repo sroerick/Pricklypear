@@ -1384,14 +1384,18 @@ and load_library (t : t) (name : string) : (string, string) result =
       in
       r)
 
-  (** branching.seed-policy: upsert of libs/<pkg>/lib.pp. system/main stays
-      admin-only (full clobber for names in that file; delegated sessions
-      never reseed main - spec_delegation: a code write to system/main;
-      data, never for code). ANY OTHER branch is open to every session:
-      agents reseed a review branch so a user can look at the code there
-      (roerick 10-21: "gate system/main but allow all reseeds to all other
-      branches"). Does not touch personal/dev rows. seed_additive stays
-      false so persist upserts. *)
+    (** branching.seed-policy: upsert of libs/<pkg>/lib.pp. system/main stays
+        admin-only (full clobber for names in that file; delegated sessions
+        never reseed main - spec_delegation: a code write to system/main;
+        data, never for code). Other branches are open to self sessions -
+        agents reseed a review branch so a user can look at the code there
+        (roerick 10-21: "gate system/main but allow all reseeds to all other
+        branches") - but restricted sessions (delegated + tenants) are
+        namespace-gated: manifest.username is the OWNER a delegated session
+        acts for, so a delegated agent can never edit a stranger's branch
+        (roerick 10-21, follow-up). Checked in [resolve] BEFORE the lookup,
+        so denial does not leak branch existence. Does not touch personal/dev
+        rows. seed_additive stays false so persist upserts. *)
   and reseed_package (t : t) (pkg : string) (branch : string option) :
       (string, string) result =
     let pkg = String.trim pkg in
@@ -1409,12 +1413,24 @@ and load_library (t : t) (name : string) : (string, string) result =
                  let name =
                    String.sub b (i + 1) (String.length b - i - 1)
                  in
-                 (match
-                    Store.lookup_branch_id_by_name t.store ~owner ~name
-                  with
-                  | Some id when id <> main_id -> Ok (id, b, false)
-                  | Some _ -> Ok (main_id, "system/main", true)
-                  | None -> Error ("no such branch: " ^ b))
+                   (* roerick 10-21: a delegated session edits only the
+                      branches of the user it acts for - manifest.username
+                      is the OWNER under spec_delegation - never a
+                      stranger's namespace. Checked before the lookup so
+                      denial does not leak branch existence. *)
+                   if restricted t && owner <> t.manifest.username then
+                     Error
+                       (Printf.sprintf
+                          "reseed-package: '%s' is outside your namespace \
+                           (you may only reseed branches of '%s')"
+                          b t.manifest.username)
+                   else
+                     (match
+                        Store.lookup_branch_id_by_name t.store ~owner ~name
+                      with
+                      | Some id when id <> main_id -> Ok (id, b, false)
+                      | Some _ -> Ok (main_id, "system/main", true)
+                      | None -> Error ("no such branch: " ^ b))
              | _ -> Error ("no such branch: " ^ b))
     in
     match resolve () with
@@ -1904,8 +1920,10 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
           (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("load-library", "need 1 string", "bad-args")))));
   (* (reseed-package pkg [branch]) - upsert libs/<pkg> onto the vault.
      No branch arg or "system/main": admin-only (delegated sessions never
-     reseed main). Any other branch: open to every session - agents reseed
-     a review branch so a user can look at the code there. *)
+     reseed main). Other branches: open to self sessions - agents reseed
+     a review branch so a user can look at the code there - while
+     delegated and tenant sessions are namespace-gated to their owner's
+     own branches (roerick 10-21). *)
   Primitives.register prim_table "reseed-package"
     (fun args ->
       match args with
