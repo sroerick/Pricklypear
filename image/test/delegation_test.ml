@@ -242,10 +242,9 @@ let test_self_reseed_main_denied () =
         (Printf.sprintf "expected denial, got: %s"
            (Pricklypear_lisp.Reader.pp_value v))
 
-(* D3d: ANY branch other than system/main is open - a delegated session
-   reseeds a non-main branch with no admin gate (roerick 10-21: "gate
-   system/main but allow all reseeds to all other branches"). Pinned via
-   the internal path; the no-DB store cannot resolve named branches. *)
+(* D3d: the shared reseed_onto load flow still works below the gate for
+   a delegated session (the no-DB store cannot resolve named branches,
+   so this pins the internal path; the namespace gate above it is D3f). *)
 let test_delegated_reseed_branch_allowed () =
   point_pp_libs_dir ();
   let t = make_session ~delegated:true in
@@ -267,6 +266,22 @@ let test_named_branch_unknown () =
   | v ->
       Alcotest.fail
         (Printf.sprintf "expected no-such-branch, got: %s"
+           (Pricklypear_lisp.Reader.pp_value v))
+
+(* D3f: namespace gate (roerick 10-21): a delegated session may only
+   reseed branches of the OWNER it acts for (manifest.username); a
+   stranger's branch is denied before the lookup, so the no-DB store
+   still exercises the denial. *)
+let test_delegated_reseed_stranger_denied () =
+  point_pp_libs_dir ();
+  let t = make_session ~delegated:true in
+  match S.eval_string_rim t "(reseed-package \"std\" \"stranger/test\")" with
+  | Ast.VStr msg ->
+      Alcotest.(check bool) "stranger namespace denied" true
+        (contains_seq msg "outside your namespace")
+  | v ->
+      Alcotest.fail
+        (Printf.sprintf "expected denial, got: %s"
            (Pricklypear_lisp.Reader.pp_value v))
 (* D7: a plain (self) attach resets provenance — actor cleared, admin
    as given, no lock. Attach twice to prove re-attach (cookie +
@@ -312,4 +327,6 @@ let () =
               (fun () -> in_eio test_delegated_reseed_branch_allowed)
           ; Alcotest.test_case "named branch unknown fails cleanly" `Quick
               (fun () -> in_eio test_named_branch_unknown)
+          ; Alcotest.test_case "reseed stranger namespace denied (delegated)" `Quick
+              (fun () -> in_eio test_delegated_reseed_stranger_denied)
         ] ) ]
