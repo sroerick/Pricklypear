@@ -1,6 +1,7 @@
 # One permission model for the OCaml layer
 
-Status: DRAFT for roerick review (gregor, 2026-10-21). Decisions locked:
+Status: APPROVED by roerick 10-21 (judgment delegated on the open
+questions: gaps first, then the migration). Decisions locked:
 no UI; policy stays in code, enforced at the OCaml layer. The doasq lane
 on wyo is out of scope (documented in ~/wyo-ops/ only).
 
@@ -136,10 +137,14 @@ inventory pass before migration step 6.
 2. Unify the two owner idioms on one authorize_owner (subsumes
    branch_owner_authorized and the reseed namespace rule; agent
    tenant-strip stays).
-3. code-history / diff: add branch_readable.
-4. tree/garden-root: restrict to own garden or admin.
+3. code-history / diff: add branch_readable. LANDED 1ac2412 (10-21;
+   deployed; prod-verified as gregor).
+4. tree/garden-root: restrict to own garden or admin. LANDED 1ac2412.
 5. tree/children-html: pass the prefix through gate_note_prefix.
-6. revoke-token: prim-layer owner-or-admin gate.
+   LANDED 1ac2412.
+6. revoke-token: prim-layer owner-or-admin gate. LANDED 1ac2412.
+   Follow-up: rotate-token still lets a DELEGATED session rotate the
+   owner's tokens (same shape) - decide during migration step 5.
 7. bench: decide - deny for anonymous/delegated at minimum.
 8. /api/prim + fs.write: close (swarm Phase A, feeds the matrix).
 9. RLS-only reads: confirm the floor default is correct for every entry
