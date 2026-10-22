@@ -467,8 +467,9 @@ let inherited_fn_body_matches (conn : Store_db.conn) ~(branch_id : string)
    closest-wins). If identical: do not write, and if an own pin exists
    UNPIN it (delete_fn), revealing the parent. A contentless pin freezes
    today's parent value with no intent behind it; it must not exist.
-   system/main never suppresses (empty parent chain); the boot-seed uses
-   persist_function_if_absent, which bypasses this path. *)
+    branching.seed-policy MIRROR (2026-10-22): the boot seed now
+    upserts THROUGH this path; on system/main the parent chain is
+    empty so the no-diff check is vacuous. *)
 (* [body_json] is the RAW jsonb body text (opaque store contract,
    i-1788671083-c): the caller serializes via [Ast.expr_to_body_json]. *)
 let persist_function (t : Store_db.t) (name : string)
@@ -521,106 +522,6 @@ let persist_function (t : Store_db.t) (name : string)
                      sql in
                  ())
     with exn -> Store_db.reraise ~op:"persist_function" exn)
-
-(** image.boot-seed-batch: preload the set of function names and route
-    paths already present on the current branch (system/main during boot
-    seed) so persist_function_if_absent / register_route_if_absent skip
-    the per-name get_by_path SELECT. Call inside the seed with_branch on
-    system/main; pair with [end_seed_names] in a finally. *)
-let begin_seed_names (t : Store_db.t) : unit =
-  match t.conn with
-  | None -> ()
-  | Some conn ->
-      let set = Hashtbl.create 1024 in
-      (try
-         let sql = "SELECT name FROM " ^ Store_common.fn_rel () ^ " WHERE branch_id = $1" in
-         let rows = Store_db.exec conn ~params:[ Pgx.Value.of_string t.branch_id ] sql in
-         List.iter (fun row ->
-             match row with
-             | [ name_c ] ->
-                 (match Pgx.Value.to_string name_c with
-                  | Some n -> Hashtbl.replace set n ()
-                  | None -> ())
-             | _ -> ()) rows
-       with exn ->
-         (* PROBE (i-1788671060-2 keep): boot-seed OPTIMIZATION — preload
-            the already-present names so seed_one can skip per-name
-            SELECTs; a failure just means no skipping (full seed pass
-            proceeds). The boot-seed-batch doc above covers the shape. *)
-         Printf.eprintf "[store] begin_seed_names (fns) error: %s\n"
-           (Printexc.to_string exn));
-      (try
-         let sql = "SELECT route FROM " ^ Store_common.rt_rel () ^ " WHERE branch_id = $1" in
-         let rows = Store_db.exec conn ~params:[ Pgx.Value.of_string t.branch_id ] sql in
-         List.iter (fun row ->
-             match row with
-             | [ route_c ] ->
-                 (match Pgx.Value.to_string route_c with
-                  | Some r -> Hashtbl.replace set r ()
-                  | None -> ())
-             | _ -> ()) rows
-       with exn ->
-         (* PROBE — same boot-seed-skip optimization as the fn half above. *)
-         Printf.eprintf "[store] begin_seed_names (routes) error: %s\n"
-           (Printexc.to_string exn));
-      t.seed_names <- Some set
-
-let end_seed_names (t : Store_db.t) : unit =
-  t.seed_names <- None
-
-(** branching.seed-policy: insert only if (branch_id, name) absent.
-    Existing main (or any branch) rows are left untouched. Used by boot
-    seed so deploy cannot clobber live promote. *)
-let persist_function_if_absent (t : Store_db.t) (name : string)
-    (body_json : string)  (* RAW jsonb body text, i-1788671083-c *)
-    ?(doc : string option = None)
-    ?(package : string option = None)
-    (author : string)
-  : unit =
-  match t.conn with
-  | None -> ()
-  | Some conn ->
-      (* image.boot-seed-batch: during the additive boot seed pass, consult
-         the preloaded name set instead of issuing a get_by_path SELECT per
-         define. Additive seed never overwrites existing rows, so an
-         existing name is a full skip. A genuinely new name upserts and
-         records itself so later duplicate defines skip too. *)
-      (match t.seed_names with
-       | Some set when Hashtbl.mem set name -> ()
-       | _ ->
-      (try
-          (* seed-policy: never overwrite body; fill package provenance
-             on the existing scaffolding row when untagged. *)
-            let exists =
-              Tree_store.get_by_path conn
-                ~path:(Tree_store.fn_path ~branch_id:t.branch_id ~name) in
-            let stamp_pkg_if_null () =
-              match package with
-              | None -> ()
-              | Some pkg ->
-                  let sql =
-                    "UPDATE function_defs SET package = $3 " ^
-                    "WHERE branch_id = $1 AND name = $2 AND package IS NULL" in
-                  let _ =
-                    Store_db.exec conn
-                      ~params:[ Pgx.Value.of_string t.branch_id;
-                                Pgx.Value.of_string name;
-                                Pgx.Value.of_string pkg ]
-                      sql in
-                  ()
-            in
-            (match exists with
-             | Some _ -> stamp_pkg_if_null ()
-             | None ->
-                 let _ =
-                   Tree_store.upsert_fn conn ~branch_id:t.branch_id ~name
-                     ~body_json ~author ~doc
-                 in
-                 stamp_pkg_if_null ());
-            (match t.seed_names with
-             | Some set -> Hashtbl.replace set name ()
-             | None -> ())
-      with exn -> Store_db.reraise ~op:"persist_function_if_absent" exn))
 
 (** Visible docstring for [name], or None. *)
 let lookup_function_doc (t : Store_db.t) (name : string) : string option =
@@ -1056,39 +957,6 @@ let register_route (t : Store_db.t) ~(route : string) ~(handler : string)
             (Tree_store.upsert_route conn ~branch_id:t.branch_id ~route
                ~handler ~visibility:vis)
     with exn -> Store_db.reraise ~op:"register_route" exn)
-
-(** branching.seed-policy: insert route only if absent on this branch. *)
-let register_route_if_absent (t : Store_db.t) ~(route : string) ~(handler : string)
-    ?visibility ()
-  : unit =
-  match t.conn with
-  | None -> ()
-  | Some conn ->
-      (* image.boot-seed-batch: skip the per-route get_by_path SELECT during
-         additive boot seed when the route is already in the preloaded set. *)
-      (match t.seed_names with
-       | Some set when Hashtbl.mem set route -> ()
-       | _ ->
-      (try
-      let vis =
-            match visibility with
-            | Some v -> normalize_visibility v
-            | None -> "private"
-          in
-          (* seed-policy: insert route only if the tree node is absent *)
-            let exists =
-              Tree_store.get_by_path conn
-                ~path:(Tree_store.route_path ~branch_id:t.branch_id ~route) in
-            (match exists with
-             | Some _ -> ()
-             | None ->
-                 ignore
-                   (Tree_store.upsert_route conn ~branch_id:t.branch_id
-                      ~route ~handler ~visibility:vis));
-            (match t.seed_names with
-             | Some set -> Hashtbl.replace set route ()
-             | None -> ())
-      with exn -> Store_db.reraise ~op:"register_route_if_absent" exn))
 
 (* List all route bindings visible to this branch (recursive-CTE walk,
    same as list_function_names — annotations from ancestors are visible

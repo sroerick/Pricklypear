@@ -26,11 +26,10 @@
        compares against the parent chain (canonical jsonb::text, single
        hash domain); an identical body writes NO pin and UNPINS an own
        row. There is no re-insert on the define path.
-     - ADDITIVE SEED IS system/main-SCOPED: seed_stdlib runs inside
-       Store.with_branch ~branch_id:system_main_id with seed_additive
-       true, so persist_function_if_absent (the only additive-insert
-       path) can never touch a personal branch — the "seed re-inserts
-       onto personal" leg of the hypothesis does not exist.
+     - MIRROR SEED IS system/main-SCOPED: seed_stdlib runs inside
+       Store.with_branch ~branch_id:system_main_id (seed_boot window),
+       so boot upserts can never touch a personal branch — the "seed
+       re-inserts onto personal" leg of the hypothesis does not exist.
      - LOAD-LIBRARY SKIP MAP (image.load-library-skip): identical
        chain-visible defs are skipped before eval/persist, so
        load-library cannot re-eval/re-persist an inherited body either
@@ -172,12 +171,11 @@ let test_synced_pin_unpins_once_and_stays_gone () =
                  "redefine #%d: own row stays unpinned (no ping-pong)" i)
               0 (count_fn store ~branch_id:child_id ~name:fn)
           done;
-          (* 6. the seed leg cannot re-insert onto the child: the additive
+          (* 6. the seed leg cannot re-insert onto the child: the mirror
              seed writes system/main only (seed_stdlib scoped by
-             Store.with_branch ~system_main_id), so persist_function_
-             if_absent never runs on a personal branch. Assert the child
-             stayed pin-free even after a main-scoped additive insert
-             (what the seed would do) of the SAME body. *)
+             Store.with_branch ~system_main_id). Assert the child
+             stayed pin-free even after a main-scoped upsert
+             (what the seed does) of the SAME body. *)
           store.branch_id <- main_id;
           ignore
             (Ses.eval_one s_main (Printf.sprintf "(define %s 7)" fn));

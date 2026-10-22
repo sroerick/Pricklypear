@@ -53,16 +53,10 @@ type t = {
   mutable conn : conn option;
   mutable branch_id : string;
   mutable current_tx : conn option;
-  (* image.boot-seed-batch: when seed_additive boot seed is running, this
-     holds the set of function/route names already present on the seed
-     branch (system/main), so persist_function_if_absent /
-     register_route_if_absent skip the per-name get_by_path SELECT. None
-     outside the boot seed pass. See borge/image.borg boot-seed-batch. *)
-  mutable seed_names : (string, unit) Hashtbl.t option;
 }
 
 let make ~cfg ~branch_id () : t =
-  { cfg; conn = None; branch_id; current_tx = None; seed_names = None }
+  { cfg; conn = None; branch_id; current_tx = None }
 
 (** Expose the config so the session registry can open per-session
     connections with the same parameters (image.per-identity-sessions). *)
@@ -215,7 +209,7 @@ let is_invalid_input_syntax (exn : exn) : bool =
     degraded must be distinguishable from legitimately empty.
 
     Swallows that remain are genuine optional probes and say so in a
-    comment at the site (visible_stamp fast path, begin_seed_names,
+      comment at the site (visible_stamp fast path,
     best-effort post-success bookkeeping, log_auth). The no-DB
     (conn=None) arms are unchanged: "not configured" is a distinct,
     truthful degraded mode, not an error to mask.

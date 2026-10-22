@@ -85,17 +85,20 @@ type eval_state = {
       with (package NAME (export …)), stamp new defines with this package
       name. None outside a package load / REPL package form. *)
   mutable current_package : string option;
-  (** image.load-library-skip (2026-09-03): during interactive
-      load-library / reseed, maps define-name -> fingerprint (pp_expr
-      body + doc) of the branch's OWN stored defs; eval_form skips
-      defines whose normalized body + doc are identical, so re-loading
-      a big lib no longer re-evaluates + re-persists ~1000 unchanged
-      defines (the boot seed got the same medicine via
-      persist_if_absent). Kernel-prim + disabled-package names excluded;
-      inherited names keep full eval (no-diff-no-pin unpin must stay
-      reachable). None outside load-library; a nested load-string during
-      the load window inherits it. *)
-  mutable load_skip_names : (string, string) Hashtbl.t option;
+    (** image.load-library-skip (2026-09-03): during interactive
+        load-library / reseed, maps define-name -> fingerprint (pp_expr
+        body + doc) of the chain-visible stored defs (closest non-hidden
+        row wins); eval_form skips defines whose normalized body + doc
+        are identical, so re-loading a big lib no longer re-evaluates +
+        re-persists ~1000 unchanged defines. branching.seed-policy MIRROR
+        (2026-10-22): the boot seed builds the same map ONCE (chain rows
+        on system/main) and skips identical defines across the whole
+        seed window — a warm boot re-evals only what a deploy changed.
+        Kernel-prim + disabled-package names excluded; inherited names
+        keep full eval (no-diff-no-pin unpin must stay reachable). None
+        outside load-library / the seed window; a nested load-string
+        during the load window inherits it. *)
+    mutable load_skip_names : (string, string) Hashtbl.t option;
   (** tmp/eval-fast-path incremental rehydrate: Def_journal cursor —
       the journal seq this session has consumed. ensure_fresh drains
       entries newer than the cursor and rebinds exactly those defs,
@@ -127,10 +130,13 @@ type t = {
   mutable ui_shell : ui_shell;
   (** Env + rim + load/rehydrate bookkeeping (interpreter driver). *)
   mutable eval_state : eval_state;
-  (** branching.seed-policy: when true, define/route persist is
-      insert-if-absent (boot seed into system/main). Interactive
-      load-library / define keep upsert (false). *)
-  mutable seed_additive : bool;
+    (** branching.seed-policy MIRROR (2026-10-22): true during the boot
+        seed window only. Boot seed UPSERTS defines/routes onto
+        system/main (persist_function / register_route) so main mirrors
+        libs/<pkg> code; this flag marks the window for the ledger skip,
+        the public-handler gate skip, the non-main pin warning, and the
+        once-per-boot mirror-skip map (load_skip_names). *)
+    mutable seed_boot : bool;
   (** Active HTTP request for user-route dispatch; None in REPL. *)
   mutable current_request : request option;
   (** When true, (checkout)/(fork)/(merge) are blocked so the agent

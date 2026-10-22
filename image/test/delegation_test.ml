@@ -202,8 +202,7 @@ let test_nonmain_load_warns () =
 
 (* W2: system/main loads stay silent. Keyed on the STORE branch, not the
    manifest — the manifest here still says tester/personal while the
-   store sits on main, exactly the reseed/with_branch shape (and boot
-   seed additionally holds seed_additive). *)
+   boot seed runs inside Store.with_branch system_main too). *)
 let test_main_load_no_warning () =
   point_pp_libs_dir ();
   let t = make_session ~delegated:true in
