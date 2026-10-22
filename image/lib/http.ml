@@ -1197,6 +1197,11 @@ let routes : route list =
              | None ->
                  ok_resp ~ok:true ~error:None ~blocked_backends ~idle_in_tx
                    `OK));
+    (* ---- debug churn + cache stats (roerick 10-22): authed JSON. Not in
+       is_system_hard_public, so the default flow requires a session. ---- *)
+    rt "debug-stats" [ `GET ] (Exact "/debug/stats") (fun env ->
+        text_response env.reqd ~status:`OK ~content_type:"application/json"
+          (Tree_store.debug_stats_json ()));
     (* ---- public agent bootstrap — no auth, no secrets; DIRECT (no
        launch): discovery must answer under load. /agent stays private. ---- *)
     rt "agent-json" [ `GET ] (Exact "/.well-known/agent.json")
