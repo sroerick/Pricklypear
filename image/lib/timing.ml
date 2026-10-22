@@ -205,3 +205,21 @@ let timing_header () : (string * string) list =
   | Some ms ->
       last_total_ms := None;
       [("x-timing-ms", Printf.sprintf "%.1f" ms)]
+
+(** PERF-5 (roerick 10-22): current per-route render aggregates as JSON,
+    for /debug/stats (the /timing page is admin-session-only). *)
+let aggregates_json () : string =
+  let agg_json (a : agg) =
+    let prim =
+      List.map
+        (fun (k, c, ms) ->
+          Printf.sprintf "{\"prim\":\"%s\",\"calls\":%d,\"ms\":%.0f}" k c ms)
+        a.prim_db_agg
+      |> String.concat ","
+    in
+    Printf.sprintf
+      "{\"route\":\"%s\",\"count\":%d,\"last_ms\":%.0f,\"avg_ms\":%.0f,\"max_ms\":%.0f,\"steps\":%.0f,\"db_hits\":%.0f,\"db_ms\":%.0f,\"prim_db\": [%s]}"
+      a.route a.count a.last_ms a.avg_ms a.max_ms a.steps a.db_hits a.db_ms
+      prim
+  in
+  "[" ^ String.concat "," (List.map agg_json (aggregates ())) ^ "]"

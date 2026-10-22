@@ -334,10 +334,10 @@ let debug_stats_json () : string =
     |> String.concat ","
   in
   Eio.Mutex.unlock cache_mu;
-  Printf.sprintf
-    "{\"gen\":%Ld,\"writes_total\":%d,\"writes_by_prefix\":{%s},\"writes_per_min\":[%s],\"l2_hits\":%d,\"l2_misses\":%d}"
-    gen (Atomic.get stats_total) prefixes minutes (Atomic.get stats_hits)
-    (Atomic.get stats_misses)
+    Printf.sprintf
+      "{\"gen\":%Ld,\"writes_total\":%d,\"writes_by_prefix\":{%s},\"writes_per_min\":[%s],\"l2_hits\":%d,\"l2_misses\":%d,\"timing\":%s}"
+      gen (Atomic.get stats_total) prefixes minutes (Atomic.get stats_hits)
+      (Atomic.get stats_misses) (Timing.aggregates_json ())
 (* ---- write helpers (upsert/delete tree_nodes; the reverse trigger mirrors
    to the legacy tables in the same tx) ----
 
