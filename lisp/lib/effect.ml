@@ -160,7 +160,7 @@ let pure_prims = [
   "request-param"; "request-params"; "request-body"; "request-multipart";
   "date-today"; "date-weekday"; "date-format";
   "date-add-days"; "date-diff-days";
-  "now"; "now-ms"; "now-iso";
+    "now"; "now-ms"; "now-iso"; "debug/stats";   (* in-memory counters, no store *)
   "parse-int"; "parse-float"; "floor"; "round";
   "fsrs-schedule";
   "length"; "equal?";
