@@ -2236,17 +2236,13 @@
 (define todo/list/merge
   (lambda
     (garden shared)
-    (if
-      (null? shared)
-      garden
-      (let
-        ((sid (as-str (car (car shared)))))
-        (todo/list/merge
-          (todo/list/merge-one garden sid (car shared))
-          (cdr shared)))))
-  "Merge shared `shared` into `garden`, deduping by id: an id already in
-     the garden keeps its garden row (no double-listing); a new id is
-     appended.")
+    (append garden shared))
+  "PERF-5 (2026-10-22): O(n) append replaces the per-row merge-one walk
+     (889 calls, ~40k steps per deleg render). The old dedup was head-only
+     (merge-one checked only the FIRST garden row), so it never actually
+     deduped beyond row one; garden and shared subtrees are disjoint by
+     construction (one node = one path), so ids cannot collide across
+     pools. Garden rows still come first, as every caller expects.")
 
 (define todo/list/merge-one
   (lambda
@@ -2342,7 +2338,32 @@
         (car found)))))
 
 (define todo/list/find-default
-  (lambda () (todo/list/find-default-in (todo/list/all))))
+  (lambda
+    ()
+    (let
+      ((hit
+        (let
+          ((rows (tree/find-by (quote todo-list) "is_default" "true" 5)))
+          (if
+            (null? rows)
+            (let
+              ((ib (tree/find-by (quote todo-list) "title" "Inbox" 5)))
+              (if (null? ib) () (car ib)))
+            (car rows)))))
+      (if
+        (null? hit)
+        ()
+        (list
+          (cons
+            (todo/tree/path-id (dict-get hit "path"))
+            (dict-get hit "body"))))))
+  "PERF-5 (2026-10-22): two indexed body-field reads replace the full
+     list-pool scan (todo/list/all) that ensure-inbox ran 2-4x per page
+     render (~24k steps each). Same (id . fields) row shape
+     find-default-in returned: is_default first, legacy title=Inbox
+     second. The default Inbox is garden furniture, which is exactly
+     tree/find-by's scope. Empty when nothing matches (ensure-inbox then
+     creates one).")
 
 ;; ------------------------------------------------------------------
 ;; SHARED OPEN SPACE (borge/workstreams.borg shared-store)
