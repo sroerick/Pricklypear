@@ -309,7 +309,7 @@ let register ~(hooks : hooks) (t : t) (tbl : Primitives.t) : unit =
   let register_route_checked ~route_path ~handler ~visibility
       ~(pass_vis_to_store : bool) ~(standalone : bool)
     : Pricklypear_lisp.Ast.value =
-    (* Publish-time gate. SKIPPED during additive boot seed: at seed the
+    (* Publish-time gate. SKIPPED during the boot seed: at seed the
        env holds only the kernel prim catalog (fingerprint-skipped
        defines never bind), so an env-based gate would deny every fresh
        package's (public-route …) and permanently prevent the route row
@@ -319,7 +319,7 @@ let register ~(hooks : hooks) (t : t) (tbl : Primitives.t) : unit =
        check_public_handler against the FULL session env before any
        public handler runs (BORGE-1785212463 dispatch gate). *)
     let gate =
-      if visibility = "public" && not t.seed_additive
+        if visibility = "public" && not t.seed_boot
       then check_public_handler handler
       else (Ok ())
     in
@@ -330,22 +330,17 @@ let register ~(hooks : hooks) (t : t) (tbl : Primitives.t) : unit =
              the view_bindings row is a code write, and delegation is for
              data, never for code. Seeded package loads keep their routes
              working in-session; nothing outlives the session. *)
-          Hashtbl.replace t.routes route_path (handler, visibility);
-          let _ =
-            if Session_types.restricted t then ()
-            else if t.seed_additive then
-            if pass_vis_to_store then
-              Store.register_route_if_absent t.store ~route:route_path
-                ~handler ~visibility ()
-            else
-              Store.register_route_if_absent t.store ~route:route_path
-                ~handler ()
-          else if pass_vis_to_store then
-            Store.register_route t.store ~route:route_path ~handler
-              ~visibility ()
-          else
-            Store.register_route t.store ~route:route_path ~handler ()
-        in
+            let _ =
+              if Session_types.restricted t then ()
+                (* branching.seed-policy MIRROR (2026-10-22): the boot
+                   seed is included — routes on system/main mirror
+                   libs/<pkg> too; register_route upserts. *)
+              else if pass_vis_to_store then
+                Store.register_route t.store ~route:route_path ~handler
+                  ~visibility ()
+              else
+                Store.register_route t.store ~route:route_path ~handler ()
+            in
         let () = declare_standalone ~standalone ~path:route_path in
         let () = notice_route ~path:route_path ~handler ~standalone in
         (Pricklypear_lisp.Ast.VStr route_path))
