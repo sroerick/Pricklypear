@@ -2338,32 +2338,7 @@
         (car found)))))
 
 (define todo/list/find-default
-  (lambda
-    ()
-    (let
-      ((hit
-        (let
-          ((rows (tree/find-by (quote todo-list) "is_default" "true" 5)))
-          (if
-            (null? rows)
-            (let
-              ((ib (tree/find-by (quote todo-list) "title" "Inbox" 5)))
-              (if (null? ib) () (car ib)))
-            (car rows)))))
-      (if
-        (null? hit)
-        ()
-        (list
-          (cons
-            (todo/tree/path-id (dict-get hit "path"))
-            (dict-get hit "body"))))))
-  "PERF-5 (2026-10-22): two indexed body-field reads replace the full
-     list-pool scan (todo/list/all) that ensure-inbox ran 2-4x per page
-     render (~24k steps each). Same (id . fields) row shape
-     find-default-in returned: is_default first, legacy title=Inbox
-     second. The default Inbox is garden furniture, which is exactly
-     tree/find-by's scope. Empty when nothing matches (ensure-inbox then
-     creates one).")
+  (lambda () (todo/list/find-default-in (todo/list/all))))
 
 ;; ------------------------------------------------------------------
 ;; SHARED OPEN SPACE (borge/workstreams.borg shared-store)
