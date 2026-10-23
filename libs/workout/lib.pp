@@ -5235,3 +5235,6 @@
                       (string-append "0" (as-str sec-rem))
                       (as-str sec-rem)))))))))))
   "Pace string (mm:ss per unit) for a walk doc, \"\" when no distance.")
+
+;; vault-declared routes (experiment 10-23: do route rows ride reseeds/deploys?)
+(route "/workout/snatch" "workout/ksk1-chart-page")
