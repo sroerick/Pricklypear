@@ -382,18 +382,27 @@ let read_one (s : string) : expr =
        raise (Reader_error ("trailing input after expression", st.line, st.col)));
   e
 
-(** [read_all s] reads as many top-level expressions as are in [s]. *)
-let read_all (s : string) : expr list =
+(** [read_all_pos s] reads as many top-level expressions as are in [s],
+    pairing each with the (line, column) at which the form starts. The
+    position is captured after whitespace/comments, so it points at the
+    form's first character. Script hosts use it to report load-time
+    errors against the source line; [read_all] stays the cheap shape. *)
+let read_all_pos (s : string) : (expr * (int * int)) list =
   let st = make_state s in
   let rec loop acc =
     skip_ws_and_comments st;
     match peek st with
     | None -> List.rev acc
     | Some _ ->
+        let line, col = st.line, st.col in
         let e = read_expr st in
-        loop (e :: acc)
+        loop ((e, (line, col)) :: acc)
   in
   loop []
+
+(** [read_all s] reads as many top-level expressions as are in [s]. *)
+let read_all (s : string) : expr list =
+  List.map fst (read_all_pos s)
 
 (** [is_complete s] returns true if [s] has balanced parens and closed
     strings, i.e. the REPL can evaluate it. Used by the REPL to know

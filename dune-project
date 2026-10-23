@@ -31,6 +31,10 @@
  (description "Laptop/agent CLIs: pp-eval, pp-sync (HTTP clients for the live image; no Python)"))
 
 (package
+ (name pricklypear-nopales)
+ (description "nopales — the standalone Nopales script runner and REPL: pure interpreter + pure prims + file/argv/exit/print/load. No image, no Postgres, no network"))
+
+(package
  (name pricklypear-glochid)
  (description "Local Nopales-native coding agent (pi-inspired): minimal agent loop, Nopales plugins, HTML code browser. Sibling of the image, not part of it — see borge/glochid.borg"))
 
