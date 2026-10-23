@@ -183,8 +183,8 @@
     ()
     (let
       ((s (as-str (request-param "since"))))
-        (if (string-eq s "") "2026-09-20" s))
-  "Chart window start: since param, default 2026-09-20 (ksf clean-and-jerk start)."))
+          (if (string-eq s "") "2026-09-20" s)))
+    "Chart window start: since param, default 2026-09-20 (ksf clean-and-jerk start).")
 (define workout/chart-page
   (lambda
     ()
