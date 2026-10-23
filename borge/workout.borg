@@ -305,6 +305,8 @@
           (route "/workout/session" "workout/session-page")
           (route "/workout/run" "workout/run-page")
           (route "/workout/log" "workout/log-page")   ; quick log / edit facts
+            (route "/workout/today" "workout/today-page") ; filmstrip pane: agenda for gated programs
+            (route "/workout/chart" "workout/chart-page") ; filmstrip pane: all sets chart
           Exact query keys implementation discretion; prefer
             ?id=uuid & ?program= & ?intensity=
 
