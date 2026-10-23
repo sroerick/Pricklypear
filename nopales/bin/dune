@@ -1,0 +1,6 @@
+(executable
+ (name nopales)
+ (public_name nopales)
+ (package pricklypear-nopales)
+ (modules nopales)
+ (libraries pricklypear-lisp pricklypear-pure-prims pricklypear_nopales_host unix))

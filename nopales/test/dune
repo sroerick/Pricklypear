@@ -1,0 +1,11 @@
+(rule
+ (target std.pp)
+ (deps ../../libs/std/lib.pp)
+ (action (copy ../../libs/std/lib.pp %{target})))
+
+(test
+ (name host_test)
+ (package pricklypear-nopales)
+ (modules host_test)
+ (libraries pricklypear-lisp pricklypear_nopales_host alcotest unix)
+ (deps std.pp))

@@ -1,0 +1,5 @@
+(library
+ (name pricklypear_nopales_host)
+ (wrapped false)
+ (modules host)
+ (libraries pricklypear-lisp pricklypear-pure-prims unix))
