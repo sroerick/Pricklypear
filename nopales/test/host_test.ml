@@ -148,6 +148,102 @@ let test_parse_error_location () =
         (String.starts_with ~prefix:"parse error:" f.message)
   | Ok v -> failf "expected a parse error, got %s" (show v)
 
+let mkdir_p dir =
+  let rec go d =
+    if d = Filename.dirname d || Sys.file_exists d then ()
+    else begin
+      go (Filename.dirname d);
+      Unix.mkdir d 0o755
+    end
+  in
+  go dir
+
+let write_datum root ~owner ~type_name ~id ~created ~fields =
+  let path = Lens_store.datum_path ~user:owner ~type_name ~id () in
+  let file = Lens_store.path_to_file ~root path in
+  mkdir_p (Filename.dirname file);
+  let env =
+    `Assoc
+      [
+        ("v", `Int 1);
+        ("kind", `String "datum");
+        ("path", `String path);
+        ("type", `String type_name);
+        ("id", `String ("node-" ^ id));  (* tree node id, != row id *)
+        ("body", `Assoc fields);
+        ("author", `String owner);
+        ("hash", `String "");
+        ("created_at", `String created);
+        ("updated_at", `String created);
+      ]
+  in
+  write_file file (Yojson.Safe.to_string env)
+
+let test_lens_reads () =
+  with_tmp (fun d ->
+      let owner = "admin" in
+      let id1 = "11111111-1111-1111-1111-111111111111" in
+      let id2 = "22222222-2222-2222-2222-222222222222" in
+      write_datum d ~owner ~type_name:"chord-quality" ~id:id1
+        ~created:"2026-01-01 00:00:00+00"
+        ~fields:[ ("name", `String "maj7") ];
+      write_datum d ~owner ~type_name:"chord-quality" ~id:id2
+        ~created:"2026-01-02 00:00:00+00"
+        ~fields:[ ("name", `String "min7") ];
+      let h = Host.create ~lens_root:d ~cwd:d () in
+      (match ok h (Printf.sprintf "(get (quote chord-quality) %S)" id1) with
+       | VStr s ->
+           Alcotest.(check string) "get body" "{\"name\":\"maj7\"}" s
+       | v -> failf "get: %s" (show v));
+      let path =
+        Lens_store.datum_path ~user:owner ~type_name:"chord-quality" ~id:id1
+          ()
+      in
+      (match ok h (Printf.sprintf "(tree/get %S)" path) with
+       | VStr s ->
+           Alcotest.(check bool) "tree/get envelope" true
+             (contains s "\"kind\":\"datum\"")
+       | v -> failf "tree/get: %s" (show v));
+      (match ok h "(rows (quote chord-quality) 10)" with
+       | VList [ VPair (VStr a, _); VPair (VStr b, _) ] ->
+           Alcotest.(check string) "created_at ASC first" id1 a;
+           Alcotest.(check string) "created_at ASC second" id2 b
+       | v -> failf "rows order: %s" (show v));
+      (match ok h "(rows (quote chord-quality) 10 \"created_at DESC\")" with
+       | VList (VPair (VStr a, _) :: _) ->
+           Alcotest.(check string) "created_at DESC first" id2 a
+       | v -> failf "rows desc: %s" (show v));
+      (match ok h "(rows (quote chord-quality) 10 \"id\")" with
+       | VList (VPair (VStr a, _) :: _) ->
+           Alcotest.(check string) "id ASC first" id1 a
+       | v -> failf "rows id sort: %s" (show v));
+      (match ok h "(rows (quote chord-quality) 1)" with
+       | VList [ _ ] -> ()
+       | v -> failf "rows limit: %s" (show v));
+      (match ok h "(rows (quote no-such-type) 10)" with
+       | VList [] -> ()
+       | v -> failf "missing type: %s" (show v));
+      (match ok h "(get (quote chord-quality) \"deadbeef\")" with
+       | VNil -> ()
+       | v -> failf "missing get: %s" (show v));
+      (match ok h "(tree/get \"data.u.nope\")" with
+       | VNil -> ()
+       | v -> failf "missing tree/get: %s" (show v));
+      match Host.eval_string h
+              "(rows (quote chord-quality) 10 \"name\")" with
+      | Error f ->
+          Alcotest.(check bool) "unsupported sort" true
+            (contains f.message "unsupported local sort")
+      | Ok v -> failf "expected a sort error, got %s" (show v))
+
+let test_no_lens_get () =
+  let h = Host.create () in
+  match Host.eval_string h "(get (quote todo) \"x\")" with
+  | Error f ->
+      Alcotest.(check bool) "get stays unbound without a lens" true
+        (contains f.message "unbound: get")
+  | Ok v -> failf "expected unbound get, got %s" (show v)
+
 let () =
   Alcotest.run "nopales-host"
     [
@@ -174,5 +270,10 @@ let () =
           Alcotest.test_case "fs read/write/exists" `Quick test_fs;
           Alcotest.test_case "relative load" `Quick test_load_relative;
           Alcotest.test_case "load cycle" `Quick test_load_cycle;
+        ] );
+      ( "lens",
+        [
+          Alcotest.test_case "get/tree-get/rows" `Quick test_lens_reads;
+          Alcotest.test_case "no lens, no get" `Quick test_no_lens_get;
         ] );
     ]

@@ -2,4 +2,4 @@
  (name pricklypear_nopales_host)
  (wrapped false)
  (modules host)
- (libraries pricklypear-lisp pricklypear-pure-prims unix))
+ (libraries pricklypear-lisp pricklypear-pure-prims pricklypear-lens unix))

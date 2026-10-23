@@ -173,11 +173,12 @@ let std_loaded (t : t) : bool = t.std_loaded
 
 let display = function VStr s -> s | v -> Reader.pp_value v
 
+let add_prim (t : t) (name : string) (fn : value list -> value) : unit =
+  Eval.register_prim t.prims name fn;
+  Env.define t.env name (VPrim name)
+
 let install_host_prims (t : t) : unit =
-  let add name fn =
-    Eval.register_prim t.prims name fn;
-    Env.define t.env name (VPrim name)
-  in
+  let add = add_prim t in
   let print args =
     t.out (String.concat " " (List.map display args));
     VNil
@@ -242,10 +243,216 @@ let install_host_prims (t : t) : unit =
                        (User_error (format_failure f, "load"))))
       | _ -> emit_error "load" "usage: (load path)")
 
+(** ---- local lens reads (offline data) ----
+
+    With [--lens DIR] the host reads the cloned rows the lens already
+    holds: [(get 'type id)] and [(tree/get path)] are path-addressed
+    reads, and [(rows 'type [limit] [sort])] scans the type's directory.
+    Nothing here crosses a wire — a miss is [()] / an empty list, which
+    is the offline working-set semantics pp-remote uses for [get] and
+    [tree/get]. Indexed queries on the image remain server-side; the
+    local rows scan is the script-host substitute for small vocabularies
+    (default limit 100, same as the image's [rows]). *)
+
+type sort_col = Sort_created | Sort_updated | Sort_id
+type sort_dir = Asc | Desc
+
+(** Decode a lens path label (base64 with [_/-] substitutions and the
+    pad count as a trailing 0..2 digit) back to the original name. Used
+    to infer the lens owner from [data/u/<label>]. *)
+let decode_label (s : string) : string option =
+  let n = String.length s in
+  if n < 2 then None
+  else
+    let pad = Char.code s.[n - 1] - Char.code '0' in
+    if pad < 0 || pad > 2 then None
+    else
+      let core = String.sub s 0 (n - 1) in
+      let core =
+        String.map (function '_' -> '+' | '-' -> '/' | c -> c) core
+      in
+      match Base64.decode (core ^ String.make pad '=') with
+      | Ok v -> Some v
+      | Error _ -> None
+
+(** Owner precedence: the single [data/u/<label>] directory in the lens,
+    then NOPALES_USER, then PP_USER, then "admin". *)
+let infer_owner (root : string) : string =
+  let dir = Filename.concat root "data/u" in
+  match (try Sys.readdir dir with Sys_error _ -> [||]) with
+  | [| only |] -> Option.value (decode_label only) ~default:"admin"
+  | _ -> (
+      match Sys.getenv_opt "NOPALES_USER" with
+      | Some u when String.trim u <> "" -> u
+      | _ -> (
+          match Sys.getenv_opt "PP_USER" with
+          | Some u when String.trim u <> "" -> u
+          | _ -> "admin"))
+
+let lens_of ?lens_owner (root : string) : Lens_store.lens =
+  let owner =
+    match lens_owner with Some o -> o | None -> infer_owner root
+  in
+  {
+    Lens_store.root;
+    owner;
+    device = "script";
+    branch = "script";
+    generation = 0L;
+  }
+
+let lens_type_dir (lens : Lens_store.lens) (type_name : string) : string =
+  List.fold_left Filename.concat lens.root
+    [ "data"; "u"; Lens_store.enc_label lens.owner;
+      Lens_store.enc_label type_name ]
+
+let parse_sort (s : string) : sort_col * sort_dir =
+  let s = String.trim s in
+  let upper = String.uppercase_ascii s in
+  let dir, base =
+    if Filename.check_suffix upper " DESC" then
+      (Desc, String.sub s 0 (String.length s - 5))
+    else if Filename.check_suffix upper " ASC" then
+      (Asc, String.sub s 0 (String.length s - 4))
+    else (Asc, s)
+  in
+  let col =
+    match String.lowercase_ascii (String.trim base) with
+    | "created_at" -> Sort_created
+    | "updated_at" -> Sort_updated
+    | "id" -> Sort_id
+    | other ->
+        emit_error "rows"
+          (Printf.sprintf
+             "unsupported local sort %S (created_at|updated_at|id, optional \
+              ASC|DESC)"
+             other)
+  in
+  (col, dir)
+
+(** Dash a 32-char uuid label (the path segment) into the canonical
+    8-4-4-4-12 form the image's [(rows …)] returns. The envelope's [id]
+    field is the TREE NODE uuid, which is not the datum row id — the row
+    id is the last path segment. *)
+let dash_uuid (s : string) : string =
+  if String.length s <> 32 then s
+  else
+    Printf.sprintf "%s-%s-%s-%s-%s"
+      (String.sub s 0 8)
+      (String.sub s 8 4)
+      (String.sub s 12 4)
+      (String.sub s 16 4)
+      (String.sub s 20 12)
+
+(** Scan [data/u/<owner>/<type>/*.json] and return the image's [(rows …)]
+    shape: [(id fields-json)] pairs, default created_at ASC, limit 100.
+    The row id is the datum path label (dashed uuid), matching the
+    server; the envelope [id] is a tree-node uuid and is deliberately
+    ignored. *)
+let local_rows (lens : Lens_store.lens) (type_name : string) ~(limit : int)
+    ~(sort : string option) : value =
+  let col, dir =
+    match sort with Some s -> parse_sort s | None -> (Sort_created, Asc)
+  in
+  let dirpath = lens_type_dir lens type_name in
+  let names =
+    match Sys.readdir dirpath with
+    | a -> Array.to_list a
+    | exception Sys_error _ -> []
+  in
+  let rows =
+    List.filter_map
+      (fun name ->
+        if not (Filename.check_suffix name ".json") then None
+        else
+          let file = Filename.concat dirpath name in
+          match read_file file with
+          | exception Sys_error _ -> None
+          | json -> (
+              match Yojson.Safe.from_string json with
+              | `Assoc kv ->
+                  let str k =
+                    match List.assoc_opt k kv with
+                    | Some (`String s) -> Some s
+                    | _ -> None
+                  in
+                  let id =
+                    dash_uuid (Filename.chop_suffix name ".json")
+                  in
+                  (match List.assoc_opt "body" kv with
+                   | Some body ->
+                       Some
+                         ( id,
+                           Option.value (str "created_at") ~default:"",
+                           Option.value (str "updated_at") ~default:"",
+                           Yojson.Safe.to_string body )
+                   | None -> None)
+              | _ -> None))
+      names
+  in
+  let key =
+    match col with
+    | Sort_created -> (fun (_, c, _, _) -> c)
+    | Sort_updated -> (fun (_, _, u, _) -> u)
+    | Sort_id -> (fun (i, _, _, _) -> i)
+  in
+  let order = match dir with Asc -> 1 | Desc -> -1 in
+  let rows =
+    List.sort
+      (fun a b -> order * String.compare (key a) (key b))
+      rows
+  in
+  let rec take n = function
+    | [] -> []
+    | _ when n <= 0 -> []
+    | x :: rest -> x :: take (n - 1) rest
+  in
+  VList
+    (List.map
+       (fun (id, _, _, body) -> VPair (VStr id, VStr body))
+       (take limit rows))
+
+let install_lens_reads (t : t) (lens : Lens_store.lens) : unit =
+  let coerce = function VSymbol s -> VStr s | v -> v in
+  add_prim t "get" (fun args ->
+      match List.map coerce args with
+      | [ VStr type_name; VStr id ] -> (
+          let path =
+            Lens_store.datum_path ~user:lens.owner ~type_name ~id ()
+          in
+          match Lens_store.get ~lens path with
+          | Some env -> (
+              match Lens_store.datum_body_of_envelope env with
+              | Some body -> VStr body
+              | None -> VNil)
+          | None -> VNil)
+      | _ -> emit_error "get" "usage: (get 'type id)");
+  add_prim t "tree/get" (fun args ->
+      match List.map coerce args with
+      | [ VStr path ] -> (
+          match Lens_store.get ~lens path with
+          | Some env -> VStr env
+          | None -> VNil)
+      | _ -> emit_error "tree/get" "usage: (tree/get path)");
+  add_prim t "rows" (fun args ->
+      match List.map coerce args with
+      | VStr type_name :: rest ->
+          let limit, sort =
+            match rest with
+            | [] -> (100, None)
+            | [ VInt n ] -> (Int64.to_int n, None)
+            | [ VInt n; VStr s ] -> (Int64.to_int n, Some s)
+            | _ -> emit_error "rows" "usage: (rows 'type [limit] [sort])"
+          in
+          local_rows lens type_name ~limit ~sort
+      | _ -> emit_error "rows" "usage: (rows 'type [limit] [sort])")
+
 (** Build a host with the pure catalog installed and bound. Pure compute
-    needs no image; DB/identity prims stay unbound on purpose. *)
+    needs no image; DB/identity prims stay unbound on purpose. With
+    [lens_root] the path-addressed data reads ([get], [tree/get], [rows])
+    resolve against the local lens instead. *)
 let create ?(out : (string -> unit) = print_string) ?(argv : string list = [])
-    ?(cwd : string option) () : t =
+    ?(cwd : string option) ?lens_root ?lens_owner () : t =
   let prims = Eval.make_prim_table () in
   Prims_pure.install prims;
   (* Pure hosts own the Prim_call effect through the direct table (same
@@ -266,4 +473,10 @@ let create ?(out : (string -> unit) = print_string) ?(argv : string list = [])
     }
   in
   install_host_prims t;
+  (match lens_root with
+   | Some root ->
+       if not (Sys.file_exists root) then
+         invalid_arg ("lens root does not exist: " ^ root);
+       install_lens_reads t (lens_of ?lens_owner root)
+   | None -> ());
   t

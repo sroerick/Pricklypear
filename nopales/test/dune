@@ -7,5 +7,5 @@
  (name host_test)
  (package pricklypear-nopales)
  (modules host_test)
- (libraries pricklypear-lisp pricklypear_nopales_host alcotest unix)
+ (libraries pricklypear-lisp pricklypear-lens pricklypear_nopales_host alcotest unix)
  (deps std.pp))
