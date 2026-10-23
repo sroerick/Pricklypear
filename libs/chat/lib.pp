@@ -2,8 +2,12 @@
 ;; Sync: scripts/pp-sync.sh status|pull|snapshot
 
 (define chat/all-messages
-  (lambda () (rows (quote chat-message) 200))
-  "Return up to 200 chat-message rows.")
+  (lambda () (rows (quote chat-message) 2000))
+  "Return up to 2000 chat-message rows. 10-23: was 200 - the scan window
+silently truncated the feed once the dataset crossed 200 rows (onset 10-21
+10:30Z): every later write returned ok+id but vanished from history reads
+while by-id reads still saw the rows (incident mem 716f53e3). Proper fix =
+newest-first ordering or pagination in the scan; this buys headroom.")
 
 (define chat/alphabet
   " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~")
