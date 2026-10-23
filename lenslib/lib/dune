@@ -1,0 +1,10 @@
+; The local lens substrate: a path-addressed filesystem tree of node
+; envelope JSON files. Pure (filesystem + JSON + base64) so every host
+; that reads or writes a lens shares ONE format — pp-remote's sync/eval
+; client and the standalone nopales script host.
+(library
+ (name pricklypear_lens)
+ (public_name pricklypear-lens)
+ (wrapped false)
+ (modules lens_store)
+ (libraries yojson base64 unix))

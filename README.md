@@ -77,6 +77,7 @@ history only.)
 | `image/` | Sole runtime binary |
 | `libs/` | Nopales packages seeded to `system/main` |
 | `cli/` | OCaml laptop clients: `pp-eval`, `pp-sync` (no Python) |
+| `nopales/` | Standalone Nopales script runner + REPL: pure interpreter, pure prims, file/argv/exit/load, optional offline lens reads — no image/DB/network ([`nopales/README.md`](nopales/README.md)) |
 | `glochid/` | **glochid** — local-first agent harness: Nopales-native coding agent; Nopales htmx fragments + multipart/mixed streamed turns ([`borge/glochid.borg`](borge/glochid.borg)) |
 | `scripts/` | `dev.sh`, `pp-eval.sh` wrappers, `verify_habitat.sh` (on-image `libs/verify`), seed ETL |
 | `docs/` | **Living docs only**: [`one-tree.md`](docs/one-tree.md) (storage overview), [`notes-ui-contract.md`](docs/notes-ui-contract.md), [`agent-ui-harness.md`](docs/agent-ui-harness.md) (agent FE verify research) |
