@@ -1,8 +1,8 @@
-(** authz.ml step-1 tests (specs/authz-matrix.md): identity classes and
-    the capability table over no-DB sessions (prim_gates_test harness
-    shape). The table is inert until families migrate onto it (steps
-    2-6); these pins travel with it so the matrix cannot drift
-    silently. *)
+(** authz.ml tests (specs/authz-matrix.md): identity classes and the
+    capability table over no-DB sessions (prim_gates_test harness
+    shape). Step 2 live: the branch-op family routes its class gate
+    through [authorize] (session_control_prims.ml); factory identities
+    (<project>-build / -review) are read-only by design (10-23). *)
 
 module S = Pricklypear_image_lib.Session
 module A = Pricklypear_image_lib.Authz
@@ -42,6 +42,13 @@ let test_classes () =
   check_class "self-human" A.Self_human (make_session ~username:"alice" ());
   check_class "self-agent" A.Self_agent
     (make_session ~username:"alice/agent" ());
+  check_class "factory-build" A.Factory_build
+    (make_session ~username:"pp-build" ());
+  check_class "factory-review" A.Factory_review
+    (make_session ~username:"todo-review" ());
+  (* delegated/admin beat the factory suffix (precedence order) *)
+  check_class "delegated factory suffix" A.Delegated
+    (make_session ~username:"pp-build" ~delegated:true ());
   check_class "delegated" A.Delegated
     (make_session ~username:"alice" ~delegated:true ());
   check_class "admin" A.Admin (make_session ~username:"bob" ~admin:true ());
@@ -88,11 +95,41 @@ let test_reseed_branch_tenant () =
 let test_branch_move () =
   check_auth "branch-move self ok" ~expect_ok:true
     (make_session ~username:"alice" ()) ~capability:A.Branch_move ();
-  check_auth "branch-move delegated denied" ~expect_ok:false
+  (* The class gate allows delegated; the SOFT agent_branch_lock denial
+     stays at the call sites (session_control_prims.ml). *)
+  check_auth "branch-move delegated class-ok" ~expect_ok:true
     (make_session ~username:"alice" ~delegated:true ())
     ~capability:A.Branch_move ();
+  check_auth "branch-move factory denied" ~expect_ok:false
+    (make_session ~username:"pp-build" ()) ~capability:A.Branch_move ();
   check_auth "branch-move anonymous denied" ~expect_ok:false
     (make_session ~username:"anonymous" ()) ~capability:A.Branch_move ()
+
+let test_branch_push () =
+  check_auth "branch-push self ok" ~expect_ok:true
+    (make_session ~username:"alice" ()) ~capability:A.Branch_push ();
+  (* delegated passes the CLASS gate; owner/promote rules stay at the
+     branch/push call site (allow_agent_promote etc.) *)
+  check_auth "branch-push delegated class-ok" ~expect_ok:true
+    (make_session ~username:"alice" ~delegated:true ())
+    ~capability:A.Branch_push ();
+  check_auth "branch-push anonymous denied" ~expect_ok:false
+    (make_session ~username:"anonymous" ()) ~capability:A.Branch_push ();
+  check_auth "branch-push factory-build denied" ~expect_ok:false
+    (make_session ~username:"pp-build" ()) ~capability:A.Branch_push ();
+  check_auth "branch-push factory-review denied" ~expect_ok:false
+    (make_session ~username:"pp-review" ()) ~capability:A.Branch_push ()
+
+let test_branch_read () =
+  check_auth "branch-read self ok" ~expect_ok:true
+    (make_session ~username:"alice" ()) ~capability:A.Branch_read ();
+  check_auth "branch-read delegated ok" ~expect_ok:true
+    (make_session ~username:"alice" ~delegated:true ())
+    ~capability:A.Branch_read ();
+  check_auth "branch-read factory-review ok" ~expect_ok:true
+    (make_session ~username:"pp-review" ()) ~capability:A.Branch_read ();
+  check_auth "branch-read anonymous denied" ~expect_ok:false
+    (make_session ~username:"anonymous" ()) ~capability:A.Branch_read ()
 
 let test_code_persist () =
   check_auth "code-persist self ok" ~expect_ok:true
@@ -147,7 +184,9 @@ let test_data_and_promote () =
   check_auth "promote-own self-agent ok" ~expect_ok:true
     (make_session ~username:"alice/agent" ()) ~capability:A.Promote_own ();
   check_auth "promote-own self-human denied" ~expect_ok:false
-    (make_session ~username:"alice" ()) ~capability:A.Promote_own ()
+    (make_session ~username:"alice" ()) ~capability:A.Promote_own ();
+  check_auth "promote-own factory denied" ~expect_ok:false
+    (make_session ~username:"pp-build" ()) ~capability:A.Promote_own ()
 
 let test_load_library_and_namespace () =
   check_auth "load-library delegated ok" ~expect_ok:true
@@ -166,7 +205,9 @@ let () =
           Alcotest.test_case "reseed-branch" `Quick test_reseed_branch;
           Alcotest.test_case "reseed-branch tenant" `Quick
             test_reseed_branch_tenant;
-          Alcotest.test_case "branch-move" `Quick test_branch_move;
+            Alcotest.test_case "branch-move" `Quick test_branch_move;
+            Alcotest.test_case "branch-push" `Quick test_branch_push;
+            Alcotest.test_case "branch-read" `Quick test_branch_read;
           Alcotest.test_case "code-persist" `Quick test_code_persist;
           Alcotest.test_case "deftype" `Quick test_deftype;
           Alcotest.test_case "tokens" `Quick test_tokens;

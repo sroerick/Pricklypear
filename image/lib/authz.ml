@@ -1,10 +1,20 @@
 (** One permission model for the OCaml layer (specs/authz-matrix.md).
 
     Migration STEP 1 (2026-10-21): identity classes + capability table +
-    [authorize], with NO call sites yet. Families migrate onto it in
-    steps 2-6 (branch ops, reseed/load-library/deftype, data, auth prims,
-    HTTP edge); until then every existing inline gate stays the live
-    enforcement and these rows are documentation, not behavior.
+    [authorize]. STEP 2 (2026-10-23): the branch-op family
+    (session_control_prims.ml) routes its class gate through [authorize];
+    the soft agent_branch_lock denial and the per-branch owner/promote
+    rules stay at the call sites (their table rows say so). Families
+    still to migrate: reseed/load-library/deftype, data, auth prims,
+    HTTP edge.
+
+    Factory identities (10-23 roerick design, runner = glochid): session
+    usernames ending "-build" / "-review" are per-project factory
+    identities (pp-build / pp-review for pricklypear). Their rows grant
+    READ ONLY - no push, no promote, no write verb at all - so the kernel
+    denies a factory card that asks for a promote before any PP code
+    runs, and pp-review cannot self-approve. Verbs get granted explicitly
+    when the runner's real needs land.
 
     Documented simplifications (deliberate):
     - Admin is computed from the session flag [t.is_admin]. The live
@@ -22,6 +32,8 @@ type identity_class =
   | Anonymous
   | Self_human
   | Self_agent
+  | Factory_build  (** per-project factory identity "<project>-build" *)
+  | Factory_review  (** per-project factory identity "<project>-review" *)
   | Delegated
   | Tenant
   | Admin
@@ -30,6 +42,8 @@ let string_of_identity_class = function
   | Anonymous -> "anonymous"
   | Self_human -> "self-human"
   | Self_agent -> "self-agent"
+  | Factory_build -> "factory-build"
+  | Factory_review -> "factory-review"
   | Delegated -> "delegated"
   | Tenant -> "tenant"
   | Admin -> "admin"
@@ -46,6 +60,9 @@ let identity_class_of_session (t : Session_types.t) : identity_class =
   if t.is_admin then Admin
   else if t.delegated then Delegated
   else if t.manifest.username = "anonymous" then Anonymous
+  else if ends_with ~suffix:"-build" t.manifest.username then Factory_build
+  else if ends_with ~suffix:"-review" t.manifest.username then
+    Factory_review
   else
     (match Profile.name () with
      | Some _ -> Tenant
@@ -59,6 +76,7 @@ type capability =
   | Reseed_main
   | Reseed_branch
   | Branch_move  (** checkout / fork / merge *)
+  | Branch_push  (** promote family: pull/push/pick/ingest/cp-restore *)
   | Branch_read
   | Code_persist  (** define / route / package persistence *)
   | Deftype
@@ -76,6 +94,7 @@ let string_of_capability = function
   | Reseed_main -> "reseed-main"
   | Reseed_branch -> "reseed-branch"
   | Branch_move -> "branch-move"
+  | Branch_push -> "branch-push"
   | Branch_read -> "branch-read"
   | Code_persist -> "code-persist"
   | Deftype -> "deftype"
@@ -113,31 +132,50 @@ let decision (c : capability) (k : identity_class) : decision =
               ref own)
   | Reseed_branch, Anonymous ->
       Deny "reseed-package: requires authentication"
-  | Branch_move, (Admin | Self_human | Self_agent | Tenant) ->
-      Allow  (* per-branch owner rules stay at the call sites *)
-  | Branch_move, Delegated ->
-      Deny "branch move blocked: agent is locked to the current branch"
-  | Branch_move, Anonymous -> Deny "requires authentication"
-  | Branch_read, _ ->
-      Allow  (* system/* public + branch_readable stay at the call sites *)
+  | Reseed_branch, (Factory_build | Factory_review) ->
+      Deny "factory identities cannot reseed"
+  | Branch_move, (Admin | Self_human | Self_agent | Tenant | Delegated) ->
+      Allow
+      (* agent_branch_lock (soft denial) + per-branch owner rules stay
+         at the call sites; the table carries only the class gate *)
+  | Branch_move, (Factory_build | Factory_review) ->
+      Deny "factory identities cannot move branches"
+  | Branch_move, Anonymous -> Deny "denied for anonymous"
+  | Branch_push, (Admin | Self_human | Self_agent | Tenant | Delegated) ->
+      Allow  (* owner/promote rules stay at the call sites *)
+  | Branch_push, (Factory_build | Factory_review) ->
+      Deny "factory identities cannot push or promote"
+  | Branch_push, Anonymous -> Deny "denied for anonymous"
+  | Branch_read, (Admin | Self_human | Self_agent | Tenant | Delegated
+                 | Factory_build | Factory_review) ->
+      Allow  (* branch_readable owner rules stay at the call sites *)
+  | Branch_read, Anonymous -> Deny "denied for anonymous"
   | Code_persist, (Admin | Self_human | Self_agent) -> Allow
   | Code_persist, Delegated -> Deny "delegation is for data, never for code"
   | Code_persist, Tenant -> Deny "denied for tenants (code persistence)"
   | Code_persist, Anonymous -> Deny "denied for anonymous"
+  | Code_persist, (Factory_build | Factory_review) ->
+      Deny "factory identities cannot persist code"
   | Deftype, (Admin | Self_human | Self_agent) -> Allow
   | Deftype, (Delegated | Tenant) ->
       Deny "deftype: denied for delegated sessions and tenants"
   | Deftype, Anonymous -> Deny "deftype: denied for anonymous"
+  | Deftype, (Factory_build | Factory_review) ->
+      Deny "factory identities cannot deftype"
   | Load_library, _ ->
       Allow  (* the seeded-only rule for delegated stays at the call site *)
   | Token_own, (Admin | Self_human | Self_agent | Tenant | Delegated) ->
       Allow
   | Token_own, Anonymous -> Deny "requires authentication"
+  | Token_own, (Factory_build | Factory_review) ->
+      Deny "factory identities cannot manage tokens"
   | Token_other, Admin -> Allow
   | Token_other, _ -> Deny "admin only"
   | Delegated_token_manage, (Admin | Self_human | Self_agent | Tenant | Delegated) ->
       Allow  (* owner checks stay at the call sites *)
   | Delegated_token_manage, Anonymous -> Deny "requires authentication"
+  | Delegated_token_manage, (Factory_build | Factory_review) ->
+      Deny "factory identities cannot manage delegated tokens"
   | User_admin, Admin -> Allow
   | User_admin, _ -> Deny "admin only"
   | Retention_admin, Admin -> Allow
@@ -145,8 +183,12 @@ let decision (c : capability) (k : identity_class) : decision =
   | Data_write, (Admin | Self_human | Self_agent | Tenant | Delegated) ->
       Allow  (* RLS + space guards stay at the call sites *)
   | Data_write, Anonymous -> Deny "denied for anonymous"
+  | Data_write, (Factory_build | Factory_review) ->
+      Deny "factory identities cannot write data"
   | Data_read, _ -> Allow  (* RLS + vis floors stay at the call sites *)
   | Promote_own, (Admin | Self_agent) -> Allow
+  | Promote_own, (Factory_build | Factory_review) ->
+      Deny "factory identities cannot promote"
   | Promote_own, _ -> Deny "promote requires an agent user"
 
 (** The one entry point call sites migrate onto. [owner] is the resource
