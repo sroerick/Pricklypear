@@ -128,11 +128,55 @@
 (define workout/chart-data-js
   (lambda
     ()
-    (let*
-      ((all (workout/session-list ""))
-        (ksk (list/filter workout/ksk1? all))
-        (points (list/map workout/chart-point-js ksk)))
-      (string-append "[" (workout/join-csv points) "]"))))
+    (string-append
+      "{\"sessions\":["
+      (workout/join-csv (workout/chart-sessions-js))
+      "],\"points\":["
+      (workout/join-csv (workout/chart-points-js))
+      "]}"))
+  "Chart payload: sessions (id/date/program) plus per-exercise points (sid/ex/w/r/u); the page joins sid->date client-side.")
+
+(define workout/chart-sessions-js
+  (lambda
+    ()
+    (list/map
+      (lambda
+        (row)
+        (let
+          ((f (workout/row-fields row)))
+          (string-append
+            "{id:\""
+            (workout/js-escape (as-str (dict-get f "id")))
+            "\",date:\""
+            (workout/js-escape (as-str (dict-get f "date")))
+            "\",program:\""
+            (workout/js-escape (as-str (dict-get f "program")))
+            "\"}")))
+      (rows (quote workout-session) 500)))
+  "One JS object per session (id/date/program).")
+
+(define workout/chart-points-js
+  (lambda
+    ()
+    (list/map
+      (lambda
+        (row)
+        (let
+          ((f (workout/row-fields row)))
+          (string-append
+            "{sid:\""
+            (workout/js-escape (as-str (dict-get f "session_id")))
+            "\",ex:\""
+            (workout/js-escape (as-str (dict-get f "exercise")))
+            "\",w:"
+            (as-str (workout/as-int (dict-get f "weight")))
+            ",r:"
+            (as-str (workout/as-int (dict-get f "reps")))
+            ",u:\""
+            (workout/js-escape (as-str (dict-get f "unit")))
+            "\"}")))
+      (rows (quote workout-exercise) 2000)))
+  "One JS object per logged exercise row (sid/exercise/weight/reps/unit).")
 
 (define workout/chart-page
   (lambda
@@ -142,14 +186,11 @@
         (html/h1 "Workout Progress")
         (html/p*
           (html/attr "class" "muted")
-          "KSK1 Snatch - reps per hand per session")
+          "All logged sets - reps per session (tooltip: weight)")
         (html/a "/workout" "<- Back to Workout")
         (html/div
           (html/attr "style" "max-width:760px;margin:1em 0")
           (html/tag "canvas" (html/attr "id" "workoutChart") ""))
-        (html/div
-          (html/attr "style" "margin:1em 0;font-size:14px")
-          "<span style=\"color:#3b82f6\">&#9632;</span> Day 1 &nbsp; <span style=\"color:#10b981\">&#9632;</span> Day 2 &nbsp; <span style=\"color:#f59e0b\">&#9632;</span> Day 3")
         (html/tag
           "script"
           (html/attr
@@ -160,55 +201,63 @@
           "script"
           ""
           (string-append
-            "const sessions="
+            "const J="
             (workout/chart-data-js)
             ";"
-            "sessions.sort(function(a,b){return a.date.localeCompare(b.date);});"
-            "const dc={1:'#3b82f6',2:'#10b981',3:'#f59e0b'};"
-            "const labels=sessions.map(function(s){const d=new Date(s.date);return d.toLocaleDateString('en-US',{month:'short',day:'numeric'});});"
-            "const colors=sessions.map(function(s){return dc[s.day]||'#999';});"
+            "const dmap={};J.sessions.forEach(function(s){dmap[s.id]=s.date;});"
+            "const pts=J.points.map(function(p){return{date:dmap[p.sid]||'',ex:p.ex,w:p.w,u:p.u,r:p.r};}).filter(function(p){return p.date;});"
+            "pts.sort(function(a,b){return a.date.localeCompare(b.date);});"
+            "const dates=[...new Set(pts.map(function(p){return p.date;}))];"
+            "const names=[...new Set(pts.map(function(p){return p.ex;}))];"
+            "const pal=['#3b82f6','#10b981','#f59e0b','#ef4444','#8b5cf6','#14b8a6','#f97316','#64748b'];"
+            "const ds=names.map(function(n,i){return{label:n,data:dates.map(function(d){const p=pts.find(function(q){return q.date===d&&q.ex===n;});return p?p.r:null;}),backgroundColor:pal[i%pal.length],borderRadius:4};});"
             "new Chart(document.getElementById('workoutChart'),{"
             "type:'bar',"
-            "data:{labels:labels,datasets:[{label:'Reps per hand',data:sessions.map(function(s){return s.reps;}),backgroundColor:colors,borderRadius:4}]},"
-            "options:{responsive:true,plugins:{legend:{display:false},tooltip:{callbacks:{afterLabel:function(c){const s=sessions[c.dataIndex];return ['Day '+s.day+' ('+s.pattern+')',s.notes];}}}},scales:{y:{beginAtZero:true,title:{display:true,text:'Reps per hand'}},x:{title:{display:true,text:'Session date'}}}}"
-            "});"))))))
+            "data:{labels:dates.map(function(d){const x=new Date(d+'T00:00:00');return x.toLocaleDateString('en-US',{month:'short',day:'numeric'});}),datasets:ds},"
+            "options:{responsive:true,plugins:{legend:{display:true},tooltip:{callbacks:{afterLabel:function(c){const n=ds[c.datasetIndex].label;const d=dates[c.dataIndex];const p=pts.find(function(q){return q.date===d&&q.ex===n;});return p&&p.w?(p.w+' '+p.u):'';}}}},scales:{y:{beginAtZero:true,title:{display:true,text:'Reps'}},x:{title:{display:true,text:'Session date'}}}}"
+              "});")))))
+  "All-sets chart: one dataset per exercise, reps per session, weight in tooltip. Pane route /workout/chart.")
 
-(define workout/chart-point-js
+(define workout/browse
   (lambda
-    (row)
-    (let*
-      ((f (workout/row-fields row))
-        (doc (dict-get f "doc"))
-        (prog (dict-get doc "progress"))
-        (params (dict-get doc "params"))
-        (date (as-str (dict-get f "date")))
-        (reps
-          (as-str (workout/as-int (dict-get prog "reps_l"))))
-        (phase
-          (as-str (workout/as-int (dict-get params "phase"))))
-        (day (as-str (workout/as-int (dict-get params "day"))))
-        (pattern
-          (workout/js-escape (dict-get params "pattern")))
-        (notes (workout/js-escape (dict-get f "notes"))))
-      (string-append
-        "{date:\""
-        date
-        "\","
-        "reps:"
-        reps
-        ","
-        "phase:"
-        phase
-        ","
-        "day:"
-        day
-        ","
-        "pattern:\""
-        pattern
-        "\","
-        "notes:\""
-        notes
-        "\"}"))))
+    (path)
+    (filmstrip/browse-walk
+      workout/browse-children
+      (list (workout/browse-root))
+      path))
+  "workout cascade for the filmstrip rail: column 0 = pages + recent sessions; session entries leaf to /workout/session?id=.")
+
+(define workout/browse-root
+  (lambda
+    ()
+    (append
+      (list
+        (list "Today" "/workout/today")
+        (list "Chart" "/workout/chart")
+        (list "Quick log" "/workout/log")
+        (list "Home" "/workout"))
+      (workout/browse-sessions)))
+  "Cascade column 0: fixed pages, then recent sessions as leaves.")
+
+(define workout/browse-sessions
+  (lambda
+    ()
+    (list/map
+      (lambda
+        (row)
+        (let
+          ((f (workout/row-fields row)))
+          (list
+            (string-append (as-str (dict-get f "date")) " " (as-str (dict-get f "program")))
+            (string-append "/workout/session?id=" (as-str (dict-get f "id"))))))
+      (workout/sessions-sorted)))
+  "Recent sessions (newest first) as (label . /workout/session?id=) leaves.")
+
+(define workout/browse-children
+  (lambda
+    (key)
+    (list))
+  "All cascade entries are route leaves; nothing drills deeper.")
 
 (define workout/col-lower
   (lambda

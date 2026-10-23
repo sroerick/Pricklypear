@@ -286,7 +286,8 @@
         (list "agent" "/agent")
         (list "calories" "/cal")
         (list "bookmarks" "/bookmarks")
-        (list "plans" "/plans")))
+          (list "plans" "/plans")
+          (list "workout" "/workout")))
     "The surfaces the start menu opens. Entries are (label . target); target is a ROUTE (starts with /) posted verbatim to /filmstrip/open -- a pane is any route dispatched in partial mode. The cascade (/filmstrip/browse, lib contract) translates targets back to package keys via filmstrip/pkg-of-route; glochid redefines this list (host seam 2).")
 
 (define filmstrip/axis-sentinel
@@ -2491,10 +2492,13 @@ skips them).")
       (if
         (string-eq pkg "notes")
         (notes/browse pkg-path)
-        (if
-          (string-eq pkg "calendar")
-          (calendar/browse pkg-path)
-          (cons (list (list)) #f)))))
+          (if
+            (string-eq pkg "calendar")
+            (calendar/browse pkg-path)
+            (if
+              (string-eq pkg "workout")
+              (workout/browse pkg-path)
+                (cons (list (list)) #f))))))
   "Dispatch the package browse; unknown packages get one empty column.")
 
 (define filmstrip/rail-box
