@@ -1,0 +1,12 @@
+; Stdlib seed installation. The source of truth is libs/std/lib.pp (the
+; habitat package vault); the host ships a copy as share data so an
+; installed nopales can seed let*/when/unless without a source tree.
+(rule
+ (target std.pp)
+ (deps ../libs/std/lib.pp)
+ (action (copy ../libs/std/lib.pp %{target})))
+
+(install
+ (section share)
+ (package pricklypear-nopales)
+ (files std.pp))

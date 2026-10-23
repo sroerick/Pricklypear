@@ -16,7 +16,7 @@
 (test
  (name lens_store_test)
  (modules lens_store_test)
- (libraries pricklypear-remote.lib pricklypear-lisp alcotest unix))
+ (libraries pricklypear-remote.lib pricklypear-lisp alcotest unix pricklypear-lens))
 
 (test
  (name free_vars_test)
@@ -41,4 +41,4 @@
 (test
  (name agent_memory_test)
  (modules agent_memory_test)
- (libraries pricklypear-remote.lib pricklypear-lisp alcotest str unix yojson))
+ (libraries pricklypear-remote.lib pricklypear-lisp alcotest str unix yojson pricklypear-lens))
