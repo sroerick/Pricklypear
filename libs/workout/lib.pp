@@ -142,11 +142,11 @@
     (list/map
       (lambda
         (row)
-        (let
-          ((f (workout/row-fields row)))
-          (string-append
-            "{id:\""
-            (workout/js-escape (as-str (dict-get f "id")))
+          (let
+            ((f (workout/row-fields row)) (id (workout/row-id row)))
+            (string-append
+              "{id:\""
+              (workout/js-escape (as-str id))
             "\",date:\""
             (workout/js-escape (as-str (dict-get f "date")))
             "\",program:\""
@@ -246,10 +246,10 @@
       (lambda
         (row)
         (let
-          ((f (workout/row-fields row)))
-          (list
-            (string-append (as-str (dict-get f "date")) " " (as-str (dict-get f "program")))
-            (string-append "/workout/session?id=" (as-str (dict-get f "id"))))))
+            ((f (workout/row-fields row)) (id (workout/row-id row)))
+            (list
+              (string-append (as-str (dict-get f "date")) " " (as-str (dict-get f "program")))
+              (string-append "/workout/session?id=" (as-str id)))))
       (workout/sessions-sorted)))
   "Recent sessions (newest first) as (label . /workout/session?id=) leaves.")
 
