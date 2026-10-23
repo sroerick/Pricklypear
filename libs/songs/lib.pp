@@ -1265,12 +1265,26 @@ section offset added to its start tick."
     (list "sus4" (list 4 5) (list 5 7))
     (list "sus" (list 4 5) (list 5 7))
     (list "add9" (list 3 4) (list 5 7) (list 9 14))
-    (list "dim7" (list 3 3) (list 5 6) (list 7 9)))
+    (list "dim7" (list 3 3) (list 5 6) (list 7 9))
+    (list "m6" (list 3 3) (list 5 7) (list 6 9))
+    (list "mMaj7" (list 3 3) (list 5 7) (list 7 11))
+    (list "maj9" (list 3 4) (list 5 7) (list 7 11) (list 9 14))
+    (list "m9" (list 3 3) (list 5 7) (list 7 10) (list 9 14))
+    (list "11" (list 3 4) (list 5 7) (list 7 10) (list 9 14) (list 11 17))
+    (list "13" (list 3 4) (list 5 7) (list 7 10) (list 9 14) (list 13 21))
+    (list "7sus4" (list 4 5) (list 5 7) (list 7 10))
+    (list "7b5" (list 3 4) (list 5 6) (list 7 10))
+    (list "7#5" (list 3 4) (list 5 8) (list 7 10))
+    (list "7b9" (list 3 4) (list 5 7) (list 7 10) (list 9 13))
+    (list "7#9" (list 3 4) (list 5 7) (list 7 10) (list 9 15))
+    (list "6/9" (list 3 4) (list 5 7) (list 6 9) (list 9 14))
+    (list "add11" (list 3 4) (list 5 7) (list 11 17)))
   "The finite chord-quality table: suffix -> degree/semitone pairs.
 Each pair is the proper 2-list (degree semitones) -- dots are not
 supported by the reader (representation invariant 3).")
 (define songs/quality-names
-  (list "" "m" "7" "maj7" "m7" "6" "9" "dim" "m7b5" "aug" "sus2" "sus4" "sus" "add9" "dim7")
+  (list "" "m" "7" "maj7" "m7" "6" "9" "dim" "m7b5" "aug" "sus2" "sus4" "sus" "add9" "dim7"
+        "m6" "mMaj7" "maj9" "m9" "11" "13" "7sus4" "7b5" "7#5" "7b9" "7#9" "6/9" "add11")
   "Accepted quality suffixes, for error messages.")
 
 (define songs/roman
@@ -1304,6 +1318,19 @@ supported by the reader (representation invariant 3).")
       ((string-eq q "sus2") "sus2")
       ((string-eq q "dim") "°")
       ((string-eq q "aug") "+")
+      ((string-eq q "m6") "6")
+      ((string-eq q "mMaj7") "maj7")
+      ((string-eq q "maj9") "maj9")
+      ((string-eq q "m9") "9")
+      ((string-eq q "11") "11")
+      ((string-eq q "13") "13")
+      ((string-eq q "7sus4") "7sus4")
+      ((string-eq q "7b5") "7b5")
+      ((string-eq q "7#5") "7#5")
+      ((string-eq q "7b9") "7b9")
+      ((string-eq q "7#9") "7#9")
+      ((string-eq q "6/9") "6/9")
+      ((string-eq q "add11") "add11")
       (else ""))))
 
 (define songs/romans
@@ -1485,10 +1512,12 @@ chart (default) parses the DSL; program evaluates in the sandbox."
   (lambda (q)
     "Triad family of a quality suffix."
     (cond
-      ((or (string-eq q "m") (string-eq q "m7")) "minor")
+      ((or (string-eq q "m") (string-eq q "m7")
+           (string-eq q "m6") (string-eq q "mMaj7") (string-eq q "m9")) "minor")
       ((or (string-eq q "dim") (string-eq q "m7b5") (string-eq q "dim7")) "dim")
-      ((string-eq q "aug") "aug")
-      ((or (string-eq q "sus") (string-eq q "sus2") (string-eq q "sus4")) "sus")
+      ((or (string-eq q "aug") (string-eq q "7#5")) "aug")
+      ((or (string-eq q "sus") (string-eq q "sus2") (string-eq q "sus4")
+           (string-eq q "7sus4")) "sus")
       (else "major"))))
 
 (define songs/uke-voicing
