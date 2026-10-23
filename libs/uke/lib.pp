@@ -1466,6 +1466,349 @@ first tone a jazz voicing drops, so it sits late.")
           "\n"
           (uke/tab-line path 3 "A| "))))))
 
+(define uke/exact-name
+  (lambda (frets)
+    "Cheap drill label: exact match only, else the fret vector."
+    (let* ((pcs (uke/pcs (uke/midis frets)))
+           (exact (uke/exact-entries pcs)))
+      (if (null? exact)
+        (uke/frets-str frets)
+        (uke/name-str (car exact) "exact" () ())))))
+
+;; ---------- M5: generated drills ----------
+
+(define uke/lcg
+  (lambda (seed)
+    "Deterministic LCG state (pure; same seed, same drill)."
+    (songs/fmod (+ (* 1103515245 seed) 12345) 2147483648)))
+
+(define uke/seed-list
+  (lambda (seed n acc)
+    "Deterministic seed states."
+    (if (<= n 0)
+      (reverse acc)
+      (let ((s (uke/lcg seed)))
+        (uke/seed-list s (- n 1) (cons s acc))))))
+
+(define uke/pick
+  (lambda (seed xs)
+    "Pick one element deterministically."
+    (if (null? xs) () (nth xs (songs/fmod seed (length xs))))))
+
+(define uke/repeat
+  (lambda (x n)
+    "n copies of x."
+    (if (<= n 0) (list) (cons x (uke/repeat x (- n 1))))))
+
+(define uke/step
+  (lambda (tick chord frets active label note)
+    "One drill column: (tick chord frets active-string label note)."
+    (list tick chord frets active label note)))
+
+(define uke/tempo-ladder
+  (lambda (start target step)
+    "Practice tempos from start to target."
+    (if (> start target)
+      (list)
+      (cons start (uke/tempo-ladder (+ start step) target step)))))
+
+(define uke/steps-from-shapes
+  (lambda (chords shapes tick step)
+    "One full-strum column per chord/shape pair."
+    (if (or (null? chords) (null? shapes))
+      (list)
+      (cons (uke/step tick (songs/chord-str (car chords)) (car shapes) () "strum" "")
+            (uke/steps-from-shapes (cdr chords) (cdr shapes) (+ tick step) step)))))
+
+(define uke/steps-from-arrange
+  (lambda (rs tick)
+    "Columns from (uke/arrange) records."
+    (if (null? rs)
+      (list)
+      (cons (uke/step tick (nth (car rs) 0) (nth (car rs) 1) () "strum" "")
+            (uke/steps-from-arrange (cdr rs) (+ tick 12))))))
+
+(define uke/tab-step-line
+  (lambda (steps i prefix)
+    "One drill tab line; a fingerstyle step only lights its active string."
+    (string-append
+      prefix
+      (string-join
+        (list/map
+          (lambda (r)
+            (if (or (null? (nth r 3)) (= i (nth r 3)))
+              (uke/pad-cell (as-str (nth (nth r 2) i)))
+              (uke/pad-cell "-")))
+          steps)
+        " "))))
+
+(define uke/drill-tab
+  (lambda (drill)
+    "Chord/label lines plus four string lines for a drill."
+    (let ((steps (nth drill 2)))
+      (if (null? steps)
+        ""
+        (string-append
+          "   " (string-join
+                  (list/map (lambda (r) (uke/pad-cell (nth r 1))) steps) " ")
+          "\n   " (string-join
+                     (list/map (lambda (r) (uke/pad-cell (nth r 4))) steps) " ")
+          "\n" (uke/tab-step-line steps 0 "G| ")
+          "\n" (uke/tab-step-line steps 1 "C| ")
+          "\n" (uke/tab-step-line steps 2 "E| ")
+          "\n" (uke/tab-step-line steps 3 "A| "))))))
+
+(define uke/drill-record
+  (lambda (family title steps meter start target pattern)
+    "The one drill value all families return."
+    (list family title steps meter start target pattern)))
+
+(define uke/drill-text
+  (lambda (drill)
+    "Drill card for the REPL."
+    (string-append
+      (nth drill 1) "  [" (nth drill 0) " " (nth drill 3) "]"
+      "\ntempo " (as-str (nth drill 4)) " -> " (as-str (nth drill 5))
+      "  (" (string-join
+              (list/map as-str
+                (uke/tempo-ladder (nth drill 4) (nth drill 5) 10))
+              " ") ")"
+      "\n" (nth drill 6)
+      "\n" (uke/drill-tab drill))))
+
+;; ---------- inversions: one chord, every shape ----------
+
+(define uke/drill-inversions
+  (lambda (chord window)
+    "Every playable shape of one chord, nearest to open first."
+    (let* ((shapes (uke/sort-frets (uke/voicings-window chord window) (list 0 0 0 0)))
+           (steps (uke/steps-from-shapes
+                    (uke/repeat chord (length shapes)) shapes 0 12)))
+      (uke/drill-record
+        "inversions"
+        (string-append (songs/chord-str chord) " inversions")
+        steps "4/4" 60 120
+        "each shape once, nearest hand position first"))))
+
+;; ---------- legato: one string, 1-2 frets, no pluck ----------
+
+(define uke/mutate-fret
+  (lambda (frets i delta)
+    "Change one string's fret."
+    (uke/mutate-i frets i delta 0)))
+
+(define uke/mutate-i
+  (lambda (frets i delta j)
+    "Accumulator for uke/mutate-fret."
+    (if (null? frets)
+      (list)
+      (cons (if (= j i) (+ (car frets) delta) (car frets))
+            (uke/mutate-i (cdr frets) i delta (+ j 1))))))
+
+(define uke/legato-deltas
+  (lambda (frets i ds)
+    "Candidate one-string moves for one string."
+    (if (null? ds)
+      (list)
+      (let* ((d (car ds))
+             (nf (+ (nth frets i) d))
+             (newf (uke/mutate-fret frets i d))
+             (sh (uke/shape newf)))
+        (append
+          (if (and (>= nf 0) (<= nf 12) (<= (nth sh 4) uke/max-span))
+            (list (list newf i d (if (> d 0) "h" "p")))
+            (list))
+          (uke/legato-deltas frets i (cdr ds)))))))
+
+(define uke/legato-candidates
+  (lambda (frets)
+    "All legal hammer/pull moves from a fret vector."
+    (uke/legato-strings frets 0)))
+
+(define uke/legato-strings
+  (lambda (frets i)
+    "Accumulator over the four strings."
+    (if (>= i 4)
+      (list)
+      (append (uke/legato-deltas frets i (list -2 -1 1 2))
+              (uke/legato-strings frets (+ i 1))))))
+
+(define uke/legato-walk
+  (lambda (seeds frets n tick acc key)
+    "Walk one-string moves, recording each column."
+    (if (or (<= n 0) (null? seeds))
+      (reverse acc)
+      (let ((cands (uke/legato-candidates frets)))
+        (if (null? cands)
+          (reverse acc)
+          (let* ((pick (uke/pick (car seeds) cands))
+                 (newf (car pick))
+                 (i (nth pick 1))
+                 (dir (nth pick 3))
+                 (step (uke/step tick (uke/exact-name newf) newf ()
+                                 (string-append dir "@" (as-str i)) "")))
+            (uke/legato-walk (cdr seeds) newf (- n 1) (+ tick 12)
+                             (cons step acc) key)))))))
+
+(define uke/drill-legato
+  (lambda (seed n meter key)
+    "Math-rock legato: n one-string 1-2 fret moves, no picking."
+    (let* ((tonic (songs/parse-chord (songs/key-str key)))
+           (voicings (uke/voicings-window tonic 7))
+           (start (if (null? voicings) (list 0 0 0 0) (car voicings)))
+           (seeds (uke/seed-list seed (+ n 8) (list)))
+           (first (uke/step 0 (songs/chord-str tonic) start () "start" ""))
+           (steps (uke/legato-walk seeds start n 12 (list first) key)))
+      (uke/drill-record
+        "legato"
+        (string-append "Legato walk in " (songs/key-str key))
+        steps meter 60 140
+        "h = hammer-on, p = pull-off, @N = string (0=G 1=C 2=E 3=A); no picking"))))
+
+;; ---------- formby: split-stroke over a seeded change table ----------
+
+(define uke/split-patterns
+  (list "T i T i  T i i T"
+        "T i i T  T i T i"
+        "T T i i  T i i T")
+  "Split-stroke templates: T = thumb, i = index.")
+
+(define uke/major-formby
+  (list (list 0 5 3 4)   ; I vi IV V
+        (list 0 4 5 3)   ; I V vi IV
+        (list 0 3 5 4)   ; I IV vi V
+        (list 0 2 3 4))  ; I iii IV V
+  "Seeded major-key change tables (0-based degrees).")
+
+(define uke/minor-formby
+  (list (list 0 3 4 0)   ; i iv v i
+        (list 0 5 2 6)   ; i VI III VII
+        (list 0 3 6 2))  ; i iv VII III
+  "Seeded minor-key change tables (0-based degrees).")
+
+(define uke/progression-from-degrees
+  (lambda (key degrees)
+    "Diatonic chords on 0-based scale degrees."
+    (let ((scale (songs/scale key)))
+      (list/filter
+        (lambda (c) (not (null? c)))
+        (list/map
+          (lambda (d)
+            (let ((pc (songs/pc-midi (nth scale d)))
+                  (q (uke/quality-of-class (songs/diatonic-quality key d))))
+              (songs/parse-chord (uke/glyph key pc q))))
+          degrees)))))
+
+(define uke/insert-at
+  (lambda (xs i x)
+    "Insert x before index i."
+    (cond
+      ((null? xs) (list x))
+      ((<= i 0) (cons x xs))
+      (else (cons (car xs) (uke/insert-at (cdr xs) (- i 1) x))))))
+
+(define uke/with-dim-connector
+  (lambda (chords seed key)
+    "Insert a leading-tone dim7 before a seeded interior chord."
+    (if (< (length chords) 2)
+      chords
+      (let* ((i (+ 1 (songs/fmod seed (- (length chords) 1))))
+             (target (nth chords i))
+             (root (songs/pc-midi (car target)))
+             (conn (songs/parse-chord
+                     (uke/glyph key (songs/fmod (- root 1) 12) "dim7"))))
+        (if (null? conn) chords (uke/insert-at chords i conn))))))
+
+(define uke/first-shape
+  (lambda (chord maxfret)
+    "The nearest-to-open playable shape, or ()."
+    (let ((shapes (uke/sort-frets (uke/voicings-window chord maxfret) (list 0 0 0 0))))
+      (if (null? shapes) () (car shapes)))))
+
+(define uke/steps-from-chords
+  (lambda (chords tick)
+    "One strum column per chord using its open shape."
+    (if (null? chords)
+      (list)
+      (let ((frets (uke/first-shape (car chords) 7)))
+        (if (null? frets)
+          (uke/steps-from-chords (cdr chords) (+ tick 12))
+          (cons (uke/step tick (songs/chord-str (car chords)) frets () "strum" "")
+                (uke/steps-from-chords (cdr chords) (+ tick 12))))))))
+
+(define uke/drill-formby
+  (lambda (seed key changes)
+    "Split-stroke drill over a seeded diatonic table plus a dim7 connector."
+    (let* ((seeds (uke/seed-list seed 8 (list)))
+           (table (if (string-eq (car (cdr key)) "minor")
+                    uke/minor-formby
+                    uke/major-formby))
+           (degrees (list/take (uke/pick (car seeds) table) changes))
+           (prog0 (uke/progression-from-degrees key degrees))
+           (progression (uke/with-dim-connector prog0 (car (cdr seeds)) key))
+           (steps (uke/steps-from-chords progression 0))
+           (pattern (uke/pick (car (cdr (cdr seeds))) uke/split-patterns)))
+      (uke/drill-record
+        "formby"
+        (string-append "Formby split-stroke in " (songs/key-str key))
+        steps "4/4" 60 130
+        (string-append pattern
+                       "  (changes: "
+                       (string-join
+                         (list/map (lambda (c) (songs/chord-str c)) progression)
+                         " ")
+                       ")")))))
+
+;; ---------- fingerstyle: arpeggios over one shape ----------
+
+(define uke/arpeggio-patterns
+  (list (list 3 2 1 0 1 2 3 2)
+        (list 0 1 2 3 2 1 0 1)
+        (list 3 1 2 0 2 1 3 2))
+  "String orders (0=G 1=C 2=E 3=A).")
+
+(define uke/finger-name
+  (lambda (i)
+    "Right-hand finger for a string index."
+    (cond ((= i 0) "p") ((= i 1) "i") ((= i 2) "m") (else "a"))))
+
+(define uke/finger-pass
+  (lambda (chord frets pattern tick)
+    "One arpeggio pass."
+    (if (null? pattern)
+      (list)
+      (let ((i (car pattern)))
+        (cons (uke/step tick (songs/chord-str chord) frets i
+                        (uke/finger-name i) "")
+              (uke/finger-pass chord frets (cdr pattern) (+ tick 6)))))))
+
+(define uke/finger-reps
+  (lambda (chord frets pattern tick reps)
+    "Repeat the pattern over one chord."
+    (if (<= reps 0)
+      (list)
+      (append
+        (uke/finger-pass chord frets pattern tick)
+        (uke/finger-reps chord frets pattern
+                         (+ tick (* 6 (length pattern)))
+                         (- reps 1))))))
+
+(define uke/drill-fingerstyle
+  (lambda (seed chord reps)
+    "Fingerstyle arpeggio over the open shape of one chord."
+    (let* ((seeds (uke/seed-list seed 8 (list)))
+           (shapes (uke/sort-frets (uke/voicings-window chord 7) (list 0 0 0 0)))
+           (frets (if (null? shapes) (list 0 0 0 0) (car shapes)))
+           (pattern (uke/pick (car seeds) uke/arpeggio-patterns))
+           (steps (uke/finger-reps chord frets pattern 0 reps)))
+      (uke/drill-record
+        "fingerstyle"
+        (string-append "Fingerstyle arpeggio: " (songs/chord-str chord))
+        steps "4/4" 50 110
+        (string-append "p-i-m-a over "
+                       (string-join (list/map uke/finger-name pattern) " ")
+                       "  (shape " (uke/frets-str frets) ")")))))
+
 ;; ---------- diagnostics ----------
 
 (define uke/describe
