@@ -5236,5 +5236,10 @@
                       (as-str sec-rem)))))))))))
   "Pace string (mm:ss per unit) for a walk doc, \"\" when no distance.")
 
-;; vault-declared routes (experiment 10-23: do route rows ride reseeds/deploys?)
+;; vault-declared routes — route rows ride ships ONLY from this file.
+;; (MIRROR boot seed upserts lib.pp defines+routes onto system/main at boot;
+;; routes hand-registered in a session land on that session's branch and stay
+;; invisible to other chains — root cause of the self-token 404s, 10-23.)
 (route "/workout/snatch" "workout/ksk1-chart-page")
+(route "/workout/today" "workout/today-page")
+(route "/workout/chart" "workout/chart-page")
