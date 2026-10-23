@@ -479,6 +479,10 @@
   (doc "Book chapter — chord charts and the layered music representation: chart DSL -> song AST (spelled pitches, explicit tick time) -> theory faces (roman numerals, key-fit, transposition), instrument voicing strips (uke first), and the note-event IR that later MIDI/engine/DAW sinks render from — Kadosh is the canonical worked example and M1 acceptance test; full text inlined from borge/songs.borg")
   (inline borge/songs.borg)
  )
+ (section ukulele
+  (doc "Book chapter — ukulele theory as a mechanism: reentrant tuning geometry, exact shape enumeration, reverse naming of a fret vector as ALL its interpretations, a finite named move grammar for next-chord suggestions, style profiles as weightings (jazz reharmonizes functions, math rock transforms shapes), string-proximity voice leading, solo chord-melody arrangement as a joint melody/harmony search with cross-key reconciliation and tab output, generated formby/fingerstyle/legato drills, and songbook-derived transition priors; companion to songs, which owns the instrument-free pitch algebra")
+  (inline borge/ukulele.borg)
+ )
  (section upsets
   (doc "Book chapter — prediction-market informed-flow analytics on the habitat: Nopales schedule-driven ingest (zero new kernel prims in v1), typed tree-row domain store, pure OCaml analytics + point-in-time simulator in spikes/upsets, parity contract between the engines, habitat control faces + paper ledger, execution signing prims gated behind paper-proof. Full text inlined from borge/upsets.borg")
   (inline borge/upsets.borg)
