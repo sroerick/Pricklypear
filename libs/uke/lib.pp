@@ -146,7 +146,7 @@
 (define uke/fretted
   (lambda (frets)
     "Number of strings stopped by a finger."
-    (count (list/filter (lambda (f) (> f 0)) (uke/parse-frets frets)))))
+    (length (list/filter (lambda (f) (> f 0)) (uke/parse-frets frets)))))
 
 (define uke/shape
   (lambda (frets)
@@ -165,39 +165,44 @@
       (lambda (f) (member (songs/fmod (+ base f) 12) pcs))
       (list/range (+ uke/window 1)))))
 
-(define uke/prepend-each
-  (lambda (x tails)
-    "Cons x onto every list in tails."
-    (list/map (lambda (t) (cons x t)) tails)))
+(define uke/extend-partials
+  (lambda (fs partials)
+    "Extend each reversed partial with one allowed fret, pruning span."
+    (list/foldl
+      (lambda (acc p)
+        (append acc
+          (list/map
+            (lambda (f) (cons f p))
+            (list/filter
+              (lambda (f) (<= (uke/span (cons f p)) uke/max-span))
+              fs))))
+      (list)
+      partials)))
 
-(define uke/append-all
-  (lambda (xss)
-    "Flatten one level of a list of lists."
-    (list/foldl (lambda (acc xs) (append acc xs)) (list) xss)))
-
-(define uke/cross
-  (lambda (choices)
-    "Cartesian product of per-string fret choices."
+(define uke/partials
+  (lambda (choices partials)
+    "Breadth-first partial vectors, one string per pass."
     (if (null? choices)
-      (list (list))
-      (let ((tails (uke/cross (cdr choices))))
-        (uke/append-all
-          (list/map (lambda (f) (uke/prepend-each f tails)) (car choices)))))))
+      partials
+      (uke/partials (cdr choices)
+                    (uke/extend-partials (car choices) partials)))))
 
 (define uke/shapes-for-pcs
   (lambda (pcs)
     "Every playable shape whose sounded set is exactly pcs.
-Target-driven: each string only visits frets that sound a wanted pc,
-so the search is a few hundred vectors, never the whole neck."
+Target-driven and span-pruned: each string only visits frets that
+sound a wanted pc, and partial vectors die as soon as their fretted
+span exceeds the budget, so the search is tens of vectors, not the neck."
     (let* ((target (uke/uniq (uke/sort pcs)))
            (choices
              (list/map (lambda (base) (uke/frets-for-pcs base target)) uke/gcea))
-           (vectors (uke/cross choices)))
-      (list/filter
-        (lambda (frets)
-          (and (<= (uke/span frets) uke/max-span)
-               (equal? (uke/pcs (uke/midis frets)) target)))
-        vectors))))
+           (partials (uke/partials choices (list (list)))))
+      (list/map
+        reverse
+        (list/filter
+          (lambda (p)
+            (equal? (uke/pcs (uke/midis (reverse p))) target))
+          partials)))))
 
 ;; ---------- the name index ----------
 
@@ -367,13 +372,13 @@ so the search is a few hundred vectors, never the whole neck."
            (subs
              (list/filter
                (lambda (e)
-                 (and (< (count pcs) (count (nth e 0)))
+                 (and (< (length pcs) (length (nth e 0)))
                       (uke/subset? pcs (nth e 0))))
                idx))
            (sups
              (list/filter
                (lambda (e)
-                 (and (> (count pcs) (count (nth e 0)))
+                 (and (> (length pcs) (length (nth e 0)))
                       (uke/subset? (nth e 0) pcs)))
                idx))
            (exact-records
@@ -398,7 +403,7 @@ so the search is a few hundred vectors, never the whole neck."
     (let ((near
             (list/filter
               (lambda (e)
-                (<= (count (append (uke/diff pcs (nth e 0))
+                (<= (length (append (uke/diff pcs (nth e 0))
                                    (uke/diff (nth e 0) pcs)))
                     1))
               (uke/name-index))))
@@ -452,8 +457,8 @@ so the search is a few hundred vectors, never the whole neck."
 
 (define uke/voicings
   (lambda (chord)
-    "Every playable shape that sounds exactly the chord's pitch classes."
-    (uke/shapes-for-pcs (uke/chord-pcs chord))))
+    "Every playable shape for the chord, cover mode when it has >4 pcs."
+    (car (uke/voicings-full chord))))
 
 (define uke/voicings-in
   (lambda (chord near)
@@ -727,9 +732,9 @@ so the search is a few hundred vectors, never the whole neck."
 (define uke/cadence-move
   (lambda (history key)
     "A detected ii-V gets an explicit tonic resolution."
-    (if (< (count history) 2)
+    (if (< (length history) 2)
       (list)
-      (let* ((n (count history))
+      (let* ((n (length history))
              (a (songs/degree-of (car (nth history (- n 2))) key))
              (b (songs/degree-of (car (nth history (- n 1))) key))
              (da (if (null? a) 99 (car a)))
@@ -784,7 +789,7 @@ so the search is a few hundred vectors, never the whole neck."
     "Ranked next-chord candidates from the current chord and key."
     (if (null? history)
       (list)
-      (let* ((chord (nth history (- (count history) 1)))
+      (let* ((chord (nth history (- (length history) 1)))
              (all
                (append
                  (uke/diatonic-moves chord key)
@@ -809,6 +814,657 @@ so the search is a few hundred vectors, never the whole neck."
       "\n")))
 
 
+
+;; ---------- M3: cover voicings + proximity arrangement ----------
+
+(define uke/degree-list
+  (lambda (chord)
+    "A chord's (degree pc) pairs, root included at degree 0."
+    (let ((root (songs/pc-midi (car chord))))
+      (cons (list 0 root)
+            (list/map
+              (lambda (d) (list (car d) (songs/fmod (+ root (nth d 1)) 12)))
+              (nth chord 3))))))
+
+(define uke/pick-degree
+  (lambda (deg dl)
+    "Pitch class for a degree, or ()."
+    (let ((e (assoc deg dl)))
+      (if (null? e) () (nth e 1)))))
+
+(define uke/cover-priority
+  (list 3 7 6 9 13 11 5 2 4)
+  "Tone priority when a chord has more than four pitch classes.
+Root first, then guide tones, then common extensions; the fifth is the
+first tone a jazz voicing drops, so it sits late.")
+
+(define uke/cover-pick
+  (lambda (priority dl acc picked)
+    "Accumulate up to four pcs by degree priority."
+    (cond
+      ((null? priority) (list acc picked))
+      ((>= (length acc) 4) (list acc picked))
+      (else
+        (let ((pc (uke/pick-degree (car priority) dl)))
+          (if (or (null? pc) (member pc acc))
+            (uke/cover-pick (cdr priority) dl acc picked)
+            (uke/cover-pick (cdr priority) dl
+                            (cons pc acc)
+                            (cons (car priority) picked))))))))
+
+(define uke/cover-pcs
+  (lambda (chord)
+    "Choose up to four tones; return (pcs omitted-degrees)."
+    (let* ((root (songs/pc-midi (car chord)))
+           (dl (uke/degree-list chord))
+           (picked (uke/cover-pick uke/cover-priority dl (list root) (list 0)))
+           (pcs (uke/uniq (uke/sort (car picked))))
+           (degrees (nth picked 1))
+           (omitted
+             (list/map car
+               (list/filter
+                 (lambda (d) (not (member (car d) degrees)))
+                 dl))))
+      (list pcs omitted))))
+
+(define uke/voicings-full
+  (lambda (chord)
+    "Return (shapes omitted-degrees). Exact for <=4 pcs, cover otherwise."
+    (let ((pcs (uke/chord-pcs chord)))
+      (if (<= (length pcs) 4)
+        (list (uke/shapes-for-pcs pcs) (list))
+        (let ((cover (uke/cover-pcs chord)))
+          (list (uke/shapes-for-pcs (car cover)) (nth cover 1)))))))
+
+(define uke/omitted
+  (lambda (chord)
+    "Degrees a cover voicing leaves out."
+    (nth (uke/voicings-full chord) 1)))
+
+(define uke/arrange-window
+  7
+  "Highest fret considered by the arrangement search (a playability knob).")
+
+(define uke/voicings-window
+  (lambda (chord maxfret)
+    "Voicings whose highest fret is at most maxfret."
+    (list/filter
+      (lambda (f) (<= (uke/max-list f) maxfret))
+      (uke/voicings chord))))
+
+(define uke/progression-sets-at
+  (lambda (progression maxfret)
+    "Voicing sets, one per chord, inside a fret window."
+    (if (null? progression)
+      (list)
+      (cons (uke/voicings-window (car progression) maxfret)
+            (uke/progression-sets-at (cdr progression) maxfret)))))
+
+(define uke/progression-sets
+  (lambda (progression)
+    "Voicing sets, one per chord, inside the arrangement window."
+    (uke/progression-sets-at progression uke/arrange-window)))
+
+(define uke/any-empty?
+  (lambda (sets)
+    "True when any voicing set is empty (a gap)."
+    (cond
+      ((null? sets) #f)
+      ((null? (car sets)) #t)
+      (else (uke/any-empty? (cdr sets))))))
+
+(define uke/position-cost
+  (lambda (shape)
+    "Prefer open positions: sum of frets."
+    (list/foldl (lambda (a f) (+ a f)) 0 shape)))
+
+(define uke/dp-init
+  (lambda (shapes)
+    "First DP layer: (cost shape prev-shape)."
+    (list/map (lambda (s) (list (uke/position-cost s) s ())) shapes)))
+
+(define uke/best-prev
+  (lambda (shape prev)
+    "Cheapest (cost prev-shape) transition into shape."
+    (list/foldl
+      (lambda (acc p)
+        (let ((c (+ (nth p 0) (uke/fret-distance (nth p 1) shape))))
+          (if (or (null? acc) (< c (car acc)))
+            (list c (nth p 1))
+            acc)))
+      (list)
+      prev)))
+
+(define uke/dp-step
+  (lambda (shapes prev)
+    "Next DP layer."
+    (list/map
+      (lambda (s)
+        (let ((bp (uke/best-prev s prev)))
+          (list (car bp) s (nth bp 1))))
+      shapes)))
+
+(define uke/viterbi-acc
+  (lambda (sets acc)
+    "Accumulate DP layers, newest first."
+    (if (null? sets)
+      (reverse acc)
+      (uke/viterbi-acc (cdr sets)
+                       (cons (uke/dp-step (car sets) (car acc)) acc)))))
+
+(define uke/viterbi
+  (lambda (sets)
+    "All DP layers, first to last."
+    (if (null? sets)
+      (list)
+      (uke/viterbi-acc (cdr sets) (list (uke/dp-init (car sets)))))))
+
+(define uke/best-state
+  (lambda (layer)
+    "Lowest-cost state in a layer."
+    (list/foldl
+      (lambda (acc s)
+        (if (or (null? acc) (< (nth s 0) (nth acc 0))) s acc))
+      (list)
+      layer)))
+
+(define uke/find-state
+  (lambda (layer shape)
+    "State in layer whose shape equals shape, or ()."
+    (cond
+      ((null? layer) ())
+      ((equal? (nth (car layer) 1) shape) (car layer))
+      (else (uke/find-state (cdr layer) shape)))))
+
+(define uke/backtrace
+  (lambda (layers shape acc)
+    "Walk prev-shape links; layers are reversed (last first)."
+    (if (null? layers)
+      acc
+      (let ((state (uke/find-state (car layers) shape)))
+        (if (null? state)
+          acc
+          (uke/backtrace (cdr layers) (nth state 2) (cons shape acc)))))))
+
+(define uke/arrange-shapes
+  (lambda (sets)
+    "The globally cheapest shape sequence."
+    (let* ((layers (uke/viterbi sets))
+           (last (nth layers (- (length layers) 1)))
+           (best (uke/best-state last)))
+      (uke/backtrace (reverse layers) (nth best 1) (list)))))
+
+(define uke/arrange-windowed
+  (lambda (progression maxfret)
+    "Arrange within a window, retrying wider when a chord has no shape."
+    (let ((sets (uke/progression-sets-at progression maxfret)))
+      (if (uke/any-empty? sets)
+        (if (< maxfret uke/window)
+          (uke/arrange-windowed
+            progression
+            (if (> (+ maxfret 2) uke/window) uke/window (+ maxfret 2)))
+          (list))
+        (uke/pair-chords progression (uke/arrange-shapes sets) (list))))))
+
+(define uke/arrange
+  (lambda (progression)
+    "One shape per chord minimizing total hand movement, or () on a gap."
+    (uke/arrange-windowed progression uke/arrange-window)))
+
+(define uke/pair-chords
+  (lambda (chords shapes prev)
+    "Attach chord names and per-step movement to a shape path."
+    (if (or (null? chords) (null? shapes))
+      (list)
+      (let ((d (if (null? prev) 0 (uke/fret-distance prev (car shapes)))))
+        (cons (list (songs/chord-str (car chords)) (car shapes) d)
+              (uke/pair-chords (cdr chords) (cdr shapes) (car shapes)))))))
+
+(define uke/arrange-cost
+  (lambda (progression)
+    "Total hand movement of the arrangement."
+    (list/foldl (lambda (a r) (+ a (nth r 2))) 0 (uke/arrange progression))))
+
+(define uke/arrange-text
+  (lambda (progression)
+    "Arrangement lines for the REPL."
+    (string-join
+      (list/map
+        (lambda (r)
+          (string-append (nth r 0) "  " (uke/frets-str (nth r 1))
+                         "  +" (as-str (nth r 2))))
+        (uke/arrange progression))
+      "\n")))
+
+;; ---------- M4: key ranking, reconciliation, solo arrangement, tab ----------
+
+(define uke/all-keys
+  (lambda ()
+    "All 24 major/minor keys as key values."
+    (append
+      (list/map (lambda (r) (list (songs/best-spelling r) "major")) (list/range 12))
+      (list/map (lambda (r) (list (songs/best-spelling r) "minor")) (list/range 12)))))
+
+(define uke/melody-duration
+  (lambda (melody)
+    "Total sounding duration of a melody note list."
+    (list/foldl (lambda (a n) (+ a (nth n 2))) 0 melody)))
+
+(define uke/key-hit
+  (lambda (melody key)
+    "Duration of melody notes whose pc is in the key's scale."
+    (let ((pcs (list/map songs/pc-midi (songs/scale key))))
+      (list/foldl
+        (lambda (acc n)
+          (if (member (songs/fmod (songs/pitch-midi (car n)) 12) pcs)
+            (+ acc (nth n 2))
+            acc))
+        0
+        melody))))
+
+(define uke/relation
+  (lambda (ref key)
+    "Human relationship of key to a reference key."
+    (if (null? ref)
+      ""
+      (let* ((d (songs/key-interval ref key))
+             (same-tonic (= d 0))
+             (same-mode (string-eq (car (cdr ref)) (car (cdr key)))))
+        (cond
+          ((and same-tonic same-mode) "same")
+          (same-tonic "parallel")
+          ((and (string-eq (car (cdr ref)) "major")
+                (string-eq (car (cdr key)) "minor")
+                (= d 9)) "relative minor")
+          ((and (string-eq (car (cdr ref)) "minor")
+                (string-eq (car (cdr key)) "major")
+                (= d 3)) "relative major")
+          ((<= d 6) (string-append "+" (as-str d)))
+          (else (string-append "-" (as-str (- 12 d)))))))))
+
+(define uke/key-tonic-hit
+  (lambda (melody key)
+    "Duration of melody notes on the key's tonic (tie-break)."
+    (let ((tonic (songs/pc-midi (car key))))
+      (list/foldl
+        (lambda (acc n)
+          (if (= (songs/fmod (songs/pitch-midi (car n)) 12) tonic)
+            (+ acc (nth n 2))
+            acc))
+        0
+        melody))))
+
+(define uke/key-record
+  (lambda (melody ref key)
+    "One key candidate: (key-str hit total relation key tonic-hit)."
+    (list (songs/key-str key)
+          (uke/key-hit melody key)
+          (uke/melody-duration melody)
+          (uke/relation ref key)
+          key
+          (uke/key-tonic-hit melody key))))
+
+(define uke/ins-key
+  (lambda (r rs)
+    "Insert a key record: hit, then tonic-hit, then original order."
+    (cond
+      ((null? rs) (list r))
+      ((or (> (nth r 1) (nth (car rs) 1))
+           (and (= (nth r 1) (nth (car rs) 1))
+                (> (nth r 5) (nth (car rs) 5))))
+       (cons r rs))
+      (else (cons (car rs) (uke/ins-key r (cdr rs)))))))
+
+(define uke/sort-keys
+  (lambda (rs)
+    "Sort key records by descending hit duration."
+    (list/foldl (lambda (a r) (uke/ins-key r a)) (list) rs)))
+
+(define uke/keys-in
+  (lambda (melody ref)
+    "All 24 keys ranked by fit to the melody."
+    (uke/sort-keys
+      (list/map (lambda (k) (uke/key-record melody ref k)) (uke/all-keys)))))
+
+(define uke/keys
+  (lambda (melody)
+    "All 24 keys ranked, no reference context."
+    (uke/keys-in melody ())))
+
+(define uke/keys-text
+  (lambda (melody)
+    "Top key candidates for the REPL."
+    (string-join
+      (list/map
+        (lambda (r)
+          (string-append (car r) "  " (as-str (nth r 1)) "/"
+                         (as-str (nth r 2)) "  " (nth r 3)))
+        (list/take (uke/keys melody) 8))
+      "\n")))
+
+(define uke/active-chord
+  (lambda (events tick)
+    "The chord event covering tick, or ()."
+    (cond
+      ((null? events) ())
+      ((and (<= (nth (car events) 1) tick)
+            (< tick (+ (nth (car events) 1) (nth (car events) 2))))
+       (car events))
+      (else (uke/active-chord (cdr events) tick)))))
+
+(define uke/coverage
+  (lambda (melody events)
+    "Return (hit-duration total-duration) for melody notes over chord events."
+    (list/foldl
+      (lambda (acc n)
+        (let ((ev (uke/active-chord events (nth n 1))))
+          (if (null? ev)
+            acc
+            (let* ((cpcs (uke/uniq (uke/sort (songs/chord-tones (car ev)))))
+                   (hit (member (songs/fmod (songs/pitch-midi (car n)) 12) cpcs))
+                   (dur (nth n 2)))
+              (list (+ (car acc) (if hit dur 0))
+                    (+ (nth acc 1) dur))))))
+      (list 0 0)
+      melody)))
+
+(define uke/transpose-events
+  (lambda (events from to)
+    "Transpose every chord event from one key to another."
+    (list/map
+      (lambda (e)
+        (list (songs/transpose-chord (car e) from to)
+              (nth e 1)
+              (nth e 2)))
+      events)))
+
+(define uke/uniq-str
+  (lambda (xs)
+    "Distinct strings, first-seen order."
+    (if (null? xs)
+      (list)
+      (let ((rest (uke/uniq-str (cdr xs))))
+        (if (member (car xs) rest) rest (cons (car xs) rest))))))
+
+(define uke/event-names
+  (lambda (events)
+    "Distinct chord names in an event list."
+    (uke/uniq-str
+      (list/map (lambda (e) (songs/chord-str (car e))) events))))
+
+(define uke/invented
+  (lambda (original transposed)
+    "Names in the transposed chart that the original chart never names."
+    (list/filter
+      (lambda (n) (not (member n original)))
+      transposed)))
+
+(define uke/reconcile-record
+  (lambda (melody events from-key k)
+    "One alignment: as-written vs transposed, whichever covers more melody."
+    (let* ((to (nth k 4))
+           (as (uke/coverage melody events))
+           (te (uke/transpose-events events from-key to))
+           (tr (uke/coverage melody te))
+           (use-tr (> (car tr) (car as)))
+           (cov (if use-tr tr as))
+           (evs (if use-tr te events))
+           (names (uke/event-names evs)))
+      (list (car k)
+            (car cov)
+            (nth cov 1)
+            (nth k 3)
+            (if use-tr "transposed" "as-written")
+            evs
+            (if use-tr (uke/invented (uke/event-names events) names) (list))
+            (nth k 5)))))
+
+(define uke/ins-reconcile
+  (lambda (r rs)
+    "Insert by coverage, then tonic-hit, then original order."
+    (cond
+      ((null? rs) (list r))
+      ((or (> (nth r 1) (nth (car rs) 1))
+           (and (= (nth r 1) (nth (car rs) 1))
+                (> (nth r 7) (nth (car rs) 7))))
+       (cons r rs))
+      (else (cons (car rs) (uke/ins-reconcile r (cdr rs)))))))
+
+(define uke/sort-reconcile
+  (lambda (rs)
+    "Sort reconciliation records by descending covered duration."
+    (list/foldl (lambda (a r) (uke/ins-reconcile r a)) (list) rs)))
+
+(define uke/reconcile
+  (lambda (melody events from-key)
+    "Rank key alignments of a chart to a melody; top 6."
+    (uke/sort-reconcile
+      (list/map
+        (lambda (k) (uke/reconcile-record melody events from-key k))
+        (list/take (uke/keys-in melody from-key) 6)))))
+
+(define uke/reconcile-text
+  (lambda (melody events from-key)
+    "Reconciliation lines for the REPL."
+    (string-join
+      (list/map
+        (lambda (r)
+          (string-append (car r) "  " (as-str (nth r 1)) "/"
+                         (as-str (nth r 2)) "  " (nth r 3)
+                         "  [" (nth r 4) "]"
+                         (if (null? (nth r 6))
+                           ""
+                           (string-append "  new: "
+                                          (string-join (nth r 6) " ")))))
+        (uke/reconcile melody events from-key))
+      "\n")))
+
+;; ---------- solo: melody as the top voice ----------
+
+(define uke/melody-string
+  (lambda (midis midi)
+    "Index of the highest string sounding exactly midi, or ()."
+    (uke/melody-string-i midis midi 0 -1 -1)))
+
+(define uke/melody-string-i
+  (lambda (midis midi i best best-midi)
+    "Accumulator for uke/melody-string."
+    (cond
+      ((null? midis) best)
+      ((and (= (car midis) midi) (> (car midis) best-midi))
+       (uke/melody-string-i (cdr midis) midi (+ i 1) i (car midis)))
+      (else (uke/melody-string-i (cdr midis) midi (+ i 1) best best-midi)))))
+
+(define uke/melody-string-top
+  (lambda (shape midi)
+    "String index when midi is the shape's highest voice, else ()."
+    (if (= midi (uke/max-list (nth shape 1)))
+      (uke/melody-string (nth shape 1) midi)
+      ())))
+
+(define uke/candidates-from-shapes
+  (lambda (shapes midi label)
+    "Candidates (frets string-index label) with midi on top."
+    (if (null? shapes)
+      (list)
+      (let ((idx (uke/melody-string-top (uke/shape (car shapes)) midi)))
+        (if (null? idx)
+          (uke/candidates-from-shapes (cdr shapes) midi label)
+          (cons (list (car shapes) idx label)
+                (uke/candidates-from-shapes (cdr shapes) midi label)))))))
+
+(define uke/solo-candidates
+  (lambda (chord midi)
+    "Chord shapes with midi on top, then tension shapes, then ()."
+    (let ((exact (uke/candidates-from-shapes (uke/voicings chord) midi "chord-tone")))
+      (if (not (null? exact))
+        exact
+        (let* ((root (songs/pc-midi (car chord)))
+               (pcs (uke/chord-pcs chord))
+               (mpc (songs/fmod midi 12))
+               (add (uke/uniq (uke/sort (cons mpc pcs)))))
+          (if (<= (length add) 4)
+            (uke/candidates-from-shapes
+              (uke/shapes-for-pcs add) midi "tension")
+            ;; five pcs: drop the fifth, keep root/3/7 + melody
+            (let* ((fifth (songs/fmod (+ root 7) 12))
+                   (drop (list/filter (lambda (p) (not (= p fifth))) pcs))
+                   (add2 (uke/uniq (uke/sort (cons mpc drop)))))
+              (if (<= (length add2) 4)
+                (uke/candidates-from-shapes
+                  (uke/shapes-for-pcs add2) midi "tension")
+                (list)))))))))
+
+(define uke/solo-step
+  (lambda (note events)
+    "Candidate states for one melody note."
+    (let ((ev (uke/active-chord events (nth note 1))))
+      (if (null? ev)
+        (list)
+        (uke/solo-candidates (car ev) (songs/pitch-midi (car note)))))))
+
+(define uke/solo-init
+  (lambda (cands)
+    "First DP layer: (cost shape prev-shape idx note label)."
+    (list/map
+      (lambda (c)
+        (list (uke/position-cost (car c)) (car c) ()
+              (nth c 1) () (nth c 2)))
+      cands)))
+
+(define uke/solo-layer
+  (lambda (cands prev)
+    "Next solo DP layer."
+    (list/map
+      (lambda (c)
+        (let ((bp (uke/best-prev (car c) prev)))
+          (list (car bp) (car c) (nth bp 1)
+                (nth c 1) () (nth c 2))))
+      cands)))
+
+(define uke/solo-acc
+  (lambda (steps acc)
+    "Accumulate solo DP layers, newest first."
+    (if (null? steps)
+      (reverse acc)
+      (uke/solo-acc (cdr steps)
+                    (cons (uke/solo-layer (car steps) (car acc)) acc)))))
+
+(define uke/solo-layers
+  (lambda (steps)
+    "All solo DP layers, first to last."
+    (if (null? steps)
+      (list)
+      (uke/solo-acc (cdr steps) (list (uke/solo-init (car steps)))))))
+
+(define uke/solo-path
+  (lambda (melody events)
+    "Viterbi chord-melody path, or (gap tick) when a note has no shape."
+    (if (null? melody)
+      (list)
+      (let ((steps (list/map (lambda (n) (uke/solo-step n events)) melody)))
+        (if (uke/any-empty? steps)
+          (list (list "gap" (uke/first-gap-tick melody steps)))
+          (let* ((layers (uke/solo-layers steps))
+                 (last (nth layers (- (length layers) 1)))
+                 (best (uke/best-state last))
+                 (shapes (uke/backtrace (reverse layers) (nth best 1) (list))))
+            (uke/zip-solo melody events shapes)))))))
+
+(define uke/first-gap-tick
+  (lambda (melody steps)
+    "Tick of the first melody note with no candidates."
+    (cond
+      ((null? steps) 0)
+      ((null? (car steps)) (nth (car melody) 1))
+      (else (uke/first-gap-tick (cdr melody) (cdr steps))))))
+
+(define uke/zip-solo
+  (lambda (melody events shapes)
+    "Attach notes and chord names to the chosen shape path."
+    (if (or (null? melody) (null? shapes))
+      (list)
+      (let* ((note (car melody))
+             (ev (uke/active-chord events (nth note 1)))
+             (midi (songs/pitch-midi (car note)))
+             (shape (uke/shape (car shapes)))
+             (idx (uke/melody-string-top shape midi))
+             (label (if (null? idx) "gap"
+                      (if (member (songs/fmod midi 12)
+                                  (uke/chord-pcs (car ev)))
+                        "chord-tone" "tension"))))
+        (cons
+          (list (nth note 1)
+                (if (null? ev) "?" (songs/chord-str (car ev)))
+                (car shapes)
+                (if (null? idx) 0 idx)
+                label
+                (songs/pitch-str (car note)))
+          (uke/zip-solo (cdr melody) events (cdr shapes)))))))
+
+(define uke/gap-record?
+  (lambda (r)
+    "True for the (gap tick) record."
+    (and (string? (car r)) (string-eq (car r) "gap"))))
+
+(define uke/solo-text
+  (lambda (melody events)
+    "Solo path lines for the REPL."
+    (string-join
+      (list/map
+        (lambda (r)
+          (if (uke/gap-record? r)
+            (string-append "gap at tick " (as-str (nth r 1)))
+            (string-append (as-str (nth r 0)) "  " (nth r 1) "  "
+                           (nth r 5) "  " (uke/frets-str (nth r 2))
+                           "  string " (as-str (nth r 3))
+                           "  [" (nth r 4) "]")))
+        (uke/solo-path melody events))
+      "\n")))
+
+;; ---------- tab rendering ----------
+
+(define uke/spaces
+  (lambda (n)
+    "n spaces."
+    (if (<= n 0) "" (string-append " " (uke/spaces (- n 1))))))
+
+(define uke/pad-cell
+  (lambda (s)
+    "Pad a fret or chord cell to six characters."
+    (let ((n (string-length s)))
+      (if (>= n 6) s (string-append s (uke/spaces (- 6 n)))))))
+
+(define uke/tab-line
+  (lambda (path i prefix)
+    "One string's tab line."
+    (string-append
+      prefix
+      (string-join
+        (list/map (lambda (r) (uke/pad-cell (as-str (nth (nth r 2) i)))) path)
+        " "))))
+
+(define uke/tab
+  (lambda (path)
+    "Four-line tab with chord names above the columns."
+    (cond
+      ((null? path) "")
+      ((uke/gap-record? (car path))
+       (string-append "no solo path: gap at tick " (as-str (nth (car path) 1))))
+      (else
+        (string-append
+          "   "
+          (string-join
+            (list/map (lambda (r) (uke/pad-cell (nth r 1))) path)
+            " ")
+          "\n"
+          (uke/tab-line path 0 "G| ")
+          "\n"
+          (uke/tab-line path 1 "C| ")
+          "\n"
+          (uke/tab-line path 2 "E| ")
+          "\n"
+          (uke/tab-line path 3 "A| "))))))
 
 ;; ---------- diagnostics ----------
 
