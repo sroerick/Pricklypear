@@ -178,6 +178,13 @@
       (rows (quote workout-exercise) 2000)))
   "One JS object per logged exercise row (sid/exercise/weight/reps/unit).")
 
+(define workout/chart-since
+  (lambda
+    ()
+    (let
+      ((s (as-str (request-param "since"))))
+        (if (string-eq s "") "2026-09-20" s))
+  "Chart window start: since param, default 2026-09-20 (ksf clean-and-jerk start)."))
 (define workout/chart-page
   (lambda
     ()
@@ -186,7 +193,7 @@
         (html/h1 "Workout Progress")
         (html/p*
           (html/attr "class" "muted")
-          "All logged sets - reps per session (tooltip: weight)")
+              (html/text (string-append "All logged sets since " (workout/chart-since) " - reps per session (tooltip: weight)")))
         (html/a "/workout" "<- Back to Workout")
         (html/div
           (html/attr "style" "max-width:760px;margin:1em 0")
@@ -204,10 +211,11 @@
             "const J="
             (workout/chart-data-js)
             ";"
+              (string-append "const SINCE='" (workout/chart-since) "';")
             "const dmap={};J.sessions.forEach(function(s){dmap[s.id]=s.date;});"
             "const pts=J.points.map(function(p){return{date:dmap[p.sid]||'',ex:p.ex,w:p.w,u:p.u,r:p.r};}).filter(function(p){return p.date;});"
             "pts.sort(function(a,b){return a.date.localeCompare(b.date);});"
-            "const dates=[...new Set(pts.map(function(p){return p.date;}))];"
+              "const pts=J.points.map(function(p){return{date:dmap[p.sid]||'',ex:p.ex,w:p.w,u:p.u,r:p.r};}).filter(function(p){return p.date>=SINCE;});"
             "const names=[...new Set(pts.map(function(p){return p.ex;}))];"
             "const pal=['#3b82f6','#10b981','#f59e0b','#ef4444','#8b5cf6','#14b8a6','#f97316','#64748b'];"
             "const ds=names.map(function(n,i){return{label:n,data:dates.map(function(d){const p=pts.find(function(q){return q.date===d&&q.ex===n;});return p?p.r:null;}),backgroundColor:pal[i%pal.length],borderRadius:4};});"
@@ -234,6 +242,7 @@
       (list
         (list "Today" "/workout/today")
         (list "Chart" "/workout/chart")
+          (list "Snatch" "/workout/snatch")
         (list "Quick log" "/workout/log")
         (list "Home" "/workout"))
       (workout/browse-sessions)))
@@ -258,6 +267,92 @@
     (key)
     (list))
   "All cascade entries are route leaves; nothing drills deeper.")
+
+(define workout/ksk1-chart-data-js
+  (lambda
+    ()
+    (let*
+      ((all (workout/session-list ""))
+        (ksk (list/filter workout/ksk1? all))
+        (points (list/map workout/ksk1-chart-point-js ksk)))
+      (string-append "[" (workout/join-csv points) "]"))))
+
+(define workout/ksk1-chart-page
+  (lambda
+    ()
+    (html/page
+      (list
+        (html/h1 "Workout Progress")
+        (html/p*
+          (html/attr "class" "muted")
+          "KSK1 Snatch - reps per hand per session")
+        (html/a "/workout" "<- Back to Workout")
+        (html/div
+          (html/attr "style" "max-width:760px;margin:1em 0")
+          (html/tag "canvas" (html/attr "id" "workoutChart") ""))
+        (html/div
+          (html/attr "style" "margin:1em 0;font-size:14px")
+          "<span style=\"color:#3b82f6\">&#9632;</span> Day 1 &nbsp; <span style=\"color:#10b981\">&#9632;</span> Day 2 &nbsp; <span style=\"color:#f59e0b\">&#9632;</span> Day 3")
+        (html/tag
+          "script"
+          (html/attr
+            "src"
+            "https://cdn.jsdelivr.net/npm/chart.js@4.4.1")
+          "")
+        (html/tag
+          "script"
+          ""
+          (string-append
+            "const sessions="
+            (workout/ksk1-chart-data-js)
+            ";"
+            "sessions.sort(function(a,b){return a.date.localeCompare(b.date);});"
+            "const dc={1:'#3b82f6',2:'#10b981',3:'#f59e0b'};"
+            "const labels=sessions.map(function(s){const d=new Date(s.date);return d.toLocaleDateString('en-US',{month:'short',day:'numeric'});});"
+            "const colors=sessions.map(function(s){return dc[s.day]||'#999';});"
+            "new Chart(document.getElementById('workoutChart'),{"
+            "type:'bar',"
+            "data:{labels:labels,datasets:[{label:'Reps per hand',data:sessions.map(function(s){return s.reps;}),backgroundColor:colors,borderRadius:4}]},"
+            "options:{responsive:true,plugins:{legend:{display:false},tooltip:{callbacks:{afterLabel:function(c){const s=sessions[c.dataIndex];return ['Day '+s.day+' ('+s.pattern+')',s.notes];}}}},scales:{y:{beginAtZero:true,title:{display:true,text:'Reps per hand'}},x:{title:{display:true,text:'Session date'}}}}"
+            "});"))))))
+
+(define workout/ksk1-chart-point-js
+  (lambda
+    (row)
+    (let*
+      ((f (workout/row-fields row))
+        (doc (dict-get f "doc"))
+        (prog (dict-get doc "progress"))
+        (params (dict-get doc "params"))
+        (date (as-str (dict-get f "date")))
+        (reps
+          (as-str (workout/as-int (dict-get prog "reps_l"))))
+        (phase
+          (as-str (workout/as-int (dict-get params "phase"))))
+        (day (as-str (workout/as-int (dict-get params "day"))))
+        (pattern
+          (workout/js-escape (dict-get params "pattern")))
+        (notes (workout/js-escape (dict-get f "notes"))))
+      (string-append
+        "{date:\""
+        date
+        "\","
+        "reps:"
+        reps
+        ","
+        "phase:"
+        phase
+        ","
+        "day:"
+        day
+        ","
+        "pattern:\""
+        pattern
+        "\","
+        "notes:\""
+        notes
+        "\"}"))))
+
 
 (define workout/col-lower
   (lambda
