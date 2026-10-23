@@ -1,5 +1,8 @@
 ;; package filmstrip -- exported from live branch system/main
 ;; Sync: scripts/pp-sync.sh status|pull|snapshot
+;; NOTE: app borg routes (borge/*.borg) register at process BOOT only; deploys that
+;; change only app libs hot-reload code but do NOT re-register routes. Changing an
+;; embedded lib (this one) rebuilds the binary and restarts, which refreshes them.
 
 (package filmstrip
   (export
