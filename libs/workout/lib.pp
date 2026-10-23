@@ -213,9 +213,9 @@
             ";"
               (string-append "const SINCE='" (workout/chart-since) "';")
             "const dmap={};J.sessions.forEach(function(s){dmap[s.id]=s.date;});"
-            "const pts=J.points.map(function(p){return{date:dmap[p.sid]||'',ex:p.ex,w:p.w,u:p.u,r:p.r};}).filter(function(p){return p.date;});"
+            "const pts=J.points.map(function(p){return{date:dmap[p.sid]||'',ex:p.ex,w:p.w,u:p.u,r:p.r};}).filter(function(p){return p.date&&p.date>=SINCE;});"
             "pts.sort(function(a,b){return a.date.localeCompare(b.date);});"
-              "const pts=J.points.map(function(p){return{date:dmap[p.sid]||'',ex:p.ex,w:p.w,u:p.u,r:p.r};}).filter(function(p){return p.date>=SINCE;});"
+            "const dates=[...new Set(pts.map(function(p){return p.date;}))];"
             "const names=[...new Set(pts.map(function(p){return p.ex;}))];"
             "const pal=['#3b82f6','#10b981','#f59e0b','#ef4444','#8b5cf6','#14b8a6','#f97316','#64748b'];"
             "const ds=names.map(function(n,i){return{label:n,data:dates.map(function(d){const p=pts.find(function(q){return q.date===d&&q.ex===n;});return p?p.r:null;}),backgroundColor:pal[i%pal.length],borderRadius:4};});"
@@ -4879,6 +4879,56 @@
                           (html/attr "type" "submit")
                           "Skip this session")))))))))))))
 
+(define workout/doc-line
+  (lambda
+    (text)
+    (html/p*
+      (html/attr "class" "docline")
+      (html/text text)))
+  "One suggestion line.")
+
+(define workout/suggest-block
+  (lambda
+    (program)
+    (let
+      ((doc (workout/suggest program (workout/today))))
+      (cond
+        ((string-eq (as-str program) "ksf")
+          (let
+            ((params (dict-get doc "params")) (progress (dict-get doc "progress")))
+            (html/join
+              (list
+                (workout/doc-line (string-append "Phase " (as-str (dict-get doc "phase")) " - day " (as-str (dict-get doc "day")) " - pattern " (as-str (dict-get doc "pattern"))))
+                (workout/doc-line (string-append "Bell " (as-str (dict-get params "bell")) " " (as-str (dict-get params "unit")) " - target " (as-str (dict-get params "target_min")) " min - cadence " (as-str (dict-get params "cadence_sec")) "s - deload " (as-str (dict-get params "deload"))))
+                (workout/doc-line (string-append "Sets done: " (as-str (dict-get progress "sets_done"))))))))
+        ((string-eq (as-str program) "run5k")
+          (let
+            ((params (dict-get doc "params")))
+            (html/join
+              (list
+                (workout/doc-line (string-append "Week " (as-str (dict-get doc "week")) " - day " (as-str (dict-get doc "day"))))
+                (workout/doc-line (string-append "Goal: " (as-str (dict-get params "goal"))))
+                  (workout/doc-line (string-append "Warmup " (as-str (dict-get params "warmup")) " - flush " (as-str (dict-get params "flush")) " - " (as-str (dict-get params "talk_test"))))))))
+        ((string-eq (as-str program) "sct")
+          (let
+            ((params (dict-get doc "params")))
+            (html/join
+              (list
+                (workout/doc-line (string-append "Phase " (as-str (dict-get doc "phase")) " - session " (as-str (dict-get doc "session")) " - day " (as-str (dict-get doc "day"))))
+                (workout/doc-line (string-append "Content: " (as-str (dict-get params "content"))))
+                  (workout/doc-line (string-append "Benchmark due: " (as-str (dict-get params "benchmark_due"))))))))
+        ((string-eq (as-str program) "stretch")
+          (let
+            ((params (dict-get doc "params")))
+            (html/join
+              (list
+                (workout/doc-line (string-append "Cycle " (as-str (dict-get doc "cycle")) " - day " (as-str (dict-get doc "day"))))
+                (workout/doc-line (as-str (dict-get params "slot")))
+                  (workout/doc-line (string-append "Cap: " (as-str (dict-get params "cap"))))))))
+        (else
+          (html/pre (html/text (as-str doc)))))))
+  "Readable render of a suggestion doc; raw pre only for unknown shapes.")
+
 (define workout/today-card-for
   (lambda
     (program)
@@ -4890,10 +4940,8 @@
           (html/p*
             (html/attr "class" "muted")
             (html/text (as-str (workout/gate-status program))))
-          (html/pre
-            (html/text
-              (as-str (workout/suggest program (workout/today)))))))))
-  "One program block: name, state summary, suggestion doc.")
+            (workout/suggest-block program)))))
+  "One program block: name, state summary, suggestion rendered readably.")
 
 (define workout/today-page
   (lambda
