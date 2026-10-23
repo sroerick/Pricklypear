@@ -23,9 +23,19 @@ type parsed = {
   std : string option;
   no_std : bool;
   quiet : bool;
+  lens : string option;
+  lens_owner : string option;
 }
 
-let empty = { mode = None; std = None; no_std = false; quiet = false }
+let empty =
+  {
+    mode = None;
+    std = None;
+    no_std = false;
+    quiet = false;
+    lens = None;
+    lens_owner = None;
+  }
 
 let usage =
   Printf.sprintf
@@ -44,6 +54,11 @@ let usage =
      \      --std PATH    stdlib seed (default: NOPALES_STD, installed\n\
      \                    share/pricklypear-nopales/std.pp, or libs/std/lib.pp)\n\
      \      --no-std      do not load the stdlib seed\n\
+     \      --lens DIR    local lens root: offline (get), (tree/get),\n\
+     \                    and (rows) over cloned data (default: NOPALES_LENS\n\
+     \                    or PP_LENS)\n\
+     \      --lens-owner NAME  owner namespace when it cannot be inferred\n\
+     \                    from the lens's data/u/<label> directory\n\
      \  -h, --help        this help\n\
      \      --version     version\n\
      \n\
@@ -73,6 +88,11 @@ let parse (args : string list) : parsed =
         if p.no_std then die "--std and --no-std are mutually exclusive";
         go { p with std = Some path } rest
     | "--std" :: [] -> die "--std needs a path"
+    | "--lens" :: dir :: rest -> go { p with lens = Some dir } rest
+    | "--lens" :: [] -> die "--lens needs a directory"
+    | "--lens-owner" :: name :: rest ->
+        go { p with lens_owner = Some name } rest
+    | "--lens-owner" :: [] -> die "--lens-owner needs a name"
     | ("-e" | "--eval") :: expr :: rest ->
         if p.mode <> None then die "only one mode may be given";
         go { p with mode = Some (Eval (expr, rest)) } []
@@ -150,6 +170,31 @@ let repl_value = function
   | Ast.VNil | Ast.VLambda _ | Ast.VMacro _ -> false
   | _ -> true
 
+(** Lens root precedence: [--lens], NOPALES_LENS, PP_LENS. Explicit
+    intent must exist; [--lens-owner] without a lens is a usage error. *)
+let find_lens (p : parsed) : string option =
+  let explicit =
+    match p.lens with
+    | Some d -> Some ("--lens", d)
+    | None -> (
+        match Sys.getenv_opt "NOPALES_LENS" with
+        | Some d when String.trim d <> "" -> Some ("NOPALES_LENS", d)
+        | _ -> (
+            match Sys.getenv_opt "PP_LENS" with
+            | Some d when String.trim d <> "" -> Some ("PP_LENS", d)
+            | _ -> None))
+  in
+  match explicit with
+  | Some (origin, dir) ->
+      if Sys.file_exists dir then Some dir
+      else
+        die
+          (Printf.sprintf "%s points at a missing lens root: %s" origin
+             dir)
+  | None ->
+      if p.lens_owner <> None then die "--lens-owner requires --lens";
+      None
+
 let repl (h : Host.t) : int =
   print_endline (version ^ " — Ctrl-D to quit");
   let buf = Buffer.create 256 in
@@ -195,7 +240,10 @@ let () =
     match mode with
     | File (_, args) | Eval (_, args) | Repl args -> args
   in
-  let h = Host.create ~argv () in
+  let lens = find_lens opts in
+  let h =
+    Host.create ~argv ?lens_root:lens ?lens_owner:opts.lens_owner ()
+  in
   (if not opts.no_std then
      match find_std opts with
      | Some path -> (
