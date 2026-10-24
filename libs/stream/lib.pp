@@ -117,3 +117,6 @@
         "The daily portion. Star what you want to keep; the rest fades.")
       (stream/portion-html))))
 )
+
+;; vault-declared route (workout pattern, 04ba7a1): route rows ride ships ONLY from here.
+(route "/stream" "stream/page")
