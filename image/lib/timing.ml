@@ -16,6 +16,8 @@ type sample = {
   db_hits : int;      (* DB-touching prim call count *)
   steps : int;        (* eval steps billed to the handler's own budget *)
   prim_db : (string * int * float) list; (* db prims: name, calls, ms *)
+  fn_steps : (string * int * int) list; (* per-fn eval steps: name, calls,
+    steps (top 12 at capture, steps-descending) *)
   at : int64;         (* epoch ms when the sample was taken *)
 }
 
@@ -69,7 +71,7 @@ let note_eval_budget (b : Pricklypear_lisp.Eval.budget) : unit =
     this request's own eval budget (fresh per eval), read from the
     fiber-keyed slot — no cross-request delta. Per image.budget-ledger,
     steps are what the ledger ranks by. *)
-let record ~route ~total_ms ~db_ms ~db_hits ~steps ~prim_db : unit =
+let record ~route ~total_ms ~db_ms ~db_hits ~steps ~prim_db ~fn_steps : unit =
   let db_ms = max 0. db_ms and db_hits = max 0 db_hits in
   let q =
     match Hashtbl.find_opt samples route with
@@ -79,9 +81,10 @@ let record ~route ~total_ms ~db_ms ~db_hits ~steps ~prim_db : unit =
         Hashtbl.replace samples route q;
         q
   in
-  Queue.add
-    { route; total_ms; db_ms; db_hits; steps; prim_db; at = now_ms () }
-    q;
+    Queue.add
+      { route; total_ms; db_ms; db_hits; steps; prim_db; fn_steps;
+        at = now_ms () }
+      q;
   incr total_count;
   (* Trim to bounds. *)
   while Queue.length q > max_samples_per_route do
@@ -119,24 +122,36 @@ let measure ~route (f : unit -> 'a) : 'a * float =
       let t0 = Unix.gettimeofday () in
       let result = f () in
       let total_ms = (Unix.gettimeofday () -. t0) *. 1000. in
-      let db_ms, db_hits, steps, prim_db =
+      let take_top n l =
+        if List.length l > n then
+          let rec take k = function
+            | x :: rest when k > 0 -> x :: take (k - 1) rest
+            | _ -> []
+          in
+          take n l
+        else l
+      in
+      let db_ms, db_hits, steps, prim_db, fn_steps =
         match !slot with
         | Some b ->
           let l =
             Hashtbl.fold (fun k (c, t) acc -> (k, c, t) :: acc) b.prim_db []
             |> List.sort (fun (_, c1, _) (_, c2, _) -> compare c2 c1)
-            |> fun l -> if List.length l > 12 then
-              let rec take n = function
-                | x :: rest when n > 0 -> x :: take (n - 1) rest
-                | _ -> []
-              in
-              take 12 l
-            else l
+            |> take_top 12
           in
-          (b.db_ms, b.db_hits, b.steps, l)
-        | None -> (0., 0, 0, [])
+          let fs =
+            Hashtbl.fold
+              (fun k steps acc ->
+                let c = try Hashtbl.find b.fn_call_counts k with Not_found -> 0 in
+                (k, c, steps) :: acc)
+              b.fn_step_counts []
+            |> List.sort (fun (_, _, s1) (_, _, s2) -> compare s2 s1)
+            |> take_top 12
+          in
+          (b.db_ms, b.db_hits, b.steps, l, fs)
+        | None -> (0., 0, 0, [], [])
       in
-      record ~route ~total_ms ~db_ms ~db_hits ~steps ~prim_db;
+      record ~route ~total_ms ~db_ms ~db_hits ~steps ~prim_db ~fn_steps;
       set_last_total_ms total_ms;
       (result, total_ms))
 
@@ -151,6 +166,8 @@ type agg = {
   steps : float;   (* avg eval steps across samples (image.budget-ledger) *)
   prim_db_agg : (string * int * float) list; (* per db prim: summed calls
     + db ms across samples, calls-descending (image.db-panel) *)
+  fn_steps_agg : (string * int * int) list; (* per fn: summed calls + eval
+    steps across samples, steps-descending *)
 }
 
 (** Aggregate the current sample set, slowest-first by max_ms. *)
@@ -160,10 +177,11 @@ let aggregates () : agg list =
     (fun route q ->
       let count = Queue.length q in
       if count > 0 then begin
-        let last_ms = ref 0. and max_ms = ref 0.
-        and sum = ref 0. and dbsum = ref 0. and hsum = ref 0.
-        and stepsum = ref 0. in
+          let last_ms = ref 0. and max_ms = ref 0.
+          and sum = ref 0. and dbsum = ref 0. and hsum = ref 0.
+          and stepsum = ref 0. in
         let psum : (string, int * float) Hashtbl.t = Hashtbl.create 8 in
+        let fsum : (string, int * int) Hashtbl.t = Hashtbl.create 16 in
         Queue.iter
           (fun s ->
             last_ms := s.total_ms;
@@ -172,11 +190,16 @@ let aggregates () : agg list =
             dbsum := !dbsum +. s.db_ms;
             hsum := !hsum +. float_of_int s.db_hits;
             stepsum := !stepsum +. float_of_int s.steps;
-            List.iter
-              (fun (k, c, t) ->
-                let pc, pt = try Hashtbl.find psum k with Not_found -> (0, 0.) in
-                Hashtbl.replace psum k (pc + c, pt +. t))
-              s.prim_db)
+              List.iter
+                (fun (k, c, t) ->
+                  let pc, pt = try Hashtbl.find psum k with Not_found -> (0, 0.) in
+                  Hashtbl.replace psum k (pc + c, pt +. t))
+                s.prim_db;
+              List.iter
+                (fun (k, c, s) ->
+                  let pc, ps = try Hashtbl.find fsum k with Not_found -> (0, 0) in
+                  Hashtbl.replace fsum k (pc + c, ps + s))
+                  s.fn_steps)
           q;
         out :=
           { route
@@ -187,10 +210,13 @@ let aggregates () : agg list =
           ; db_ms = !dbsum /. float_of_int count
           ; db_hits = !hsum /. float_of_int count
           ; steps = !stepsum /. float_of_int count
-          ; prim_db_agg =
-            Hashtbl.fold (fun k (c, t) acc -> (k, c, t) :: acc) psum []
-            |> List.sort (fun (_, c1, _) (_, c2, _) -> compare c2 c1)
-          }
+            ; prim_db_agg =
+                Hashtbl.fold (fun k (c, t) acc -> (k, c, t) :: acc) psum []
+                |> List.sort (fun (_, c1, _) (_, c2, _) -> compare c2 c1)
+            ; fn_steps_agg =
+                Hashtbl.fold (fun k (c, s) acc -> (k, c, s) :: acc) fsum []
+                |> List.sort (fun (_, _, s1) (_, _, s2) -> compare s2 s1)
+            }
           :: !out
       end)
     samples;
@@ -205,3 +231,28 @@ let timing_header () : (string * string) list =
   | Some ms ->
       last_total_ms := None;
       [("x-timing-ms", Printf.sprintf "%.1f" ms)]
+
+(** PERF-5 (roerick 10-22): current per-route render aggregates as JSON,
+    for /debug/stats (the /timing page is admin-session-only). *)
+let aggregates_json () : string =
+  let agg_json (a : agg) =
+    let prim =
+      List.map
+        (fun (k, c, ms) ->
+          Printf.sprintf "{\"prim\":\"%s\",\"calls\":%d,\"ms\":%.0f}" k c ms)
+        a.prim_db_agg
+      |> String.concat ","
+    in
+    let fns =
+      List.map
+        (fun (k, c, s) ->
+          Printf.sprintf "{\"fn\":\"%s\",\"calls\":%d,\"steps\":%d}" k c s)
+        a.fn_steps_agg
+      |> String.concat ","
+    in
+    Printf.sprintf
+      "{\"route\":\"%s\",\"count\":%d,\"last_ms\":%.0f,\"avg_ms\":%.0f,\"max_ms\":%.0f,\"steps\":%.0f,\"db_hits\":%.0f,\"db_ms\":%.0f,\"prim_db\": [%s],\"fn_steps\": [%s]}"
+      a.route a.count a.last_ms a.avg_ms a.max_ms a.steps a.db_hits a.db_ms
+      prim fns
+  in
+  "[" ^ String.concat "," (List.map agg_json (aggregates ())) ^ "]"

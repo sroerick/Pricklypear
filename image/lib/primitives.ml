@@ -181,6 +181,7 @@ let make_with_defaults () : t =
   register_sync t "date-today" Prims_time.prim_date_today;
   register_sync t "now" Prims_time.prim_now;
   register_sync t "now-iso" Prims_time.prim_now_iso;
+    register_sync t "debug/stats" Prims_debug.prim_debug_stats;
   register_sync t "now-ms" Prims_time.prim_now_ms;
   register_sync t "date-weekday" Prims_time.prim_date_weekday;
   register_sync t "date-format" Prims_time.prim_date_format;
@@ -225,6 +226,7 @@ let prim_summary (name : string) : string =
   | "date-today" -> "local date YYYY-MM-DD"
   | "now" -> "unix epoch seconds (UTC int)"
   | "now-iso" -> "ISO-8601 UTC timestamp YYYY-MM-DDTHH:MM:SSZ"
+  | "debug/stats" -> "debug counters JSON: gen, writes_total, writes_by_prefix, writes_per_min (60m ring), l2_hits, l2_misses"
   | "now-ms" -> "unix epoch milliseconds (UTC int)"
   | "sleep" -> "sleep N seconds (float or int); yields the fiber (Eio)"
   | "http-get" -> "outbound HTTP GET: (http-get url [headers-json]) -> {ok,status,headers,body,err,kind} dict; admin/agent only"

@@ -1612,7 +1612,7 @@ let tree_list (store : Store.t) ~(prefix : string) ?(depth : int option)
       let nodes =
         match depth with
         | Some 1 -> Tree_store.list_children conn ~prefix ~limit ()
-        | _ -> Tree_store.list_subtree conn ~prefix ~limit ()
+          | _ -> Tree_store.cached_list_subtree conn ~prefix ~limit ()
       in
       (VList (List.map (fun n -> VStr (Tree_store.node_to_json n)) nodes)))
 
@@ -1632,7 +1632,7 @@ let tree_children_of (store : Store.t) ~(path : string)
 let tree_subtree (store : Store.t) ~(path : string)
     ?(limit : int = 50000) () : value =
   with_tree_tx store ~none:(fun () -> VList []) (fun conn ->
-      let nodes = Tree_store.list_subtree conn ~prefix:path ~limit () in
+        let nodes = Tree_store.cached_list_subtree conn ~prefix:path ~limit () in
       (VList (List.map (fun n -> VStr (Tree_store.node_to_json n)) nodes)))
 
 (* ---- lens-aware read prims (one-tree.tree-read-prims, BORGE-1785516993) ----
@@ -1729,7 +1729,7 @@ let replication_unit (store : Store.t) () : value =
     match Io_db.Db.current_conn store with
     | None -> 0
     | Some conn ->
-        List.length (Tree_store.list_subtree conn ~prefix ~limit:100000 ())
+          List.length (Tree_store.cached_list_subtree conn ~prefix ~limit:100000 ())
   in
     let spaces = Sync.member_space_prefixes store ~user:user in
     let space_counts = List.map (fun p -> (p, count p)) spaces in
@@ -2849,6 +2849,7 @@ let fork_data (store : Store.t) ~(lens : string)
          let rows =
            Store_db.exec conn ~params sql
          in
+          Tree_store.write_bump ();
          let n = List.length rows in
          VStr (Printf.sprintf "ok %s (%d nodes forked)" lens n)))
 
@@ -2898,7 +2899,7 @@ let merge_data_lens (store : Store.t) ~(lens : string) () : value =
           The live path is constructed by replacing the data.l.<lens> prefix
           with data.u — i.e. dropping the lens segment. *)
        let lens_nodes =
-         Tree_store.list_subtree conn ~prefix:lens_prefix ~limit:100000 ()
+           Tree_store.cached_list_subtree conn ~prefix:lens_prefix ~limit:100000 ()
        in
        let merged = ref 0 in
        let skipped = ref 0 in

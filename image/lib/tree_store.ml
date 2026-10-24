@@ -246,6 +246,98 @@ let node_of_row (row : Pgx.row) : node option =
        | _ -> None)
   | _ -> None
 
+(* ---- PERF-9: in-image subtree read cache (docs/caching-strategy.md L2) ----
+
+   One image, one writer: every datum/hier write goes through a write prim
+   below, and every prim calls [write_bump] in the same tx, so a
+   generation-stamped entry can never outlive the write that invalidates
+   it. Entries are keyed (prefix, pp.user): the RLS floor (SET LOCAL
+   pp.user per tx) differs per reader identity, so the cache never crosses
+   users.
+
+   Belt and braces: entries also expire after [cache_ttl_s] seconds. That
+   bounds staleness from write paths that reach tree_nodes without a prim
+   (scaffolding-mirror triggers on promote/merge, crud's lens-fork SQL). It
+   costs one gettimeofday per hit; render scans re-hit within milliseconds.
+
+   Only COMPLETE (untruncated) scans become entries: a read whose row
+   count hit LIMIT is not a full snapshot and must never answer a larger
+   later ask. A cached entry is therefore the full prefix snapshot for
+   that user; a caller's smaller limit is applied by truncation, which
+   preserves the SQL ordering. *)
+
+let cache_ttl_s = 30.0
+
+let cache_tbl : (string * string, float * int64 * node list) Hashtbl.t =
+  Hashtbl.create 16
+
+let cache_gen = ref 0L
+
+let cache_mu = Eio.Mutex.create ()
+
+(** Bump the generation and drop every stamped entry. Called by every
+    write prim AFTER its row write, inside the same tx, so the cache never
+    serves a row the next statement can no longer see. *)
+(* debug write-churn + cache stats (roerick 10-22): in-memory only, never
+   stored. Counters ride [write_bump] (every write prim calls it inside
+   its tx) and [cached_list_subtree] (hit/miss). Summarized by the
+   (debug/stats) prim and /debug/stats. *)
+let stats_total = Atomic.make 0
+let stats_by_prefix : (string, int) Hashtbl.t = Hashtbl.create 16
+let stats_minute : (int * int) array = Array.init 60 (fun _ -> (0, 0))
+let stats_hits = Atomic.make 0
+let stats_misses = Atomic.make 0
+
+let stats_prefix_of (p : string) : string =
+  match String.index_opt p '.' with
+  | Some i ->
+      (match String.index_from_opt p (i + 1) '.' with
+       | Some j -> String.sub p 0 j
+       | None -> p)
+  | None -> p
+
+let write_bump ?(path : string option = None) () : unit =
+  Eio.Mutex.lock cache_mu;
+  cache_gen := Int64.succ !cache_gen;
+  Hashtbl.reset cache_tbl;
+  Atomic.incr stats_total;
+  (match path with
+   | Some p ->
+       let pre = stats_prefix_of p in
+       let n = Option.value (Hashtbl.find_opt stats_by_prefix pre) ~default:0 in
+       Hashtbl.replace stats_by_prefix pre (n + 1)
+   | None -> ());
+  let minute = int_of_float (Unix.gettimeofday () /. 60.0) in
+  let i = minute mod 60 in
+  let (m0, c0) = stats_minute.(i) in
+  stats_minute.(i) <- if m0 = minute then (m0, c0 + 1) else (minute, 1);
+  Eio.Mutex.unlock cache_mu
+
+let debug_stats_json () : string =
+  Eio.Mutex.lock cache_mu;
+  let gen = !cache_gen in
+  let prefixes =
+    Hashtbl.fold (fun k v acc -> (k, v) :: acc) stats_by_prefix []
+    |> List.sort compare
+    |> List.map (fun (k, v) -> Printf.sprintf "\"%s\":%d" k v)
+    |> String.concat ","
+  in
+  let now_min = int_of_float (Unix.gettimeofday () /. 60.0) in
+  let minutes =
+    Array.fold_left
+      (fun acc (m, c) ->
+        if c > 0 && m >= now_min - 60 then (m, c) :: acc else acc)
+      [] stats_minute
+    |> List.sort compare
+    |> List.map (fun (m, c) ->
+           Printf.sprintf "{\"age_min\":%d,\"writes\":%d}" (now_min - m) c)
+    |> String.concat ","
+  in
+  Eio.Mutex.unlock cache_mu;
+    Printf.sprintf
+      "{\"gen\":%Ld,\"writes_total\":%d,\"writes_by_prefix\":{%s},\"writes_per_min\":[%s],\"l2_hits\":%d,\"l2_misses\":%d,\"timing\":%s}"
+      gen (Atomic.get stats_total) prefixes minutes (Atomic.get stats_hits)
+      (Atomic.get stats_misses) (Timing.aggregates_json ())
 (* ---- write helpers (upsert/delete tree_nodes; the reverse trigger mirrors
    to the legacy tables in the same tx) ----
 
@@ -281,6 +373,7 @@ let upsert_fn (conn : Store_db.conn) ~(branch_id : string) ~(name : string)
       in
       (* tmp/eval-fast-path: incremental-rehydrate journal (def writes). *)
       Def_journal.record_upsert ~branch_id ~name;
+          write_bump ~path:(Some path) ();
       Ok (fn_path ~branch_id ~name)
 
 let upsert_type (conn : Store_db.conn) ~(branch_id : string) ~(name : string)
@@ -302,6 +395,7 @@ let upsert_type (conn : Store_db.conn) ~(branch_id : string) ~(name : string)
                     Pgx.Value.of_string fields_json; Pgx.Value.of_string author ]
           sql
       in
+          write_bump ~path:(Some path) ();
       Ok (type_path ~branch_id ~name)
 
 let upsert_route (conn : Store_db.conn) ~(branch_id : string) ~(route : string)
@@ -328,6 +422,7 @@ let upsert_route (conn : Store_db.conn) ~(branch_id : string) ~(route : string)
       in
       (* tmp/eval-fast-path: route writes dirty the session route table. *)
       Def_journal.record_routes ~branch_id;
+        write_bump ();
       Ok (route_path ~branch_id ~route)
 
 let delete_fn (conn : Store_db.conn) ~(branch_id : string) ~(name : string)
@@ -346,6 +441,7 @@ let delete_fn (conn : Store_db.conn) ~(branch_id : string) ~(name : string)
          a spurious journal Remove is harmless — the name is simply not
          bound). *)
       Def_journal.record_remove ~branch_id ~name;
+        write_bump ();
       if rows <> [] then Ok path
       else Error ("delete_fn: no row at " ^ path)
 
@@ -378,6 +474,7 @@ let insert_datum ?(acted_by : string option = None)
                    | None -> Pgx.Value.null) ]
         sql
   in
+    write_bump ();
   (match rows with
    | [ [ id_c ] ] ->
        (match Pgx.Value.to_string id_c with
@@ -415,6 +512,7 @@ let update_datum ?(acted_by : string option = None) (conn : Store_db.conn)
                    | None -> Pgx.Value.null) ]
       sql
   in
+    write_bump ();
   (match rows with
    | [ id_c ] :: _ ->
        (match Pgx.Value.to_string id_c with
@@ -436,6 +534,7 @@ let delete_datum (conn : Store_db.conn) ~(type_name : string) ~(id : string) :
       ~params:[ Pgx.Value.of_string id; Pgx.Value.of_string type_name ]
       sql
   in
+    write_bump ();
   (match rows with
    | [ id_c ] :: _ ->
        (match Pgx.Value.to_string id_c with
@@ -466,6 +565,7 @@ let upsert_datum ?(acted_by : string option = None) (conn : Store_db.conn)
   let run_sql ~params sql =
     try
       let rows = Store_db.exec conn ~params sql in
+        write_bump ();
       (match rows with
        | [ [ p ] ] ->
            (match Pgx.Value.to_string p with
@@ -593,6 +693,7 @@ let recompute_head_hash (conn : Store_db.conn) ~(branch_id : string) : unit =
       ~params:[ Pgx.Value.of_string root; Pgx.Value.of_string branch_id ]
       sql
   in
+    write_bump ();
   ()
 
 (* ---- DB helpers (read/verify; mirror writes happen in SQL triggers) ---- *)
@@ -712,6 +813,44 @@ let list_subtree (conn : Store_db.conn) ~(prefix : string)
           ~params:[ Pgx.Value.of_string prefix; Pgx.Value.of_int limit ] sql
       in
       (List.filter_map node_of_row rows)
+
+(** PERF-9 cached variant of [list_subtree]: one PG scan per
+    (prefix, user, generation) instead of one per call — the /kanban
+    /workstreams render rescans the same todo subtree ~70x per page.
+    Freshness = the generation stamp plus TTL in the cache block above.
+    Truncated reads (rows = limit) return fresh and stay uncached;
+    complete snapshots are truncated to the caller's ask in memory. *)
+let cached_list_subtree (conn : Store_db.conn) ~(prefix : string)
+    ?(limit : int = 1000) () : node list =
+  let key = (prefix, Store_db.current_pp_user ()) in
+  Eio.Mutex.lock cache_mu;
+  let hit =
+    match Hashtbl.find_opt cache_tbl key with
+    | Some (t, gen, nodes) when gen = !cache_gen
+        && Unix.gettimeofday () -. t < cache_ttl_s -> Some nodes
+    | _ -> None
+  in
+  Eio.Mutex.unlock cache_mu;
+  let rec take n = function
+    | [] -> []
+    | x :: xs -> if n <= 0 then [] else x :: take (n - 1) xs
+  in
+  match hit with
+    | Some nodes when List.length nodes <= limit ->
+        Atomic.incr stats_hits;
+        take limit nodes
+    | _ ->
+        Atomic.incr stats_misses;
+      let nodes = list_subtree conn ~prefix ~limit () in
+      (* Only untruncated scans become entries: rows < limit proves the
+         snapshot complete for this prefix under this user's RLS floor. *)
+      if List.length nodes < limit then begin
+        Eio.Mutex.lock cache_mu;
+        Hashtbl.replace cache_tbl key
+          (Unix.gettimeofday (), !cache_gen, nodes);
+        Eio.Mutex.unlock cache_mu
+      end;
+      nodes
 
 (** Branch-chain resolution: try [name] under self, then each ancestor.
     Returns the first hit (closest-ancestor-wins = the override rule).
@@ -1365,6 +1504,7 @@ let upsert_hier (conn : Store_db.conn) ~(path : string) ~(kind : string)
                             ]
                           sql
                       in
+                        write_bump ();
                       match rows with
                       | [ [ p ] ] ->
                           (match Pgx.Value.to_string p with
@@ -1396,6 +1536,7 @@ let delete_path (conn : Store_db.conn) ~(path : string) ~(recursive : bool)
     let rows =
       Store_db.exec conn ~params:[ Pgx.Value.of_string path ] sql
     in
+        write_bump ~path:(Some path) ();
     (List.length rows)
 
 (** Move subtree rooted at [old_path] to [new_path]. Rewrites every descendant
@@ -1436,6 +1577,7 @@ let move_subtree (conn : Store_db.conn) ~(old_path : string) ~(new_path : string
                 [ Pgx.Value.of_string old_path; Pgx.Value.of_string new_path ]
               sql
           in
+              write_bump ~path:(Some old_path) ();
           (match rows with
            | [ [ c ] ] ->
                (match Pgx.Value.to_int c with
@@ -1971,6 +2113,7 @@ let set_rank (conn : Store_db.conn) ~(path : string)
           ]
         sql
     in
+      write_bump ();
     List.length rows
 
 (** Re-assign fresh fixed-width ranks to every RANKED sibling under
@@ -2081,6 +2224,7 @@ let upsert_link (conn : Store_db.conn) ~(path : string)
                    ]
                  sql
              in
+               write_bump ();
              (match rows with
               | [ [ p ] ] ->
                   (match Pgx.Value.to_string p with

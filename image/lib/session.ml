@@ -851,17 +851,17 @@ let rec eval_one (t : t) (input : string) : Pricklypear_lisp.Ast.value =
         (* Opaque-body contract (i-1788671083-c): the store persists the raw
            jsonb body; serialization happens here at the eval boundary. *)
         let body_json = Pricklypear_lisp.Ast.expr_to_body_json body_expr in
-        if t.seed_additive then
-          Store.persist_function_if_absent t.store name body_json ~doc
-            ~package:pkg t.manifest.username
-        else
-          Store.persist_function t.store name body_json ~doc
-            ~package:pkg t.manifest.username;
+        (* branching.seed-policy MIRROR (2026-10-22): persist always
+           upserts. The boot seed (seed_boot window) mirrors system/main
+           onto libs/<pkg> code; personal branches stay the override
+           layer via closest-chain. *)
+        Store.persist_function t.store name body_json ~doc
+          ~package:pkg t.manifest.username;
         (* product-experience §activity-ledger: a code write is a
            tree.write event. Target is the b.fn.<name> PATH.
-           seed_additive boot loading is not interactive activity — skip
+           seed_boot boot loading is not interactive activity — skip
            it (it would flood the ledger with every package define). *)
-        if not t.seed_additive then
+        if not t.seed_boot then
           ignore
             (Activity_ledger.push ~actor:t.manifest.username
                ~cls:"tree.write"
@@ -894,8 +894,8 @@ let rec eval_one (t : t) (input : string) : Pricklypear_lisp.Ast.value =
      plain top-level eval and the begin/seq spine walk below (log/issues
      "begin-wrapped defines never persist"): defines inside (begin …)
      bound in env via eval_special_form but never landed in the store
-     and died with the session. eval_one has no seed/load skip windows
-     (boot seed relies on persist_function_if_absent's name set), so
+      and died with the session. eval_one has no seed/load skip windows
+      (boot seed skips via load_skip_names in eval_form only), so
      the only guard here is the anonymous one, as for plain defines. *)
   let rec persist_toplevel (e : Pricklypear_lisp.Ast.expr) : unit =
     match Pricklypear_lisp.Eval.parse_top_define e with
@@ -1041,47 +1041,26 @@ and eval_form (t : t) (expr : Pricklypear_lisp.Ast.expr)
        (Pricklypear_lisp.Ast.Var "package", args) ->
        handle_package_form t args
    | _ ->
-  (* image.boot-seed-skip (promote-window task 7, 2026-09-04): during the
-     ADDITIVE boot seed, a top-level define/defmacro whose name already
-     exists on the branch is a guaranteed no-op — persist_*_if_absent
-     skips (seed_names hit) and the in-env binding is discarded by the
-     post-seed rehydrate (boot_personal: seed → checkout → rehydrate).
-     Skip the eval entirely; ~2300 define forms re-eval per warm boot for
-     nothing. Scoped to the seed window (seed_additive + seed_names both
-     active). image.load-library-skip (2026-09-03) gives interactive
-     load-library / reseed-package the same medicine for IDENTICAL
-     normalized body + doc via load_skip_names; changed/new defines keep
-     full eval.
-     Safety: no libs/*/lib.pp has a top-level CALL form (scan 2026-09-04:
-     only define/defmacro/route/deftype/package/export/public-route), so
-     a later top-level form in the same load cannot need a skipped
-     binding; route/deftype/package forms are NOT skipped, and
-     record_define_side_effects already no-ops under the seed's
-     suppress_refresh_on_define. Name extraction is by pattern only —
-     malformed defines still fall through to eval and raise exactly as
-     before. *)
-  (* image.boot-seed-skip, per-name (shared by top-level forms and the
-     begin/seq spine walk below). *)
-  let seed_skips (name : string) : bool =
-    t.seed_additive
-    && (match t.store.seed_names with
-        | Some set -> Hashtbl.mem set name
-        | None -> false)
-  in
-  let seed_skip =
-    match expr with
-    | Pricklypear_lisp.Ast.App
-        (Pricklypear_lisp.Ast.Var "define",
-         (Pricklypear_lisp.Ast.Var name :: _))
-    | Pricklypear_lisp.Ast.App
-        (Pricklypear_lisp.Ast.Var "define",
-         Pricklypear_lisp.Ast.App (Pricklypear_lisp.Ast.Var name, _) :: _)
-    | Pricklypear_lisp.Ast.App
-        (Pricklypear_lisp.Ast.Var "defmacro",
-         [ Pricklypear_lisp.Ast.Var name; _; _ ]) ->
-        seed_skips name
-    | _ -> false
-  in
+    (* branching.seed-policy MIRROR (2026-10-22): the boot seed upserts
+       system/main from libs/<pkg>, so a define whose name already exists
+       but whose BODY changed must re-eval and re-persist — the old
+       body-agnostic boot-seed-skip (name-present => skip; additive era,
+       promote-window task 7 2026-09-04) is gone. Warm-boot cost is now
+       carried by the IDENTICAL-body skip: during the seed window
+       boot_seed.ml builds load_skip_names once (chain-visible
+       fingerprints on system/main) and load_skips below skips defines
+       whose normalized body + doc match — a warm boot re-evals only
+       what a deploy changed. image.load-library-skip (2026-09-03) gives
+       interactive load-library / reseed-package the same medicine;
+       changed/new defines keep full eval.
+       Safety: no libs/*/lib.pp has a top-level CALL form (scan
+       2026-09-04: only define/defmacro/route/deftype/package/export/
+       public-route), so a later top-level form in the same load cannot
+       need a skipped binding; route/deftype/package forms are NOT
+       skipped, and record_define_side_effects already no-ops under the
+       seed's suppress_refresh_on_define. Name extraction is by pattern
+       only — malformed defines still fall through to eval and raise
+       exactly as before. *)
   (* image.load-library-skip (2026-09-03), per-form (shared by the
      top-level expr and the begin/seq spine walk below): inside
      load-library / reseed-package, skip defines whose name resolves
@@ -1105,7 +1084,19 @@ and eval_form (t : t) (expr : Pricklypear_lisp.Ast.expr)
       match t.eval_state.load_skip_names with
       | None -> false
       | Some tbl ->
-        let env_binds name = Hashtbl.mem t.eval_state.env.bindings name in
+        (* boot seed: env holds only the kernel prim catalog during the
+           seed window (route-gate note in session_control_prims), so
+           requiring env_binds would disable every boot skip and force a
+           full ~2300-define re-eval per warm boot. Safe to relax: the
+           post-seed rehydrate (boot_personal: seed -> checkout ->
+           rehydrate) rebuilds env from the very store rows this
+           fingerprint just matched. The self-heal case (2026-10-18, a
+           LIVE load-library on a parked session whose env lost a
+           binding) still needs the env check — there seed_boot is
+           false. *)
+        let env_binds name =
+          t.seed_boot || Hashtbl.mem t.eval_state.env.bindings name
+        in
         (match Pricklypear_lisp.Eval.parse_top_define e with
          | Some { name; body; doc } ->
              (match Hashtbl.find_opt tbl name with
@@ -1133,7 +1124,7 @@ and eval_form (t : t) (expr : Pricklypear_lisp.Ast.expr)
               | _ -> false))
   in
   let load_skip_hit = load_skips expr in
-  if seed_skip || load_skip_hit then Pricklypear_lisp.Ast.VNil
+    if load_skip_hit then Pricklypear_lisp.Ast.VNil
   else
   let v = eval_expr_rim t expr in
   let pkg = t.eval_state.current_package in
@@ -1145,10 +1136,8 @@ and eval_form (t : t) (expr : Pricklypear_lisp.Ast.expr)
       (* Opaque-body contract (i-1788671083-c): the store persists the raw
          jsonb body; serialization happens here at the eval boundary. *)
       let body_json = Pricklypear_lisp.Ast.expr_to_body_json body_expr in
-      if t.seed_additive then
-        Store.persist_function_if_absent t.store name body_json ~doc
-          ~package:pkg t.manifest.username
-      else
+        (* branching.seed-policy MIRROR (2026-10-22): persist always
+           upserts; the seed_boot window carries the rest. *)
         Store.persist_function t.store name body_json ~doc
           ~package:pkg t.manifest.username
     end
@@ -1169,8 +1158,8 @@ and eval_form (t : t) (expr : Pricklypear_lisp.Ast.expr)
     let () = notice_define t ~name ~body:body_expr ~doc in
     v
   in
-  (* Persist one top-level-shaped form (define | defmacro), honoring the
-     seed and load-skip windows. Used by the begin/seq spine walk —
+    (* Persist one top-level-shaped form (define | defmacro), honoring the
+       load-skip window. Used by the begin/seq spine walk —
      log/issues "begin-wrapped defines never persist (bit me twice)":
      the persist hook only watched the WHOLE top-level form, so defines
      inside (begin …) bound in env but never landed in the store, and
@@ -1180,14 +1169,14 @@ and eval_form (t : t) (expr : Pricklypear_lisp.Ast.expr)
   let rec persist_toplevel (e : Pricklypear_lisp.Ast.expr) : unit =
     match Pricklypear_lisp.Eval.parse_top_define e with
     | Some { name; body; doc } ->
-        if (not (seed_skips name)) && (not (load_skips e)) then
+          if not (load_skips e) then
           ignore (persist_define name body doc)
     | None ->
         (match e with
          | Pricklypear_lisp.Ast.App
              (Pricklypear_lisp.Ast.Var "defmacro",
               [ Pricklypear_lisp.Ast.Var name; params_expr; body_expr ]) ->
-             if (not (seed_skips name)) && (not (load_skips e)) then begin
+               if not (load_skips e) then begin
                if t.manifest.username <> "anonymous" then begin
                  let stored =
                    Pricklypear_lisp.Ast.App
@@ -1298,7 +1287,10 @@ and load_library (t : t) (name : string) : (string, string) result =
      waste, now skipped. *)
   let prev_skip = t.eval_state.load_skip_names in
   let () =
-    if t.seed_additive then ()
+      (* boot seed: the mirror-skip map was built ONCE in boot_seed.ml
+         for the whole seed window; rebuilding per package would
+         re-decode the whole chain ~25x. *)
+      if t.seed_boot then ()
     else begin
       let disabled_set = Hashtbl.create 16 in
       List.iter
@@ -1351,11 +1343,11 @@ and load_library (t : t) (name : string) : (string, string) result =
          in-flight branch pins — the rb dec-2 hazard, hit for real by
          repair scripts on prod (log/issues i-1790493758). Reseed and the
          boot seed do not warn: reseed runs inside with_branch
-         system_main_id, and the additive seed sets seed_additive.
+           system_main_id, and the boot seed sets seed_boot.
          Keyed on the STORE branch (current_branch_id), not the manifest,
          so the with_branch rebind is honored. *)
       let warn_nonmain =
-        (not t.seed_additive)
+          (not t.seed_boot)
         && Store.current_branch_id t.store <> Store.system_main_id
       in
       let () =
@@ -1384,38 +1376,88 @@ and load_library (t : t) (name : string) : (string, string) result =
       in
       r)
 
-(** branching.seed-policy: admin-only upsert of libs/<pkg>/lib.pp onto
-    system/main (full clobber for names in that file). Does not touch
-    personal/dev rows. seed_additive stays false so persist upserts. *)
-and reseed_package (t : t) (pkg : string) : (string, string) result =
-  let pkg = String.trim pkg in
-  (* spec_delegation: delegated sessions never reseed (a code write to
-     system/main; data, never for code). *)
-  if restricted t then
-    (Error "reseed-package: denied for delegated sessions and tenants")
-  else if pkg = "" then (Error "empty package name")
-  else if (not (Prims_db_common.is_verified_admin ~t ()))
-          && t.manifest.username <> "admin"
-          && t.manifest.username <> "system" then
-    (Error "requires admin")
-  else begin
-    t.seed_additive <- false;
-    t.ui_shell.suppress_refresh_on_define <- true;
+    (** branching.seed-policy: upsert of libs/<pkg>/lib.pp. system/main stays
+        admin-only (full clobber for names in that file; delegated sessions
+        never reseed main - spec_delegation: a code write to system/main;
+        data, never for code). Other branches are open to self sessions -
+        agents reseed a review branch so a user can look at the code there
+        (roerick 10-21: "gate system/main but allow all reseeds to all other
+        branches") - but restricted sessions (delegated + tenants) are
+        namespace-gated: manifest.username is the OWNER a delegated session
+        acts for, so a delegated agent can never edit a stranger's branch
+        (roerick 10-21, follow-up). Checked in [resolve] BEFORE the lookup,
+        so denial does not leak branch existence. Does not touch personal/dev
+      rows. Persist upserts (branching.seed-policy MIRROR 2026-10-22). *)
+  and reseed_package (t : t) (pkg : string) (branch : string option) :
+      (string, string) result =
+    let pkg = String.trim pkg in
+    let main_id = Store.system_main_id in
+    let resolve () =
+      match branch with
+      | None -> Ok (main_id, "system/main", true)
+      | Some b ->
+          let b = String.trim b in
+          if b = "system/main" then Ok (main_id, "system/main", true)
+          else
+            (match String.index_opt b '/' with
+             | Some i when i > 0 && i < String.length b - 1 ->
+                 let owner = String.sub b 0 i in
+                 let name =
+                   String.sub b (i + 1) (String.length b - i - 1)
+                 in
+                   (* roerick 10-21: a delegated session edits only the
+                      branches of the user it acts for - manifest.username
+                      is the OWNER under spec_delegation - never a
+                      stranger's namespace. Checked before the lookup so
+                      denial does not leak branch existence. *)
+                   if restricted t && owner <> t.manifest.username then
+                     Error
+                       (Printf.sprintf
+                          "reseed-package: '%s' is outside your namespace \
+                           (you may only reseed branches of '%s')"
+                          b t.manifest.username)
+                   else
+                     (match
+                        Store.lookup_branch_id_by_name t.store ~owner ~name
+                      with
+                      | Some id when id <> main_id -> Ok (id, b, false)
+                      | Some _ -> Ok (main_id, "system/main", true)
+                      | None -> Error ("no such branch: " ^ b))
+             | _ -> Error ("no such branch: " ^ b))
+    in
+    match resolve () with
+    | Error e -> Error e
+    | Ok (branch_id, label, is_main) ->
+        if is_main then begin
+          (* spec_delegation: delegated sessions never reseed main. *)
+          if restricted t then
+            (Error "reseed-package: denied for delegated sessions and tenants")
+          else if pkg = "" then (Error "empty package name")
+          else
+            if (not (Prims_db_common.is_verified_admin ~t ()))
+               && t.manifest.username <> "admin"
+               && t.manifest.username <> "system" then
+              (Error "requires admin")
+            else reseed_onto t pkg branch_id label
+        end
+        else if pkg = "" then (Error "empty package name")
+        else reseed_onto t pkg branch_id label
+
+  and reseed_onto (t : t) (pkg : string) (branch_id : string) (label : string) :
+      (string, string) result =
     let finally () =
       t.ui_shell.suppress_refresh_on_define <- false;
-      t.seed_additive <- false;
       ()
     in
     Fun.protect ~finally (fun () ->
-        Store.with_branch t.store ~branch_id:Store.system_main_id (fun () ->
+        Store.with_branch t.store ~branch_id (fun () ->
           let r = load_library t pkg in
           let () = rehydrate t in
           let () = refresh_ui_shell t in
           match r with
           | Ok msg ->
-              (Ok (Printf.sprintf "reseeded %s → system/main: %s" pkg msg))
+              (Ok (Printf.sprintf "reseeded %s → %s: %s" pkg label msg))
           | Error e -> (Error e)))
-  end
 
 and refresh_ui_shell (t : t) : unit =
   (* Product shell: nav HTML + theme CSS (image.product-theme).
@@ -1588,7 +1630,7 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
           load_skip_names = None;
           def_journal_seq = 0;
           thunk_bodies = Hashtbl.create 512 };
-      seed_additive = false;
+      seed_boot = false;
       current_request = None;
       agent_branch_lock = false;
       public_dispatch = false;
@@ -1865,18 +1907,27 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
                (Pricklypear_lisp.Ast.VStr ("load-library: " ^ e)))
       | _ ->
           (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("load-library", "need 1 string", "bad-args")))));
-  (* (reseed-package pkg) — admin-only upsert libs/<pkg> onto system/main. *)
+  (* (reseed-package pkg [branch]) - upsert libs/<pkg> onto the vault.
+     No branch arg or "system/main": admin-only (delegated sessions never
+     reseed main). Other branches: open to self sessions - agents reseed
+     a review branch so a user can look at the code there - while
+     delegated and tenant sessions are namespace-gated to their owner's
+     own branches (roerick 10-21). *)
   Primitives.register prim_table "reseed-package"
     (fun args ->
       match args with
       | [ Pricklypear_lisp.Ast.VStr pkg ] ->
-          let r = reseed_package !t pkg in
-          (match r with
+          (match reseed_package !t pkg None with
+           | Ok msg -> (Pricklypear_lisp.Ast.VStr msg)
+           | Error e ->
+               (Pricklypear_lisp.Ast.VStr ("reseed-package: " ^ e)))
+      | [ Pricklypear_lisp.Ast.VStr pkg; Pricklypear_lisp.Ast.VStr branch ] ->
+          (match reseed_package !t pkg (Some branch) with
            | Ok msg -> (Pricklypear_lisp.Ast.VStr msg)
            | Error e ->
                (Pricklypear_lisp.Ast.VStr ("reseed-package: " ^ e)))
       | _ ->
-          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("reseed-package", "need package-str", "bad-args")))));
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("reseed-package", "need package-str [branch-str]", "bad-args")))));
   let final_prims = prim_table in
   let kernel_catalog = Primitives.catalog prim_table in
   (* i-1788670318: boot-time prim-classification assertion. Every
