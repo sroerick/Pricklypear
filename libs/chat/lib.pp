@@ -526,13 +526,14 @@ newest-first ordering or pagination in the scan; this buys headroom.")
       ((want (as-str room-id)))
       (if
         (chat/can-access? want)
-        (list/filter
-          (lambda
-            (row)
-            (string-eq (chat/msg-room (chat/row-fields row)) want))
-          (chat/all-messages))
+        (find-rows (quote chat-message) "room_id" want 2000)
         (list))))
-  "Get messages for a room the user can access.")
+  "Get messages for a room the user can access.
+   Filtered in SQL, not in Lisp: fetching (chat/all-messages) and dropping
+   non-matching rows cost a full-table scan per room read and silently
+   truncated once the store passed the scan cap (10-21 read-fork). find-rows
+   pushes room_id into the WHERE clause under the same visible_sql floor that
+   (rows ...) applies, so access semantics are unchanged.")
 
 (define chat/kid
   (lambda
@@ -612,8 +613,19 @@ newest-first ordering or pagination in the scan; this buys headroom.")
 (define chat/member?
   (lambda
     (members-json user)
-    (string-contains? (as-str members-json) (as-str user)))
-  "Check if a user is in a members JSON array string.")
+    (let
+      ((raw (as-str members-json)) (me (as-str user)))
+      (if
+        (blank? raw)
+        #f
+        (let
+          ((xs (guard (lambda (e) ()) (json-parse raw))))
+          (if (pair? (member me xs)) #t #f)))))
+  "Check whether a user is an EXACT member of a room's members JSON array.
+   Compares whole array elements, never a substring: a string-contains? test
+   let user 'ho' match 'hollis', an access check satisfiable by a prefix of
+   someone else's name. Malformed or empty members JSON is 'not a member',
+   never an error.")
 
 (define chat/members-json
   (lambda
@@ -808,6 +820,119 @@ newest-first ordering or pagination in the scan; this buys headroom.")
                     (chat/timestamp)))))
             "chat: not a member of room")))))
   "Say a message in a specific chat room (with access check). Stamps\n     created_at with (chat/timestamp) — was hardcoded \"\" (blank DM\n     timestamps, BORGE-1790367502).")
+
+(define chat/mirror-in
+  (lambda
+    (room-id body from to)
+    (let
+      ((text (as-str body))
+        (rid (as-str room-id))
+        (speaker (as-str from))
+        (dest (as-str to))
+        (me (as-str (whoami))))
+      (if
+        (blank? text)
+        ""
+        (if
+          (> (string-length text) 4000)
+          "chat: body too long (max 4000)"
+          (if
+            (chat/can-access? rid)
+            (seq
+              (chat/ensure-space)
+              (if
+                (string-eq rid chat/lobby-id)
+                (chat/ensure-lobby)
+                ())
+              (create
+                (quote chat-message)
+                (dict-set*
+                  "{}"
+                  (if
+                    (blank? dest)
+                    (list
+                      "room_id"
+                      rid
+                      "from"
+                      speaker
+                      "body"
+                      text
+                      "created_at"
+                      (chat/timestamp)
+                      "mirrored_by"
+                      me)
+                    (list
+                      "room_id"
+                      rid
+                      "from"
+                      speaker
+                      "body"
+                      text
+                      "created_at"
+                      (chat/timestamp)
+                      "mirrored_by"
+                      me
+                      "turn"
+                      "true"
+                      "to"
+                      dest)))))
+            "chat: not a member of room")))))
+  "Record a mirrored message, keeping the SPEAKER and the WRITER distinct.
+   A bridge authenticates as one identity but relays messages from many
+   people; writing (whoami) into 'from' would launder every author into the
+   bridge's own name and make the log lie about who said what. So 'from' is
+   the attested speaker and 'mirrored_by' is the identity that actually
+   wrote the row (also the crud 'author' column). Blank 'to' records Tier 0
+   (no turn); a non-blank 'to' requests one Tier-1 turn from that addressee.
+   The bridge attests authorship - it does not thereby gain authority: the
+   access check below still runs as the writing identity.")
+
+(define chat/say-in-addressed
+  (lambda
+    (room-id body to)
+    (let
+      ((text (as-str body))
+        (user (as-str (whoami)))
+        (rid (as-str room-id))
+        (dest (as-str to)))
+      (if
+        (blank? text)
+        ""
+        (if
+          (> (string-length text) 4000)
+          "chat: body too long (max 4000)"
+          (if
+            (chat/can-access? rid)
+            (seq
+              (chat/ensure-space)
+              (if
+                (string-eq rid chat/lobby-id)
+                (chat/ensure-lobby)
+                ())
+              (create
+                (quote chat-message)
+                (dict-set*
+                  "{}"
+                  (list
+                    "room_id"
+                    rid
+                    "from"
+                    user
+                    "body"
+                    text
+                    "created_at"
+                    (chat/timestamp)
+                    "turn"
+                    "true"
+                    "to"
+                    dest))))
+            "chat: not a member of room")))))
+  "Say a message that REQUESTS A TURN from its addressee (Tier 1).
+   'to' is a FIELD, not an @mention scraped out of the body: the record says
+   who it is for, and each reader decides whether that is itself or 'room'.
+   This is the transport/inference split - posting writes the log and wakes
+   nobody by itself; only the addressee's own wake scan turns the row into a
+   model call. Use chat/say-in for Tier 0 (recorded, no turn).")
 
 (define chat/str-le?
   (lambda
