@@ -647,7 +647,7 @@
            Per-user wildcard SANs/DNS stay on demand
            (pp-wild-cert-renew.sh -d list).
         |)))
-    (subsection user-llm-keys
+    )
   (subsection user-llm-keys
    (doc "Per-user LLM provider keys; session AI uses user key with env fallback")
    (status implemented)

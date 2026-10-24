@@ -566,6 +566,15 @@
         borge/security.borg.")
   (inline borge/security.borg)
  )
+ (section doasq
+  (doc "Book chapter — the privileged-request queue on wyo.town: ONE
+        doas command (doasq-exec) as the standing grant, every use tied
+        to an approved, sha-pinned, fully audited request. This is the
+        mechanism behind security's 'nothing privileged is unapproved'
+        rule 2 (doasq card shape). CLI first; the habitat face rides on
+        top. Full text inlined from borge/doasq.borg.")
+  (inline borge/doasq.borg)
+ )
  (section habitat-book
   (doc "Book chapter — the spec IS the book: borg chapters rendered
         to paper (borge) and to the habitat (Nopales `book` package),

@@ -6,7 +6,7 @@
    DECISION (roerick 2026-10-06): the core ops may be OCaml for performance —
    system-wide primitives — but they return SEXP values (the interpreter's
    own AST shapes), never a parallel JSON universe.")
- (status draft)
+ (status planned)
  (convention ocaml-dune)
 
  (section model
@@ -20,7 +20,7 @@
     becomes THE visibility chokepoint: enforcement lives in the store rim,
     once, not scattered across 107 prims. [REC roerick Q1: zones stay, the
     wrapper unifies.]")
-  (status draft)
+  (status planned)
   (test "every path in the store parses under the grammar; no path matches two zones"))
 
  (section contracts
@@ -32,7 +32,7 @@
     truncation is retired (incidents: pulse undercounted under the 500
     cap; foreign-cards under the 5000 cap). Depth semantics: depth N =
     N levels below the path, uniformly, in every listing op.")
-  (status draft)
+  (status planned)
   (test "each op: total, distinct error kinds, cursor round-trips, depth uniform"))
 
  (section core-ops
@@ -41,7 +41,7 @@
     kind, type, hash) by default — bodies are per-node opt-in
     (with-body #t). Fixes the 268KB-for-89-nodes listing payload.")
   (implements "image/lib/prims_data.ml (rim over store.ml)")
-  (status draft)
+  (status planned)
   (test "each op: total, cursor round-trip, shallow-by-default"))
 
  (section op-list
@@ -61,7 +61,7 @@
       ; closes BUG 82871ca1 (cross-user read via arbitrary prefixes)
     history path [cursor] -> versions                      ; data-history
     validate path -> diagnostics                           ; integrity checker")
-  (status draft))
+  (status planned))
 
  (section visibility
   (doc "VIS(zone, scope, caller) -> read? write? — evaluated ONCE per
@@ -73,7 +73,7 @@
     [REC roerick Q2: garden-private default + per-zone policy now; the
     private/instance/world tiers from notes.borg defer until a second
     consumer needs them.]")
-  (status draft)
+  (status planned)
   (test "non-owner caller: garden zones deny, shared reads, cross-zone find denies without capability"))
 
  (section concurrency
@@ -82,7 +82,7 @@
     bugs and the 027 full-tree hash rehash are the evidence base. v1
     ships last-write-wins with updated_at; CAS is spec'd here so the
     rim reserves the parameter.")
-  (status draft))
+  (status planned))
 
  (section ocaml-sexp
   (doc "DECISION (roerick 2026-10-06): the core ops are OCaml — Store-layer,
@@ -92,7 +92,7 @@
     hot path. Lisp-visible shapes match the JSON-dict shapes existing
     callers already consume, so the 107-prim callers keep working while the
     core set replaces their hot paths.")
-  (status draft))
+  (status planned))
 
  (section large-tree
   (doc "Guarantees at 100k+ nodes (the live store exceeds this):
@@ -100,7 +100,7 @@
     scan of the whole forest. The fixture: a synthetic 100k-node generator
     (deterministic seed) runs in the test suite; benchmarks gate the rim.
     Listing payloads shallow-by-default (see core-ops).")
-  (status draft)
+  (status planned)
   (test "100k fixture: children/find/count p95 < 50ms; move/copy correct under iteration"))
 
  (section process
@@ -111,5 +111,5 @@
     tested against a naive reference (the branch_algebra pattern, 120+265
     lines). C the rim: prims delegate to the algebra + one visibility
     chokepoint. D fixture + benchmarks.")
-  (status draft))
- (status draft))
+  (status planned))
+ (status planned))
