@@ -1,7 +1,8 @@
 (project pricklypear-jobs
  (doc "Pricklypear book chapter: jobs — durable background jobs, step checkpoints, and cron; host owns concurrency, guests see rows")
  (status implemented)
- (* agent note (|2026-12 plan pass: flipped planned -> implemented. All four deliverable subsections (node-shapes, runner, step-checkpoints, schedules) are implemented and live: image/lib/jobs.ml (5-field cron + every-ms, SKIP LOCKED claim, runner fiber forked in boot.ml), prims_db.ml registers submit-job/submit-job-at/job-status/cancel-job/jobs/schedule/unschedule/schedules. The label lagged the ship.|) *)
+ (* agent note (|2026-12 plan pass: flipped planned -> implemented. All four deliverable subsections (node-shapes, runner, step-checkpoints, schedules) are implemented and live: image/lib/jobs.ml (5-field cron + every-ms, SKIP LOCKED claim, runner fiber forked in boot.ml). The prim surface lives in image/lib/prims_jobs.ml (split out of prims_db.ml; prims_db.ml just calls Prims_jobs.register): submit-job/submit-job-at/job-status/cancel-job/jobs/schedule/unschedule/schedules. The label lagged the ship.|) *)
+ (* agent note (|2026-10 lease rework: 015's recovery rule was "status=running AND runner_id <> mine ⇒ dead runner", which is only sound for a single claimant — boot.ml reaped on EVERY loop iteration, so a second worker (or a second image on the same DB) requeued the other's live rows on each 1s tick. 045_jobs_lease.sql adds lease_heartbeat_at/lease_deadline and the reclaim predicate becomes "lease_deadline has PASSED", never "the owner is someone else": a live lease is never stolen. runner_id is now `boot-<host>#<pid>` (host-scoped) purely for FAST same-host restart recovery (preempt_dead_host_leases: my host + dead pid ⇒ recover now instead of waiting out the TTL); a foreign host's lease is untouched. Terminal writes (record_done/record_failed) are CASes on (status=running AND runner_id=owner), so a worker whose lease lapsed cannot overwrite a newer attempt. Expired leases requeue IMMEDIATELY (run_at=now, no backoff) — attempts was already incremented at claim, so the retry budget bounds a job that keeps killing its runner. SUPERSEDES: the quoted "run_at = now + backoff(attempts)" in the runner loop's RECORD step still applies to EVAL FAILURES; lease-expiry recovery is the no-backoff path.|) *)
  (convention ocaml-dune)
  (section jobs
 
@@ -107,7 +108,7 @@
         are NOT updatable through the CRUD prims (the runner owns
         status transitions).
 
-        job fields (migrations/015_jobs.sql):
+        job fields (migrations/015_jobs.sql + 045_jobs_lease.sql):
           id           uuid     PK, gen_random_uuid at submit
           fn           string   name of a 1-arity Nopales fn
           args         json     single argument value
@@ -119,7 +120,12 @@
           max_attempts int      default 3; exhausted ⇒ dead
           result       json     return value on done
           error        string   last failure message
-          runner_id    string   image boot instance that claimed it
+          runner_id    string   lease OWNER: `boot-<host>#<pid>` of the
+                                claiming process (host-scoped so a booting
+                                image can recognise its own dead pids)
+          lease_heartbeat_at epoch-ms last renewal by the owner
+          lease_deadline     epoch-ms expiry; 0 = no live claim. A row is
+                             recoverable only once this has PASSED (045)
           created_at   timestamptz submit time (list ordering)
 
         job-step fields (checkpoint rows):
@@ -169,31 +175,70 @@
           1. CLAIM — due jobs (status=pending, run_at <= now),
              oldest first, claimed with SELECT ... FOR UPDATE
              SKIP LOCKED + status→running + runner_id, committed
-             before eval begins. SKIP LOCKED is correct from day
-             one and is exactly the claim protocol an out-of-process
-             worker (the Blender bridge shape) would run against
-             the same rows later.
+             before eval begins. The claim is a LEASE: the same
+             statement stamps runner_id (owner), lease_heartbeat_at
+             and lease_deadline = now + ttl. SKIP LOCKED is correct
+             from day one and is exactly the claim protocol an
+             out-of-process worker (the Blender bridge shape, or a
+             lens client) runs against the same rows today.
           2. EVAL — resolve fn on the job's recorded branch, call
              it with args, under a synthetic request context
              (whoami = submitted_by, branch = recorded branch) —
              the same session record the REPL fabricates, no HTTP
-             request involved. Standard eval budget applies.
-          3. RECORD — success ⇒ status=done + result; exception ⇒
+             request involved. Jobs run unbudgeted (max_int); see
+             the budget note below.
+          3. HEARTBEAT — a fork_daemon renews the lease every
+             ttl/3 while eval runs (PP_JOB_HEARTBEAT_SECS, default
+             20s). A renewal that matches no row means the lease
+             was LOST; the runner logs it and the eval's terminal
+             write is refused (see RECORD).
+          4. RECORD — success ⇒ status=done + result; exception ⇒
              attempts+1 and either status=pending with
              run_at = now + backoff(attempts), or status=dead when
-             attempts = max_attempts.
+             attempts = max_attempts. Both terminal writes are
+             CASes on (status='running' AND runner_id=owner): a
+             worker whose lease lapsed can never overwrite a newer
+             attempt's status or result.
 
         WAKE-UP: sleep until min(run_at) of pending jobs, with a
         bounded poll interval (tunable, default seconds) as the
         floor so earlier inserts are never missed by a stale
         sleep target. v1 has no LISTEN/NOTIFY.
 
-        RECOVERY: each boot stamps a fresh runner_id. After claim
-        and before new work, the runner fails jobs left status=
-        running by a DEAD runner_id — they were mid-eval at crash —
-        retrying them under the attempts/backoff rule. Single-image
-        means the "fleet" is one fiber; runner_id exists so crash
-        recovery is explicit instead of implied.
+        RECOVERY (045 — lease, not identity): the reclaim rule is
+        "the lease deadline passed", NOT "the owner is someone
+        else". A live lease is never stolen, whoever holds it, so
+        N workers of any kind can claim from the same queue
+        without reaping each other's live rows — the reason 015's
+        runner_id comparison ("running AND runner_id <> mine ⇒
+        dead") could not be kept: it is only correct for a single
+        claimant, and boot.ml reaped on every 1s tick.
+
+        An expired lease is requeued IMMEDIATELY (run_at = now, no
+        backoff) or marked dead at max_attempts. attempts was
+        already incremented by the claim, so the retry budget — not
+        a timer — bounds a job that keeps killing its runner.
+
+        Same-host restart stays FAST: runner_id is
+        `boot-<host>#<pid>`, so at boot the runner recovers leases
+        whose owner is THIS machine and whose pid is gone
+        (preempt_dead_host_leases) in milliseconds instead of
+        waiting out the TTL. A foreign host's lease is untouched
+        even then. Residual risk is pid reuse across a restart: it
+        costs latency (the row waits for the deadline), never
+        correctness. Rows written before 045 have
+        lease_deadline = 0 (already expired), so an upgrade
+        recovers them on the first reap with no backfill.
+
+        THE FLEET QUESTION. "One image, one runner fiber" is still
+        the shipped topology, but it is now an OPERATIONAL choice,
+        not something the schema enforces. Any process that speaks
+        claim/heartbeat/CAS against these rows is a valid worker:
+        the claim is SKIP LOCKED, liveness is a lease, and a late
+        writer loses the CAS. What a second worker does NOT get is
+        a fair share — single FIFO queue, no priorities or rate
+        limits (hard edges below) — and a job that wedges a worker
+        still wedges that worker.
 
         =========================================================
         STEP CHECKPOINTS (the DBOS idea, Nopales-shaped)
@@ -287,17 +332,17 @@
     (smoke "pp_eval '(submit-job …)' → (job-status id) shows submitted_by + branch pinned, then the runner fiber drives it pending→running→done with result (jobs are inspected via the job prims, NOT /data — v1 reconcile: no /data/job surface)")))
 
   (subsection runner
-   (doc "boot-time Eio runner fiber: SKIP LOCKED claim, synthetic request context, budget, attempts/backoff, dead-runner recovery at boot. Jobs run UNBUDGETED (max_int steps) — long-running ingest/analytics ticks are the design target (upsets.ingest runs 400+ DB ops per tick); request-path evals keep the 100k sync budget (multi-user.budgets).")
+   (doc "boot-time Eio runner fiber: SKIP LOCKED claim, synthetic request context, budget, attempts/backoff, lease renewal, lease-expiry recovery. Jobs run UNBUDGETED (max_int steps) — long-running ingest/analytics ticks are the design target (upsets.ingest runs 400+ DB ops per tick); request-path evals keep the 100k sync budget (multi-user.budgets).")
    (status implemented)
    (* note (|2026-12 ralph loop 19 (campaign 4.0 plan verify) found the runner ARGS bug: eval_job wrapped job.args with Printf.sprintf "%S" (boot.ml), so a jsonb NUMBER arg was evaled as a STRING literal -(submit-job "f" 1) stores args=1 but the runner evaled (f "1") -> Interp_error -> retries -> dead. Numeric/bool/object args all failed; only JSON-string args round-tripped. 4.1 FIXED it (Jobs.eval_src): job.args is the jsonb column rendered ::text = one JSON literal, spliced DIRECTLY as the call (never %S-quoted), so numeric/object/bool args eval as their real type, and the runner surfaces the REAL error text (pp_interp_error) instead of opaque Interp_error(_). ARG-ENCODING CONTRACT on submit: the submit-job VStr branch stores the raw string as jsonb (unquoted), so a string arg must already be valid JSON -(submit-job "f" "\"hello\"") for the string hello; align submit+runner on one encoding (prim surface + Jobs.eval_src + boot runner are consistent; see image/test/jobs_test.ml args-bug suite).|) *)
    (* agent note (|2026-09-05 plan pass (operator directed; upsets.ingest consumer): eval_job previously ran jobs on Session.eval_string_rim's fresh default budget = 100k steps (lisp/lib/eval.ml default_limit) - a 2-page market poll (400+ DB ops) died budget-exceeded mid-tick. The max_int budget people remember is the BENCH prim (session.ml bench run_once), not jobs. Fix: eval_job binds Eval.current_budget to Some (make_budget ~limit:max_int ()) around the job eval (Fun.protect restores) - jobs are host-owned, submitted by authed users on their own branch, with attempts/backoff + step checkpoints as the runaway guard; request-path budgets unchanged.|) *)
    (verify
     (build "dune build @all")
-    (test "image/test: jobs_test.ml runner — claim skips locked rows (second-connection FOR UPDATE); exponential backoff requeues into the future / exhausted→dead; dead-runner reaper fails stale running rows (retry or dead) while leaving our own runner_id untouched")
+    (test "image/test: jobs_test.ml runner — claim skips locked rows (second-connection FOR UPDATE); exponential backoff requeues into the future / exhausted→dead; expired lease requeued IMMEDIATELY (run_at pulled to now, attempts kept) or dead at max_attempts; a LIVE lease is never stolen by another runner; heartbeat renews the deadline and refuses a late write from a lapsed owner; same-host boot preempt recovers only THIS host's dead-pid leases")
         (test "job budget: a job stepping past 100k (long counter loop) completes done, does not die budget-exceeded - the same loop on the request path still budget-exceeds")
     (smoke "submit a job that sleeps, watch status pending→running→done with result via (job-status)")
     (smoke "submit a job whose fn raises → attempts increments, retry, eventual dead")
-    (smoke "restart image mid-job → stale running row recovered per attempts rule")))
+    (smoke "restart image mid-job → expired-lease row recovered per attempts rule; a live row on another host is left alone")))
 
   (subsection step-checkpoints
    (doc "(with-step \"name\" thunk) memoized by (job-id, name); with-transaction composition gives exactly-once for DB-writing steps; plain call outside jobs")

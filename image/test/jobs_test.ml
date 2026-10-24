@@ -11,8 +11,12 @@
       - claim SKIP LOCKED skips a row locked by a concurrent connection.
       - exponential backoff schedule (failed retry is re-queued into the
         future; exhausted attempts => dead).
-      - dead-runner reaper fails stale 'running' rows left by a dead
-        runner_id (retry under attempts/backoff or dead at exhaustion).
+      - lease expiry reaper recovers lapsed 'running' rows (retry under
+        attempts, or dead at exhaustion) and NEVER steals a live lease,
+        whoever owns it (045: lease + heartbeat replaced runner_id
+        comparison, which was only correct for a single claimant).
+      - heartbeat renews a held lease and refuses a late terminal write
+        from an owner that lost the row.
       - cancel of a pending job (and only pending; not-yours rejected).
 
     The boot-time runner fiber (boot.ml) is thin glue over these Jobs
@@ -90,6 +94,44 @@ let read_job_fields (store : S.t) ~(id : string) : (int * string * int64) option
                 in
                 Some (attempts, status, run_at))
        | _ -> None)
+
+(** Lease columns for a job row: (owner, heartbeat_at, deadline). *)
+let read_lease (store : S.t) ~(id : string)
+    : (string * int64 * int64) option =
+  match S.conn_of store with
+  | None -> None
+  | Some conn -> (
+      match
+        S.exec conn
+          ~params:[ Pgx.Value.of_string id ]
+          "SELECT runner_id, lease_heartbeat_at::text, lease_deadline::text \
+           FROM jobs WHERE id = $1::uuid"
+      with
+      | [ [ rid; hb; dl ] ] ->
+          let s v =
+            match Pgx.Value.to_string v with Some x -> x | None -> ""
+          in
+          let i64 v = try Int64.of_string (s v) with _ -> 0L in
+          Some (s rid, i64 hb, i64 dl)
+      | _ -> None)
+
+(** Force a 'running' row's lease into a known state, bypassing the claim, so
+    a test can express "a foreign worker claimed this and its lease is (dead
+    | alive)" without sleeping out a real TTL. *)
+let set_lease (store : S.t) ~(id : string) ~(owner : string)
+    ~(deadline_ms : int64) : unit =
+  match S.conn_of store with
+  | None -> ()
+  | Some conn ->
+      ignore
+        (S.exec conn
+           ~params:
+             [ Pgx.Value.of_string id
+             ; Pgx.Value.of_string owner
+             ; Pgx.Value.of_int64 deadline_ms
+             ]
+           "UPDATE jobs SET status='running', runner_id=$2, \
+            lease_heartbeat_at=$3, lease_deadline=$3 WHERE id=$1::uuid")
 
 let delete_job (store : S.t) ~(id : string) : unit =
   match S.conn_of store with
@@ -189,7 +231,7 @@ let test_job_lifecycle () =
            Alcotest.(check bool) "runner_id stamped" true
              (j.J.runner_id <> ""));
       (* record_done: running -> done with result *)
-      J.record_done ~store ~id ~result_json:"\"ok-result\"";
+      J.record_done ~store ~id ~result_json:"\"ok-result\"" ();
       (match J.get ~store ~id ~caller:"alice" ~is_admin:false with
        | Pricklypear_lisp.Ast.VStr s ->
            Alcotest.(check bool) "complete status done" true
@@ -315,7 +357,7 @@ let test_backoff_schedule () =
        | None -> Alcotest.fail "no job to claim"
        | Some j ->
            Alcotest.(check int) "attempts after first claim" 1 j.J.attempts;
-           J.record_failed ~store ~id ~error:"boom" ~max_attempts:3);
+           J.record_failed ~store ~id ~error:"boom" ~max_attempts:3 ());
       (* not dead yet (attempts 1 < max 3) -> requeued pending into future *)
       (match read_job_fields store ~id with
        | Some (attempts, status, run_at) ->
@@ -329,7 +371,7 @@ let test_backoff_schedule () =
       (match J.claim_due ~store with
        | None -> Alcotest.fail "no job to claim (2nd)"
        | Some j -> J.record_failed ~store ~id ~error:"boom2"
-             ~max_attempts:3);
+             ~max_attempts:3 ());
       (match read_job_fields store ~id with
        | Some (attempts, status, _) ->
            Alcotest.(check int) "attempts after 2nd fail" 2 attempts;
@@ -340,7 +382,7 @@ let test_backoff_schedule () =
       (match J.claim_due ~store with
        | None -> Alcotest.fail "no job to claim (3rd)"
        | Some j -> J.record_failed ~store ~id ~error:"boom3"
-             ~max_attempts:3);
+             ~max_attempts:3 ());
       (match read_job_fields store ~id with
        | Some (_, status, _) ->
            Alcotest.(check string) "exhausted -> dead" "dead" status
@@ -348,69 +390,232 @@ let test_backoff_schedule () =
       delete_job store ~id)
 
 (* ------------------------------------------------------------------ *)
-(* runner: dead-runner reaper fails stale 'running' rows              *)
+(* runner: lease expiry reaper (045)                                   *)
+(*                                                                      *)
+(* The old reaper compared runner_id and failed ANY row owned by another *)
+(* process — correct only for a single claimant. Recovery is now "the   *)
+(* deadline passed", so these cases are about TIME, not identity:       *)
+(*   - a lapsed foreign lease is requeued (or dead at max_attempts)     *)
+(*   - a LIVE foreign lease is never touched, however foreign it is     *)
+(*   - our own live lease is never touched                             *)
 (* ------------------------------------------------------------------ *)
 
-let test_reap_dead () =
+let test_reap_expired_lease () =
   with_store (fun store ->
       clear_jobs store;
-      (* a job claimed (running) by a DIFFERENT runner id than ours, with
-         attempts just under max -> reaper requeues it pending *)
+      let now = now_ms () in
+      (* A foreign worker whose lease lapsed, attempts just under max:
+         requeued pending, attempts preserved (the retry budget is kept). *)
       let id_a = submit_future store ~fn:"jfn" ~args_json:"{}"
           ~branch:"system/main" ~submitted_by:"alice"
       in
       ignore
         (S.exec (Option.get (S.conn_of store))
-           ~params:
-             [ Pgx.Value.of_string id_a
-             ; Pgx.Value.of_string "runner-OTHER"
-             ]
-           "UPDATE jobs SET status='running', runner_id=$2, attempts=2 \
-            WHERE id=$1::uuid");
-      (* a job claimed by another runner at max_attempts -> reaper dead *)
+           ~params:[ Pgx.Value.of_string id_a ]
+           "UPDATE jobs SET attempts=2 WHERE id=$1::uuid");
+      set_lease store ~id:id_a ~owner:"boot-otherhost#4242"
+        ~deadline_ms:(Int64.sub now 1000L);
+      (* A lapsed foreign lease at max_attempts -> dead. *)
       let id_b = submit_future store ~fn:"jfn" ~args_json:"{}"
           ~branch:"system/main" ~submitted_by:"alice"
       in
       ignore
         (S.exec (Option.get (S.conn_of store))
-           ~params:
-             [ Pgx.Value.of_string id_b
-             ; Pgx.Value.of_string "runner-OTHER"
-             ]
-           "UPDATE jobs SET status='running', runner_id=$2, attempts=3, \
-            max_attempts=3 WHERE id=$1::uuid");
+           ~params:[ Pgx.Value.of_string id_b ]
+           "UPDATE jobs SET attempts=3, max_attempts=3 WHERE id=$1::uuid");
+      set_lease store ~id:id_b ~owner:"boot-otherhost#4242"
+        ~deadline_ms:(Int64.sub now 1000L);
       J.reap_dead ~store;
       (match read_job_fields store ~id:id_a with
        | Some (attempts, status, _) ->
            Alcotest.(check int) "reaped attempts kept" 2 attempts;
-           Alcotest.(check string) "stale running requeued pending"
+           Alcotest.(check string) "expired running requeued pending"
              "pending" status
        | None -> Alcotest.fail "job_a missing after reap");
       (match read_job_fields store ~id:id_b with
        | Some (_, status, _) ->
-           Alcotest.(check string) "exhausted stale -> dead" "dead" status
+           Alcotest.(check string) "exhausted expired -> dead" "dead" status
        | None -> Alcotest.fail "job_b missing after reap");
-      (* part A done; remove the now-claimable id_a/id_b so the "our runner
-         not reaped" check below exercises a solitary due job, else
-         claim_due (oldest-first) would claim id_a, not ours. *)
+      (* Reclaim is IMMEDIATE: no backoff timer, so a recovered row is due
+         at once (the attempt counter already bounds the retry loop). Compare
+         against a timestamp taken AFTER the reap: the reap stamps run_at
+         with its own now(), which is necessarily >= the pre-reap [now]. *)
+      let after = now_ms () in
+      (match read_job_fields store ~id:id_a with
+       | Some (_, _, run_at) ->
+           Alcotest.(check bool) "reclaimed row is immediately due" true
+             (Int64.compare run_at after <= 0)
+       | None -> Alcotest.fail "job_a missing for due check");
+      (* The lease is released on reclaim so the row cannot look live. *)
+      (match read_lease store ~id:id_a with
+       | Some (_, _, dl) ->
+           Alcotest.(check bool) "reclaim clears the deadline" true
+             (Int64.compare dl 0L = 0)
+       | None -> Alcotest.fail "job_a missing for lease check");
       delete_job store ~id:id_a;
-      delete_job store ~id:id_b;
-      (* the reaper must NOT touch rows running under OUR runner_id *)
+      delete_job store ~id:id_b)
+
+let test_reaper_never_steals_live_lease () =
+  with_store (fun store ->
+      clear_jobs store;
+      let now = now_ms () in
+      let ttl = J.lease_ttl_ms () in
+      (* A FOREIGN, LIVE worker: deadline comfortably in the future. Under
+         the old runner_id comparison this row was reaped within a second. *)
+      let id = submit_future store ~fn:"jfn" ~args_json:"{}"
+          ~branch:"system/main" ~submitted_by:"alice"
+      in
+      set_lease store ~id ~owner:"boot-otherhost#4242"
+        ~deadline_ms:(Int64.add now (Int64.div ttl 2L));
+      J.reap_dead ~store;
+      (match read_job_fields store ~id with
+       | Some (_, status, _) ->
+           Alcotest.(check string) "live foreign lease untouched" "running"
+             status
+       | None -> Alcotest.fail "job missing after reap");
+      (* Our own live lease is equally untouched. *)
       let mine = submit_future store ~fn:"jfn" ~args_json:"{}"
           ~branch:"system/main" ~submitted_by:"alice"
       in
       make_due store ~id:mine;
       (match J.claim_due ~store with
-       | None -> Alcotest.fail "no job to claim for reap-mine check"
+       | None -> Alcotest.fail "no job to claim"
        | Some j ->
-           Alcotest.(check string) "claimed our own job" mine j.J.id;
-           J.record_done ~store ~id:j.J.id ~result_json:"null");
-      (* after our claim+done the row is done, not pending from reaper *)
+           Alcotest.(check string) "claimed id" mine j.J.id;
+           (* the claim itself stamps a future deadline *)
+           Alcotest.(check bool) "claim stamps a future deadline" true
+             (Int64.compare j.J.lease_deadline now > 0));
+      J.reap_dead ~store;
       (match read_job_fields store ~id:mine with
        | Some (_, status, _) ->
-           Alcotest.(check string) "our runner not reaped" "done" status
-       | None -> Alcotest.fail "our own job missing");
+           Alcotest.(check string) "our live lease untouched" "running" status
+       | None -> Alcotest.fail "our job missing after reap");
+      delete_job store ~id;
       delete_job store ~id:mine)
+
+(* heartbeat: a live runner renews its lease; a lost lease reports false and
+   a late result is refused (the CAS half of the lease contract). *)
+let test_heartbeat_renews_and_guards () =
+  with_store (fun store ->
+      clear_jobs store;
+      let id = submit_future store ~fn:"jfn" ~args_json:"{}"
+          ~branch:"system/main" ~submitted_by:"alice"
+      in
+      make_due store ~id;
+      let claimed =
+        match J.claim_due ~store with
+        | None -> Alcotest.fail "no job to claim"
+        | Some j -> j
+      in
+      let first =
+        match read_lease store ~id with
+        | Some (_, _, dl) -> dl
+        | None -> Alcotest.fail "lease missing after claim"
+      in      (* Pretend the previous beat was long ago; a real beat must push the
+         deadline forward and return true while we hold the row. *)
+      (match S.conn_of store with
+       | Some conn ->
+           ignore
+             (S.exec conn
+                ~params:[ Pgx.Value.of_string id ]
+                "UPDATE jobs SET lease_heartbeat_at=1, lease_deadline=2 \
+                 WHERE id=$1::uuid")
+       | None -> ());
+      Alcotest.(check bool) "heartbeat renews a held lease" true
+        (J.heartbeat ~store ~id);
+      (match read_lease store ~id with
+       | Some (owner, hb, dl) ->
+           Alcotest.(check string) "lease owner unchanged" claimed.J.runner_id
+             owner;
+           (* the beat replaced the planted old stamp (1) with the current
+              epoch-ms; comparing against a fresh now() would be a race in
+              the wrong direction since the beat happened a moment earlier *)
+           Alcotest.(check bool) "heartbeat stamped the current time" true
+             (Int64.compare hb 1000L > 0);
+           Alcotest.(check bool) "deadline pushed past the old one" true
+             (Int64.compare dl 2L > 0);
+           (* renewal is monotonic: a beat never shortens the lease below the
+              one the claim granted. *)
+           Alcotest.(check bool) "renewal does not shorten the lease" true
+             (Int64.compare dl first >= 0)
+       | None -> Alcotest.fail "lease missing after heartbeat");
+      (* Hand the row to another worker: our heartbeat must report loss. *)
+      set_lease store ~id ~owner:"boot-otherhost#4242"
+        ~deadline_ms:(Int64.add (now_ms ()) 60000L);
+      Alcotest.(check bool) "heartbeat reports a lost lease" false
+        (J.heartbeat ~store ~id);
+      (* ...and a late terminal write from the old owner is REFUSED, so it
+         cannot overwrite the new attempt's status/result. *)
+      J.record_done ~store ~owner:claimed.J.runner_id ~id
+        ~result_json:"\"stale\"" ();
+      (match read_job_fields store ~id with
+       | Some (_, status, _) ->
+           Alcotest.(check string) "stale done write refused" "running" status
+       | None -> Alcotest.fail "job missing after stale write");
+      (* The owner-CAS also lets the RIGHT holder write; drop it and finish. *)
+      J.record_done ~store ~owner:"boot-otherhost#4242" ~id
+        ~result_json:"\"fresh\"" ();
+      (match read_job_fields store ~id with
+       | Some (_, status, _) ->
+           Alcotest.(check string) "current owner finishes the row" "done"
+             status
+       | None -> Alcotest.fail "job missing after owner write");
+      delete_job store ~id)
+
+(* Same-host boot preempt: a previous process on THIS machine is provably
+   dead, so its leases are recovered at boot instead of after the TTL. *)
+let test_preempt_dead_host_leases () =
+  with_store (fun store ->
+      clear_jobs store;
+      let future_lease = Int64.add (now_ms ()) 600_000L in
+      (* A dead same-host owner: our host prefix, a pid that cannot exist. *)
+      let dead = submit_future store ~fn:"jfn" ~args_json:"{}"
+          ~branch:"system/main" ~submitted_by:"alice"
+      in
+      set_lease store ~id:dead
+        ~owner:(J.host_prefix ^ "2147483646") ~deadline_ms:future_lease;
+      (* A FOREIGN host's live lease with the same shape must be left alone. *)
+      let foreign = submit_future store ~fn:"jfn" ~args_json:"{}"
+          ~branch:"system/main" ~submitted_by:"alice"
+      in
+      set_lease store ~id:foreign ~owner:"boot-otherhost#2147483646"
+        ~deadline_ms:future_lease;
+      (* Our own live lease must survive our own boot preempt. *)
+      let mine = submit_future store ~fn:"jfn" ~args_json:"{}"
+          ~branch:"system/main" ~submitted_by:"alice"
+      in
+      set_lease store ~id:mine ~owner:J.runner_id ~deadline_ms:future_lease;
+      let n = J.preempt_dead_host_leases ~store in
+      Alcotest.(check int) "exactly the dead same-host lease recovered" 1 n;
+      (match read_job_fields store ~id:dead with
+       | Some (_, status, _) ->
+           Alcotest.(check string) "dead host lease requeued" "pending" status
+       | None -> Alcotest.fail "dead row missing");
+      (match read_job_fields store ~id:foreign with
+       | Some (_, status, _) ->
+           Alcotest.(check string) "foreign live lease untouched" "running"
+             status
+       | None -> Alcotest.fail "foreign row missing");
+      (match read_job_fields store ~id:mine with
+       | Some (_, status, _) ->
+           Alcotest.(check string) "own live lease untouched" "running" status
+       | None -> Alcotest.fail "own row missing");
+      delete_job store ~id:dead;
+      delete_job store ~id:foreign;
+      delete_job store ~id:mine)
+
+(* runner identity is host-scoped so same-host recovery can be exact. *)
+let test_runner_id_shape () =
+  Alcotest.(check bool) "runner id carries the host prefix" true
+    (String.length J.runner_id > String.length J.host_prefix
+     && String.sub J.runner_id 0 (String.length J.host_prefix)
+        = J.host_prefix);
+  Alcotest.(check bool) "runner id parses back to our pid" true
+    (J.pid_of_runner_id J.runner_id = Some (Unix.getpid ()));
+  Alcotest.(check bool) "a foreign id parses too" true
+    (J.pid_of_runner_id "boot-host.example#4242" = Some 4242);
+  Alcotest.(check bool) "a bare id does not parse" true
+    (J.pid_of_runner_id "runner-OTHER" = None)
 
 (* ------------------------------------------------------------------ *)
 (* runner ARGS BUG — campaign 4.1: eval_src must splice the jsonb args   *)
@@ -697,7 +902,8 @@ let test_job_to_value_json () =
     { J.id = "id-1"; J.fn = adversarial; J.args = "42"; J.branch = "b\"r"
     ; J.submitted_by = "a\\ice"; J.status = "pending"; J.run_at = 1234L
     ; J.attempts = 1; J.max_attempts = 3; J.result = None
-    ; J.error = adversarial; J.runner_id = "boot-1" }
+    ; J.error = adversarial; J.runner_id = "boot-1"
+    ; J.lease_heartbeat_at = 999L; J.lease_deadline = 1999L }
   in
   let json = parse_json (match J.job_to_value j with
                          | Pricklypear_lisp.Ast.VStr s -> s
@@ -719,6 +925,11 @@ let test_job_to_value_json () =
      && member "attempts" json = Some (`Int 1)
      && member "max_attempts" json = Some (`Int 3)
      && member "status" json = Some (`String "pending"));
+  (* lease fields surface as raw epoch-ms ints (045): the JSON renderer must
+     not stringify them, so a reader can compare deadlines numerically. *)
+  Alcotest.(check bool) "lease fields are numeric" true
+    (member "lease_heartbeat_at" json = Some (`Int 999)
+     && member "lease_deadline" json = Some (`Int 1999));
   (* a string-valued jsonb result stays a JSON string (record_done wraps     *)
   (* results in a JSON string before storing, so this is the live shape)     *)
   let j2 = { j with J.args = "{}"; J.result = Some "\"ok-result\"" } in
@@ -796,7 +1007,16 @@ let () =
       , [ Alcotest.test_case "claim skips locked" `Quick
             test_claim_skips_locked
         ; Alcotest.test_case "backoff schedule" `Quick test_backoff_schedule
-        ; Alcotest.test_case "dead-runner reaper" `Quick test_reap_dead ] )
+        ; Alcotest.test_case "lease expiry reaper" `Quick
+            test_reap_expired_lease
+        ; Alcotest.test_case "reaper never steals a live lease" `Quick
+            test_reaper_never_steals_live_lease
+        ; Alcotest.test_case "heartbeat renews + guards late writes" `Quick
+            test_heartbeat_renews_and_guards
+        ; Alcotest.test_case "same-host boot preempt" `Quick
+            test_preempt_dead_host_leases
+        ; Alcotest.test_case "runner id is host-scoped" `Quick
+            test_runner_id_shape ] )
     ; ( "args-bug"
       , [ Alcotest.test_case "eval_src splices jsonb args as literal" `Quick
             test_eval_src_args ] )

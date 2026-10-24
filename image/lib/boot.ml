@@ -147,6 +147,40 @@ let prepare () : Session.t * int * int =
 
 (** Eio path: prepare + fork REPL fiber + Httpun_eio accept loop.
     Call under Eio_main + Io_eio.with_ctx. *)
+(** How often the lease is renewed while a job evaluates. A third of the TTL
+    keeps two missed beats from expiring a healthy lease, and makes a lost
+    lease visible (a single [false]) several beats before anything could be
+    reclaimed. Overridable for tests. *)
+let heartbeat_interval_s () : float =
+  match Sys.getenv_opt "PP_JOB_HEARTBEAT_SECS" with
+  | Some s -> (
+      match float_of_string_opt (String.trim s) with
+      | Some v when v > 0.0 -> v
+      | _ -> 20.0)
+  | None -> 20.0
+
+(** Renew [job]'s lease on a background fiber for the duration of [f].
+
+    fork_daemon is the right primitive: the renewer is cancelled when the
+    surrounding switch ends (job finished), so there is no join to forget and
+    no way to leak a fiber per job. A failed renewal ([false]) stops the
+    renewer and is reported by the caller — it means the lease lapsed and the
+    row may already belong to another runner. *)
+let with_lease_heartbeat ~(store : Store.t) ~(job : Jobs.job)
+    ~(on_lost : unit -> unit) (f : unit -> 'a) : 'a =
+  Eio.Switch.run @@ fun sw ->
+  Eio.Fiber.fork_daemon ~sw (fun () ->
+      let rec beat () =
+        Io_eio.sleep (heartbeat_interval_s ());
+        if Jobs.heartbeat ~store ~id:job.Jobs.id then beat ()
+        else begin
+          on_lost ();
+          `Stop_daemon
+        end
+      in
+      try beat () with Eio.Cancel.Cancelled _ -> `Stop_daemon);
+  f ()
+
 (** Jobs runner loop — lives here (not in Jobs.ml) to avoid a dependency
     cycle: Jobs (DB ops) must not depend on Session, which depends on
     Prims_db, which depends on Jobs. boot.ml can depend on both. *)
@@ -284,25 +318,49 @@ let jobs_runner_loop ~(session : Session.t) : unit =
     (match claimed with
      | Some job ->
        (try
-          let result, ok = eval_job ~job in
+          let result, ok =
+            with_lease_heartbeat ~store:session.store ~job
+              ~on_lost:(fun () ->
+                Printf.eprintf
+                  "[jobs] lease lost on %s (%s) — another runner may own this \
+                   row; eval continues, result will not be recorded\n%!"
+                  job.Jobs.id job.Jobs.fn)
+              (fun () -> eval_job ~job)
+          in
+          (* Both terminal writes are lease CASes: a worker that lost the row
+             must not overwrite a newer attempt's status/result. *)
           if ok then
-            Jobs.record_done ~store:session.store ~id:job.Jobs.id
-              ~result_json:result
+            Jobs.record_done ~store:session.store ~owner:Jobs.runner_id
+              ~id:job.Jobs.id ~result_json:result ()
           else
-            Jobs.record_failed ~store:session.store ~id:job.Jobs.id
-              ~error:result ~max_attempts:job.Jobs.max_attempts
+            Jobs.record_failed ~store:session.store ~owner:Jobs.runner_id
+              ~id:job.Jobs.id ~error:result ~max_attempts:job.Jobs.max_attempts
+              ()
         with exn ->
           (try
-             Jobs.record_failed ~store:session.store ~id:job.Jobs.id
-               ~error:(Printexc.to_string exn)
+             Jobs.record_failed ~store:session.store ~owner:Jobs.runner_id
+               ~id:job.Jobs.id ~error:(Printexc.to_string exn)
                ~max_attempts:job.Jobs.max_attempts
+               ()
            with _ -> ()));
        loop ()
      | None ->
        Io_eio.sleep 1.0;
        loop ())
   in
-  Printf.eprintf "[jobs] runner fiber started (runner_id=%s)\n%!" Jobs.runner_id;
+  Printf.eprintf "[jobs] runner fiber started (runner_id=%s lease=%Lds)\n%!"
+    Jobs.runner_id
+    (Int64.div (Jobs.lease_ttl_ms ()) 1000L);
+  (* Restart recovery: a previous process on THIS host is provably dead, so
+     its leases are recovered now instead of waiting out the TTL. Other
+     hosts' live leases are untouched (Jobs.preempt_dead_host_leases). *)
+  (try
+     let n = Jobs.preempt_dead_host_leases ~store:session.store in
+     if n > 0 then
+       Printf.eprintf "[jobs] recovered %d lease(s) from dead same-host runners\n%!" n
+   with exn ->
+     Printf.eprintf "[jobs] boot lease recovery failed: %s\n%!"
+       (Printexc.to_string exn));
   loop ()
 
 
