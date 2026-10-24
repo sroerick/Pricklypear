@@ -1855,7 +1855,7 @@
    (smoke "upsert stamps vis private on create, preserves it on update; set-vis persists; POST action=set-vis")
    (smoke "/notes?slug=… and POST /notes unchanged; /notes/<user> and deeper shapes 400")
    (smoke "scripts/smoke_note_vis.sh end-to-end (two identities + anonymous)")
-   )
+  )
   (details
    (doc (|
         MODEL (spec_note_visibility, 2026-09-18):
@@ -1899,6 +1899,7 @@
             breadcrumb; absent and not-visible both render the plain
             Missing page, so the route never leaks existence.
       |))
+   )
   )
 
  )

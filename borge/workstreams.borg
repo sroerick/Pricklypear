@@ -116,7 +116,7 @@
    promise this chapter must keep.")
   (implements "migrations/029_data_spaces.sql" "migrations/030_open_spaces.sql"
               "libs/todo/lib.pp (space adoption + ensure)")
-  (status implemented-live)
+  (status implemented)
   (verify
    (test "todo-list/todo-item/todo-comment/todo-event are admitted to the open `todo` space"
          "two distinct identities each see every card and every list the other created"
@@ -137,7 +137,7 @@
    identity is dropped as a concept here — there is one board. The named
    list ids in this chapter (Board, glochid, the AUTO lane) therefore
    refer to rows in the space and resolve for every identity.")
-  (status implemented-live)  ;; lists exist; relocated to the space by shared-store
+  (status implemented)  ;; lists exist; relocated to the space by shared-store
   (verify
    (test "each workstream list carries the same column set as Board"
          "every open board card sits in a named column"
@@ -216,7 +216,7 @@
    triage-pass).")
   (implements "libs/todo/lib.pp (columns + recipes — both exist; per-stream config is data)"
               "work-triage triage pass (placement rule)")
-  (status implemented-live)
+  (status implemented)
   (verify
    (test "a faces-stream card, a kernel-stream card, and an auto-stream card resolve DIFFERENT effective pipelines from their lists' columns fields"
          "the triage pass places a new intake card in the stream its kind calls for"
@@ -274,7 +274,7 @@
    forward motion set `columns`.")
   (implements "libs/todo/lib.pp todo/state/list"
               "libs/todo/lib.pp todo/state/todo-next-in (cycle order)")
-  (status implemented-live)
+  (status implemented)
   (verify
    (test "todo/state/list equals TODO SPEC CODE LOGIC-REVIEW UI-REVIEW HUMAN-REVIEW DONE PARKED"
          "a card on a columns-less list can be set to every work-triage state and stays in that list's pipeline (no other-bucket)"
@@ -369,7 +369,7 @@
               "libs/todo/lib.pp todo/item/set-state (origin write-back)"
               "libs/notes/lib.pp (unpromoted section + back-links)"
               "libs/kanban/lib.pp ('from-notes' as a card filter)")
-  (status implemented-live)
+  (status implemented)
   (verify
    (test "setting a node's todo keyword writes only that node (no card, no space row) and does not publish it"
          "todo/promote-node creates ONE shared card whose origin_ref is <slug>#<nid>, and re-promoting returns that same card"
@@ -398,7 +398,7 @@
    auto-scope; never hardcode a shared data.<type> path.")
   (implements "libs/todo/lib.pp deftype todo-comment todo-event"
               "libs/todo/lib.pp card detail v2")
-  (status implemented-live)  ;; orchestration tasks 2+3 (2026-09-25: comments/events/feed, transition events)
+  (status implemented)  ;; orchestration tasks 2+3 (2026-09-25: comments/events/feed, transition events)
   (verify
    (test "a comment on a card appears on its detail page thread"
          "a state transition appends a todo-event row"
@@ -411,7 +411,7 @@
    card cold' because the card names the deliverable, the target, and the
    done-test.")
   (implements "libs/todo/lib.pp")
-  (status implemented-live))  ;; orchestration task 4 (2026-09-25: acceptance + branch fields)
+  (status implemented))  ;; orchestration task 4 (2026-09-25: acceptance + branch fields)
 
  (section branch-domain
   (doc "A card's `branch` field names a branch in ONE OF TWO branch systems,
@@ -446,7 +446,7 @@
   (implements "libs/todo/lib.pp todo/item/branch-kind todo/item/set-branch-kind todo/item/set-target"
               "libs/todo/lib.pp todo/flow-brief (BRANCH DOMAIN block)"
               "libs/todo/lib.pp todo/detail-html + todo/ui/detail (domain badge)")
-  (status implemented-live)
+  (status implemented)
   (verify
    (test "a card with branch but no branch_kind renders [DOMAIN UNSET] + the ask-instead-of-guess instruction in its brief"
          "a card with branch_kind=git renders branch + [git] + 'commit to this branch in the laptop repo'"
@@ -479,7 +479,7 @@
    the card's title/acceptance/branch/state), so every list gets actionable
    instructions before anyone configures a per-list override.")
   (implements "libs/todo/lib.pp (todo/recipes-*)" "libs/todo/lib.pp flow/brief")
-  (status implemented-live))  ;; orchestration task 6 (2026-09-27: todo/recipes-* + default family)
+  (status implemented))  ;; orchestration task 6 (2026-09-27: todo/recipes-* + default family)
 
  (section session-is-the-run
   (doc "The RUN RECORD IS THE GLOCHID SESSION — no run datum type. A glochid
@@ -577,9 +577,10 @@
    write_back honors it; an unknown or unverifiable column falls back to the
    safe one-column advance and says so on stderr. This matters most on the
    AUTO lane, where a wrong DESTINATION either resurrects the human gate or
+   writes a state the list does not define.
    writes a state the list does not define.")
   (implements "scripts/pp-flow.sh" "libs/todo/lib.pp todo/flow-brief")
-  (status implemented-live)  ;; orchestration tasks 7+8 (2026-09-27: todo/flow-brief + scripts/pp-flow.sh)
+  (status implemented)  ;; orchestration tasks 7+8 (2026-09-27: todo/flow-brief + scripts/pp-flow.sh)
   (verify
    (test "executor claim → brief contains title+acceptance+column recipe"
          "write-back lands an event + comment and advances exactly one column"
@@ -699,7 +700,7 @@
      runner for unattended `--drain` loops — the declared fallback is what
      runs headless today, which is exactly why the hardening above matters.")
    (implements "scripts/pp-flow-autolith.sh" "scripts/pp-flow.sh (PP_FLOW_PI hook)")
-   (status implemented-live)  ;; autolith runner exercised end-to-end by the orchestration TEST card (2026-09-25)
+   (status implemented)  ;; autolith runner exercised end-to-end by the orchestration TEST card (2026-09-25)
    (verify
     (test "PP_FLOW_PI=scripts/pp-flow-autolith.sh runs a brief and prints the :RESULT transcript on stdout"
           "a SUCCEEDED job exits 0 and pp-flow scrapes EVIDENCE / DESTINATION from the transcript"
@@ -759,7 +760,7 @@
    `/workstreams` renders before and after.")
   (implements "libs/todo/lib.pp (legacy layer removal + export manifest sync)"
               scripts/verify_todo_exports.sh)
-  (status implemented-live)  ;; T4 lib-hygiene (2026-10-01): 41 legacy defines deleted, export manifest synced 64->88, scripts/verify_todo_exports.sh guards it
+  (status implemented)  ;; T4 lib-hygiene (2026-10-01): 41 legacy defines deleted, export manifest synced 64->88, scripts/verify_todo_exports.sh guards it
   (verify
    (test "no define named todo/db/* or todo/main-html|detail-html|nav-html|items-html|handle-post|list-item-li|item-li|partial remains"
          "no duplicate-alias pairs remain (one canonical name per body)"
@@ -811,7 +812,7 @@
    /kanban?list=<id> + card detail. Retires the cron 'workstreams' note; the
    note is replaced by a pointer to the live face.")
   (implements libs/workstreams/lib.pp)  ;; ATOM path (not a string) so the lib binds as declared in the book manifest
-  (status implemented-live)  ;; orchestration task 9 (2026-09-27: /workstreams live face)
+  (status implemented)  ;; orchestration task 9 (2026-09-27: /workstreams live face)
   (verify
    (test "each stream shows live counts matching kanban"
          "HUMAN-REVIEW rollup lists every card in that column across streams")))
@@ -822,7 +823,7 @@
    gregor's 09:00 brief says 'here's where each stream is, here's what moved,
    here's what's ready for you' — from the live store, not a static mirror.")
   (implements "libs/standup/lib.pp v2")
-  (status implemented-live))  ;; orchestration task 10 (2026-09-27: per-stream counts + review rollup + moved-yesterday, guarded)
+  (status implemented))  ;; orchestration task 10 (2026-09-27: per-stream counts + review rollup + moved-yesterday, guarded)
 
  (section landing-gregors-assignment-work
   (doc "Requires porting 0f1b9a4+b7059e6+133b228+89e5ddf (assignment/priority/
@@ -833,7 +834,7 @@
    layout. Provides assignee (claim) + priority (queue) that this chapter's
    protocol depends on.")
   ;; orchestration task 1 (2026-09-27: 286360d; kanban half already merged in libs/kanban)
-  (status implemented-live))
+  (status implemented))
 
  ;; ---------------------------------------------------------------------------
  ;; THE PIPELINE MODEL (2026-09-25, roerick) — the unifying status machine
@@ -888,7 +889,7 @@
               "libs/kanban/lib.pp kanban/stray? (not-a-column)"
               "libs/notes/lib.pp issues lens reads pipeline"
               "libs/workstreams/lib.pp pulse face reads the same columns")
-  (status implemented-live)
+  (status implemented)
   (* agent note (|2026-09-25 roerick: 'we should basically describe the state
      pipeline/status machine as a list. a todo should be able to define its own
      state pipeline. everything in our todo list and our issues log should use
@@ -953,7 +954,7 @@
    above is replaced by: one VOCABULARY for indicators, native machines
    for work.")
   (implements "libs/workstreams/lib.pp pulse-* defines + workstreams/status-map-set + /pulse route")
-  (status implemented-live))
+  (status implemented))
 
 
  (section projects-plan
@@ -967,7 +968,7 @@
     datum + uuid pointer; the bare string-field variant is REJECTED —
     denormalized identity: typos mint phantom projects, no metadata home,
     rename = N list writes.")
-  (status draft)
+  (status planned)
   (doc "DATUM — the exact store envelope (no new machinery; a new type value):
     { type: project,
       path: data.s.<space>.<b64(project)>.<hash>,

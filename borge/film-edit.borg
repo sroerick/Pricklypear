@@ -459,7 +459,7 @@
     (smoke "edit/expand returns action prompt + cast appearances + unioned ref hashes")
     (smoke "edit/promote-take mints an asset from a landed take's media_hash")
     (smoke "asset.media_id optional; gen path still uses primary_hash on disk")
-    (smoke "no shot.refs JSON column — cast/ref are typed rows")
+    (smoke "no shot.refs JSON column — cast/ref are typed rows"))
     (details
      (doc (|
         Package API sketch (prefix edit/):
@@ -491,7 +491,7 @@
         projects on the branch (personal garden pack). Project-
         scoped assets win on slug clash only if callers pass
         project explicitly — default lookup: project then studio.
-     |))))
+     |)))
 
   )
   (subsection sound
@@ -503,7 +503,7 @@
     (smoke "cue rows place beds and hits on the timeline in frames with gain_db")
     (smoke "export writes a cue sheet + ffmpeg bounce script on disk for a cut (v1)")
     (smoke "edit/dailies bounces chosen picture + lines + cues to a proxy mp4 with audio (v2)")
-    (smoke "mix-job on unchanged audio graph returns cache hit; changing a line take or cue changes cue_hash")
+    (smoke "mix-job on unchanged audio graph returns cache hit; changing a line take or cue changes cue_hash"))
     (details
      (doc (|
         Package API sketch (prefix edit/):
@@ -529,7 +529,7 @@
           a line reads wrong → record or generate a new take →
           edit/line-choose the new id → the next bounce uses it.
           The old read stays in the take list; nothing is destroyed.
-     |))))
+     |)))
   )
   (subsection edl-and-export
    (doc "canonical EDL print + edl_hash; export to MLT XML and Blender scene script on disk; re-import path for GUI edits")
@@ -564,7 +564,7 @@
     (smoke "(http-get url) returns status + body string")
     (smoke "(http-download url path) streams response to disk, returns hash")
     (smoke "(spawn argv) runs a subprocess, captures exit code + output")
-    (smoke "prims documented in lisp-interpreter chapter and seeded")
+    (smoke "prims documented in lisp-interpreter chapter and seeded"))
     (details
      (doc (|
         Design notes for the kernel work:
@@ -580,7 +580,7 @@
             be spec'd as general prims when this subsection
             activates. Auth/capability story: admin-only until
             capability-enforcement (lisp-interpreter) lands.
-        |)))))
+        |))))
 
   (subsection gen-bridge
    (doc "FUTURE EDGE: gen API submission (fal/Replicate/direct), job polling, take landing; expands library bindings into input_snapshot; local ComfyUI as later backend behind same interface")
@@ -591,7 +591,7 @@
     (smoke "failed jobs mark takes failed with log tail")
     (smoke "spend report sums cost_cents per project and cut")
     (smoke "budget_cents cap blocks submission over budget")
-    (smoke "re-gen after asset appearance edit produces a new snapshot, not a silent reuse of the old lock")
+    (smoke "re-gen after asset appearance edit produces a new snapshot, not a silent reuse of the old lock"))
     (details
      (doc (|
         Gated on prims-http-spawn. Backend config is rows, not
@@ -607,7 +607,7 @@
         job leaves. Landing a take never mutates the snapshot.
         Changing an asset afterwards does not rewrite old takes;
         only new submits see the new lock (build-system semantics).
-        |)))))
+        |))))
 
   (subsection ui
    (doc "routes /studio, /studio/project?slug=<slug>, /studio/shot, /studio/export: cast/library panel, shot table with take picker, cut timeline view, render state, spend panel. NOTE (2026-10-02): the kernel function editor already owns /edit and /edit/<name>, so the package serves under /studio (BORGE-1785714837).")
