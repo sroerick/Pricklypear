@@ -13,10 +13,46 @@
 
 open Pricklypear_lisp.Ast
 
-(* ---- runner identity — one fresh id per boot ---- *)
+(* ---- runner identity — one fresh id per boot, host-scoped ---- *)
 
-let runner_id : string =
-  Printf.sprintf "boot-%s" (string_of_int (Unix.getpid ()))
+(* The id is `<host>#<pid>`: the host prefix is what lets a booting image
+   recognise leases left by a PREVIOUS process on the SAME machine (see
+   [preempt_dead_host_leases]) without ever touching another machine's live
+   worker. The pid is what makes that recognition exact — a same-host owner
+   whose pid is gone is provably dead, so its rows can be recovered in
+   milliseconds instead of waiting out the lease TTL. *)
+let host_tag : string =
+  let h =
+    match Sys.getenv_opt "PP_HOST_TAG" with
+    | Some h when String.trim h <> "" -> String.trim h
+    | _ -> ( try Unix.gethostname () with _ -> "unknown")
+  in
+  (* keep the tag free of the separator and path-ish characters *)
+  String.map
+    (fun c -> if c = '#' || c = '/' || c = ' ' || c = '%' then '_' else c)
+    h
+
+let runner_id : string = Printf.sprintf "boot-%s#%d" host_tag (Unix.getpid ())
+
+(** Host prefix shared by every runner id this machine issues. *)
+let host_prefix : string = Printf.sprintf "boot-%s#" host_tag
+
+(* ---- lease ---- *)
+
+(** Lease TTL. A claim stamps `lease_deadline = now + ttl` and the runner
+    heartbeats it while the job evaluates; a row is recoverable only once
+    that deadline has PASSED. Mirrors glochid's ratified claim TTL shape
+    (supervisor.ml `ttl_s`) so there is one lease idiom in the codebase.
+    The floor is generous on purpose: recovery latency is bounded by it, and
+    cost of being late is one stuck row, while the cost of being early is
+    two live workers on one job. *)
+let lease_ttl_ms () : int64 =
+  let secs =
+    match Sys.getenv_opt "PP_JOB_LEASE_SECS" with
+    | Some s -> ( match int_of_string_opt (String.trim s) with Some n -> n | None -> 600)
+    | None -> 600
+  in
+  Int64.mul (Int64.of_int (max 30 secs)) 1000L
 
 (* row-cell accessors live in Row (was a local copy here, "ai_store pattern"). *)
 
@@ -35,11 +71,14 @@ type job = {
   result : string option;
   error : string;
   runner_id : string;
+  lease_heartbeat_at : int64;
+  lease_deadline : int64;
 }
 
 let select_cols =
   "id, fn, args::text, branch, submitted_by, status, run_at, attempts, \
-   max_attempts, result::text, error, runner_id"
+   max_attempts, result::text, error, runner_id, lease_heartbeat_at, \
+   lease_deadline"
 
 (* Build the call source the runner evals: (fn <args>).
    [args] is the jsonb column rendered ::text — i.e. the JSON literal for the
@@ -71,6 +110,8 @@ let row_to_job row : job option =
     and result = Row.cell_string row 9
     and error = Row.cell_string row 10
     and runner_id = Row.cell_string row 11
+    and lease_heartbeat_at = Row.cell_int64 row 12
+    and lease_deadline = Row.cell_int64 row 13
     in
     match id, fn, branch, submitted_by, status with
     | Some id, Some fn, Some branch, Some submitted_by, Some status ->
@@ -83,6 +124,9 @@ let row_to_job row : job option =
           max_attempts = (match max_attempts with Some a -> a | None -> 3);
           result; error = (match error with Some e -> e | None -> "");
           runner_id = (match runner_id with Some r -> r | None -> "");
+          lease_heartbeat_at =
+            (match lease_heartbeat_at with Some t -> t | None -> 0L);
+          lease_deadline = (match lease_deadline with Some t -> t | None -> 0L);
         }
     | _ -> None
   with _ -> None
@@ -116,7 +160,9 @@ let job_to_value (j : job) : value =
              | Some r -> json_of_stored_literal r
              | None -> `Null)
           ; ("error", `String j.error)
-          ; ("runner_id", `String j.runner_id) ]))
+          ; ("runner_id", `String j.runner_id)
+          ; ("lease_heartbeat_at", `Intlit (Int64.to_string j.lease_heartbeat_at))
+          ; ("lease_deadline", `Intlit (Int64.to_string j.lease_deadline)) ]))
 
 
 (* ---- submit ---- *)
@@ -243,8 +289,13 @@ let claim_due ~(store : Store.t) : job option =
   | None -> None
   | Some _ ->
     let now_ms = Int64.of_float (Unix.gettimeofday () *. 1000.0) in
+    let lease_until = Int64.add now_ms (lease_ttl_ms ()) in
     (* Claim one due pending job, oldest first, with SKIP LOCKED.
-       Runs in its own transaction so the claim commits before eval. *)
+       Runs in its own transaction so the claim commits before eval.
+
+       The claim is a LEASE (045): the same statement that flips the row to
+       running stamps the owner, the heartbeat, and the deadline, so there is
+       never a 'running' row without a liveness proof. *)
     Store.with_dynamic_transaction store (fun () ->
       match pg_conn store with
       | None -> None
@@ -252,7 +303,8 @@ let claim_due ~(store : Store.t) : job option =
         let sql =
           Printf.sprintf
             "UPDATE jobs SET status = 'running', runner_id = $1, \
-             attempts = attempts + 1 \
+             attempts = attempts + 1, lease_heartbeat_at = $2, \
+             lease_deadline = $3 \
              WHERE id = (SELECT id FROM jobs WHERE status = 'pending' \
                          AND run_at <= $2 ORDER BY run_at, id \
                          FOR UPDATE SKIP LOCKED LIMIT 1) \
@@ -264,6 +316,7 @@ let claim_due ~(store : Store.t) : job option =
             ~params:
               [ Pgx.Value.of_string runner_id
               ; Pgx.Value.of_int64 now_ms
+              ; Pgx.Value.of_int64 lease_until
               ]
             sql
         in
@@ -292,59 +345,214 @@ let rec expt_backoff (store : Store.t) (id : string) : int =
 
 (* ---- record results ---- *)
 
-let record_done ~(store : Store.t) ~(id : string) ~(result_json : string) : unit =
+(* Terminal transitions RELEASE the lease (045): deadline 0 means "not a
+   live claim", so nothing has to special-case status here and a leftover
+   deadline can never make a finished row look recoverable. *)
+
+(* The trailing [()] makes the optional [owner] erasable: without it the
+   optional can never be resolved, because every other argument is labelled
+   (warning 16 as error under this dune profile). *)
+let record_done ~(store : Store.t) ?(owner : string option)
+    ~(id : string) ~(result_json : string) () : unit =
   match pg_conn store with
   | None -> ()
   | Some conn ->
+    (* With [owner], the write is a CAS on the lease: only the runner that
+       still holds the row may finish it. Without it a worker whose lease
+       lapsed could stamp 'done' over a result another runner already
+       produced after reclaiming the row. *)
+    let guard, extra =
+      match owner with
+      | Some rid ->
+          ( "AND status = 'running' AND runner_id = $3",
+            [ Pgx.Value.of_string rid ] )
+      | None -> ("", [])
+    in
     let sql =
-      "UPDATE jobs SET status = 'done', result = $2::jsonb, error = '' \
-       WHERE id = $1::uuid"
+      Printf.sprintf
+        "UPDATE jobs SET status = 'done', result = $2::jsonb, error = '', \
+         lease_deadline = 0 \
+         WHERE id = $1::uuid %s"
+        guard
     in
     (* Wrap the result in a JSON string value so it's always valid jsonb. *)
     let wrapped = Printf.sprintf "%s" (Yojson.Safe.to_string (`String result_json)) in
-    ignore (Store_db.exec conn
-              ~params:[ Pgx.Value.of_string id; Pgx.Value.of_string wrapped ]
-              sql)
+    ignore
+      (Store_db.exec conn
+         ~params:
+           ([ Pgx.Value.of_string id; Pgx.Value.of_string wrapped ] @ extra)
+         sql)
 
-let record_failed ~(store : Store.t) ~(id : string) ~(error : string)
-    ~(max_attempts : int) : unit =
+let record_failed ~(store : Store.t) ?(owner : string option)
+    ~(id : string) ~(error : string) ~(max_attempts : int) () : unit =
   match pg_conn store with
   | None -> ()
   | Some conn ->
     (* If attempts >= max_attempts → dead; else pending with backoff. *)
     let now_ms = Int64.of_float (Unix.gettimeofday () *. 1000.0) in
+    let guard, extra =
+      match owner with
+      | Some rid ->
+          ( "AND status = 'running' AND runner_id = $5",
+            [ Pgx.Value.of_string rid ] )
+      | None -> ("", [])
+    in
     let sql =
-      "UPDATE jobs SET status = CASE WHEN attempts >= $3 THEN 'dead' \
-                                ELSE 'pending' END, \
-       error = $2, run_at = CASE WHEN attempts >= $3 THEN run_at \
-                                  ELSE $4 END \
-       WHERE id = $1::uuid"
+      Printf.sprintf
+        "UPDATE jobs SET status = CASE WHEN attempts >= $3 THEN 'dead' \
+                                  ELSE 'pending' END, \
+         error = $2, lease_deadline = 0, \
+         run_at = CASE WHEN attempts >= $3 THEN run_at \
+                                    ELSE $4 END \
+         WHERE id = $1::uuid %s"
+        guard
     in
     ignore (Store_db.exec conn
               ~params:
-                [ Pgx.Value.of_string id
-                ; Pgx.Value.of_string error
-                ; Pgx.Value.of_int max_attempts
-                ; Pgx.Value.of_int64
-                    (Int64.add now_ms (Int64.of_int (expt_backoff store id)))
-                ]
+                ([ Pgx.Value.of_string id
+                 ; Pgx.Value.of_string error
+                 ; Pgx.Value.of_int max_attempts
+                 ; Pgx.Value.of_int64
+                     (Int64.add now_ms (Int64.of_int (expt_backoff store id)))
+                 ] @ extra)
               sql)
 
-(* ---- dead-runner recovery: fail stale 'running' rows from dead runners ---- *)
+(* ---- lease heartbeat ---- *)
 
+(** Renew the lease on a job this runner holds. Called by the runner's
+    heartbeat fiber while the job evaluates.
+
+    Returns [true] when the row was still ours and is renewed, [false] when
+    the lease is GONE — either the row finished, or (worse) the deadline
+    passed unnoticed and another runner reclaimed the row. The runner uses
+    the [false] to stop treating the eval as authoritative; it does NOT abort
+    the fiber (v1 has no mid-eval cancellation, jobs.borg hard edges), but the
+    stopped-renews path is logged so a duplicate eval is never silent. *)
+let heartbeat ~(store : Store.t) ~(id : string) : bool =
+  match pg_conn store with
+  | None -> false
+  | Some conn ->
+    let now_ms = Int64.of_float (Unix.gettimeofday () *. 1000.0) in
+    let deadline = Int64.add now_ms (lease_ttl_ms ()) in
+    let rows =
+      Store_db.exec conn
+        ~params:
+          [ Pgx.Value.of_string id
+          ; Pgx.Value.of_int64 now_ms
+          ; Pgx.Value.of_int64 deadline
+          ; Pgx.Value.of_string runner_id
+          ]
+        "UPDATE jobs SET lease_heartbeat_at = $2, lease_deadline = $3 \
+         WHERE id = $1::uuid AND status = 'running' AND runner_id = $4 \
+         RETURNING id::text"
+    in
+    rows <> []
+
+(* ---- dead-runner recovery: expire LAPSED leases only ---- *)
+
+(** Recover rows whose lease deadline has passed. This is the ONLY reclaim
+    path, and it never looks at [runner_id] for ownership: a live worker's
+    lease is not stolen no matter which process is asking (glochid's ratified
+    rule — "a live claim is NEVER stolen"). A crashed image simply stops
+    heartbeating and its rows come back here once the TTL lapses.
+
+    Requeue is IMMEDIATE (no backoff): [attempts] was already incremented by
+    the claim, so the retry budget — not a timer — bounds a job that keeps
+    killing its runner; making the user wait out both a TTL and a backoff for
+    an image restart is pure latency. [run_at] is therefore pulled to now, not
+    left where it was: only a row that WAS claimed can be here, so this can
+    never resurrect a job that was legitimately scheduled for later. *)
 let reap_dead ~(store : Store.t) : unit =
   match pg_conn store with
   | None -> ()
   | Some conn ->
-    (* Any row status=running whose runner_id != our boot runner_id is
-       stale (the image crashed mid-eval). Requeue with backoff or dead. *)
+    let now_ms = Int64.of_float (Unix.gettimeofday () *. 1000.0) in
     let sql =
       "UPDATE jobs SET status = CASE WHEN attempts >= max_attempts THEN 'dead' \
                                       ELSE 'pending' END, \
-       error = 'runner died: ' || runner_id \
-       WHERE status = 'running' AND runner_id <> $1"
+       error = 'runner lease expired: ' || runner_id, \
+       lease_deadline = 0, lease_heartbeat_at = 0, \
+       run_at = CASE WHEN attempts >= max_attempts THEN run_at ELSE $1 END \
+       WHERE status = 'running' AND lease_deadline <= $1"
     in
-    ignore (Store_db.exec conn ~params:[ Pgx.Value.of_string runner_id ] sql)
+    ignore
+      (Store_db.exec conn
+         ~params:[ Pgx.Value.of_int64 now_ms ]
+         sql)
+
+(* ---- same-host boot preempt: recover our OWN dead processes at once ---- *)
+
+(** Parse the pid out of an id this module issues (`boot-<host>#<pid>`). *)
+let pid_of_runner_id (rid : string) : int option =
+  match String.rindex_opt rid '#' with
+  | None -> None
+  | Some i ->
+    int_of_string_opt
+      (String.sub rid (i + 1) (String.length rid - i - 1))
+
+let pid_alive (pid : int) : bool =
+  if pid <= 0 then false
+  else if pid = Unix.getpid () then true
+  else if Sys.file_exists (Printf.sprintf "/proc/%d" pid) then true
+  else (try Unix.kill pid 0; true with Unix.Unix_error (Unix.ESRCH, _, _) -> false | _ -> true)
+
+(** Recover leases held by a process on THIS host that no longer exists.
+
+    [reap_dead] alone would make an image restart wait out the full lease TTL
+    (600s by default) before re-running an interrupted job — a real latency
+    regression against the old reap-everything-else behaviour. This narrows
+    that: a lease whose owner is *this machine* AND whose pid is gone is
+    provably dead, so its rows are recovered immediately at boot.
+
+    Safety: the host tag must match, so another machine's live worker is
+    never touched; an unknowable pid leaves the row to the TTL. Residual
+    risk is pid reuse across a restart — a reused pid keeps a dead lease
+    alive until the deadline, which costs latency, never correctness. *)
+let preempt_dead_host_leases ~(store : Store.t) : int =
+  match pg_conn store with
+  | None -> 0
+  | Some conn ->
+    let rows =
+      Store_db.exec conn
+        ~params:[ Pgx.Value.of_string (host_prefix ^ "%") ]
+        "SELECT DISTINCT runner_id FROM jobs \
+         WHERE status = 'running' AND runner_id LIKE $1"
+    in
+    let dead_owners =
+      List.filter_map
+        (fun row ->
+          match Row.cell_string row 0 with
+          | None -> None
+          | Some rid -> (
+              match pid_of_runner_id rid with
+              | Some pid when not (pid_alive pid) -> Some rid
+              | _ -> None))
+        rows
+    in
+    let total = ref 0 in
+    let now_ms = Int64.of_float (Unix.gettimeofday () *. 1000.0) in
+    List.iter
+      (fun rid ->
+        let n =
+          match
+            Store_db.exec conn
+              ~params:
+                [ Pgx.Value.of_string rid; Pgx.Value.of_int64 now_ms ]
+              "UPDATE jobs SET \
+               status = CASE WHEN attempts >= max_attempts THEN 'dead' \
+                             ELSE 'pending' END, \
+               error = 'runner died: ' || runner_id, \
+               lease_deadline = 0, lease_heartbeat_at = 0, \
+               run_at = CASE WHEN attempts >= max_attempts THEN run_at \
+                             ELSE $2 END \
+               WHERE status = 'running' AND runner_id = $1 \
+               RETURNING id::text"
+          with
+          | rows -> List.length rows
+        in
+        total := !total + n)
+      dead_owners;
+    !total
 
 (* The runner loop (eval_job + runner_loop) lives in boot.ml to avoid a
    dependency cycle: Jobs (DB ops) must not depend on Session, which
