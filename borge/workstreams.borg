@@ -578,7 +578,35 @@
    safe one-column advance and says so on stderr. This matters most on the
    AUTO lane, where a wrong DESTINATION either resurrects the human gate or
    writes a state the list does not define.
-   writes a state the list does not define.")
+   ACTOR AND CUSTODY (2026-10-24): the executor no longer picks an identity
+   for you. `PP_USER` has NO default — an unset `PP_USER` with no `PP_TOKEN`
+   exits 2, because the old `PP_USER:-admin` default silently attributed
+   every claim, comment and transition on the board to an account named
+   `admin` that nobody chose. There is no safe default here: the actor on a
+   card is a record of who acted, and a record whose actor is wrong is worse
+   than no record.
+   THE HABITAT PASSWORD ON THE BASIC-AUTH PATH IS A SHARED CREDENTIAL.
+   Verified 2026-10-24: `admin` is the only account that authenticates with
+   it (`roerick`, `hollis`, `gregor` all return 'authentication required').
+   So on that path every write really IS performed as `admin`, and
+   `author=admin` cannot distinguish one operator from another. An explicit
+   `PP_USER=admin` therefore proceeds with a warning naming this, rather
+   than being refused outright — refusing it would break the only working
+   path. ATTRIBUTABLE WRITES REQUIRE A DELEGATED TOKEN (`PP_TOKEN`); the
+   executor calls `(whoami)` once on that path and refuses if the token's
+   actor differs from `PP_USER`, because under Bearer auth the habitat
+   IGNORES `--user`: a mismatch would LABEL writes as one identity while
+   another CAPABILITY performs them, which is exactly the actor/authority
+   conflation the whole identity rule forbids.
+   THE CREDENTIAL NEVER TRAVELS ON ARGV. `--password` call sites are gone;
+   the secret reaches `pp-eval` through the environment (`PP_PASS` >
+   `PP_PASS_FILE` > `PP_TOKEN`), which pp_eval already resolves. Previously
+   it was on the command line for the life of every run and re-passed to
+   each `--drain`/`--walk` child, i.e. readable from the process table by
+   any local account. `strip_creds` now REMOVES those variables from the
+   agent runner's environment (the runner — pi, autolith, glochid — is a
+   third-party process and has no business holding the habitat password);
+   `PP_FLOW_DELEGATE_CREDS=1` opts a flow out when it genuinely needs them.")
   (implements "scripts/pp-flow.sh" "libs/todo/lib.pp todo/flow-brief")
   (status implemented)  ;; orchestration tasks 7+8 (2026-09-27: todo/flow-brief + scripts/pp-flow.sh)
   (verify
@@ -588,7 +616,11 @@
          "--drain skips leased cards, non-actionable columns, and excluded kinds"
          "an agent DESTINATION outside the card's column set is refused and the one-column advance is used"
          "a failed card stops the drain unless PP_FLOW_DRAIN_CONTINUE=1"
-         "stale claims are reclaimable")))
+         "stale claims are reclaimable"
+         "an unset PP_USER with no PP_TOKEN exits 2 instead of defaulting to a named actor"
+         "an explicit PP_USER=admin proceeds and warns that the basic-auth password is a shared credential"
+         "a delegated token whose (whoami) differs from PP_USER is refused rather than labelling the write"
+         "the habitat password never appears on argv and is stripped from the agent runner's environment unless PP_FLOW_DELEGATE_CREDS=1")))
 
   (section autolith-runner
    (doc "The claim/brief local executor is pluggable via PP_FLOW_PI (default
