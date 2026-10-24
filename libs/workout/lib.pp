@@ -128,13 +128,156 @@
 (define workout/chart-data-js
   (lambda
     ()
+    (string-append
+      "{\"sessions\":["
+      (workout/join-csv (workout/chart-sessions-js))
+      "],\"points\":["
+      (workout/join-csv (workout/chart-points-js))
+      "]}"))
+  "Chart payload: sessions (id/date/program) plus per-exercise points (sid/ex/w/r/u); the page joins sid->date client-side.")
+
+(define workout/chart-sessions-js
+  (lambda
+    ()
+    (list/map
+      (lambda
+        (row)
+          (let
+            ((f (workout/row-fields row)) (id (workout/row-id row)))
+            (string-append
+              "{id:\""
+              (workout/js-escape (as-str id))
+            "\",date:\""
+            (workout/js-escape (as-str (dict-get f "date")))
+            "\",program:\""
+            (workout/js-escape (as-str (dict-get f "program")))
+            "\"}")))
+      (rows (quote workout-session) 500)))
+  "One JS object per session (id/date/program).")
+
+(define workout/chart-points-js
+  (lambda
+    ()
+    (list/map
+      (lambda
+        (row)
+        (let
+          ((f (workout/row-fields row)))
+          (string-append
+            "{sid:\""
+            (workout/js-escape (as-str (dict-get f "session_id")))
+            "\",ex:\""
+            (workout/js-escape (as-str (dict-get f "exercise")))
+            "\",w:"
+            (as-str (workout/as-int (dict-get f "weight")))
+            ",r:"
+            (as-str (workout/as-int (dict-get f "reps")))
+            ",u:\""
+            (workout/js-escape (as-str (dict-get f "unit")))
+            "\"}")))
+      (rows (quote workout-exercise) 2000)))
+  "One JS object per logged exercise row (sid/exercise/weight/reps/unit).")
+
+(define workout/chart-since
+  (lambda
+    ()
+    (let
+      ((s (as-str (request-param "since"))))
+          (if (string-eq s "") "2026-09-20" s)))
+    "Chart window start: since param, default 2026-09-20 (ksf clean-and-jerk start).")
+(define workout/chart-page
+  (lambda
+    ()
+    (html/page
+      (list
+        (html/h1 "Workout Progress")
+        (html/p*
+          (html/attr "class" "muted")
+              (html/text (string-append "All logged sets since " (workout/chart-since) " - reps per session (tooltip: weight)")))
+        (html/a "/workout" "<- Back to Workout")
+        (html/div
+          (html/attr "style" "max-width:760px;margin:1em 0")
+          (html/tag "canvas" (html/attr "id" "workoutChart") ""))
+        (html/tag
+          "script"
+          (html/attr
+            "src"
+            "https://cdn.jsdelivr.net/npm/chart.js@4.4.1")
+          "")
+        (html/tag
+          "script"
+          ""
+          (string-append
+            "const J="
+            (workout/chart-data-js)
+            ";"
+              (string-append "const SINCE='" (workout/chart-since) "';")
+            "const dmap={};J.sessions.forEach(function(s){dmap[s.id]=s.date;});"
+            "const pts=J.points.map(function(p){return{date:dmap[p.sid]||'',ex:p.ex,w:p.w,u:p.u,r:p.r};}).filter(function(p){return p.date&&p.date>=SINCE;});"
+            "pts.sort(function(a,b){return a.date.localeCompare(b.date);});"
+            "const dates=[...new Set(pts.map(function(p){return p.date;}))];"
+            "const names=[...new Set(pts.map(function(p){return p.ex;}))];"
+            "const pal=['#3b82f6','#10b981','#f59e0b','#ef4444','#8b5cf6','#14b8a6','#f97316','#64748b'];"
+            "const ds=names.map(function(n,i){return{label:n,data:dates.map(function(d){const p=pts.find(function(q){return q.date===d&&q.ex===n;});return p?p.r:null;}),backgroundColor:pal[i%pal.length],borderRadius:4};});"
+            "new Chart(document.getElementById('workoutChart'),{"
+            "type:'bar',"
+            "data:{labels:dates.map(function(d){const x=new Date(d+'T00:00:00');return x.toLocaleDateString('en-US',{month:'short',day:'numeric'});}),datasets:ds},"
+            "options:{responsive:true,plugins:{legend:{display:true},tooltip:{callbacks:{afterLabel:function(c){const n=ds[c.datasetIndex].label;const d=dates[c.dataIndex];const p=pts.find(function(q){return q.date===d&&q.ex===n;});return p&&p.w?(p.w+' '+p.u):'';}}}},scales:{y:{beginAtZero:true,title:{display:true,text:'Reps'}},x:{title:{display:true,text:'Session date'}}}}"
+              "});")))))
+  "All-sets chart: one dataset per exercise, reps per session, weight in tooltip. Pane route /workout/chart.")
+
+(define workout/browse
+  (lambda
+    (path)
+    (filmstrip/browse-walk
+      workout/browse-children
+      (list (workout/browse-root))
+      path))
+  "workout cascade for the filmstrip rail: column 0 = pages + recent sessions; session entries leaf to /workout/session?id=.")
+
+(define workout/browse-root
+  (lambda
+    ()
+    (append
+      (list
+        (list "Today" "/workout/today")
+        (list "Chart" "/workout/chart")
+          (list "Snatch" "/workout/snatch")
+        (list "Quick log" "/workout/log")
+        (list "Home" "/workout"))
+      (workout/browse-sessions)))
+  "Cascade column 0: fixed pages, then recent sessions as leaves.")
+
+(define workout/browse-sessions
+  (lambda
+    ()
+    (list/map
+      (lambda
+        (row)
+        (let
+            ((f (workout/row-fields row)) (id (workout/row-id row)))
+            (list
+              (string-append (as-str (dict-get f "date")) " " (as-str (dict-get f "program")))
+              (string-append "/workout/session?id=" (as-str id)))))
+      (workout/sessions-sorted)))
+  "Recent sessions (newest first) as (label . /workout/session?id=) leaves.")
+
+(define workout/browse-children
+  (lambda
+    (key)
+    (list))
+  "All cascade entries are route leaves; nothing drills deeper.")
+
+(define workout/ksk1-chart-data-js
+  (lambda
+    ()
     (let*
       ((all (workout/session-list ""))
         (ksk (list/filter workout/ksk1? all))
-        (points (list/map workout/chart-point-js ksk)))
+        (points (list/map workout/ksk1-chart-point-js ksk)))
       (string-append "[" (workout/join-csv points) "]"))))
 
-(define workout/chart-page
+(define workout/ksk1-chart-page
   (lambda
     ()
     (html/page
@@ -161,7 +304,7 @@
           ""
           (string-append
             "const sessions="
-            (workout/chart-data-js)
+            (workout/ksk1-chart-data-js)
             ";"
             "sessions.sort(function(a,b){return a.date.localeCompare(b.date);});"
             "const dc={1:'#3b82f6',2:'#10b981',3:'#f59e0b'};"
@@ -173,7 +316,7 @@
             "options:{responsive:true,plugins:{legend:{display:false},tooltip:{callbacks:{afterLabel:function(c){const s=sessions[c.dataIndex];return ['Day '+s.day+' ('+s.pattern+')',s.notes];}}}},scales:{y:{beginAtZero:true,title:{display:true,text:'Reps per hand'}},x:{title:{display:true,text:'Session date'}}}}"
             "});"))))))
 
-(define workout/chart-point-js
+(define workout/ksk1-chart-point-js
   (lambda
     (row)
     (let*
@@ -209,6 +352,7 @@
         "notes:\""
         notes
         "\"}"))))
+
 
 (define workout/col-lower
   (lambda
@@ -4735,6 +4879,56 @@
                           (html/attr "type" "submit")
                           "Skip this session")))))))))))))
 
+(define workout/doc-line
+  (lambda
+    (text)
+    (html/p*
+      (html/attr "class" "docline")
+      (html/text text)))
+  "One suggestion line.")
+
+(define workout/suggest-block
+  (lambda
+    (program)
+    (let
+      ((doc (workout/suggest program (workout/today))))
+      (cond
+        ((string-eq (as-str program) "ksf")
+          (let
+            ((params (dict-get doc "params")) (progress (dict-get doc "progress")))
+            (html/join
+              (list
+                (workout/doc-line (string-append "Phase " (as-str (dict-get doc "phase")) " - day " (as-str (dict-get doc "day")) " - pattern " (as-str (dict-get doc "pattern"))))
+                (workout/doc-line (string-append "Bell " (as-str (dict-get params "bell")) " " (as-str (dict-get params "unit")) " - target " (as-str (dict-get params "target_min")) " min - cadence " (as-str (dict-get params "cadence_sec")) "s - deload " (as-str (dict-get params "deload"))))
+                (workout/doc-line (string-append "Sets done: " (as-str (dict-get progress "sets_done"))))))))
+        ((string-eq (as-str program) "run5k")
+          (let
+            ((params (dict-get doc "params")))
+            (html/join
+              (list
+                (workout/doc-line (string-append "Week " (as-str (dict-get doc "week")) " - day " (as-str (dict-get doc "day"))))
+                (workout/doc-line (string-append "Goal: " (as-str (dict-get params "goal"))))
+                  (workout/doc-line (string-append "Warmup " (as-str (dict-get params "warmup")) " - flush " (as-str (dict-get params "flush")) " - " (as-str (dict-get params "talk_test"))))))))
+        ((string-eq (as-str program) "sct")
+          (let
+            ((params (dict-get doc "params")))
+            (html/join
+              (list
+                (workout/doc-line (string-append "Phase " (as-str (dict-get doc "phase")) " - session " (as-str (dict-get doc "session")) " - day " (as-str (dict-get doc "day"))))
+                (workout/doc-line (string-append "Content: " (as-str (dict-get params "content"))))
+                  (workout/doc-line (string-append "Benchmark due: " (as-str (dict-get params "benchmark_due"))))))))
+        ((string-eq (as-str program) "stretch")
+          (let
+            ((params (dict-get doc "params")))
+            (html/join
+              (list
+                (workout/doc-line (string-append "Cycle " (as-str (dict-get doc "cycle")) " - day " (as-str (dict-get doc "day"))))
+                (workout/doc-line (as-str (dict-get params "slot")))
+                  (workout/doc-line (string-append "Cap: " (as-str (dict-get params "cap"))))))))
+        (else
+          (html/pre (html/text (as-str doc)))))))
+  "Readable render of a suggestion doc; raw pre only for unknown shapes.")
+
 (define workout/today-card-for
   (lambda
     (program)
@@ -4746,10 +4940,8 @@
           (html/p*
             (html/attr "class" "muted")
             (html/text (as-str (workout/gate-status program))))
-          (html/pre
-            (html/text
-              (as-str (workout/suggest program (workout/today)))))))))
-  "One program block: name, state summary, suggestion doc.")
+            (workout/suggest-block program)))))
+  "One program block: name, state summary, suggestion rendered readably.")
 
 (define workout/today-page
   (lambda
@@ -5091,3 +5283,11 @@
                       (string-append "0" (as-str sec-rem))
                       (as-str sec-rem)))))))))))
   "Pace string (mm:ss per unit) for a walk doc, \"\" when no distance.")
+
+;; vault-declared routes — route rows ride ships ONLY from this file.
+;; (MIRROR boot seed upserts lib.pp defines+routes onto system/main at boot;
+;; routes hand-registered in a session land on that session's branch and stay
+;; invisible to other chains — root cause of the self-token 404s, 10-23.)
+(route "/workout/snatch" "workout/ksk1-chart-page")
+(route "/workout/today" "workout/today-page")
+(route "/workout/chart" "workout/chart-page")

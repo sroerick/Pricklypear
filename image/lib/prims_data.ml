@@ -891,19 +891,31 @@ let register (t : t) (tbl : Primitives.t) : unit =
   (* (tree/children-html [prefix]) -> HTML string of notes-tree children.
      OCaml-side so large folders (3k+) do not blow the eval budget.
      Caller wraps with (render-html …) for raw emission. *)
-  register_crud "tree/children-html"
-    (fun args ->
-      let garden = Tree_store.garden_root ~user:(actor ()) in
-      let prefix =
-        match args with
-        | [] -> garden
-        | [ Pricklypear_lisp.Ast.VStr p ] -> p
-        | _ -> ""
-      in
-      if prefix = "" then
-        ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("tree/children-html", "[] | prefix", "bad-args")))))
-      else
-        Crud.tree_children_html t.store ~prefix ~garden_root:garden ());
+    register_crud "tree/children-html"
+      (fun args ->
+        let garden = Tree_store.garden_root ~user:(actor ()) in
+        let explicit =
+          match args with
+          | [] -> None
+          | [ Pricklypear_lisp.Ast.VStr p ] -> Some p
+          | _ -> Some ""
+        in
+        let prefix = match explicit with None -> garden | Some p -> p in
+        if prefix = "" then
+          ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("tree/children-html", "[] | prefix", "bad-args")))))
+        else begin
+          (* authz-matrix gap 5 (2026-10-21): a caller-chosen prefix passes
+             the same note-garden gate (82871ca1) as note-index/folder-index/
+             search-text; the no-arg default is already the caller's own
+             garden root. *)
+          (match explicit with
+           | Some _ ->
+               gate_note_prefix ~caller:(actor ())
+                 ~viewer_is_admin:(Prims_db_common.is_verified_admin ~t ())
+                 ~prefix
+           | None -> ());
+          Crud.tree_children_html t.store ~prefix ~garden_root:garden ()
+        end);
 
   (* (tree/search-text needle [limit]) or (tree/search-text prefix needle [limit])
      -> list of hit JSON (slug/title/node_id/header_path/matched/rank).
@@ -989,15 +1001,24 @@ let register (t : t) (tbl : Primitives.t) : unit =
       | _ ->
           (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("tree/ancestors", "need path", "bad-args")))));
 
-  register_crud "tree/garden-root"
-    (fun args ->
-      match args with
-      | [] ->
-          (Crud.tree_garden_root ~user:(actor ()))
-      | [ Pricklypear_lisp.Ast.VStr user ] ->
-          (Crud.tree_garden_root ~user)
-      | _ ->
-          ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("tree/garden-root", "[] or user", "bad-args"))))));
+    register_crud "tree/garden-root"
+      (fun args ->
+        match args with
+        | [] ->
+            (Crud.tree_garden_root ~user:(actor ()))
+        | [ Pricklypear_lisp.Ast.VStr user ] ->
+            (* authz-matrix gap 4 (2026-10-21): a garden root names another
+               user's tree path space; only your own (or admin) may be named. *)
+            if user <> actor ()
+               && not (Prims_db_common.is_verified_admin ~t ()) then
+              ((raise (Pricklypear_lisp.Ast.Interp_error
+                 (Pricklypear_lisp.Ast.Prim_error
+                    ("tree/garden-root",
+                     Printf.sprintf "denied: %s is not your garden" user,
+                     "denied")))))
+            else (Crud.tree_garden_root ~user)
+        | _ ->
+            ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("tree/garden-root", "[] or user", "bad-args"))))));
 
     (* (deftype 'name 'field1 'field2 ...) -> VStr "defined type <name>".
        All args are quoted symbols (now VSymbol; coerced above). Persists

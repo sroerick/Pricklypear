@@ -10,8 +10,17 @@
     bust + rehydrate) — arrive as a [hooks] record supplied by Session
     at registration time. Same pattern as Prims_db.~rehydrate_fn.
 
-    Behavior contract: byte-identical relocation; the prim table, arg
-    shapes, error strings, and owner-authorization rules are unchanged. *)
+    Behavior contract (extraction): byte-identical relocation; the prim
+    table, arg shapes, error strings, and owner-authorization rules are
+    unchanged.
+
+    AUTHZ STEP 2 (2026-10-23, specs/authz-matrix.md): every branch prim's
+    class gate routes through Authz.authorize at the old anonymous check:
+    anonymous keeps its byte-identical "denied for anonymous" raise, and
+    factory identities (<project>-build / -review) are kernel-denied
+    before any PP code runs (no push, no promote, no write verb). The
+    soft agent_branch_lock denial and the per-branch owner/promote rules
+    stay below, verbatim. *)
 
 open Session_types
 
@@ -105,8 +114,14 @@ let register ~(hooks : hooks) (t : t) (tbl : Primitives.t) : unit =
   (* (fork 'parent 'child) -> VStr new-branch-id | VStr "no such parent" *)
   Primitives.register_server_only tbl "fork"
     (fun args ->
-      if t.manifest.username = "anonymous" then
-        (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("fork", "denied for anonymous", "denied"))))
+      let denied =
+        match Authz.authorize t ~capability:Authz.Branch_move () with
+        | Ok () -> ""
+        | Error msg -> msg
+      in
+      if denied <> "" then
+        (raise (Pricklypear_lisp.Ast.Interp_error
+                  (Pricklypear_lisp.Ast.Prim_error ("fork", denied, "denied"))))
       else if t.agent_branch_lock then
         (Pricklypear_lisp.Ast.VStr
              "fork blocked: agent is locked to the current branch")
@@ -159,8 +174,14 @@ let register ~(hooks : hooks) (t : t) (tbl : Primitives.t) : unit =
      caller's own `owner/*` branches are free. *)
   Primitives.register_server_only tbl "merge"
     (fun args ->
-      if t.manifest.username = "anonymous" then
-        (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("merge", "denied for anonymous", "denied"))))
+      let denied =
+        match Authz.authorize t ~capability:Authz.Branch_move () with
+        | Ok () -> ""
+        | Error msg -> msg
+      in
+      if denied <> "" then
+        (raise (Pricklypear_lisp.Ast.Interp_error
+                  (Pricklypear_lisp.Ast.Prim_error ("merge", denied, "denied"))))
       else if t.agent_branch_lock then
         (Pricklypear_lisp.Ast.VStr
              "merge blocked: agent is locked to the current branch")
@@ -309,7 +330,7 @@ let register ~(hooks : hooks) (t : t) (tbl : Primitives.t) : unit =
   let register_route_checked ~route_path ~handler ~visibility
       ~(pass_vis_to_store : bool) ~(standalone : bool)
     : Pricklypear_lisp.Ast.value =
-    (* Publish-time gate. SKIPPED during additive boot seed: at seed the
+    (* Publish-time gate. SKIPPED during the boot seed: at seed the
        env holds only the kernel prim catalog (fingerprint-skipped
        defines never bind), so an env-based gate would deny every fresh
        package's (public-route …) and permanently prevent the route row
@@ -319,7 +340,7 @@ let register ~(hooks : hooks) (t : t) (tbl : Primitives.t) : unit =
        check_public_handler against the FULL session env before any
        public handler runs (BORGE-1785212463 dispatch gate). *)
     let gate =
-      if visibility = "public" && not t.seed_additive
+        if visibility = "public" && not t.seed_boot
       then check_public_handler handler
       else (Ok ())
     in
@@ -330,22 +351,17 @@ let register ~(hooks : hooks) (t : t) (tbl : Primitives.t) : unit =
              the view_bindings row is a code write, and delegation is for
              data, never for code. Seeded package loads keep their routes
              working in-session; nothing outlives the session. *)
-          Hashtbl.replace t.routes route_path (handler, visibility);
-          let _ =
-            if Session_types.restricted t then ()
-            else if t.seed_additive then
-            if pass_vis_to_store then
-              Store.register_route_if_absent t.store ~route:route_path
-                ~handler ~visibility ()
-            else
-              Store.register_route_if_absent t.store ~route:route_path
-                ~handler ()
-          else if pass_vis_to_store then
-            Store.register_route t.store ~route:route_path ~handler
-              ~visibility ()
-          else
-            Store.register_route t.store ~route:route_path ~handler ()
-        in
+            let _ =
+              if Session_types.restricted t then ()
+                (* branching.seed-policy MIRROR (2026-10-22): the boot
+                   seed is included — routes on system/main mirror
+                   libs/<pkg> too; register_route upserts. *)
+              else if pass_vis_to_store then
+                Store.register_route t.store ~route:route_path ~handler
+                  ~visibility ()
+              else
+                Store.register_route t.store ~route:route_path ~handler ()
+            in
         let () = declare_standalone ~standalone ~path:route_path in
         let () = notice_route ~path:route_path ~handler ~standalone in
         (Pricklypear_lisp.Ast.VStr route_path))
@@ -445,8 +461,14 @@ let register ~(hooks : hooks) (t : t) (tbl : Primitives.t) : unit =
      the right bindings). Blocked while agent_branch_lock is set. *)
   Primitives.register_server_only tbl "checkout"
     (fun args ->
-      if t.manifest.username = "anonymous" then
-        (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("checkout", "denied for anonymous", "denied"))))
+      let denied =
+        match Authz.authorize t ~capability:Authz.Branch_move () with
+        | Ok () -> ""
+        | Error msg -> msg
+      in
+      if denied <> "" then
+        (raise (Pricklypear_lisp.Ast.Interp_error
+                  (Pricklypear_lisp.Ast.Prim_error ("checkout", denied, "denied"))))
       else if t.agent_branch_lock then
         (Pricklypear_lisp.Ast.VStr
              "checkout blocked: agent is locked to the current branch")
@@ -560,8 +582,14 @@ let register ~(hooks : hooks) (t : t) (tbl : Primitives.t) : unit =
      (ref-addressed, fork/merge/checkout family). *)
   Primitives.register_server_only tbl "branch/status"
     (fun args ->
-      if t.manifest.username = "anonymous" then
-        (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("branch/status", "denied for anonymous", "denied"))))
+      let denied =
+        match Authz.authorize t ~capability:Authz.Branch_read () with
+        | Ok () -> ""
+        | Error msg -> msg
+      in
+      if denied <> "" then
+        (raise (Pricklypear_lisp.Ast.Interp_error
+                  (Pricklypear_lisp.Ast.Prim_error ("branch/status", denied, "denied"))))
       else
         let run_status branch_ref mode =
           let owner, short = split_branch_ref branch_ref in
@@ -658,8 +686,14 @@ let register ~(hooks : hooks) (t : t) (tbl : Primitives.t) : unit =
      branch with its parent is not a branch-escape). *)
   Primitives.register_server_only tbl "branch/pull"
     (fun args ->
-      if t.manifest.username = "anonymous" then
-        (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("branch/pull", "denied for anonymous", "denied"))))
+      let denied =
+        match Authz.authorize t ~capability:Authz.Branch_push () with
+        | Ok () -> ""
+        | Error msg -> msg
+      in
+      if denied <> "" then
+        (raise (Pricklypear_lisp.Ast.Interp_error
+                  (Pricklypear_lisp.Ast.Prim_error ("branch/pull", denied, "denied"))))
       else
         match args with
         | [ Pricklypear_lisp.Ast.VStr branch_ref ] ->
@@ -730,8 +764,14 @@ let register ~(hooks : hooks) (t : t) (tbl : Primitives.t) : unit =
        (ref-addressed, fork/merge/checkout family). *)
     Primitives.register_server_only tbl "branch/push"
       (fun args ->
-        if t.manifest.username = "anonymous" then
-          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("branch/push", "denied for anonymous", "denied"))))
+        let denied =
+          match Authz.authorize t ~capability:Authz.Branch_push () with
+          | Ok () -> ""
+          | Error msg -> msg
+        in
+        if denied <> "" then
+          (raise (Pricklypear_lisp.Ast.Interp_error
+                    (Pricklypear_lisp.Ast.Prim_error ("branch/push", denied, "denied"))))
         else
           let names_of_val = function
             | Pricklypear_lisp.Ast.VStr s -> [ s ]
@@ -883,8 +923,15 @@ let register ~(hooks : hooks) (t : t) (tbl : Primitives.t) : unit =
        tags). Current branch only; author = caller. *)
     Primitives.register_server_only tbl "branch/cp"
       (fun args ->
-        if t.manifest.username = "anonymous" then
-          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("branch/cp", "denied for anonymous", "denied"))))
+        let denied =
+          match Authz.authorize t ~capability:Authz.Branch_read () with
+          | Ok () -> ""
+          | Error msg -> msg
+        in
+        if denied <> "" then
+          (raise (Pricklypear_lisp.Ast.Interp_error
+                    (Pricklypear_lisp.Ast.Prim_error
+                       ("branch/cp", denied, "denied"))))
         else
           match args with
           | Pricklypear_lisp.Ast.VStr name :: rest ->
@@ -929,8 +976,15 @@ let register ~(hooks : hooks) (t : t) (tbl : Primitives.t) : unit =
        authorization (branch_readable). Denied for anonymous. *)
     Primitives.register_server_only tbl "branch/cp-list"
       (fun args ->
-        if t.manifest.username = "anonymous" then
-          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("branch/cp-list", "denied for anonymous", "denied"))))
+        let denied =
+          match Authz.authorize t ~capability:Authz.Branch_read () with
+          | Ok () -> ""
+          | Error msg -> msg
+        in
+        if denied <> "" then
+          (raise (Pricklypear_lisp.Ast.Interp_error
+                    (Pricklypear_lisp.Ast.Prim_error
+                       ("branch/cp-list", denied, "denied"))))
         else
           let cp_json (c : Store.cp_row) : Yojson.Safe.t =
             `Assoc
@@ -979,8 +1033,15 @@ let register ~(hooks : hooks) (t : t) (tbl : Primitives.t) : unit =
        Current branch only (the cp was captured here). *)
     Primitives.register_server_only tbl "branch/cp-diff"
       (fun args ->
-        if t.manifest.username = "anonymous" then
-          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("branch/cp-diff", "denied for anonymous", "denied"))))
+        let denied =
+          match Authz.authorize t ~capability:Authz.Branch_read () with
+          | Ok () -> ""
+          | Error msg -> msg
+        in
+        if denied <> "" then
+          (raise (Pricklypear_lisp.Ast.Interp_error
+                    (Pricklypear_lisp.Ast.Prim_error
+                       ("branch/cp-diff", denied, "denied"))))
         else
           match args with
           | [ Pricklypear_lisp.Ast.VStr name ] ->
@@ -1048,8 +1109,15 @@ let register ~(hooks : hooks) (t : t) (tbl : Primitives.t) : unit =
        Rehydrates the env when anything landed (current-branch writes). *)
     Primitives.register_server_only tbl "branch/cp-restore"
       (fun args ->
-        if t.manifest.username = "anonymous" then
-          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("branch/cp-restore", "denied for anonymous", "denied"))))
+        let denied =
+          match Authz.authorize t ~capability:Authz.Branch_push () with
+          | Ok () -> ""
+          | Error msg -> msg
+        in
+        if denied <> "" then
+          (raise (Pricklypear_lisp.Ast.Interp_error
+                    (Pricklypear_lisp.Ast.Prim_error
+                       ("branch/cp-restore", denied, "denied"))))
         else
           let names_of_val = function
             | Pricklypear_lisp.Ast.VStr s -> [ s ]
@@ -1171,8 +1239,15 @@ let register ~(hooks : hooks) (t : t) (tbl : Primitives.t) : unit =
        branch/cp-list. *)
     Primitives.register_server_only tbl "branch/log"
       (fun args ->
-        if t.manifest.username = "anonymous" then
-          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("branch/log", "denied for anonymous", "denied"))))
+        let denied =
+          match Authz.authorize t ~capability:Authz.Branch_read () with
+          | Ok () -> ""
+          | Error msg -> msg
+        in
+        if denied <> "" then
+          (raise (Pricklypear_lisp.Ast.Interp_error
+                    (Pricklypear_lisp.Ast.Prim_error
+                       ("branch/log", denied, "denied"))))
         else
           let emit ~label ~branch_id ~cp_name =
             let window =
@@ -1255,8 +1330,15 @@ let register ~(hooks : hooks) (t : t) (tbl : Primitives.t) : unit =
        agent_branch_lock (same class as promote). Server-only. *)
     Primitives.register_server_only tbl "branch/pick"
       (fun args ->
-        if t.manifest.username = "anonymous" then
-          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("branch/pick", "denied for anonymous", "denied"))))
+        let denied =
+          match Authz.authorize t ~capability:Authz.Branch_push () with
+          | Ok () -> ""
+          | Error msg -> msg
+        in
+        if denied <> "" then
+          (raise (Pricklypear_lisp.Ast.Interp_error
+                    (Pricklypear_lisp.Ast.Prim_error
+                       ("branch/pick", denied, "denied"))))
         else
           match args with
           | Pricklypear_lisp.Ast.VStr target_ref :: rest ->
@@ -1457,8 +1539,15 @@ let register ~(hooks : hooks) (t : t) (tbl : Primitives.t) : unit =
        system/* are ADMIN-ONLY. Not gated on agent_branch_lock. Server-only. *)
     Primitives.register_server_only tbl "branch/ingest"
       (fun args ->
-        if t.manifest.username = "anonymous" then
-          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("branch/ingest", "denied for anonymous", "denied"))))
+        let denied =
+          match Authz.authorize t ~capability:Authz.Branch_push () with
+          | Ok () -> ""
+          | Error msg -> msg
+        in
+        if denied <> "" then
+          (raise (Pricklypear_lisp.Ast.Interp_error
+                    (Pricklypear_lisp.Ast.Prim_error
+                       ("branch/ingest", denied, "denied"))))
         else
           match args with
           | Pricklypear_lisp.Ast.VStr target_ref
@@ -1635,8 +1724,14 @@ let register ~(hooks : hooks) (t : t) (tbl : Primitives.t) : unit =
      (branch_readable); denied for anonymous; server-only. *)
   Primitives.register_server_only tbl "branch/defs"
     (fun args ->
-      if t.manifest.username = "anonymous" then
-        (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("branch/defs", "denied for anonymous", "denied"))))
+      let denied =
+        match Authz.authorize t ~capability:Authz.Branch_read () with
+        | Ok () -> ""
+        | Error msg -> msg
+      in
+      if denied <> "" then
+        (raise (Pricklypear_lisp.Ast.Interp_error
+                  (Pricklypear_lisp.Ast.Prim_error ("branch/defs", denied, "denied"))))
       else
         match args with
         | [ Pricklypear_lisp.Ast.VStr branch_ref ] ->

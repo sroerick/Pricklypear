@@ -312,6 +312,76 @@ let test_deftype_admin_system_passes () =
    (never a silent no-op that would look like a successful reset). The
    gate runs first, so this only fires for an admin caller. *)
 
+(* authz-matrix gaps 3-5 (2026-10-21): read-ref + note-garden gates.
+   code-history and diff resolve ARBITRARY owner/branch refs; both now
+   honor branch_read_scope - denial fires BEFORE the lookup, so the
+   no-DB store still exercises it. tree/garden-root and
+   tree/children-html confine to the caller's note garden (82871ca1).
+   revoke-token (gap 6) needs Auth_store, so it is verified on prod,
+   not here. *)
+
+let test_code_history_stranger_denied () =
+  with_eio (fun () ->
+      let t = make_session ~username:"tester" in
+      match call t "code-history" [ VStr "f"; VStr "hollis/personal" ] with
+    | VStr s ->
+        Alcotest.(check bool) "code-history stranger denied" true
+          (starts_with ~prefix:"denied: branch" s)
+    | v -> Alcotest.fail ("expected denial, got: " ^ pp v))
+
+let test_code_history_own_ref_passes_gate () =
+  with_eio (fun () ->
+      let t = make_session ~username:"tester" in
+      match call t "code-history" [ VStr "f"; VStr "tester/x" ] with
+    | VStr s ->
+        Alcotest.(check bool) "code-history own ref passes gate" true
+          (starts_with ~prefix:"code-history: no such branch" s)
+    | v -> Alcotest.fail ("expected no-such-branch, got: " ^ pp v))
+
+let test_diff_stranger_denied () =
+  with_eio (fun () ->
+      let t = make_session ~username:"tester" in
+      match call t "diff" [ VStr "hollis/personal"; VStr "tester/x" ] with
+    | VStr s ->
+        Alcotest.(check bool) "diff stranger denied" true
+          (starts_with ~prefix:"denied: branch" s)
+    | v -> Alcotest.fail ("expected denial, got: " ^ pp v))
+
+let test_diff_own_pair_passes_gate () =
+  with_eio (fun () ->
+      let t = make_session ~username:"tester" in
+      match call t "diff" [ VStr "tester/a"; VStr "tester/b" ] with
+    | VStr s ->
+        Alcotest.(check string) "diff own pair passes gate"
+          "diff: no such branch pair (tester/a, tester/b)" s
+    | v -> Alcotest.fail ("expected no-such-pair, got: " ^ pp v))
+
+let test_garden_root_stranger_denied () =
+  with_eio (fun () ->
+      let t = make_session ~username:"tester" in
+      match call t "tree/garden-root" [ VStr "hollis" ] with
+    | v -> Alcotest.fail ("expected denial, got: " ^ pp v)
+    | exception Interp_error (Prim_error (_, m, _)) ->
+        Alcotest.(check string) "garden-root stranger denied"
+          "denied: hollis is not your garden" m)
+
+let test_garden_root_self_passes () =
+  with_eio (fun () ->
+      let t = make_session ~username:"tester" in
+      match call t "tree/garden-root" [ VStr "tester" ] with
+    | VStr s ->
+        Alcotest.(check bool) "garden-root self passes" true
+          (starts_with ~prefix:"data." s)
+    | v -> Alcotest.fail ("expected garden root, got: " ^ pp v))
+
+let test_children_html_stranger_prefix_denied () =
+  with_eio (fun () ->
+      let t = make_session ~username:"tester" in
+      match call t "tree/children-html" [ VStr "data.note.u.hollis" ] with
+    | v -> Alcotest.fail ("expected denial, got: " ^ pp v)
+    | exception Interp_error (Prim_error (_, m, _)) ->
+        Alcotest.(check bool) "children-html stranger prefix denied" true
+          (starts_with ~prefix:"note prefix data.note.u.hollis is outside" m))
 let () =
   Alcotest.run "pricklypear-prim-gates"
     [
@@ -368,5 +438,26 @@ let () =
           ; ( "deftype-admin-system-passes"
             , `Quick
             , test_deftype_admin_system_passes )
+          ; ( "code-history-stranger-denied"
+            , `Quick
+            , test_code_history_stranger_denied )
+          ; ( "code-history-own-ref-passes-gate"
+            , `Quick
+            , test_code_history_own_ref_passes_gate )
+          ; ( "diff-stranger-denied"
+            , `Quick
+            , test_diff_stranger_denied )
+          ; ( "diff-own-pair-passes-gate"
+            , `Quick
+            , test_diff_own_pair_passes_gate )
+          ; ( "garden-root-stranger-denied"
+            , `Quick
+            , test_garden_root_stranger_denied )
+          ; ( "garden-root-self-passes"
+            , `Quick
+            , test_garden_root_self_passes )
+          ; ( "children-html-stranger-prefix-denied"
+            , `Quick
+            , test_children_html_stranger_prefix_denied )
         ] )
     ]

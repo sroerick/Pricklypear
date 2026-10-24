@@ -11,8 +11,11 @@
     an [ops] record supplied by Session. ensure_personal_branch /
     ensure_agent_branch are Store-only and need no ops.
 
-    Behavior contract: byte-identical relocation; seed order, failure
-    reporting, additive-seed flags, and stderr lines are unchanged. *)
+     Behavior contract: byte-identical relocation; seed order, failure
+     reporting, and stderr lines are unchanged. branching.seed-policy
+     MIRROR (roerick 2026-10-22): the seed now UPSERTS onto system/main
+     (persist_function / register_route) instead of insert-if-absent —
+     system/main mirrors the code; there is no second system branch. *)
 
 open Session_types
 
@@ -206,75 +209,88 @@ let seed_agents_note ~(ops : ops) (t : t) : unit =
         (Agent_tools.pp_interp_exn exn);
       ())
 
-let seed_stdlib ~(ops : ops) (t : t) : unit =
-  (* Package defaults always land on system/main — NEVER on the user's
-     personal branch. Personal inherits main via the recursive CTE; user
-     (define)s write overrides on personal and survive reseed/deploy.
+  let seed_stdlib ~(ops : ops) (t : t) : unit =
+    (* Package defaults always land on system/main — NEVER on the user's
+       personal branch. Personal inherits main via the recursive CTE; user
+       (define)s write overrides on personal and survive reseed/deploy.
 
-     branching.seed-policy OPTION A: boot seed is ADDITIVE —
-     persist_function_if_absent / register_route_if_absent via
-     t.seed_additive. Existing system/main rows (e.g. from promote)
-     are not clobbered on deploy/restart. Explicit (reseed-package)
-     upserts from libs when an admin asks. Interactive load-library
-     still upserts the CURRENT branch.
+       branching.seed-policy MIRROR (roerick 2026-10-22): boot seed
+       UPSERTS every define/route from libs/<pkg>/lib.pp onto system/main
+       (persist_function / register_route — the old OPTION A
+       insert-if-absent policy and its seed_additive flag are retired),
+       so a deploy's code changes land on main at the next boot without
+       an admin (reseed-package). There is no second system branch.
+       Personal branches stay the override layer: persist_function's
+       no-diff-no-pin rule keeps an identical body from pinning, and a
+       user's own define wins by closest-chain.
 
-     suppress_refresh_on_define: the eval_one define-interceptor would
-     otherwise fire refresh_ui_shell when ui/nav is defined mid-seed
-     (before notes/capture/nav is bound) and fail with
-     `unbound: notes/capture/nav`. The boot sequence does one explicit
-     refresh_ui_shell AFTER all packages are loaded. *)
-  Store.with_branch t.store ~branch_id:Store.system_main_id (fun () ->
-    t.ui_shell.suppress_refresh_on_define <- true;
-    t.seed_additive <- true;
-    (* image.boot-seed-batch: preload existing fn/route names on
-       system/main once, so persist_function_if_absent /
-       register_route_if_absent skip the per-name get_by_path SELECT
-       (~1800 defines + routes). On a warm DB this collapses the seed
-       to two queries + zero writes. *)
-    Store.begin_seed_names t.store;
-    let started = Unix.gettimeofday () in
-    (* image.seed-failure-loud (i-1788670156): collect per-package load
-       failures so the boot-seed summary names them loudly. *)
-    let failed : string list ref = ref [] in
-    let record_failure name = function
-      | None -> ()
-      | Some e -> failed := (name ^ ": " ^ e) :: !failed
-    in
-    let finally () =
-      let preloaded =
-        match t.store.seed_names with
-        | Some h -> Some (Hashtbl.length h)
-        | None -> None in
-      Store.end_seed_names t.store;
-      t.ui_shell.suppress_refresh_on_define <- false;
-      t.seed_additive <- false;
-      let elapsed_ms =
-        int_of_float ((Unix.gettimeofday () -. started) *. 1000.0) in
-      Printf.eprintf "[session] boot seed: %d packages, %d ms%s%s\n%!"
-        (List.length (discover_seed_packages ())) elapsed_ms
-        (match preloaded with
-         | Some n -> Printf.sprintf " (%d names preloaded)" n
-         | None -> "")
-        (match !failed with
-         | [] -> ""
-         | xs ->
-             Printf.sprintf
-               "\n[session] *** BOOT SEED FAILURES (%d): %s — those \
-                packages' defines/routes are MISSING; fix libs/<pkg> \
-                and reseed ***"
-               (List.length xs) (String.concat " | " xs))
-    in
-    Fun.protect ~finally (fun () ->
-        let pkgs = discover_seed_packages () in
-        Printf.eprintf "[session] seed_stdlib packages (%d): %s\n%!"
-          (List.length pkgs) (String.concat " " pkgs);
-        let rec go = function
-          | [] -> ()
-          | name :: rest ->
-              let () = record_failure name (seed_one ~ops t name) in
-              go rest
-        in
-        go pkgs))
+       Warm-boot cost: load_skip_names (the same fingerprint map
+       interactive load-library uses) is built ONCE below from the
+       chain-visible rows on system/main; eval_form skips defines whose
+       normalized body + doc match, so a warm boot re-evals only what a
+       deploy changed. This replaces the additive era's body-agnostic
+       seed_names skip (begin_seed_names / end_seed_names are gone).
+
+       suppress_refresh_on_define: the eval_one define-interceptor would
+       otherwise fire refresh_ui_shell when ui/nav is defined mid-seed
+       (before notes/capture/nav is bound) and fail with
+       `unbound: notes/capture/nav`. The boot sequence does one explicit
+       refresh_ui_shell AFTER all packages are loaded. *)
+    Store.with_branch t.store ~branch_id:Store.system_main_id (fun () ->
+      t.ui_shell.suppress_refresh_on_define <- true;
+      t.seed_boot <- true;
+      (* Mirror-skip map: name -> fingerprint (pp_expr body ^ "\\x00" ^
+         doc) of every chain-visible fn row on system/main, built ONCE
+         for the seed window. load_library leaves it alone while
+         seed_boot is set (session.ml) and our finally restores it. *)
+      let tbl = Hashtbl.create 1024 in
+      List.iter
+        (fun (name, body_json, _author, _pkg, doc, _branch, _updated) ->
+          match Pricklypear_lisp.Ast.expr_of_body_json body_json with
+          | None -> ()  (* malformed row: keep full eval *)
+          | Some body ->
+              Hashtbl.replace tbl name
+                (Pricklypear_lisp.Reader.pp_expr body ^ "\\x00"
+                 ^ (match doc with Some d -> d | None -> "")))
+        (Store.list_function_names_for_load t.store);
+      let prev_skip = t.eval_state.load_skip_names in
+      t.eval_state.load_skip_names <- Some tbl;
+      let started = Unix.gettimeofday () in
+      (* image.seed-failure-loud (i-1788670156): collect per-package load
+         failures so the boot-seed summary names them loudly. *)
+      let failed : string list ref = ref [] in
+      let record_failure name = function
+        | None -> ()
+        | Some e -> failed := (name ^ ": " ^ e) :: !failed
+      in
+      let finally () =
+        t.eval_state.load_skip_names <- prev_skip;
+        t.ui_shell.suppress_refresh_on_define <- false;
+        t.seed_boot <- false;
+        let elapsed_ms =
+          int_of_float ((Unix.gettimeofday () -. started) *. 1000.0) in
+        Printf.eprintf "[session] boot seed: %d packages, %d ms%s\n%!"
+          (List.length (discover_seed_packages ())) elapsed_ms
+          (match !failed with
+           | [] -> ""
+           | xs ->
+               Printf.sprintf
+                 "\n[session] *** BOOT SEED FAILURES (%d): %s — those \
+                  packages' defines/routes are MISSING; fix libs/<pkg> \
+                  and reseed ***"
+                 (List.length xs) (String.concat " | " xs))
+      in
+      Fun.protect ~finally (fun () ->
+          let pkgs = discover_seed_packages () in
+          Printf.eprintf "[session] seed_stdlib packages (%d): %s\n%!"
+            (List.length pkgs) (String.concat " " pkgs);
+          let rec go = function
+            | [] -> ()
+            | name :: rest ->
+                let () = record_failure name (seed_one ~ops t name) in
+                go rest
+          in
+          go pkgs))
 
 (** Ensure username/personal exists as an EMPTY child of system/main.
     Inheritance (not copy) means main defaults stay visible; personal

@@ -2236,17 +2236,13 @@
 (define todo/list/merge
   (lambda
     (garden shared)
-    (if
-      (null? shared)
-      garden
-      (let
-        ((sid (as-str (car (car shared)))))
-        (todo/list/merge
-          (todo/list/merge-one garden sid (car shared))
-          (cdr shared)))))
-  "Merge shared `shared` into `garden`, deduping by id: an id already in
-     the garden keeps its garden row (no double-listing); a new id is
-     appended.")
+    (append garden shared))
+  "PERF-5 (2026-10-22): O(n) append replaces the per-row merge-one walk
+     (889 calls, ~40k steps per deleg render). The old dedup was head-only
+     (merge-one checked only the FIRST garden row), so it never actually
+     deduped beyond row one; garden and shared subtrees are disjoint by
+     construction (one node = one path), so ids cannot collide across
+     pools. Garden rows still come first, as every caller expects.")
 
 (define todo/list/merge-one
   (lambda
@@ -4133,14 +4129,15 @@
      node or note is missing. borge/workstreams.borg note-todos clause 2.")
 (define todo/from-notes-items
   (lambda
-    ()
+    (items)
     (list/filter
       (lambda
         (row)
         (string-eq (todo/item/origin-kind (cdr row)) "note"))
-      (todo/item/all)))
+      (if (null? items) (todo/item/all) items)))
   "Promoted cards (origin_kind = note) — the board's 'from notes' filter,
-     a filter over CARDS, never a second scrape of the note tree.")
+   a filter over CARDS, never a second scrape of the note tree. Takes the
+   page's ONE board snapshot (items); an empty list fetches its own.")
 (define todo/node/promoted-refs
   (lambda
     ()
@@ -4231,15 +4228,15 @@
      the owning note path, which is the slug-map key.")
 (define todo/node/unpromoted
   (lambda
-    ()
+    (items)
     (let*
       ((promoted
           (list/filter
             (lambda (r) (not (string-eq r "")))
             (list/map
               (lambda (row) (todo/item/origin-ref (cdr row)))
-              (todo/item/all))))
-        (marked (todo/node/marked-rows))
+              (if (null? items) (todo/item/all) items))))
+          (marked (todo/node/marked-rows))
         (smap (todo/node/slug-map marked)))
       (list/filter
         (lambda
@@ -4324,10 +4321,10 @@
   "One unpromoted node row with a promote button (POST action=promote-node).")
 (define todo/from-notes-html
   (lambda
-    (view)
+    (view items)
     (let
-      ((cards (todo/from-notes-items))
-        (unpromoted (todo/node/unpromoted)))
+      ((cards (todo/from-notes-items items))
+        (unpromoted (todo/node/unpromoted items)))
       (html/join
         (list
           (html/h2 "From notes")
@@ -4451,11 +4448,12 @@
                   (string-eq view "from-notes")
                   ""
                   (if (string-eq view "archived") "" view))))
+            (board-items (todo/item/all))
             (body
               (cond
                 ((string-eq view "everything")
                   (let
-                    ((items (todo/item/all)))
+                    ((items board-items))
                     (let
                       ((active (todo/item/active items)))
                       (html/join
@@ -4470,9 +4468,9 @@
                               ""
                               (list/take active todo/page/cap)))
                           (todo/page/more-note (length active))
-                          (todo/from-notes-html view))))))
+                          (todo/from-notes-html view board-items))))))
                 ((string-eq view "from-notes")
-                  (todo/from-notes-html view))
+                  (todo/from-notes-html view board-items))
                 (#t (todo/item/html view)))))
           (html/div
             (html/attr "id" "todo-main")
@@ -4484,7 +4482,7 @@
                     (list
                       (html/div
                         (html/attr "class" "todo-side")
-                        (todo/ui/nav view))
+                        (todo/ui/nav view board-items))
                       (html/div
                         (html/attr "class" "todo-body")
                         (html/join
@@ -4497,15 +4495,15 @@
      todo/item/html, whose sections each re-read the board (todo/item/all)
      and the note scrape — three card scans and two scrapes per page, 500
      budget-exceeded on prod. The smart view is assembled HERE now, from
-     ONE snapshot. todo/ui/nav keeps its 1-arg signature for cross-branch
-     safety (see todo/item/html's arity note).")
+       ONE snapshot (board-items, now shared with todo/ui/nav; nav falls back
+       to its own fetch when passed an empty list).")
 
 (define todo/ui/nav
   (lambda
-    (view)
+      (view items)
     (let
       ((lists (todo/list/all))
-        (items (todo/item/all))
+          (items (if (null? items) (todo/item/all) items))
         (inbox (todo/list/ensure-inbox)))
       (let
         ((arch-n
@@ -4555,7 +4553,7 @@
                             (html/attr "required" "required")
                             (html/attr "class" "todo-new-list-input"))))
                       (html/button (html/attr "type" "submit") "+ list")))))))))))
-  "nav: ONE items fetch (archived count only); lists render without per-list ratios — dict-get JSON parses per item blew the route budget")
+    "nav: items snapshot comes from the caller (empty list fetches once here); archived count only; lists render without per-list ratios - dict-get JSON parses per item blew the route budget")
 
 (define todo/ui/nav-link
   (lambda

@@ -559,18 +559,37 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
         in
         (Pricklypear_lisp.Ast.VList rows));
 
-  (* (revoke-token credential-id) -> VStr ok|error. Caller may revoke own; admin any. *)
+  (* (revoke-token credential-id) -> VStr ok|error. Caller may revoke own;
+     admin any. authz-matrix gap 6 (2026-10-21): the prim layer now
+     ENFORCES what this comment promises - rotate-token's owner check,
+     mirrored; previously any authenticated caller could revoke any
+     credential id. *)
   Primitives.register tbl "revoke-token"
     (fun args ->
       match args with
       | [ Pricklypear_lisp.Ast.VStr cid ] when cid <> "" ->
-          let r = Auth_store.revoke_token t.store ~credential_id:cid in
-          (match r with
-           | Error e ->
-               raise (Pricklypear_lisp.Ast.Interp_error
-                        (Pricklypear_lisp.Ast.Prim_error
-                           ("revoke-token", e, "failed")))
-           | Ok () -> (Pricklypear_lisp.Ast.VStr "ok"))
+          let uname = caller_username () in
+          let caller = Auth_store.get_user_by_username t.store uname in
+          let caller_id =
+            match caller with Some x -> x.Auth_store.id | None -> "" in
+          let is_admin =
+            match caller with
+            | Some x -> x.Auth_store.is_admin | None -> false in
+          let metas = Auth_store.list_tokens t.store ~user_id:caller_id in
+          let owns =
+            List.exists (fun (m : Auth_store.token_meta) -> m.id = cid) metas in
+          if not is_admin && not owns then
+            (raise (Pricklypear_lisp.Ast.Interp_error
+              (Pricklypear_lisp.Ast.Prim_error
+                 ("revoke-token", "denied: not your token", "denied"))))
+          else
+            let r = Auth_store.revoke_token t.store ~credential_id:cid in
+            (match r with
+             | Error e ->
+                 raise (Pricklypear_lisp.Ast.Interp_error
+                          (Pricklypear_lisp.Ast.Prim_error
+                             ("revoke-token", e, "failed")))
+             | Ok () -> (Pricklypear_lisp.Ast.VStr "ok"))
       | _ -> (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("revoke-token", "need credential-id", "bad-args")))));
 
   (* (rotate-token credential-id [label]) -> VStr new-raw-token. Admin: rotates any;
