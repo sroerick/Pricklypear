@@ -39,13 +39,23 @@
 #
 # Options:
 #   --url URL              habitat base (default PP_URL env, else https://pricklypear.rocks)
-#   --user U --password P  creds (default PP_USER / PP_PASS env)
+#   --user U               ACTOR identity for every write (default PP_USER; REQUIRED)
+#   --password P           DEPRECATED, accepted for compatibility only: the value is
+#                          moved into the environment and never forwarded to a child
 #   --force                override a LIVE non-stale claim lease
 #   --dry-run              no side effects (overrides mode selection)
 #
 # Env / knobs:
 #   PP_URL PP_USER PP_PASS (or PP_TOKEN for Bearer auth) - env vars, or
 #   ~/.config/pricklypear/env; environment wins over the file
+#   PP_FLOW_ALLOW_ADMIN=1    permit PP_USER=admin/root/system. OFF by default:
+#                            every write is attributed to PP_USER, and a record
+#                            whose actor is a generic privileged name cannot say
+#                            who acted. Name the agent (e.g. PP_USER=hollis).
+#   PP_FLOW_DELEGATE_CREDS=1 pass PP_PASS/PP_PASS_FILE/PP_TOKEN through to the
+#                            agent runner. OFF by default: the runner resolves
+#                            its own credentials, so the habitat password never
+#                            enters the agent's environment.
 #   PP_FLOW_PI — the pi runner (default: `pi -p`); set to e.g. `true` to stub
 #                the agent for tests:  PP_FLOW_PI=true ./scripts/pp-flow.sh --run <id>
 #   PP_FLOW_LOG_DIR — where run logs + brief files go (default <repo>/.ralph)
@@ -76,7 +86,7 @@ if [ -f "$HOME/.config/pricklypear/env" ]; then
 fi
 
 URL="${PP_URL:-$DEFAULT_HOST}"
-AUSER="${PP_USER:-admin}"
+AUSER="${PP_USER:-}"
 APASS="${PP_PASS:-}"
 MODE="run"
 FORCE=0
@@ -141,7 +151,74 @@ if [ -z "$CARD" ] && [ "$MODE" != "drain" ]; then
   exit 2
 fi
 [ -n "$APASS" ] || [ -n "${PP_TOKEN:-}" ] || { echo "pp-flow: no credentials (set PP_PASS, or PP_TOKEN for Bearer auth)" >&2; exit 2; }
+# ---- the ACTOR is required, and a shared credential is not an actor ---------
+# Every claim, comment and transition below is attributed to $AUSER. Through
+# 2026-10-24 the default was the literal string "admin", so an unset PP_USER
+# silently stamped every artifact with an identity nobody chose -- and the card
+# record could never later say whether that was a human, an agent, or a fallback.
+#
+# VERIFIED ON PROD 2026-10-24 (this is why the rule is nuanced, not absolute):
+#   admin -> whoami = admin          (works)
+#   roerick, hollis, gregor -> "authentication required"
+# `admin` is the ONLY basic-auth account, i.e. ONE SHARED CREDENTIAL. So on the
+# basic-auth path every write really is performed as `admin` no matter what name
+# you wish it had. Refusing it outright would not harden anything; it would break
+# the only working path. Named-actor attribution requires a DELEGATED TOKEN
+# (PP_TOKEN), where resolve_actor() below pins the actor to the token's identity.
 
+# 1. No silent default. An unset PP_USER must fail, not become "admin".
+if [ -z "${PP_USER:-}" ] && [ -z "${PP_TOKEN:-}" ]; then
+  echo "pp-flow: PP_USER is required -- name the ACTOR, e.g. PP_USER=hollis" >&2
+  echo "        (there is deliberately no 'admin' default any more: this identity is" >&2
+  echo "        stamped on every claim, comment and transition the run produces)" >&2
+  exit 2
+fi
+
+# 2. A shared-credential name is allowed only when EXPLICITLY chosen, and it
+#    always says out loud what it costs. Deliberate choice is not the bug; the
+#    silent default was.
+case "$AUSER" in
+  admin|Admin|ADMIN|root|system)
+    if [ -n "${PP_TOKEN:-}" ]; then
+      : # resolve_actor() will pin the real identity; nothing to warn about yet.
+    else
+      echo "pp-flow: WARNING PP_USER='$AUSER' -- on the basic-auth path this is a SHARED" >&2
+      echo "        credential, not a named actor: every write is performed as '$AUSER' and" >&2
+      echo "        'author=$AUSER' on the card cannot distinguish you from any other user of" >&2
+      echo "        it. For attributable writes, use a delegated token instead:" >&2
+      echo "          PP_TOKEN=<agent token>   (actor is then pinned to the token's identity)" >&2
+    fi
+    ;;
+esac
+
+# ---- credential custody: environment only, never argv -----------------------
+# pp-eval.sh/pp_eval already resolve PP_PASS, then PP_PASS_FILE, then PP_TOKEN
+# from the environment; an explicit --password always wins. So the fix is to stop
+# passing one and make sure what we hold is exported. A --password given on OUR
+# command line is still argv at this instant -- it is moved into the environment
+# here and never forwarded, which is the part that was leaking across the process
+# table. Rule borrowed from gregor/tuna act-as: "the model must never see the
+# token ... never printed (not output, not argv)".
+if [ -n "$APASS" ]; then
+  PP_PASS="$APASS"; export PP_PASS
+elif [ -n "${PP_PASS_FILE:-}" ]; then
+  export PP_PASS_FILE
+elif [ -n "${PP_TOKEN:-}" ]; then
+  export PP_TOKEN
+fi
+
+# ---- credentials for the AGENT RUNNER are withheld by default ---------------
+# PP_PASS stays exported for OUR pp-eval children (they need it), but the agent
+# runner is a third-party process (pi, autolith, glochid) and has no business
+# holding the habitat password. strip_creds runs a command with those variables
+# removed from its environment. PP_FLOW_DELEGATE_CREDS=1 opts a flow out.
+strip_creds() {
+  if [ "${PP_FLOW_DELEGATE_CREDS:-0}" = "1" ]; then
+    "$@"
+  else
+    env -u PP_PASS -u PP_PASS_FILE -u PP_TOKEN "$@"
+  fi
+}
 # ---- eval plumbing -----------------------------------------------------------
 # NO (load-library "todo") around these calls (2026-10-18 perf fix). The old
 # comment here claimed "a fresh session still has the lib" — but the session
@@ -156,9 +233,39 @@ fi
 # session step. Keep these bare. (Callers that used to pass their own
 # (begin (load-library ...)) wrapper double-wrapped it: pp_todo_val already
 # prefixed one.)
-pp_eval() { if [ -n "$APASS" ]; then "$SCRIPT_DIR/pp-eval.sh" -j --url "$URL" --user "$AUSER" --password "$APASS" -e "$1" 2>&1; else "$SCRIPT_DIR/pp-eval.sh" -j --url "$URL" -e "$1" 2>&1; fi; }
+pp_eval() { "$SCRIPT_DIR/pp-eval.sh" -j --url "$URL" --user "$AUSER" -e "$1" 2>&1; }
 pp_todo_raw() { pp_eval "$1"; }
-pp_todo_val() { if [ -n "$APASS" ]; then "$SCRIPT_DIR/pp-eval.sh" --url "$URL" --user "$AUSER" --password "$APASS" -e "$1" 2>/dev/null; else "$SCRIPT_DIR/pp-eval.sh" --url "$URL" -e "$1" 2>/dev/null; fi; }
+pp_todo_val() { "$SCRIPT_DIR/pp-eval.sh" --url "$URL" --user "$AUSER" -e "$1" 2>/dev/null; }
+
+# ---- reconcile LABEL with AUTHORITY ----------------------------------------
+# Under PP_TOKEN (delegated Bearer auth) the habitat authenticates the TOKEN and
+# IGNORES --user; under basic auth --user is the identity. So a caller who sets
+# both could label writes as one actor while a different identity actually acts,
+# and the card record would preserve only the label. That is the actor/authority
+# conflation the whole delegation model exists to prevent, so resolve it once,
+# up front, and refuse on a mismatch.
+#
+# Costs one /api/eval ONLY on the token path; the basic-auth path pays nothing.
+resolve_actor() {
+  [ -n "${PP_TOKEN:-}" ] || return 0
+  tok_actor="$(pp_todo_val '(whoami)')"
+  tok_actor="$(printf '%s' "$tok_actor" | awk '{gsub(/[ \t\r\n"]/,""); print}')"
+  if [ -z "$tok_actor" ]; then
+    echo "pp-flow: PP_TOKEN could not be resolved to an identity ((whoami) returned nothing)" >&2
+    echo "        refusing to run: writes would be attributed to an unknown actor" >&2
+    exit 2
+  fi
+  if [ -n "$AUSER" ] && [ "$AUSER" != "$tok_actor" ]; then
+    echo "pp-flow: ACTOR MISMATCH -- PP_USER='$AUSER' but PP_TOKEN authenticates as '$tok_actor'." >&2
+    echo "        Under Bearer auth --user is ignored for authentication, so the write would be" >&2
+    echo "        performed by '$tok_actor' while the record said '$AUSER'. Refusing." >&2
+    echo "        Fix: set PP_USER='$tok_actor' (or unset it and let the token speak)." >&2
+    exit 2
+  fi
+  AUSER="$tok_actor"
+  echo "pp-flow: actor resolved from token: $AUSER" >&2
+}
+resolve_actor
 # Nopales-safe string literal via POSIX awk (escape backslash, dquote, tab;
 # join newline-separated records with \n). OpenBSD ksh has no ${v//pat/rep}.
 # No interpreter one-liner, matching the repo's no-Python rule.
@@ -517,11 +624,13 @@ case "$MODE" in
       if [ -z "$did" ]; then echo "pp-flow: drain: unparseable pick '$pick'" >&2; break; fi
       echo "pp-flow: drain: picked $did [$dstate] $dtitle" >&2
       # separate process = separate run = fresh reviewer if this column is a review
-      # Forward creds/URL explicitly: the child is a fresh process and a
-      # caller who passed --url/--user/--password (rather than exporting them)
-      # would otherwise have the child fall back to the secrets file/defaults
-      # — reading a card from one habitat and writing back to another.
-      "$0" --run "$did" --url "$URL" --user "$AUSER" --password "$APASS"
+      # Forward URL and ACTOR explicitly: the child is a fresh process and a
+      # caller who passed --url/--user (rather than exporting them) would
+      # otherwise fall back to the secrets file/defaults -- reading a card from
+      # one habitat and writing back to another. The CREDENTIAL is NOT forwarded
+      # on argv any more: it is exported above and inherited through the
+      # environment, so it is never visible in the process table.
+      "$0" --run "$did" --url "$URL" --user "$AUSER"
       drc=$?
       ran=$(( ran + 1 ))
       if [ "$drc" -ne 0 ]; then
@@ -582,7 +691,8 @@ case "$MODE" in
       esac
       visited="$visited $wstate"
       echo "pp-flow: walk: gate $wg/$wmax at column $wstate" >&2
-      "$0" --run "$CARD" --url "$URL" --user "$AUSER" --password "$APASS"
+      # No --password: inherited from the environment (see --drain above).
+      "$0" --run "$CARD" --url "$URL" --user "$AUSER"
       wrc=$?
       if [ "$wrc" -ne 0 ]; then
         echo "pp-flow: walk: card $CARD failed at gate $wg (column $wstate, rc=$wrc)" >&2
@@ -680,7 +790,7 @@ case "$MODE" in
       rc=127
     else
       # shellcheck disable=SC2086
-      $PI_RUNNER "$(cat "$BRIEF_FILE")" > "$LOG_FILE" 2>&1
+      strip_creds $PI_RUNNER "$(cat "$BRIEF_FILE")" > "$LOG_FILE" 2>&1
       rc=$?
     fi
     A1=$(date +%s); AGENT_S=$(( A1 - A0 ))
