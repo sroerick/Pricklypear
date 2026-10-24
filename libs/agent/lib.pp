@@ -392,6 +392,43 @@
   (lambda (room cur) (string-append room "-" cur))
   "Deterministic idempotency key for a reply built at cursor cur: room-cursor.")
 
+(define agent/addressed?
+  (lambda
+    (row)
+    (let
+      ((f (cdr row)))
+      (and
+        (string-eq (as-str (dict-get f "turn")) "true")
+        (not (blank? (as-str (dict-get f "to")))))))
+  "A row that requests a turn: turn:true plus an explicit to:. Addressing is a
+   FIELD, never a substring search for '@name' in the body. Arrival alone is
+   Tier 0 (recorded, wakes nobody); this flag is Tier 1 (one deliberate turn).")
+
+(define agent/addressed-to-me
+  (lambda
+    (xs)
+    (filter
+      (lambda
+        (r)
+        (let
+          ((f (cdr r))
+            (to (as-str (dict-get (cdr r) "to"))))
+          (and
+            (agent/addressed? r)
+            (or (string-eq to agent/bot) (string-eq to "room")))))
+      xs))
+  "Rows in xs addressed to this agent (or to the whole room).")
+
+(define agent/addressed-room?
+  (lambda
+    (rows)
+    (pair?
+      (filter (lambda (r) (agent/addressed? r)) rows)))
+  "Whether this room has EVER carried an addressed row. Used as the rollout
+   signal: a room with addressing speaks the new protocol and wakes only on
+   turn:true, while a room with none keeps legacy wake-on-any-message so no
+   agent goes silent before its bridge learns to write turn.")
+
 (define agent/wake-room
   (lambda
     (room)
@@ -424,19 +461,33 @@
                 ((wid (agent/wake-id room cur)))
                 (if
                   (string-eq (agent/find-wake all wid) "")
-                  (let
-                    ((talk (agent/notbot newm ())))
+                  (let*
+                    ((talk (agent/notbot newm ()))
+                     (trig
+                       (if
+                         (agent/addressed-room? all)
+                         (agent/addressed-to-me newm)
+                         talk)))
                     (if
-                      (null? talk)
-                      (seq
-                        (update-field
-                          (quote agent-state)
-                          id
-                          "cursor"
-                          (agent/last-id all))
-                        (update-field (quote agent-state) id "fails" "")
-                        (string-append room ": quiet-self"))
-                      (let*
+                      (null? trig)
+                      (if
+                        (null? talk)
+                        (seq
+                          (update-field
+                            (quote agent-state)
+                            id
+                            "cursor"
+                            (agent/last-id all))
+                          (update-field (quote agent-state) id "fails" "")
+                          (string-append room ": quiet-self"))
+                        (seq
+                          (update-field (quote agent-state) id "fails" "")
+                          (string-append
+                            room
+                            ": holding "
+                            (as-str (length talk))
+                            " unaddressed (tier 0 - recorded, no turn)")))
+                        (let*
                         ((noted (agent/notify-talk room talk))
                           (transcript (agent/join talk ""))
                           (tl (string-length transcript))
