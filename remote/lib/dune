@@ -7,7 +7,7 @@
  (name pricklypear_remote_lib)
  (public_name pricklypear-remote.lib)
  (wrapped false)
- (modules agent_context agent_memory proxy_rim remote http_transport placer def_cache sync_client free_vars http_ui surface assets libs_source)
+ (modules agent_context agent_memory proxy_rim remote http_transport placer def_cache sync_client free_vars http_ui surface assets libs_source job_worker)
  (libraries
   pricklypear-hostkit
   pricklypear-llm
