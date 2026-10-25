@@ -269,6 +269,11 @@ let write_db_prims = [
   "agent-profile";
   "with-public-write";  (* elevates anon → may write data_rows *)
   "submit-job"; "submit-job-at"; "cancel-job";  (* borge/jobs.borg WriteDb *)
+    "claim-job"; "job-release"; "job-heartbeat"; "job-finish";
+    (* work-loop fleet worker prims (borge/jobs.borg): lease
+       claim/heartbeat/finish/release stamp the jobs row - WriteDb like
+       submit-job. Unclassified these failed boot's prim classification
+       check (2026-10-25: image refused to start on every deploy). *)
   "with-step"; "__step__";  (* checkpoint write; composes with Txn for exactly-once *)
   "schedule"; "unschedule";  (* borge/jobs.borg schedules WriteDb *)
   "undo";  (* borge/tree-time.borg reads-as-of-gen restore-by-write WriteDb *)
