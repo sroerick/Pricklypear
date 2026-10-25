@@ -1203,9 +1203,17 @@ let spawn_native (st : st) ~(run_id : string) ~(ctx : ctx) : unit =
 let spawn_run_sidecar (st : st) ~(run_id : string) ~(ctx : ctx) : unit =
   let cfg = st.cfg in
   let driver_log = Filename.concat ctx.x_dir "driver.log" in
+  (* `exec VAR=value cmd` is NOT valid POSIX sh: the shell reads the
+     assignment word as the COMMAND NAME and dies with
+     "/bin/sh: PP_FLOW_PI=...: not found" before pp-flow ever runs (observed
+     live on gregor 2026-10-25: every dispatch died sidecar-failure with an
+     empty PPFLOW-STATUS, and the only trace was one line in driver.log).
+     `exec env VAR=value cmd` is the portable form; the assignment also has
+     to sit BEFORE exec, not after it. Empty runner = pp-flow's own default
+     (``pi -p``), which must exist on the box or the run fails loudly. *)
   let runner =
     if cfg.runner = "" then ""
-    else Printf.sprintf "PP_FLOW_PI=%s " (sh_quote cfg.runner)
+    else Printf.sprintf "env PP_FLOW_PI=%s " (sh_quote cfg.runner)
   in
   let cmd =
     Printf.sprintf
