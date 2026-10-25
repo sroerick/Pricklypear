@@ -1,4 +1,4 @@
-;; package stream -- manna: the daily portion. Verses, RSS, tasks.
+;; package streams -- the daily portion. Verses, RSS, tasks.
 ;; Star levels (1-5, tally "*" .. "*****"): 5 stars = every 3 days, 1 = every 60.
 ;; Fade steps a star DOWN; star rows are never deleted. Exposures are a dated
 ;; ledger (stream-seen). Deal priority: most-starred first. Exodus 16: one
@@ -336,7 +336,7 @@
                 (html/span (html/attr "class" "stream-sep") " - ")
                 (html/a (string-append "/stream/fade?id=" (as-str id)) "fade")
                 (html/span (html/attr "class" "stream-sep") " - ")
-                (html/a (string-append "/stream/done?id=" (as-str id)) "done"))))))))))
+                (html/a (string-append "/stream/done?id=" (as-str id)) "release"))))))))))
 
 (define (stream/portion-html)
     "Deal (idempotent) then render today's portion."
@@ -363,9 +363,9 @@
 (define (stream/page)
     (html/page (list
       (html/join (list "<style>" (stream/css) "</style>"))
-      (html/h1 "manna")
+      (html/h1 "streams")
       (html/p* (html/attr "class" "muted")
-        "The daily portion. Star what you want to keep; the rest fades.")
+        "The daily portion. Star what you want to keep - it comes back around.")
       (stream/portion-html)))))
 
 (route "/stream" "stream/page")
