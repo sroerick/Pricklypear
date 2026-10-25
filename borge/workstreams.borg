@@ -310,17 +310,24 @@
    and `total` are shown beside it for scale, deliberately, so the reader
    can tell a quiet factory from a broken one.
 
-   BUDGET: THREE SCANS DO NOT FIT, AND THE ACCUMULATOR IS POSITIONAL.
-   run-open and run-reap each re-scan the shared data root internally
-   (both call run-all), so assembling this block from the derived readers
-   costs three full traversals and returned 'budget exceeded' on
-   measurement. The block takes a PRECOMPUTED row list and traverses it
-   once (factory-counts-from, the pulse-*-from pattern). The accumulator is
-   a positional list, not an assoc: the eval budget counts STEPS, and a
-   seven-key map-lookup rebuilt per row is seven recursive walks per row
-   (verified: that variant also exceeded the budget at 1118 rows, while
-   seven list-refs against a seven-element list did not). The assoc is
-   built once, at the end.
+   BUDGET: THE SCAN DOES NOT FIT; A DB-FILTERED READ IS 300x CHEAPER.
+   First implementation folded workstreams/run-all once (factory-counts-from,
+   the pulse-*-from pattern). It rendered correctly ALONE (2.5s, 1118 rows)
+   but the full page returned 'budget exceeded': the eval budget is a STEP
+   limit (400000, lisp/lib/budget.ml default), the baseline /pulse costs
+   170104 steps, and that fold cost 261945. A single scan was already too
+   much, so no accumulator tuning could have saved it.
+
+   The block therefore reads through find-rows, which filters in the DB, and
+   DB time does not consume steps: measured 10 steps per filtered read
+   (8 for the query, 7 to count). Unfiltered find-rows returns total=1118
+   directly, and eight per-state reads summed to exactly 1118 — matching
+   run-all, so the filter misses no rows. The whole block now costs 851
+   steps against the same live data, leaving the page near 171k of 400k.
+
+   COUNT SHAPE: `open` is derived by SUBTRACTION (total minus the five
+   terminal states) rather than by summing live states, so a run state
+   added later cannot silently vanish from it.
 
    WHY /pulse's OWN COUNTS ARE TRUSTWORTHY BUT todo/item/active's ARE NOT.
    Measured the same day: todo/item/all returns 510 rows / 281 unique ids
@@ -330,7 +337,7 @@
    which is clean. The duplication is a real defect in the item reader and
    is NOT fixed here; this section records why the indicator can be
    believed and why a monitor that reads todo/item/active cannot yet.")
-  (implements "libs/workstreams/lib.pp (workstreams/factory-counts-from, workstreams/factory-html-from; pulse-page gains the block)")
+  (implements "libs/workstreams/lib.pp (workstreams/factory-counts, workstreams/factory-html; pulse-page gains the block)")
   (* agent note (|2026-10-25: the operator-side monitor factory-watch.py lives
      in the workspace, NOT in this image — it reads the same run rows over
      /api/eval so a laptop can watch the factory without a deploy. It is
