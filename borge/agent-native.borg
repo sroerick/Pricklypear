@@ -31,6 +31,19 @@
   (implements "borge/jobs.borg" "libs/agent")
   (status partial)
  (* agent note (|2026-09-04: M1 is the single-room quiet/loud wake, verified end to end (cron tick + CRON-OK + idempotent quiet paths). 09-04: the generalize slice SHIPPED as part of M2 - multi-room scan via agent/rooms, one state row per room with per-room cursors, observation parameterized by room (agent/room-msgs find-rows, no more 400-row global scan); M1's single-room state row deleted, its defines superseded by the tool-loop set.|) *)
+ (* agent note (|2026-10-24 ADDRESSING GATE + ROOM PROTOCOL (branch work/messaging-gate): arrival no longer implies a turn. agent/wake-room branches on the room's declared protocol (multi-user.borg 2b):
+
+   - agent/addressed?      — parses the ROW: true only for turn:"true" PLUS a non-blank explicit to:. Never a body/@name scan.
+   - agent/addressed-to-me — the same test narrowed to to: == this agent's identity.
+   - agent/addressed-room? — ONE ARGUMENT, a room id (it used to take a row list). Asks chat/room-protocol and answers (string-eq <protocol> "addressed").
+
+   Cursor discipline is unchanged and load-bearing: an unaddressed row is HELD, never skipped — the tick logs "room: holding <N> unaddressed (tier 0 - recorded, no turn)" and advances nothing, so a later addressed row still sees the full backlog.
+
+   WHY the gate moved off row-scanning: the old form answered "has this room EVER carried an addressed row". A quiet room never has, so it read legacy forever, and a freshly created DM would have woken the other party on every message — exactly the behaviour this work exists to prevent. The declaration now lives on the chat-room row, so a new room is 'addressed' from its first message while grandfathered rooms (lobby) stay 'legacy' and no agent goes silent on deploy.
+
+   LOOP BRAKE (invariant to preserve): the reply writer stores only room_id/from/body/created_at/wake_id — never turn/to. An agent's answer is Tier 0 by construction and cannot wake another reader. Any future reply path must keep that property.
+
+   Verified live on dev (admin, image :18080): lobby -> legacy, new room -> addressed, DM -> addressed, unset room -> addressed; agent/addressed-room? agrees on all three; one Tier 0 row and one Tier 1 row in the same room return [false,true] from agent/addressed?, and agent/addressed-to-me yields exactly the addressed body.|) *)
   (verify
    (test "quiet tick on an up-to-date room makes no provider call and writes no rows (idempotent, observed 09-03)")
    (test "a room row arriving between ticks produces exactly one reply on the next tick"))
