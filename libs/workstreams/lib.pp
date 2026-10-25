@@ -244,6 +244,7 @@
               (workstreams/pulse-summary rows)
               (workstreams/pulse-table rows)
               (workstreams/pulse-rollup-from nodes streams)
+              (workstreams/factory-html-from (workstreams/run-all))
               (html/p*
                 (html/attr "class" "muted ws-board-link")
                 (html/a "/workstreams" "per-stream detail"))))))))
@@ -1214,3 +1215,108 @@
           (as-str (dict-get (cdr row) "card_id"))
           (as-str card-id)))
       (workstreams/run-open))))
+
+(define workstreams/factory-counts-from
+  (lambda (runs)
+    "Counters over PRECOMPUTED run rows — ONE traversal for the whole
+       factory block (the pulse-*-from pattern; calling the three derived
+       readers — run-all, run-open, run-reap — each re-scans the shared
+       data root and together exceed the per-call eval budget: measured
+       2026-10-25, that shape and a 7-assoc-walk-per-row variant both
+       returned 'budget exceeded' at 1118 rows).
+
+       POSITIONAL accumulator on purpose: the budget counts STEPS, and a
+       map-lookup per counter per row is a recursive walk each time. Seven
+       list-refs against a small list are cheap; a seven-key assoc that is
+       rebuilt per row is not. The assoc is built ONCE at the end.
+
+       Returns an assoc list of (key . n):
+         total       every run row
+         open        non-terminal (the queue a supervisor works from)
+         running     open AND state=running
+         reclaimable expired deadline AND still non-terminal — a
+                     supervisor that died mid-run
+         failed / succeeded / dead   terminal outcomes
+
+       LIVE vs HISTORY is the point of `reclaimable`. Expiry is
+       meaningless on a finished row: 2026-10-25 measured 1118 rows, ALL
+       terminal, of which 971 carried a past claim_deadline. Counting
+       those as 'expired leases' reports dead history as orphaned work
+       and reads as a permanent alarm — a verdict that never changes is
+       a heartbeat, not information. Only expired-and-live is reapable,
+       and that number was 0."
+    (let
+      ((acc
+        (list/foldl
+          (lambda (a row)
+            (let ((b (cdr row)))
+              (let ((s (workstreams/run-state b))
+                    (term? (workstreams/run-terminal? b))
+                    (exp? (workstreams/run-expired? b)))
+                (list
+                  (+ (list-ref a 0) 1)
+                  (+ (list-ref a 1) (if term? 0 1))
+                  (+ (list-ref a 2)
+                     (if (and (not term?) (string-eq s "running")) 1 0))
+                  (+ (list-ref a 3) (if (and exp? (not term?)) 1 0))
+                  (+ (list-ref a 4) (if (string-eq s "failed") 1 0))
+                  (+ (list-ref a 5) (if (string-eq s "succeeded") 1 0))
+                  (+ (list-ref a 6) (if (string-eq s "dead") 1 0))))))
+          (list 0 0 0 0 0 0 0)
+          runs)))
+      (list
+        (cons "total" (list-ref acc 0))
+        (cons "open" (list-ref acc 1))
+        (cons "running" (list-ref acc 2))
+        (cons "reclaimable" (list-ref acc 3))
+        (cons "failed" (list-ref acc 4))
+        (cons "succeeded" (list-ref acc 5))
+        (cons "dead" (list-ref acc 6)))))
+  "Factory counters from a precomputed run-row scan (single traversal).")
+
+(define workstreams/factory-html-from
+  (lambda (runs)
+    "The factory block of /pulse: is the executor actually running, and is
+       anything stuck. Reads a PRECOMPUTED run-row scan (call
+       workstreams/run-all once in the caller).
+       Deliberately reports the RECLAIMABLE count, not 'expired leases' —
+       see workstreams/factory-counts-from for why the wider figure is an
+       alarm that never clears."
+    (let ((c (workstreams/factory-counts-from runs)))
+      (let ((open-n (workstreams/map-lookup "open" c))
+            (running-n (workstreams/map-lookup "running" c))
+            (reclaim-n (workstreams/map-lookup "reclaimable" c))
+            (failed-n (workstreams/map-lookup "failed" c))
+            (total-n (workstreams/map-lookup "total" c)))
+        (html/div
+          (html/attr "class" "ws-factory")
+          (html/join
+            (list
+              (html/h3 (html/text "Factory"))
+              (html/p*
+                (html/attr "class" "muted pulse-summary")
+                (string-append
+                  (as-str open-n)
+                  " run"
+                  (if (string-eq (as-str open-n) "1") "" "s")
+                  " open · "
+                  (as-str running-n)
+                  " running · "
+                  (as-str reclaim-n)
+                  " reclaimable · "
+                  (as-str failed-n)
+                  " failed · "
+                  (as-str total-n)
+                  " total"))
+              (if (string-eq (as-str reclaim-n) "0")
+                  (html/p*
+                    (html/attr "class" "muted")
+                    "No supervisor is holding a dead lease.")
+                  (html/p*
+                    (html/attr "class" "ws-warn")
+                    (string-append
+                      (as-str reclaim-n)
+                      " run(s) died mid-flight and are reclaimable from "
+                      "their step pointer — see borge/run-primitive.borg "
+                      "(resume-semantics).")))))))))
+  "Factory section for /pulse: run activity + reclaimable leases.")

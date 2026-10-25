@@ -286,6 +286,63 @@
          "the AUTO list's stored columns contain no HUMAN-REVIEW column"
          "a LOGIC-REVIEW PASS on an AUTO card with an empty DESTINATION advances to DONE, never HUMAN-REVIEW")))
 
+ (section factory-indicator
+  (doc "THE FACTORY BLOCK ON /pulse (2026-10-25). /pulse answered 'what work
+   is open'; it could not answer 'is the executor running, and is anything
+   stuck'. This adds that as ONE block on the existing face — no new route,
+   no new table, no new prim: every number comes from run rows that already
+   exist in data.s.run.* (run-primitive.borg).
+
+   THE ALARM THAT NEVER CLEARS (the reason this section exists in this
+   shape). A first monitor reported '971 expired leases'. The number was
+   arithmetically reproducible and completely misleading: 1118 run rows
+   exist, ALL 1118 are terminal, and 971 of them carry a claim_deadline in
+   the past because they finished long ago. Expiry on a FINISHED row means
+   nothing — a lease is only orphaned while the run is still live. Measured
+   on the same pass: run-open = 0, expired-AND-non-terminal = 0. So the
+   honest figures are '0 reclaimable', and the 971 is HISTORY.
+
+   This is the /hollis-health law applied to a number: a verdict that never
+   changes is a heartbeat, not information. A permanent 971 trains the
+   reader to ignore the block, and the day it becomes 972 nobody looks. The
+   block therefore reports RECLAIMABLE (expired AND non-terminal) and says
+   'no supervisor is holding a dead lease' when it is zero. `failed` (88)
+   and `total` are shown beside it for scale, deliberately, so the reader
+   can tell a quiet factory from a broken one.
+
+   BUDGET: THREE SCANS DO NOT FIT, AND THE ACCUMULATOR IS POSITIONAL.
+   run-open and run-reap each re-scan the shared data root internally
+   (both call run-all), so assembling this block from the derived readers
+   costs three full traversals and returned 'budget exceeded' on
+   measurement. The block takes a PRECOMPUTED row list and traverses it
+   once (factory-counts-from, the pulse-*-from pattern). The accumulator is
+   a positional list, not an assoc: the eval budget counts STEPS, and a
+   seven-key map-lookup rebuilt per row is seven recursive walks per row
+   (verified: that variant also exceeded the budget at 1118 rows, while
+   seven list-refs against a seven-element list did not). The assoc is
+   built once, at the end.
+
+   WHY /pulse's OWN COUNTS ARE TRUSTWORTHY BUT todo/item/active's ARE NOT.
+   Measured the same day: todo/item/all returns 510 rows / 281 unique ids
+   (170 ids appear twice), so todo/item/active = 451 rows / 281 ids and
+   every count built on it double-counts. /pulse does not use it — the face
+   derives from the tree scan (pulse-nodes: 170 nodes / 170 unique ids),
+   which is clean. The duplication is a real defect in the item reader and
+   is NOT fixed here; this section records why the indicator can be
+   believed and why a monitor that reads todo/item/active cannot yet.")
+  (implements "libs/workstreams/lib.pp (workstreams/factory-counts-from, workstreams/factory-html-from; pulse-page gains the block)")
+  (* agent note (|2026-10-25: the operator-side monitor factory-watch.py lives
+     in the workspace, NOT in this image — it reads the same run rows over
+     /api/eval so a laptop can watch the factory without a deploy. It is
+     deliberately not listed under `implements`: nothing in the repo ships it,
+     and a reader who greps this chapter for the file will not find it here.|) *)
+  (status implemented)
+  (verify
+   (test "the /pulse factory block reports reclaimable (expired AND non-terminal) separately from terminal rows whose deadline has merely passed — 2026-10-25: 1118 total, 0 open, 0 reclaimable, 88 failed"
+         "the block renders from ONE precomputed run-row scan; collapsing it back to run-open + run-reap + run-all re-introduces 'budget exceeded'"
+         "the block states 'no supervisor is holding a dead lease' when reclaimable is zero, rather than a bare zero"
+         "a run row that is expired AND non-terminal increments reclaimable; an expired terminal row does not")))
+
  (section default-pipeline
   (doc "The GLOBAL DEFAULT pipeline is the ENGINEERING taxonomy, not the
    legacy checklist. borge/workstreams.borg pipeline-model resolves an
