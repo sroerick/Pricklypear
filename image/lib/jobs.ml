@@ -333,7 +333,8 @@ let cancel ~(store : Store.t) ~(id : string) ~(caller : string) ~(is_admin : boo
     "eval this fn on my branch as me" — while claiming ANOTHER user's job
     would be, which is why that stays admin-only. *)
 let claim_due ~(store : Store.t) ?(owner : string = runner_id)
-    ?(eligible_for = (None : string option)) () : job option =
+    ?(eligible_for = (None : string option))
+    ?(branch = (None : string option)) () : job option =
   match pg_conn store with
   | None -> None
   | Some _ ->
@@ -352,10 +353,30 @@ let claim_due ~(store : Store.t) ?(owner : string = runner_id)
         (* The eligibility predicate lives INSIDE the subquery, not on the
            UPDATE: filtering after the LIMIT 1 would let an ineligible row
            occupy the single slot and starve the claimant forever. *)
-        let scope_sql, scope_params =
-          match eligible_for with
-          | Some uname -> ("AND submitted_by = $4", [ Pgx.Value.of_string uname ])
-          | None -> ("", [])
+        (* SCOPE PREDICATES, NUMBERED DYNAMICALLY.
+
+           Eligibility and branch are independent optional narrowings, so the
+           placeholder numbers depend on WHICH are present: hardcoding $4/$5
+           leaves an unreferenced parameter when only one applies, and
+           PostgreSQL rejects that at prepare time (42P18, "could not
+           determine data type of parameter $4"). Build the fragments and
+           their params together, numbering from 4 — the first free slot after
+           owner/heartbeat/deadline. *)
+        let numbered =
+          List.filter_map
+            (fun v -> v)
+            [ Option.map (fun uname -> ("submitted_by", uname)) eligible_for
+            ; Option.map (fun b -> ("branch", b)) branch ]
+        in
+        let scope_sql =
+          String.concat ""
+            (List.mapi
+               (fun i (col, _) ->
+                 Printf.sprintf " AND %s = $%d" col (i + 4))
+               numbered)
+        in
+        let scope_params =
+          List.map (fun (_, v) -> Pgx.Value.of_string v) numbered
         in
         let sql =
           Printf.sprintf
@@ -539,6 +560,40 @@ let heartbeat ~(store : Store.t) ~(id : string)
           ]
         "UPDATE jobs SET lease_heartbeat_at = $2, lease_deadline = $3 \
          WHERE id = $1::uuid AND status = 'running' AND runner_id = $4 \
+         RETURNING id::text"
+    in
+    rows <> []
+
+(* ---- release: hand a claim back UNRUN ---- *)
+
+(** Return a claimed row to pending without counting an attempt.
+
+    This is not the same as [record_failed]. A worker that discovers it
+    cannot faithfully run a job — the body carries effects that cannot leave
+    the image, or the def does not resolve locally — has not USED an attempt:
+    nothing ran, nothing failed. Without this, such a row would sit 'running'
+    until the lease lapsed (10 min default) and then be requeued with
+    attempts+1, so a worker that keeps picking up an unrunnable job would
+    march it to 'dead' purely by declining to run it. The decrement
+    (attempts = GREATEST(attempts - 1, 0)) is what makes declining free.
+
+    Guarded by the same ownership CAS as every other terminal write: only the
+    current holder can give the row back. [run_at] is untouched, so a
+    released row is immediately claimable by the next eligible worker —
+    which is exactly the handoff intended (an image runner takes the Txn
+    job a lens worker declined). *)
+let release ~(store : Store.t) ~(id : string)
+    ?(owner : string = runner_id) () : bool =
+  match pg_conn store with
+  | None -> false
+  | Some conn ->
+    let rows =
+      Store_db.exec conn
+        ~params:[ Pgx.Value.of_string id; Pgx.Value.of_string owner ]
+        "UPDATE jobs SET status = 'pending', runner_id = '', \
+         lease_deadline = 0, lease_heartbeat_at = 0, \
+         attempts = GREATEST(attempts - 1, 0) \
+         WHERE id = $1::uuid AND status = 'running' AND runner_id = $2 \
          RETURNING id::text"
     in
     rows <> []

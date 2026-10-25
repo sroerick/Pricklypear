@@ -850,6 +850,88 @@ let test_claim_skips_ineligible_older_rows () =
       delete_job store ~id:foreign;
       delete_job store ~id:mine)
 
+(* RELEASE — declining a job must be FREE.
+
+   A worker that discovers it cannot faithfully run a body (Txn/Step effects,
+   or a def that will not resolve locally) has not used an attempt: nothing
+   ran, nothing failed. If declining cost an attempt, a worker that kept
+   picking up an unrunnable job would march it to 'dead' purely by refusing
+   it — the queue would kill jobs for being declined rather than for failing.
+   The refusals themselves are the run-loop's job; this pins the ledger. *)
+let test_release_costs_no_attempt () =
+  with_store (fun store ->
+      clear_jobs store;
+      let id =
+        submit_future store ~fn:"jfn" ~args_json:"{}"
+          ~branch:"system/main" ~submitted_by:"alice"
+      in
+      make_due store ~id;
+      let worker = J.external_owner "alice-lens" in
+      (match J.claim_due ~store ~owner:worker () with
+       | None -> Alcotest.fail "nothing to claim"
+       | Some j ->
+           Alcotest.(check int) "the claim itself spends attempt 1" 1
+             j.J.attempts);
+      (* Release it. *)
+      Alcotest.(check bool) "the holder can release" true
+        (J.release ~store ~id ~owner:worker ());
+      (match read_job_fields store ~id with
+       | Some (attempts, status, _) ->
+           Alcotest.(check int)
+             "release refunds the attempt (declining is free)" 0 attempts;
+           Alcotest.(check string) "the row is claimable again" "pending" status
+       | None -> Alcotest.fail "row missing after release");
+      (* A foreign worker cannot release someone else's row — that would let
+         one worker yank another's in-flight work. *)
+      ignore (J.claim_due ~store ~owner:(J.external_owner "bob-lens") ());
+      Alcotest.(check bool)
+        "a foreign owner cannot release a lapsed/nonexistent claim" false
+        (J.release ~store ~id ~owner:(J.external_owner "carol-lens") ());
+      delete_job store ~id)
+
+(* BRANCH SCOPE — a worker is only handed work it can actually serve.
+
+   The in-image runner pins eval to job.branch; an external worker evaluates
+   under ITS OWN connection's branch and cannot retarget. So a wrong-branch
+   row must never be claimed, or the fn resolves against the wrong tree and
+   fails for reasons unrelated to the job. Same starvation rule as
+   eligibility: the predicate lives inside the SELECT. *)
+let test_claim_branch_scope () =
+  with_store (fun store ->
+      clear_jobs store;
+      let other =
+        submit_future store ~fn:"otherfn" ~args_json:"{}"
+          ~branch:"alice/scratch" ~submitted_by:"alice"
+      in
+      make_due store ~id:other;
+      let mine =
+        submit_future store ~fn:"minefn" ~args_json:"{}"
+          ~branch:"alice/personal" ~submitted_by:"alice"
+      in
+      make_due store ~id:mine;
+      (* The worker is attached to alice/personal. The older row is on a
+         different branch and must be stepped over, not claimed. *)
+      (match
+         J.claim_due ~store ~owner:(J.external_owner "alice-lens")
+           ~branch:(Some "alice/personal") ()
+       with
+       | None ->
+           Alcotest.fail
+             "claim was starved by an out-of-scope branch row (scope must be \
+              inside the SELECT)"
+       | Some j ->
+           Alcotest.(check string) "the on-branch row is claimed" mine j.J.id;
+           Alcotest.(check string) "...and it is the right branch"
+             "alice/personal" j.J.branch);
+      (* The other-branch row is untouched and still pending. *)
+      (match read_job_fields store ~id:other with
+       | Some (attempts, status, _) ->
+           Alcotest.(check int) "the off-branch row was not consumed" 0 attempts;
+           Alcotest.(check string) "...and is still pending" "pending" status
+       | None -> Alcotest.fail "off-branch row vanished");
+      delete_job store ~id:other;
+      delete_job store ~id:mine)
+
 (* runner identity is host-scoped so same-host recovery can be exact. *)
 let test_runner_id_shape () =
   Alcotest.(check bool) "runner id carries the host prefix" true
@@ -1274,7 +1356,11 @@ let () =
         ; Alcotest.test_case "claim eligibility is self-or-admin" `Quick
             test_claim_eligibility
         ; Alcotest.test_case "claim skips ineligible older rows" `Quick
-            test_claim_skips_ineligible_older_rows ] )
+            test_claim_skips_ineligible_older_rows
+        ; Alcotest.test_case "release costs no attempt" `Quick
+            test_release_costs_no_attempt
+        ; Alcotest.test_case "claim respects branch scope" `Quick
+            test_claim_branch_scope ] )
     ; ( "args-bug"
       , [ Alcotest.test_case "eval_src splices jsonb args as literal" `Quick
             test_eval_src_args ] )
