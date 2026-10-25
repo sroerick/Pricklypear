@@ -24,21 +24,28 @@
     stream/today-key
     stream/deal-rows
     stream/todays-deals
-    stream/first-n
-    stream/pick-level
-    stream/list-merge2
-    stream/list-merge5
-    stream/mark-seen
-    stream/deal-today
-    stream/portion
-    stream/done
-    stream/action-star
-    stream/action-fade
-    stream/action-done
-    stream/card-html
-    stream/portion-html
-    stream/css
-    stream/page)
+      stream/first-n
+      stream/drop-n
+      stream/reverse
+      stream/list-append
+      stream/pick-level
+      stream/dealt-item-ids
+      stream/fresh-pool
+      stream/resurfacing
+      stream/daily-count
+      stream/list-merge2
+      stream/list-merge5
+      stream/mark-seen
+      stream/deal-today
+      stream/portion
+      stream/done
+      stream/action-star
+      stream/action-fade
+      stream/action-done
+      stream/card-html
+      stream/portion-html
+      stream/css
+      stream/page)
 
 (define (stream/item/add kind source title ref body)
     "Add a stream item (verse | rss | task). Returns the row id."
@@ -401,6 +408,8 @@
 
 
 (define stream/page-size 12)
+;; One day's gather (Exodus 16): portion size for stream/deal-today.
+(define stream/daily-count 12)
 (define (stream/page-html p) (let ((all (stream/reverse (stream/items-all))))(let ((start (* (- p 1) stream/page-size)))(let ((page (stream/first-n (stream/drop-n all start) stream/page-size)))(let ((items (todo/tree/rows "stream-item" 200)))(let ((stars (todo/tree/rows "stream-star" 500)))(let ((seens (todo/tree/rows "stream-seen" 2000)))(let ((res (if (= p 1) (stream/resurfacing) ()))) (html/join (list (if (null? res) "" (html/join (list/map (lambda (rp) (let ((iid (as-str (dict-get (cdr rp) "item_id")))) (let ((fields (dict-get items iid))) (if (null? fields) "" (stream/card-html iid fields stars seens))))) res))) (if (null? page) (html/div (html/attr "class" "card stream-end") (html/p "caught up.")) (html/join (list/map (lambda (pair) (let ((iid (as-str (car pair)))) (let ((fields (dict-get items iid))) (if (null? fields) "" (stream/card-html iid fields stars seens))))) page))) (html/div (html/attr "class" "stream-more") (html/a (string-append "/stream?p=" (as-str (+ p 1))) "more"))))))))))))
 
 (define (stream/portion-html)
