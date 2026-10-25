@@ -1038,7 +1038,7 @@ formals, tokens resolved through glochid/tg.")
       (list
         "ui/railtab" "ui/start-entry" "ui/bubble" "ui/tool-line"
         "ui/turn-open" "ui/think-open" "ui/tool-open" "ui/turn-error"
-          "ui/swatch" "ui/palette" "ui/file-issue")))
+            "ui/swatch" "ui/palette" "ui/file-issue" "ui/dialog")))
   "Glochid's lookbook inventory: the lib seed elements + glochid's own
 shell chrome. Every entry answers a <name>/examples card; the ui rail
 root + /lookbook face read this one def.")
