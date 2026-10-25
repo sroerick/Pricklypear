@@ -278,12 +278,13 @@ newest-first ordering or pagination in the scan; this buys headroom.")
     (lookbook/html
       (ui/chatpage
         "dm-main"
+          (string-append "/chat/dm?peer=" peer "&partial=1")
           (string-append "/chat/dm?peer=" peer)
-          (string-append "/chat/dm?peer=" peer)
-          (chat/dm-kids peer))))
-  "Render the DM main area with message form and history. The DM page is
-     its own poll: an HX-Request GET returns the windowed transcript
-     fragment, so DMs get autoscroll + catch-up like the lobby.")
+        (chat/dm-kids peer))))
+  "Render the DM main area with message form and history. The composer
+   posts to this peer only; the log polls the ?partial=1 transcript
+   fragment, so an HX-Request GET WITHOUT partial serves the pane body
+   (shell + composer) when the thread opens as a filmstrip pane.")
 
 (define chat/dm-messages-html
   (lambda
@@ -321,7 +322,10 @@ newest-first ordering or pagination in the scan; this buys headroom.")
             (blank? (as-str (request-param "before")))
             (if
               (hx-request?)
-              (render-html (chat/kids-html (chat/dm-kids peer)))
+              (if
+                (blank? (as-str (request-param "partial")))
+                (render-html (chat/dm-main-html peer))
+                (render-html (chat/kids-html (chat/dm-kids peer))))
               (html/page
                 (list
                   (html/h1 (string-append "DM with " peer))
@@ -681,7 +685,9 @@ newest-first ordering or pagination in the scan; this buys headroom.")
     "ui/bubble"
     "ui/chat-log"
     "ui/chat-composer"
-    "ui/chatpage")
+      "ui/chatpage"
+      "chat/channel-row"
+      "chat/dm-starter")
   "This host's declared chat vocabulary (literal list, NOT a snapshot of\n   lookbook/elements: a captured snapshot would make lookbook/elements\n   refer to itself after a reload -> cyclic thunk force).")
 
 (define chat/lobby
@@ -849,6 +855,7 @@ newest-first ordering or pagination in the scan; this buys headroom.")
                 "Lobby for everyone on this box. You are "
                 (as-str (whoami))
                 "."))
+            (chat/channels-html)
             (chat/older-initial)
             (chat/main-html)))
         (if
@@ -1278,3 +1285,277 @@ newest-first ordering or pagination in the scan; this buys headroom.")
           ""))))
   "Initial DM #chat-older region: the control only when history exists
    beyond the live window, empty otherwise.")
+
+;; ---- channel picker (card a7fbbaab, 2026-10-25) ----
+;; One row per surface the user can talk in -- the lobby, every room they
+;; are an explicit member of, every DM thread -- listed at /chat. Rows are
+;; DECLARED UI VALUES (libs/lookbook discipline: declare, never render;
+;; the <name>/examples card IS the declaration), projected through
+;; lookbook/html at the one markup site. A row is an in-shell app-link
+;; (POST /filmstrip/open, open-or-focus), never an anchor: an anchor
+;; navigates the whole window out of the shell.
+
+(define chat/channel-row
+  (lambda (label route)
+    (ui/elm
+      "button"
+      (list
+        "type" "button"
+        "class" "fs-applink"
+        "hx-post" "/filmstrip/open"
+        "hx-vals" (string-append "{\"route\":\"" route "\"}")
+        "hx-target" "#fs-sink"
+        "hx-swap" "innerHTML"
+        "data-optimistic" "open")
+      (list (ui/text label))))
+  "One channel-picker row: a declared in-shell app-link posting
+/filmstrip/open with the surface's route (open-or-focus as a filmstrip
+pane; never an anchor, which navigates the whole window out of the
+shell). Declared, never string-built.")
+
+(define chat/channel-row/examples
+  (lambda ()
+    (lb/obj
+      (list
+        "name" "chat/channel-row"
+        "doc" "One channel row: an in-shell app-link posting /filmstrip/open with the surface's route -- open-or-focus as a filmstrip pane, never a window navigation."
+        "file" "libs/chat/lib.pp"
+        "formals" (json-emit (list "label" "route"))
+        "variants" (json-emit
+                     (list
+                       (lb/obj (list "label" "Lobby" "route" "/chat"))
+                       (lb/obj (list "label" "alice" "route" "/chat/dm?peer=alice"))))
+        "source"
+        "(chat/channel-row label route) ->\n  (ui/elm \"button\" (list \"type\" \"button\" \"class\" \"fs-applink\"\n          \"hx-post\" \"/filmstrip/open\"\n          \"hx-vals\" (string-append \"{\\\"route\\\":\\\"\" route \"\\\"}\")\n          \"hx-target\" \"#fs-sink\" \"hx-swap\" \"innerHTML\"\n          \"data-optimistic\" \"open\")\n    (list (ui/text label)))")))
+  "The chat/channel-row card: this def IS the element's declaration.")
+
+(define chat/dm-starter
+  (lambda ()
+    (ui/elm
+      "form"
+      (list
+        "class" "chat-dm-start"
+        "hx-post" "/chat/dm/open"
+        "hx-target" "#fs-sink"
+        "hx-swap" "innerHTML")
+      (list
+        (ui/elm
+          "input"
+          (list
+            "name" "peer"
+            "placeholder" "peer username"
+            "aria-label" "peer username"
+            "required" "required")
+          (list))
+        (ui/elm
+          "button"
+          (list "type" "submit")
+          (list (ui/text "DM"))))))
+  "The start-DM control: a peer input posting /chat/dm/open (htmx
+includes the form field), which open-or-focuses the /chat/dm?peer=<peer>
+pane. Declared, never string-built.")
+
+(define chat/dm-starter/examples
+  (lambda ()
+    (lb/obj
+      (list
+        "name" "chat/dm-starter"
+        "doc" "The start-DM control: a peer input whose submit posts /chat/dm/open, opening the /chat/dm?peer=<peer> pane."
+        "file" "libs/chat/lib.pp"
+        "formals" (json-emit (list))
+        "variants" (json-emit (list (lb/obj (list))))
+        "source"
+          "(chat/dm-starter) ->\n  (ui/elm \"form\" (list \"class\" \"chat-dm-start\"\n          \"hx-post\" \"/chat/dm/open\" \"hx-target\" \"#fs-sink\"\n          \"hx-swap\" \"innerHTML\")\n    (list (ui/elm \"input\" (list \"name\" \"peer\" \"placeholder\" \"peer username\"\n                  \"aria-label\" \"peer username\" \"required\" \"required\") (list))\n          (ui/elm \"button\" (list \"type\" \"submit\") (list (ui/text \"DM\"))))")))
+  "The chat/dm-starter card: this def IS the element's declaration.")
+
+(define chat/channel-entries
+  (lambda ()
+    (let ((me (as-str (whoami))))
+      (append
+        (list (list "Lobby" "/chat" "lobby"))
+        (list/map
+          (lambda (row)
+            (let* ((f (chat/row-fields row))
+                   (rid (chat/room-id-of f))
+                   (title (as-str (dict-get f "title"))))
+              (list
+                (if (string-eq title "") rid title)
+                (string-append "/chat/room?id=" rid)
+                "room")))
+          (list/filter
+            (lambda (row)
+              (if (string-eq (as-str (dict-get (chat/row-fields row) "kind")) "lobby")
+                #f
+                #t))
+            (chat/rooms)))
+        (list/map
+          (lambda (row)
+            (let* ((f (chat/row-fields row))
+                   (title (as-str (dict-get f "title")))
+                   (peer (chat/dm-peer-from-title title me)))
+              (list
+                peer
+                (string-append "/chat/dm?peer=" peer)
+                "dm")))
+          (chat/dms)))))
+  "The surfaces the user can talk in, one (label route kind) entry each:
+the lobby, every kind=room they are an EXPLICIT member of (chat/rooms
+with kind=lobby rows dropped -- the Lobby entry IS that surface), and
+every DM thread (chat/dms, peer label via chat/dm-peer-from-title).")
+
+(define chat/channels-html
+  (lambda ()
+    (html/div
+      (html/attr "class" "card chat-channels")
+      (html/join
+        (append
+          (list (html/h2 "Channels"))
+          (list/map
+            (lambda (e)
+              (lookbook/html (chat/channel-row (nth e 0) (nth e 1))))
+            (chat/channel-entries))
+          (list
+            (html/p* (html/attr "class" "muted") "Start a DM:")
+            (lookbook/html (chat/dm-starter)))))))
+  "The chats list at /chat (card a7fbbaab): one app-link row per surface
+the user can talk in, each open-or-focusing its route as a filmstrip
+pane, plus the start-DM control. Rows are declared chat/channel-row
+values projected through lookbook/html -- never string-built markup.")
+
+(define chat/dm-open
+  (lambda ()
+    (let ((peer (string-trim (as-str (request-param "peer")))))
+      (if (blank? peer)
+          (render-html (filmstrip/oob-msg "chat: peer required"))
+          (let* ((r (string-append "/chat/dm?peer=" (filmstrip/url-enc peer)))
+                 (row (filmstrip/row))
+                 (cascade (nth row 0))
+                 (panes (nth row 1))
+                 (focus (nth row 2))
+                 (res (filmstrip/open-apply panes r))
+                 (panes2 (nth res 0))
+                 (focus2 (nth res 1))
+                 (appended? (nth res 2)))
+            (seq
+              (filmstrip/save-all cascade panes2 focus2)
+              (render-html
+                (html/join
+                  (list
+                    (filmstrip/oob-msg "")
+                    (filmstrip/open-response panes2 focus focus2 appended?)
+                    (filmstrip/oob-coltabs)))))))))
+  "POST /chat/dm/open: peer param -> open-or-focus the
+/chat/dm?peer=<peer> pane (the filmstrip/open flow with a route the
+server builds from the peer input). A blank peer answers the launcher
+status line only.")
+
+;; ---- room threads (card a7fbbaab: rooms open as filmstrip panes) ----
+
+(define chat/room-title
+  (lambda (room-id)
+    (let ((row (chat/find-room room-id)))
+      (if (null? row)
+          (as-str room-id)
+          (let ((t (as-str (dict-get (chat/row-fields row) "title"))))
+            (if (string-eq t "") (as-str room-id) t)))))
+  "Display title of a room: its title field, the room id as fallback.")
+
+(define chat/room-kids
+  (lambda (room-id)
+    (let ((xs (chat/latest room-id)))
+      (if (null? xs)
+          (list (ui/elm "p" (list "class" "muted") (list (ui/text "No messages yet."))))
+          (list/map chat/bubble xs))))
+  "Room transcript kid values (live window: latest chat/window-size
+messages).")
+
+(define chat/room-main-html
+  (lambda (room-id)
+    (let ((r (string-append "/chat/room?id=" room-id)))
+      (lookbook/html
+        (ui/chatpage
+          "room-main"
+          (string-append r "&partial=1")
+          r
+          (chat/room-kids room-id)))))
+  "Room main area: the declared chatpage shell. The composer posts to
+/chat/room?id=<this room> only; the log polls the ?partial=1 transcript
+fragment, so an HX-Request GET WITHOUT partial serves the pane body
+(shell + composer) when the room opens as a filmstrip pane.")
+
+(define chat/room-older-html
+  (lambda (room-id before)
+    (let ((rows (chat/older-rows room-id before)))
+      (if (null? rows)
+          (chat/older-region (list (chat/no-older-kid)) "")
+          (chat/older-region
+            (list/map chat/bubble rows)
+            (string-append "/chat/room?id=" room-id "&before=" (chat/row-id (car rows)))))))
+  "Room older-history fragment (GET /chat/room?id=..&before=<id> under
+HX-Request).")
+
+(define chat/room-older-initial
+  (lambda (room-id)
+    (let* ((rows (chat/room-rows room-id))
+           (window (chat/take-last chat/window-size rows)))
+      (if (null? window)
+          ""
+          (if (chat/more-older? rows (chat/row-id (car window)))
+              (chat/older-region
+                (list)
+                (string-append "/chat/room?id=" room-id "&before=" (chat/row-id (car window))))
+              ""))))
+  "Initial room #chat-older region: the control only when history exists
+beyond the live window, empty otherwise.")
+
+(define chat/room-page
+  (lambda ()
+    (let ((rid (string-trim (as-str (request-param "id")))))
+      (if (blank? rid)
+          (html/page
+            (list
+              (html/h1 "Chat")
+              (html/p* (html/attr "class" "muted") "Missing room id.")))
+          (if (chat/can-access? rid)
+              (if (string-eq (request-method) "POST")
+                  (seq
+                    (chat/say-in rid (request-param "body"))
+                    (if (hx-request?)
+                        (render-html (chat/kids-html (chat/room-kids rid)))
+                        (redirect (string-append "/chat/room?id=" rid))))
+                  (if (blank? (as-str (request-param "before")))
+                      (if (hx-request?)
+                          (if (blank? (as-str (request-param "partial")))
+                              (render-html (chat/room-main-html rid))
+                              (render-html (chat/kids-html (chat/room-kids rid))))
+                          (html/page
+                            (list
+                              (html/h1 (chat/room-title rid))
+                              (chat/room-older-initial rid)
+                              (chat/room-main-html rid))))
+                      (render-html (chat/room-older-html rid (request-param "before")))))
+              (html/page
+                (list
+                  (html/h1 "Chat")
+                  (html/p* (html/attr "class" "muted")
+                           "You are not a member of this room.")))))))
+  "Room route handler (GET /chat/room?id=<rid>): the room thread (title,
+lazy-history region, declared chatpage whose composer posts to this
+room only). POST says into the room; a plain HX-Request GET is the pane
+body (shell + composer) or, with ?partial=1, the transcript fragment
+(the log poll); a GET with ?before=<id> under HX-Request returns one
+older history page. Access-checked with chat/can-access?.")
+
+;; ---- route bindings (vault, additive at load/boot-seed) ----
+;; multi-user.borg chat routes + the channel-picker surfaces (card
+;; a7fbbaab). Handlers stay PRIVATE (login required; the multi-user.borg
+;; chat stanza). CAUTION (2026-10-16, filmstrip footer): pp-sync
+;; pull/snapshot mirrors STORE content only, so a vault sync silently
+;; drops these load-time forms (the 4381766 wipe class) -- keep this
+;; footer in any future snapshot.
+(route "/chat" "chat/page" "private")
+(route "/chat/partial" "chat/partial" "private")
+(route "/chat/dm" "chat/dm-page" "private")
+(route "/chat/room" "chat/room-page" "private")
+(route "/chat/dm/open" "chat/dm-open" "private")
+
