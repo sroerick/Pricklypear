@@ -238,6 +238,53 @@ let test_handler_non_function_binding () =
   | S.Handler_unbound ->
       Alcotest.fail "bound non-function name reported unbound"
 
+(** Regression (card d189fa94, "[ops] handler: unbound: stream/page-size"):
+    the d93d8292/0eaf31d5 snapshot-env discipline held only for EAGER
+    bindings — eval-defined handlers. Every package define binds as a
+    VThunk (image.lazy-env-load), and the image's force closure evaluated
+    the body against the session's LIVE env at force time, escaping the
+    snapshot mid-request. A rehydrate/checkout swap of t.eval_state.env
+    during dispatch then died "unbound: stream/page-size" inside the
+    forced body and auto-filed the incident (stream/page-size is a
+    VARIABLE in libs/stream/lib.pp, referenced by the /stream page chain).
+    The force must resolve in the same env call_handler looked the handler
+    up in. *)
+let test_handler_thunk_force_in_snapshot_env () =
+  let t = anon_session () in
+  (* Package-style lazy bindings through the session's own force
+     evaluator — exactly what load_defs binds for stored defs. *)
+  let bind name src =
+    match Pricklypear_lisp.Reader.read_one src with
+    | body ->
+        Pricklypear_lisp.Env.define_thunk (S.env t) name
+          ~force:(fun _e body -> S.force_thunk_body t body) body
+    | exception exn -> Alcotest.fail (Printexc.to_string exn)
+  in
+  bind "stream/page-size" "12";
+  bind "stream/page" "(lambda () (* 6 stream/page-size))";
+  let snapshot_env = S.env t in
+  (* Simulate the mid-request rehydrate: the live env moves to a fresh,
+     binding-free record; the request context keeps holding the snapshot. *)
+  t.eval_state.env <- Pricklypear_lisp.Env.create ();
+  let ctx =
+    Pricklypear_image_lib.Request_context.make
+      ~manifest:(S.manifest t)
+      ~env:snapshot_env
+      ~is_admin:false
+      ~routes:(Pricklypear_image_lib.Request_context.copy_routes (S.routes t))
+      ~source_ip:None
+  in
+  Pricklypear_image_lib.Request_context.with_current ctx (fun () ->
+      match S.call_handler t "stream/page" with
+      | S.Handler_ok v ->
+          Alcotest.(check string) "thunk handler forced in the snapshot env"
+            "72" (Pricklypear_lisp.Reader.pp_value v)
+      | S.Handler_unbound ->
+          Alcotest.fail "thunk-bound handler resolved as unbound"
+      | S.Handler_error msg ->
+          Alcotest.fail
+            (Printf.sprintf "thunk force escaped the snapshot env: %s" msg))
+
 
 (* Control_rim captures Eio effects, so eval-touching cases run inside
    the Eio scheduler (rls_floor_test precedent). *)
@@ -257,6 +304,9 @@ let () =
           ; Alcotest.test_case "handler body callee evals in the snapshot env" `Quick
               (fun () -> in_eio test_handler_body_callee_evals_in_snapshot_env)          ; Alcotest.test_case "handler non-function binding errors precisely" `Quick
               (fun () -> in_eio test_handler_non_function_binding)
+
+          ; Alcotest.test_case "handler thunk force resolves in the snapshot env" `Quick
+              (fun () -> in_eio test_handler_thunk_force_in_snapshot_env)
 
         ; Alcotest.test_case "boot seed re-exports" `Quick
             test_boot_seed_reexports

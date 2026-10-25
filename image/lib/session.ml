@@ -129,6 +129,37 @@ let eval_expr_rim (t : t) (expr : Pricklypear_lisp.Ast.expr)
           Pricklypear_lisp.Eval.eval
             ~budget ~prims:Pricklypear_lisp.Eval.empty_prims t.eval_state.env expr))
 
+(* card d189fa94 ("[ops] handler: unbound: stream/page-size"): the env a
+   lazy thunk body resolves against when FORCED. image.lazy-env-load binds
+   every package define as a VThunk and Env.lookup is the single auto-force
+   site; call_handler runs the handler lookup + eval in the per-request
+   snapshot env (image.per-request-context, cards d93d8292 / 0eaf31d5).
+   The force closure itself used to evaluate the body against
+   t.eval_state.env — the session's LIVE env — so a thunk-bound package
+   handler forced at dispatch escaped the snapshot: a concurrent
+   rehydrate / checkout swapping t.eval_state.env mid-request (shared
+   anonymous session, attach-time ensure_fresh) made the body's references
+   die "unbound: <def>" and auto-file the reliability incident. When a
+   request context is bound, force against THAT context's snapshot env;
+   otherwise (REPL, boot seed, rehydrate-time forcing) keep the live env —
+   the tmp/eval-fast-path freshness semantics (carried-over thunks see
+   rebound defs) are unchanged outside requests. *)
+let thunk_force_env (t : t) : Pricklypear_lisp.Ast.env =
+  match Request_context.get () with
+  | Some ctx -> Request_context.env ctx
+  | None -> t.eval_state.env
+
+(* The force evaluator load_defs / rehydrate bind for every non-macro
+   package define: fiber-scoped budget + scope (i-1788670103-5) under the
+   session rim, body resolved through [thunk_force_env]. *)
+let force_thunk_body (t : t) (expr : Pricklypear_lisp.Ast.expr)
+    : Pricklypear_lisp.Ast.value =
+  let b = Pricklypear_lisp.Eval.current_or_fresh () in
+  eval_under_rim t (fun () ->
+      Pricklypear_lisp.Eval.with_scope (Some b) (fun () ->
+          Pricklypear_lisp.Eval.eval ~budget:b
+            ~prims:Pricklypear_lisp.Eval.empty_prims (thunk_force_env t) expr))
+
 let load_defs (t : t) : unit =
   let disabled = Store.disabled_package_names t.store in
   let disabled_set = Hashtbl.create 16 in
@@ -199,28 +230,25 @@ let load_defs (t : t) : unit =
                   Pricklypear_lisp.Env.define t.eval_state.env name
                     (Pricklypear_lisp.Ast.VMacro (params, body_expr, t.eval_state.env));
               | _ ->
-                  let force _env' expr' =
-                    (* tmp/eval-fast-path: resolve against the session's
-                       CURRENT env at force time, not the bind-time
-                       capture. Top-level def bodies are dynamically
-                       scoped to the session env — a thunk forced after
-                       an incremental rehydrate sees the rebound defs
-                       (full rehydrate gave the same guarantee by
-                       re-thunking everything; this keeps unchanged
-                       thunks fresh without rebinding them). *)
-                    (* The budget is read through the fiber scope
-                       (i-1788670103-5): the forcing eval's budget pays,
-                       never a concurrently-published request's. The
-                       nested eval re-establishes the scope so its own
-                       prim bodies' DB accounting resolves to [b] even
-                       across Eio awaits. *)
-                    let b = Pricklypear_lisp.Eval.current_or_fresh () in
-                    eval_under_rim t (fun () ->
-                        Pricklypear_lisp.Eval.with_scope (Some b) (fun () ->
-                            Pricklypear_lisp.Eval.eval ~budget:b
-                              ~prims:Pricklypear_lisp.Eval.empty_prims t.eval_state.env
-                              expr'))
-                  in
+                    let force _env' expr' =
+                      (* tmp/eval-fast-path + card d189fa94: the body resolves
+                         through force_thunk_body — the per-request snapshot
+                         env when one is bound (the same env call_handler
+                         looks the handler up and evals in; a mid-request
+                         rehydrate swap of t.eval_state.env used to escape
+                         here and die "unbound: <def>"), else the session's
+                         CURRENT env at force time, not the bind-time
+                         capture: top-level def bodies are dynamically
+                         scoped to the session env, so a thunk forced after
+                         an incremental rehydrate sees the rebound defs
+                         (full rehydrate gave the same guarantee by
+                         re-thunking everything; this keeps unchanged
+                         thunks fresh without rebinding them). The budget
+                         is read through the fiber scope (i-1788670103-5):
+                         the forcing eval's budget pays, never a
+                         concurrently-published request's. *)
+                      force_thunk_body t expr'
+                    in
                   Pricklypear_lisp.Env.define_thunk t.eval_state.env name ~force body;
                   Hashtbl.replace t.eval_state.thunk_bodies name body))
       defs
@@ -410,17 +438,14 @@ let rehydrate_incremental (t : t) : unit =
                          (Pricklypear_lisp.Ast.VMacro
                             (params, body_expr, fresh))
                    | _ ->
-                       let force _env' expr' =
-                         (* Fiber-scoped budget + scope for the nested
-                            eval (i-1788670103-5; see load_defs above). *)
-                         let b = Pricklypear_lisp.Eval.current_or_fresh () in
-                         eval_under_rim t (fun () ->
-                             Pricklypear_lisp.Eval.with_scope (Some b)
-                               (fun () ->
-                                  Pricklypear_lisp.Eval.eval ~budget:b
-                                    ~prims:Pricklypear_lisp.Eval.empty_prims
-                                    t.eval_state.env expr'))
-                       in
+                         let force _env' expr' =
+                           (* Fiber-scoped budget + scope for the nested eval
+                              (i-1788670103-5; see load_defs above) + card
+                              d189fa94: force resolves through
+                              force_thunk_body (per-request snapshot env when
+                              one is bound, else the live env). *)
+                           force_thunk_body t expr'
+                         in
                        Pricklypear_lisp.Env.define_thunk fresh name
                          ~force body;
                        Hashtbl.replace t.eval_state.thunk_bodies name body)
@@ -434,16 +459,12 @@ let rehydrate_incremental (t : t) : unit =
          Hashtbl.iter
            (fun name body ->
              if Hashtbl.mem fresh.bindings name then
-               let force _env' expr' =
-                 (* Fiber-scoped budget + scope for the nested eval
-                    (i-1788670103-5; see load_defs above). *)
-                 let b = Pricklypear_lisp.Eval.current_or_fresh () in
-                 eval_under_rim t (fun () ->
-                     Pricklypear_lisp.Eval.with_scope (Some b) (fun () ->
-                         Pricklypear_lisp.Eval.eval ~budget:b
-                           ~prims:Pricklypear_lisp.Eval.empty_prims t.eval_state.env
-                           expr'))
-               in
+                 let force _env' expr' =
+                   (* Fiber-scoped budget + scope for the nested eval
+                      (i-1788670103-5; see load_defs above) + card d189fa94:
+                      force resolves through force_thunk_body. *)
+                   force_thunk_body t expr'
+                 in
                Pricklypear_lisp.Env.define_thunk fresh name ~force body)
            t.eval_state.thunk_bodies;
          if routes_dirty then begin
