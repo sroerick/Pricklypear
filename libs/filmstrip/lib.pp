@@ -905,6 +905,13 @@ between strip and rail).")
           (css/rule ".fs-shell:has(#fs-railmode.rm-ui) .fs-rmode:not([data-rmode=\"ui\"])" (list "display" "none"))
         (css/rule ".fs-sentinel" (list "display" "none"))
         (css/rule ".fs-sink" (list "display" "none"))
+          ;; modal layers (card 5da2cf6c): the #fs-layers sink is the
+          ;; pads/layers-modality float/scrim; an empty sink casts nothing.
+          (css/rule ".fs-layers" (list "position" "fixed" "inset" "0" "background" "rgba(5,7,12,0.62)" "display" "flex" "align-items" "center" "justify-content" "center" "z-index" "60"))
+          (css/rule ".fs-layers:empty" (list "display" "none"))
+          (css/rule ".fs-dialog" (list "background" "var(--panel)" "border" "1px solid var(--border)" "border-radius" "10px" "padding" "0.9rem" "width" "min(34rem,92vw)" "max-height" "80vh" "overflow" "auto" "box-shadow" "0 10px 30px var(--shadow)"))
+          (css/rule ".fs-dialog-head" (list "display" "flex" "align-items" "center" "justify-content" "space-between" "gap" "0.5rem" "margin-bottom" "0.5rem"))
+          (css/rule ".fs-dialog-title" (list "font-weight" "600" "color" "var(--ink)"))
           (css/rule ".fs-oob-delete" (list "display" "none"))
           ;; v5 theme + layout (ported from the glochid app surface's
           ;; base-css, 10-14): the :root palette ABOVE declares the theme;
@@ -2714,9 +2721,11 @@ DOM alive.")
               (html/text "rail")))
           (filmstrip/railtabs)
           (list (filmstrip/coltabs-html panes focus))
-            ;; the file-issue affordance (card 5877331e): one declared
-            ;; button on the rail opens the /issues register -- reporting
-            ;; an issue or UI feedback is one click from any desktop.
+            ;; the file-issue affordance (cards 5877331e + 5da2cf6c): one
+            ;; declared button on the rail opens the issues face in a modal
+            ;; dialog (ui/dialog, swapped into #fs-layers) -- reporting an
+            ;; issue or UI feedback is one click from any desktop, no
+            ;; pane, no navigation.
             (list (lookbook/html (ui/file-issue "file an issue")))
           (list (filmstrip/keys-hint))))))
   "The rail mode controlbox (one word per tree root, per
@@ -3158,6 +3167,16 @@ optimistic-loader attrs (filmstrip/optimistic-attrs) onto the trigger.")
           (html/join
             (list
               (filmstrip/content-area panes focus)
+                ;; the modal layers sink (card 5da2cf6c): the pads/layers
+                ;; #layers sibling of the strips -- float/scrim nodes
+                ;; (ui/dialog) swap here while a modal lives.
+                (html/tag
+                  "div"
+                  (html/attrs
+                    (list
+                      (html/attr "id" "fs-layers")
+                      (html/attr "class" "fs-layers")))
+                  "")
               (filmstrip/railmode-sentinel (filmstrip/railmode) #f)
               (filmstrip/key-sentinels)
               (html/tag
@@ -3178,7 +3197,7 @@ optimistic-loader attrs (filmstrip/optimistic-attrs) onto the trigger.")
               (filmstrip/desk-sentinel (filmstrip/ws-desktop) #f)))))))
   "The whole shell (v5, sidebar-only -- BORGE-1789879934): style +
 surface area (main strip + rail box: docked panes, railtabs, start
-menu, trees), sentinels, the OOB sink + a status-line anchor. The
+  menu, trees), sentinels, the OOB sink, the modal layers sink + a
 cascade column and the launcher are retired (the start menu rides the
 railtabs row); the axis is pinned col; the cascade arg is kept for the
 route signature. Zero scripts (CSS :has flips the layout from the axis
@@ -4204,23 +4223,24 @@ data: the hx-* verbs ride attrs verbatim through the projection.")
       (list
         "id" "fs-file-issue"
         "class" "fs-btn fs-applink"
-        "title" "report an issue or UI feedback (opens /issues)"
-        "hx-post" "/filmstrip/open"
-        "hx-vals" "{\"route\":\"/issues\"}"
-        "hx-target" "#fs-sink"
+        "title" "report an issue or UI feedback (opens a dialog)"
+        "hx-post" "/filmstrip/dialog"
+        "hx-vals" "{\"route\":\"/issues\",\"title\":\"file an issue\"}"
+        "hx-target" "#fs-layers"
         "hx-swap" "innerHTML")
       (list (ui/text label))))
-  "One rail file-issue button: opens the issues register (/issues) as a
-pane via /filmstrip/open (open-or-focus, OOB into #fs-sink). The issues
-face owns the creator form; this element only transports the route --
-declared behavior data, never its own markup.")
+  "One rail file-issue button: opens the issues face (/issues) in a
+modal dialog via /filmstrip/dialog (layers-modality, swapped into
+#fs-layers -- no pane, no navigation). The issues face owns the
+creator form; this element only transports the route -- declared
+behavior data, never its own markup.")
 
 (define ui/file-issue/examples
   (lambda ()
     (lb/obj
       (list
         "name" "ui/file-issue"
-        "doc" "One rail file-issue button: opens the /issues register as a pane via /filmstrip/open; the issues face owns the creator form."
+        "doc" "One rail file-issue button: opens the /issues register in a modal dialog via /filmstrip/dialog (swapped into #fs-layers); the issues face owns the creator form."
         "file" "libs/filmstrip/lib.pp"
         "formals" (json-emit (list "label"))
         "variants" (json-emit
@@ -4228,9 +4248,98 @@ declared behavior data, never its own markup.")
                        (lb/obj (list "label" "file an issue"))
                        (lb/obj (list "label" "report a bug"))))
         "source"
-        "(ui/file-issue label) ->\n  (ui/elm \"button\"\n    (list \"id\" \"fs-file-issue\"\n          \"class\" \"fs-btn fs-applink\"\n          \"title\" \"report an issue or UI feedback (opens /issues)\"\n          \"hx-post\" \"/filmstrip/open\"\n          \"hx-vals\" \"{\\\"route\\\":\\\"/issues\\\"}\"\n          \"hx-target\" \"#fs-sink\"\n          \"hx-swap\" \"innerHTML\")\n    (list (ui/text label)))")))
+        "(ui/file-issue label) ->\n  (ui/elm \"button\"\n    (list \"id\" \"fs-file-issue\"\n          \"class\" \"fs-btn fs-applink\"\n          \"title\" \"report an issue or UI feedback (opens a dialog)\"\n          \"hx-post\" \"/filmstrip/dialog\"\n          \"hx-vals\" \"{\\\"route\\\":\\\"/issues\\\",\\\"title\\\":\\\"file an issue\\\"}\"\n          \"hx-target\" \"#fs-layers\"\n          \"hx-swap\" \"innerHTML\")\n    (list (ui/text label)))")))
   "The ui/file-issue card: this def IS the element's declaration.")
 
+(define ui/dialog
+  (lambda (title route)
+    (ui/elm
+      "div"
+      (list
+        "class" "fs-dialog"
+        "role" "dialog"
+        "aria-modal" "true")
+      (list
+        (ui/elm
+          "div"
+          (list "class" "fs-dialog-head")
+          (list
+            (ui/elm
+              "span"
+              (list "class" "fs-dialog-title")
+              (list (ui/text title)))
+            (ui/elm
+              "button"
+              (list
+                "class" "fs-btn fs-dialog-close"
+                "title" "close"
+                "hx-post" "/filmstrip/dialog/close"
+                "hx-target" "#fs-layers"
+                "hx-swap" "innerHTML")
+              (list (ui/text "close")))))
+        (ui/elm
+          "div"
+          (list
+            "class" "fs-dialog-body"
+            "hx-get" route
+            "hx-trigger" "revealed"
+            "hx-target" "this"
+            "hx-swap" "innerHTML")
+          (list)))))
+  "One modal dialog (pads/layers-modality, filmstrip.borg shell-events):
+a title row + close button over a lazy body that hx-gets `route` when
+revealed (the filmstrip/pane-body-lazy idiom) -- the modal IS router
+scope while the node lives. Compose content by calling element defs;
+the dialog never strings its own markup.")
+
+(define ui/dialog/examples
+  (lambda ()
+    (lb/obj
+      (list
+        "name" "ui/dialog"
+        "doc" "One modal dialog: title row + close button; the body hx-gets the route when revealed (modal = router scope while the node lives)."
+        "file" "libs/filmstrip/lib.pp"
+        "formals" (json-emit (list "title" "route"))
+        "variants" (json-emit
+                     (list
+                       (lb/obj (list "title" "file an issue" "route" "/issues"))))
+        "source"
+        "(ui/dialog title route) ->\n  (ui/elm \"div\"\n    (list \"class\" \"fs-dialog\" \"role\" \"dialog\" \"aria-modal\" \"true\")\n    (list (ui/elm \"div\" (list \"class\" \"fs-dialog-head\")\n            (list (ui/elm \"span\" (list \"class\" \"fs-dialog-title\")\n                    (list (ui/text title)))\n                  (ui/elm \"button\"\n                    (list \"class\" \"fs-btn fs-dialog-close\" \"title\" \"close\"\n                          \"hx-post\" \"/filmstrip/dialog/close\"\n                          \"hx-target\" \"#fs-layers\" \"hx-swap\" \"innerHTML\")\n                    (list (ui/text \"close\")))))\n          (ui/elm \"div\"\n            (list \"class\" \"fs-dialog-body\" \"hx-get\" route\n                  \"hx-trigger\" \"revealed\" \"hx-target\" \"this\"\n                  \"hx-swap\" \"innerHTML\")\n            (list))))")))
+  "The ui/dialog card: this def IS the element's declaration.")
+
+(define filmstrip/dialog
+  (lambda
+    ()
+    (let*
+      ((r (string-trim (as-str (request-param "route"))))
+          (t (string-trim (as-str (request-param "title"))))
+      (if
+        (or
+          (< (string-length r) 1)
+          (not (string-starts-with? r "/")))
+        (render-html
+          (filmstrip/oob-msg
+            "filmstrip: routes start with / (try /issues)"))
+        (let*
+          ((path (car (filmstrip/split-query r)))
+            (title (if (string-eq t "") path t)))
+          (if
+            (null? (route/lookup path))
+            (render-html
+              (filmstrip/oob-msg
+                (string-append "filmstrip: no route " path)))
+            (render-html
+              (lookbook/html (ui/dialog title r)))))))))
+  "POST /filmstrip/dialog: route (+ optional title) vals -> the modal
+dialog (ui/dialog) swapped into #fs-layers. Bad/missing routes answer
+with the launcher status line only; the dialog body hx-gets the route
+when revealed (lazy pane-body idiom), so the modal is router scope
+while the node lives (pads/layers-modality).")
+
+(define filmstrip/dialog-close
+  (lambda () (render-html ""))
+  "POST /filmstrip/dialog/close: clears #fs-layers -- the modal node
+dies and its router scope goes with it.")
 ;; ---- route bindings (vault, additive at load/boot-seed) ----
 ;; filmstrip.borg filmstrip-shell: the shell is the DEFAULT habitat
 ;; view, so a fresh habitat (boot seed loads libs/filmstrip onto
@@ -4247,6 +4356,8 @@ declared behavior data, never its own markup.")
 ;; word but the habitat itself never needed the flip.
 (route "/filmstrip" "filmstrip/page")
 (route "/filmstrip/open" "filmstrip/open")
+  (route "/filmstrip/dialog" "filmstrip/dialog")
+  (route "/filmstrip/dialog/close" "filmstrip/dialog-close")
 (route "/filmstrip/close" "filmstrip/close")
 (route "/filmstrip/cascade" "filmstrip/cascade")
 (route "/filmstrip/focus" "filmstrip/focus")

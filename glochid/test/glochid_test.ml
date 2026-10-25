@@ -1088,13 +1088,15 @@ let test_filmstrip_optimistic ~rt () =
      | Ast.VBool b -> b
      | other -> Alcotest.fail ("expect: " ^ Reader.pp_value other))
 
-(** file-issue rail button (card 5877331e): the railtabs strip carries a
-    declared lookbook element that opens the /issues register as a pane
-    (open-or-focus, OOB into #fs-sink) -- reporting an issue or UI
-    feedback is one click from any desktop. The examples card + the host
-    inventory witness the lookbook discipline; a hyper/expect rides a
-    real POST /filmstrip/open roundtrip with route=/issues (a stub
-    issues face stands in on the agent runtime). *)
+(** file-issue rail button (cards 5877331e + 5da2cf6c): the railtabs strip
+    carries a declared lookbook element that opens the /issues face in a
+    modal dialog (ui/dialog via POST /filmstrip/dialog, swapped into the
+    #fs-layers sink) -- reporting an issue or UI feedback is one click
+    from any desktop, no pane, no navigation. The examples card + the
+    host inventory witness the lookbook discipline; hyper/expects ride a
+    real POST /filmstrip/dialog roundtrip with route=/issues (a stub
+    issues face stands in on the agent runtime) plus a close-button
+    roundtrip that empties the sink. *)
 let test_filmstrip_file_issue ~rt () =
   Surface.load ~rt;
   (* hermetic ws: a throwaway row file so stale pane state from an earlier
@@ -1126,13 +1128,21 @@ let test_filmstrip_file_issue ~rt () =
   Alcotest.(check bool) "lookbook: file-issue registered in the inventory" true
     (has "ui/file-issue"
            (eval_str ~what:"lookbook/elements" {|(json-emit (lookbook/elements))|}));
+    (* ui/dialog (card 5da2cf6c): the modal element answers its card and is
+       registered in the same host inventory. *)
+    let dcard = eval_str ~what:"dialog card" {|(ui/dialog/examples)|} in
+    Alcotest.(check bool) "lookbook: dialog card declares the element" true
+      (has "ui/dialog" dcard);
+    Alcotest.(check bool) "lookbook: dialog registered in the inventory" true
+      (has "ui/dialog"
+             (eval_str ~what:"lookbook/elements" {|(json-emit (lookbook/elements))|}));
   (* the rail strip renders the declared button *)
   let rail =
     eval_str ~what:"railtabs" {|(render-html (filmstrip/railtabs-html (list) 0))|}
   in
   Alcotest.(check bool) "rail: file-issue button present" true
     (has "fs-file-issue" rail && has "file an issue" rail);
-  (* the declared verb: posts /filmstrip/open with route=/issues into #fs-sink *)
+    (* the declared verb: posts /filmstrip/dialog with route=/issues into #fs-layers *)
   let hxvals =
     eval_str ~what:"hx-vals"
       {|(as-str (hyper/attr
@@ -1143,35 +1153,52 @@ let test_filmstrip_file_issue ~rt () =
   in
   Alcotest.(check bool) "rail: file-issue hx-vals carries the issues route" true
     (has "/issues" hxvals && has "route" hxvals);
-  Alcotest.(check bool) "rail: file-issue posts /filmstrip/open" true
-    (has "hx-post=\"/filmstrip/open\"" rail);
+    Alcotest.(check bool) "rail: file-issue posts /filmstrip/dialog" true
+      (has "hx-post=\"/filmstrip/dialog\"" rail);
     (* card c0ad9354: the strip wraps instead of clipping -- a full
        railtabs row must never push the file-issue button off the rail
        (#fs-rail clips overflow-x). The wrap rule rides filmstrip/css. *)
     Alcotest.(check bool) "rail css: railtabs strip wraps, never clips" true
       (has ".fs-railtabs{flex-wrap:wrap"
              (eval_str ~what:"filmstrip css" {|(css/render (filmstrip/css))|}));
-  (* hyper/expect: stub /issues, then POST /filmstrip/open through the
-     real route machinery; the OOB fragment must carry the opened pane
-     rendering the issues face. *)
-  (match Runtime.eval_string ~rt
-           {|(seq (define (stub-issues)
-                      (render-html "<div id=issue-reg>issues-register</div>"))
-                  (route "/issues" "stub-issues"))|}
-  with
-  | _ -> ()
-  | exception Ast.Interp_error e ->
-      Alcotest.fail
-        ("stub issues face: INTERP "
-         ^ (match e with
-            | Ast.Prim_error (k, n, m) -> k ^ "/" ^ n ^ ": " ^ m
-            | _ -> "opaque")));
-  ignore (Runtime.eval_string ~rt
-    {|(define pg (soup/parse (route/dispatch (route/lookup "/filmstrip/open") "POST" "/filmstrip/open" (list (cons "route" "/issues")) (list (cons "hx-request" "true")))))|});
-  Alcotest.(check bool) "hyper: expect the issues pane in the open fragment" true
-    (match Runtime.eval_string ~rt {|(hyper/expect pg "#issue-reg" "issues-register")|} with
-     | Ast.VBool b -> b
-     | other -> Alcotest.fail ("expect: " ^ Reader.pp_value other))
+    (* hyper/expect: stub /issues (route/lookup validation stands in for
+       the real notes face on the agent runtime), then POST /filmstrip/dialog
+       through the real route machinery: the fragment carries the modal
+       dialog; on the full shell page the rail button's click swaps it into
+       #fs-layers and the close button empties the sink again. *)
+    (match Runtime.eval_string ~rt
+             {|(seq (define (stub-issues)
+                        (render-html "<div id=issue-reg>issues-register</div>"))
+                    (route "/issues" "stub-issues"))|}
+    with
+    | _ -> ()
+    | exception Ast.Interp_error e ->
+        Alcotest.fail
+          ("stub issues face: INTERP "
+           ^ (match e with
+              | Ast.Prim_error (k, n, m) -> k ^ "/" ^ n ^ ": " ^ m
+              | _ -> "opaque")));
+    ignore (Runtime.eval_string ~rt
+      {|(define pg (soup/parse (route/dispatch (route/lookup "/filmstrip/dialog") "POST" "/filmstrip/dialog" (list (cons "route" "/issues") (cons "title" "file an issue")) (list (cons "hx-request" "true")))))|});
+    Alcotest.(check bool) "hyper: expect the modal dialog title" true
+      (match Runtime.eval_string ~rt {|(hyper/expect pg ".fs-dialog-title" "file an issue")|} with
+       | Ast.VBool b -> b
+       | other -> Alcotest.fail ("expect: " ^ Reader.pp_value other));
+    ignore (Runtime.eval_string ~rt
+      {|(define shell (soup/parse (route/dispatch (route/lookup "/filmstrip") "GET" "/filmstrip" (list) (list (cons "hx-request" "true")))))|});
+    ignore (Runtime.eval_string ~rt
+      {|(define pg2 (hyper/click shell "#fs-file-issue" (list (cons "route" "/issues") (cons "title" "file an issue"))))|});
+    Alcotest.(check bool) "hyper: file-issue click swaps the dialog into #fs-layers" true
+      (match Runtime.eval_string ~rt {|(hyper/expect pg2 ".fs-dialog-title" "file an issue")|} with
+       | Ast.VBool b -> b
+       | other -> Alcotest.fail ("expect: " ^ Reader.pp_value other));
+    ignore (Runtime.eval_string ~rt
+      {|(define pg3 (hyper/click pg2 ".fs-dialog-close" (list)))|});
+    Alcotest.(check bool) "hyper: close empties #fs-layers" true
+      (match Runtime.eval_string ~rt {|(string-eq (hyper/text pg3 "#fs-layers") "")|}
+      with
+       | Ast.VBool b -> b
+       | other -> Alcotest.fail ("expect: " ^ Reader.pp_value other))
 
 (** start-menu cap (card e3de4aa0): the zero-JS start menu floats OVER
     the tree below the railtabs strip, so it must never extend below the
@@ -1789,7 +1816,7 @@ let test_lookbook ~rt () =
            {|(list/map (lambda (n) (lb/get n "open")) (glochid/ui-tree ""))|}
    with
    | Ast.VList opens ->
-        Alcotest.(check int) "ui root: lib seeds + glochid host elements + ui/file-issue" 14
+          Alcotest.(check int) "ui root: lib seeds + glochid host elements + ui/file-issue + ui/dialog" 15
          (List.length opens);
        Alcotest.(check bool) "ui rows open-or-focus the /lookbook pane" true
          (List.exists
