@@ -222,6 +222,11 @@
         b
         (cons (car a) (stream/list-merge2 (cdr a) b))))
 
+(define (stream/list-append lst x)
+    "Append one item x at the end of lst."
+    (if (null? lst)
+        (list x)
+        (cons (car lst) (stream/list-append (cdr lst) x))))
 (define (stream/list-merge5 a b c d e f)
     (stream/list-merge2 a
       (stream/list-merge2 b
