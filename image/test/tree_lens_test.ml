@@ -59,6 +59,27 @@ let test_lens_suffix_path () =
   Alcotest.(check (option string)) "kind-only suffix -> None"
     None (T.lens_suffix_path ~branch_id:b "fn")
 
+(* ---- regression (ops incident 2026-10-25, handler=stream/action-done):
+   an empty or malformed lens suffix must resolve to None/[] — it must never
+   reach PG as ''::ltree (42601 ltree syntax error, "Unexpected end of
+   input."). ---- *)
+let test_lens_malformed_suffix_no_ltree_error () =
+  with_store (fun store ->
+      match S.conn_of store with
+      | None -> ()
+      | Some conn ->
+          let chain = [ main_id ] in
+          Alcotest.(check bool) "empty suffix -> None"
+            true (Option.is_none (T.lens_get_in_chain conn ~suffix:"" chain));
+          Alcotest.(check bool) "kind-only suffix -> None"
+            true (Option.is_none (T.lens_get_in_chain conn ~suffix:"fn" chain));
+          Alcotest.(check bool) "kind-dot suffix -> None"
+            true (Option.is_none (T.lens_get_in_chain conn ~suffix:"fn." chain));
+          Alcotest.(check bool) "children malformed -> []"
+            true ([] = T.lens_children_in_chain conn ~suffix:"" ~limit:10 chain);
+          Alcotest.(check bool) "subtree malformed -> []"
+            true ([] = T.lens_subtree_in_chain conn ~suffix:"fn." ~limit:10 chain))
+
 (* ---- integration: override chain, closest-wins ---- *)
 let test_effective_override_chain () =
   with_store (fun store ->
@@ -191,4 +212,6 @@ let () =
             test_effective_override_chain;
           Alcotest.test_case "lens-get prim closest-wins" `Quick
             test_lens_get_prim;
+            Alcotest.test_case "malformed suffix no ltree error" `Quick
+              test_lens_malformed_suffix_no_ltree_error;
         ] ) ]
