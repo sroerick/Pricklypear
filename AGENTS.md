@@ -559,3 +559,35 @@ auth is **in-process** in the image.
   escape hatch, not a note-taking habit: status flips, drift
   observations, and verification results belong in commit messages and
   reports, not in the issue tracker.
+
+### Two queues: `jobs` vs `run` (2026-10-25)
+
+They are not duplicates and must not be merged; the storage split is
+deliberate and ratified (`run-primitive.borg` records the jobs table as
+the *considered-and-rejected* alternative). The axis is where the runner
+lives, not what the work is:
+
+- **`jobs`** — `image/lib/jobs.ml`, tables `jobs`/`job_steps`/`schedules`
+  (migration 015). Runner is an in-image Eio fiber forked in `boot.ml`;
+  claim is `SKIP LOCKED`; owner ids are `boot-<pid>`. Use for app
+  async and cron: cache refresh, `agent/wake`, bench. Schedules are armed
+  by the same fiber (`fire_schedules`).
+- **`run`** — `data.s.run.*` tree datum, `libs/workstreams/lib.pp` +
+  `glochid/lib/supervisor.ml`. Runner is an EXTERNAL supervised process;
+  claim is one guarded CAS `queued -> claimed`; owner ids are
+  `glochid-supervisor@<host>`. Use for factory work: one run = one
+  attempt to advance one card one gate. The LLM loop NEVER runs inside
+  the PP runtime process (`jobs.borg:246-253`, the absolute rule) — that
+  rule is why the factory could not simply reuse the in-image runner.
+
+Both converged on the same lease semantics (heartbeat + deadline, reclaim
+on *deadline passed* and never on *owner is someone else*, terminal writes
+fenced on ownership). The protocol is shared by reference, not by code;
+they are two implementations of one lease contract. When changing either
+one, change both or say plainly that you did not.
+
+`remote/lib/job_worker.ml` is NOT legacy glue between them: `jobs.borg`
+calls it "THE SHIPPED EXTERNAL WORKER" — the client loop the placement
+protocol was designed for. `pp-remote --work-loop` is how an out-of-image
+worker drains the `jobs` queue, releasing bodies it cannot faithfully run.
+Distinct from the factory's `run` supervisor.
