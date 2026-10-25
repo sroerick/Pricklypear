@@ -165,14 +165,20 @@ let heartbeat_interval_s () : float =
     surrounding switch ends (job finished), so there is no join to forget and
     no way to leak a fiber per job. A failed renewal ([false]) stops the
     renewer and is reported by the caller — it means the lease lapsed and the
-    row may already belong to another runner. *)
+    row may already belong to another runner.
+
+    [owner] must be the SAME id the claim stamped. It is threaded rather than
+    read from [Jobs.runner_id] so the renewer cannot drift from the claim: a
+    heartbeat from a different id is a `false` (the CAS misses), which reads
+    as "lease lost" and would make the runner discard a result it actually
+    owns. *)
 let with_lease_heartbeat ~(store : Store.t) ~(job : Jobs.job)
-    ~(on_lost : unit -> unit) (f : unit -> 'a) : 'a =
+    ~(owner : string) ~(on_lost : unit -> unit) (f : unit -> 'a) : 'a =
   Eio.Switch.run @@ fun sw ->
   Eio.Fiber.fork_daemon ~sw (fun () ->
       let rec beat () =
         Io_eio.sleep (heartbeat_interval_s ());
-        if Jobs.heartbeat ~store ~id:job.Jobs.id then beat ()
+        if Jobs.heartbeat ~store ~id:job.Jobs.id ~owner () then beat ()
         else begin
           on_lost ();
           `Stop_daemon
@@ -314,12 +320,21 @@ let jobs_runner_loop ~(session : Session.t) : unit =
            fire_schedules ()
      in
      try fire_schedules () with _ -> ());
-    let claimed = (try Jobs.claim_due ~store:session.store with _ -> None) in
+    let claimed =
+      (try Jobs.claim_due ~store:session.store ~owner:Jobs.runner_id ()
+       with _ -> None)
+    in
     (match claimed with
      | Some job ->
-       (try
+       (* The CAS verdict is ignored HERE on purpose: the in-image runner
+          learns about lease loss from [heartbeat]'s [false], which is why
+          [with_lease_heartbeat] calls [on_lost]. An external claimant, which
+          has no such fiber, reads the returned bool instead. *)
+       ignore
+         (try
           let result, ok =
             with_lease_heartbeat ~store:session.store ~job
+              ~owner:Jobs.runner_id
               ~on_lost:(fun () ->
                 Printf.eprintf
                   "[jobs] lease lost on %s (%s) — another runner may own this \
@@ -334,15 +349,14 @@ let jobs_runner_loop ~(session : Session.t) : unit =
               ~id:job.Jobs.id ~result_json:result ()
           else
             Jobs.record_failed ~store:session.store ~owner:Jobs.runner_id
-              ~id:job.Jobs.id ~error:result ~max_attempts:job.Jobs.max_attempts
-              ()
+              ~id:job.Jobs.id ~error:result
+              ?max_attempts:(Some job.Jobs.max_attempts) ()
         with exn ->
           (try
              Jobs.record_failed ~store:session.store ~owner:Jobs.runner_id
                ~id:job.Jobs.id ~error:(Printexc.to_string exn)
-               ~max_attempts:job.Jobs.max_attempts
-               ()
-           with _ -> ()));
+               ?max_attempts:(Some job.Jobs.max_attempts) ()
+           with _ -> false));
        loop ()
      | None ->
        Io_eio.sleep 1.0;

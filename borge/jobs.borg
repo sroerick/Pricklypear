@@ -167,6 +167,53 @@
         vocabulary film-edit specified for gen/render.
 
         =========================================================
+        THE WORKER PRIMS (host side, server-only)
+        =========================================================
+          (claim-job "tag")                    → job row | null
+          (job-heartbeat id "tag")             → bool
+          (job-finish id "tag" "done" v)       → bool
+          (job-finish id "tag" "failed" msg)   → bool
+
+        These are register_server_only, NOT guest prims: no Nopales
+        code evaluated on a branch can call them, exactly as with
+        the other host-side prims. They exist so an out-of-process
+        worker (pp-remote's lens client, the Blender bridge shape)
+        drives the SAME rows through the SAME protocol the in-image
+        runner uses, instead of a second private queue.
+
+        CONTRACT. null from claim-job is not an error — an empty
+        queue is the steady state, so a worker loop is
+        (let (j (claim-job "tag")) (if (null? j) (sleep) …)).
+        heartbeat and finish return a BOOL that reports ownership,
+        not merely whether a write happened: false means the lease
+        is gone (finished, or deadline passed and someone else
+        reclaimed), and a worker must treat it as "stop, my result
+        is no longer authoritative". A worker cannot reconstruct
+        that verdict locally, so it has to come back over the prim.
+
+        OWNER IS DERIVED, NEVER SELF-DECLARED. The owner id is
+        ext-<authenticated-caller>-<tag> (Jobs.external_owner).
+        Two reasons, both load-bearing: the image must not accept a
+        worker-chosen identity, or one worker could claim into
+        another's lease namespace; and the ext- prefix keeps these
+        rows out of preempt_dead_host_leases, which decides death
+        by probing /proc on THIS host and would otherwise declare
+        a live remote laptop worker dead. Separator characters in
+        the tag are neutralized, so no tag can spell a boot-<host>#
+        pid id and get itself preempted.
+
+        max_attempts is deliberately NOT a job-finish parameter:
+        the retry budget is a property of the ROW. A worker able to
+        pass its own budget could retry a poisoned job forever.
+
+        OPEN (recorded, not decided here): claim requires a
+        verified admin, which makes a worker a cross-tenant
+        privilege. Per-owner eligibility ("this lens may claim only
+        its own owner's jobs") needs an eligibility column on the
+        row. Admin-gating is the conservative floor, not the
+        intended ceiling.
+
+        =========================================================
         THE RUNNER (host side)
         =========================================================
         One Eio fiber forked at boot, beside the HTTP accept loop
@@ -235,10 +282,51 @@
         not something the schema enforces. Any process that speaks
         claim/heartbeat/CAS against these rows is a valid worker:
         the claim is SKIP LOCKED, liveness is a lease, and a late
-        writer loses the CAS. What a second worker does NOT get is
+        writer loses the CAS (the worker prims above are that
+        protocol, exposed). What a second worker does NOT get is
         a fair share — single FIFO queue, no priorities or rate
         limits (hard edges below) — and a job that wedges a worker
         still wedges that worker.
+
+        WHAT GATES PLACEMENT IS THE BODY'S EFFECTS, NOT ITS
+        PACKAGE. The claim protocol travels; the evaluation
+        context does not. So before a job may run on an external
+        worker, its body has to be one whose effects survive
+        leaving this image, and the tree already has the
+        classifier that answers this: Effect.infer, the same
+        analysis (with-transaction) uses to refuse bodies
+        carrying Net/Ai (session_control_prims.ml). Reusing it
+        means the rule is stated once.
+
+          - Txn / Step effects ⇒ STAY IN-IMAGE, always.
+            with-transaction and with-step hand a LAMBDA to a
+            server-only prim (they are not register_server_only
+            themselves), and a lambda cannot cross the wire:
+            prims_json renders one as its printed text and
+            reconstructs nothing, so a proxied call would be
+            rejected as "need a lambda" — loud, not silent. It
+            is worse than a transport failure: with-step's
+            checkpoint must land in the SAME transaction as the
+            thunk's writes (that is the entire exactly-once
+            mechanism, and it rides Store.current_conn). And
+            lens writes are sync/push — a three-way merge
+            against a server-authoritative hash, not a
+            transaction. Exactly-once is honorable in ONE place:
+            inside the image. The placer does not save this — it
+            decides per top-level expression, and a job evaluates
+            as (fn args), so a transaction inside fn's body is
+            invisible to it.
+          - Net / Ai / pure-read-mostly ⇒ LENS-ELIGIBLE:
+            cache refreshes, market polls, LLM turns. This is
+            exactly the long external work already assigned to an
+            external worker, and exactly what the two shipped
+            submissions are (notes/cache-refresh,
+            todo/notes-cache-refresh).
+
+        Placement therefore derives from the body, not from a
+        config list: a job that GROWS a with-transaction becomes
+        ineligible automatically. A curated allowlist of package
+        names would rot the first time someone edits a body.
 
         =========================================================
         STEP CHECKPOINTS (the DBOS idea, Nopales-shaped)
@@ -339,6 +427,7 @@
    (verify
     (build "dune build @all")
     (test "image/test: jobs_test.ml runner — claim skips locked rows (second-connection FOR UPDATE); exponential backoff requeues into the future / exhausted→dead; expired lease requeued IMMEDIATELY (run_at pulled to now, attempts kept) or dead at max_attempts; a LIVE lease is never stolen by another runner; heartbeat renews the deadline and refuses a late write from a lapsed owner; same-host boot preempt recovers only THIS host's dead-pid leases")
+    (test "image/test: jobs_test.ml runner — EXTERNAL CLAIMANT (worker prims): a distinct owner can claim a due row without the in-image runner, and each lease is confined (a foreign owner cannot renew or finish it, both CAS writes report their verdict); owner ids are normalized into the ext- namespace and no tag can spell a boot-<host># pid id, so preempt_dead_host_leases leaves remote workers to TTL-only recovery; the retry budget stays row-derived when no max_attempts argument is passed")
         (test "job budget: a job stepping past 100k (long counter loop) completes done, does not die budget-exceeded - the same loop on the request path still budget-exceeds")
     (smoke "submit a job that sleeps, watch status pending→running→done with result via (job-status)")
     (smoke "submit a job whose fn raises → attempts increments, retry, eventual dead")

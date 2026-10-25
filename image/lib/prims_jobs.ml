@@ -160,3 +160,129 @@ let register (t : t) (tbl : Primitives.t) : unit =
 
   Primitives.register tbl "schedules"
     (fun _ -> Jobs.list_schedules ~store:t.store ());
+
+  (* ===== EXTERNAL CLAIM SURFACE (borge/jobs.borg, THE FLEET QUESTION) =====
+
+     Until this block existed, `claim-job` was not a thing you could call: the
+     queue was multi-claimable in SCHEMA (045: SKIP LOCKED claim, lease,
+     expiry-only reclaim, CAS terminal writes) but the only process that could
+     exercise it was the in-image runner, whose id was baked into
+     Jobs.runner_id. These three prims are the missing verb.
+
+     GATE — verified admin, not the session flag. A claimant picks up work
+     submitted by ANY user and the runner then evals that job's fn on the job's
+     branch, so "may claim" is equivalent to "may execute arbitrary submitted
+     code across tenants". t.is_admin is exactly the wrong authority to trust
+     here: on prod the SHARED BOOT session derives is_admin from
+     username="admin", which is the situation is_verified_admin was written
+     for. Fail closed when the row is missing.
+
+     OPEN (recorded, not decided here): this makes a worker a
+     cross-tenant privilege, so the only workers today are admin
+     ones. Scoping eligibility — "this lens may claim only its own
+     owner's jobs" — needs an eligibility column on the row and is
+     the design question left open in the chapter. Admin-gating is
+     the conservative floor, not the intended ceiling. *)
+  let worker_owner (tag : string) : string =
+    (* Owner id is derived from the AUTHENTICATED caller plus the worker's own
+       tag: the image must not accept a self-declared identity, or a worker
+       could claim into another worker's lease namespace. Namespacing under
+       ext- (Jobs.external_owner) keeps these rows invisible to
+       preempt_dead_host_leases, which decides death by probing /proc on THIS
+       host and would otherwise declare a remote laptop worker dead. *)
+    Jobs.external_owner (Printf.sprintf "%s-%s" (job_caller ()) tag)
+  in
+  let require_worker ~(op : string) : unit =
+    if job_caller () = "anonymous" then Prims_db_common.deny_anon op
+    else if not (Prims_db_common.is_verified_admin ~t ()) then
+      raise
+        (Pricklypear_lisp.Ast.Interp_error
+           (Pricklypear_lisp.Ast.User_error
+              (op ^ ": denied: worker claim requires verified admin", "denied")))
+  in
+  let as_json (v : Pricklypear_lisp.Ast.value) : string =
+    match v with
+    | Pricklypear_lisp.Ast.VStr s -> s
+    | other -> Pricklypear_lisp.Reader.pp_value other
+  in
+  (* (claim-job "worker-tag") -> the claimed job row | null.
+     null is NOT an error: an empty queue is the normal steady state. *)
+  Primitives.register_server_only tbl "claim-job"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr tag ] ->
+        require_worker ~op:"claim-job";
+        (match Jobs.claim_due ~store:t.store ~owner:(worker_owner tag) () with
+         | Some j -> Jobs.job_to_value j
+         | None -> Pricklypear_lisp.Ast.VNil)
+      | _ ->
+        raise
+          (Pricklypear_lisp.Ast.Interp_error
+             (Pricklypear_lisp.Ast.Prim_error
+                ("claim-job", "need worker-tag-str", "bad-args"))));
+
+  (* (job-heartbeat id "worker-tag") -> bool.
+
+     false means the lease is GONE — the row finished, or the deadline passed
+     and another worker reclaimed it. A worker must treat false as "stop, my
+     work is no longer authoritative" and must NOT finish the row. *)
+  Primitives.register_server_only tbl "job-heartbeat"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr id; Pricklypear_lisp.Ast.VStr tag ] ->
+        require_worker ~op:"job-heartbeat";
+        Pricklypear_lisp.Ast.VBool
+          (Jobs.heartbeat ~store:t.store ~id ~owner:(worker_owner tag) ())
+      | _ ->
+        raise
+          (Pricklypear_lisp.Ast.Interp_error
+             (Pricklypear_lisp.Ast.Prim_error
+                ( "job-heartbeat",
+                  "need job-id-str, worker-tag-str",
+                  "bad-args" ))));
+
+  (* (job-finish id "worker-tag" "done" value)    -> bool
+     (job-finish id "worker-tag" "failed" message) -> bool
+
+     Both are lease CASes: the returned bool is the verdict on OWNERSHIP, not
+     merely on the write. false = this worker no longer holds the row and its
+     result was discarded — a retry already owns the job. That distinction
+     cannot be reconstructed by the worker, so it has to come back here.
+
+     max_attempts is deliberately NOT a parameter: the retry budget is a
+     property of the row, so a worker cannot inflate its own budget (see
+     Jobs.record_failed). *)
+  Primitives.register_server_only tbl "job-finish"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr id;
+          Pricklypear_lisp.Ast.VStr tag;
+          Pricklypear_lisp.Ast.VStr outcome;
+          value ] ->
+        require_worker ~op:"job-finish";
+        let owner = worker_owner tag in
+        (match outcome with
+         | "done" ->
+           Pricklypear_lisp.Ast.VBool
+             (Jobs.record_done ~store:t.store ?owner:(Some owner) ~id
+                ~result_json:(as_json value) ())
+         | "failed" ->
+           Pricklypear_lisp.Ast.VBool
+             (Jobs.record_failed ~store:t.store ?owner:(Some owner) ~id
+                ~error:(as_json value) ())
+         | other ->
+           raise
+             (Pricklypear_lisp.Ast.Interp_error
+                (Pricklypear_lisp.Ast.Prim_error
+                   ( "job-finish",
+                     Printf.sprintf
+                       "outcome must be \"done\" or \"failed\", got %S" other,
+                     "bad-args" ))))
+      | _ ->
+        raise
+          (Pricklypear_lisp.Ast.Interp_error
+             (Pricklypear_lisp.Ast.Prim_error
+                ( "job-finish",
+                  "need job-id-str, worker-tag-str, outcome-str, value",
+                  "bad-args" ))));
+

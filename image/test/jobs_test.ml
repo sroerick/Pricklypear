@@ -222,7 +222,7 @@ let test_job_lifecycle () =
        | _ -> Alcotest.fail "get (admin) returned non-string");
       (* claim: pending -> running, runner_id set, attempts+1 *)
       make_due store ~id;
-      (match J.claim_due ~store with
+      (match J.claim_due ~store () with
        | None -> Alcotest.fail "claim of a due job returned None"
        | Some j ->
            Alcotest.(check string) "claimed id" id j.J.id;
@@ -231,7 +231,7 @@ let test_job_lifecycle () =
            Alcotest.(check bool) "runner_id stamped" true
              (j.J.runner_id <> ""));
       (* record_done: running -> done with result *)
-      J.record_done ~store ~id ~result_json:"\"ok-result\"" ();
+      ignore (J.record_done ~store ~id ~result_json:"\"ok-result\"" ());
       (match J.get ~store ~id ~caller:"alice" ~is_admin:false with
        | Pricklypear_lisp.Ast.VStr s ->
            Alcotest.(check bool) "complete status done" true
@@ -327,13 +327,13 @@ let test_claim_skips_locked () =
                 (S.exec c ~params:[ Pgx.Value.of_string job1 ]
                    "SELECT id FROM jobs WHERE id=$1::uuid FOR UPDATE");
               (* claim on store A must SKIP the locked job1 and take job2 *)
-              (match J.claim_due ~store:store_a with
+              (match J.claim_due ~store:store_a () with
                | None -> Alcotest.fail "claim skipped nothing"
                | Some j ->
                    Alcotest.(check string) "skipped locked, claimed job2"
                      job2 j.J.id));
       (* B's tx committed/rolled back -> job1 unlockable; claim it *)
-      (match J.claim_due ~store:store_a with
+      (match J.claim_due ~store:store_a () with
        | None -> Alcotest.fail "second claim returned None"
        | Some j -> Alcotest.(check string) "claimed formerly-locked job1"
              job1 j.J.id);
@@ -353,11 +353,12 @@ let test_backoff_schedule () =
       in
       (* claim (attempts 0->1) then fail with max_attempts=3 *)
       make_due store ~id;
-      (match J.claim_due ~store with
-       | None -> Alcotest.fail "no job to claim"
-       | Some j ->
-           Alcotest.(check int) "attempts after first claim" 1 j.J.attempts;
-           J.record_failed ~store ~id ~error:"boom" ~max_attempts:3 ());
+      ignore
+        (match J.claim_due ~store () with
+         | None -> Alcotest.fail "no job to claim"
+         | Some j ->
+             Alcotest.(check int) "attempts after first claim" 1 j.J.attempts;
+             J.record_failed ~store ~id ~error:"boom" ?max_attempts:(Some 3) ());
       (* not dead yet (attempts 1 < max 3) -> requeued pending into future *)
       (match read_job_fields store ~id with
        | Some (attempts, status, run_at) ->
@@ -368,10 +369,11 @@ let test_backoff_schedule () =
        | None -> Alcotest.fail "job missing after backoff");
       (* second claim (attempts 2) + fail -> still pending, later retry *)
       make_due store ~id;
-      (match J.claim_due ~store with
-       | None -> Alcotest.fail "no job to claim (2nd)"
-       | Some j -> J.record_failed ~store ~id ~error:"boom2"
-             ~max_attempts:3 ());
+      ignore
+        (match J.claim_due ~store () with
+         | None -> Alcotest.fail "no job to claim (2nd)"
+         | Some _j -> J.record_failed ~store ~id ~error:"boom2"
+               ?max_attempts:(Some 3) ());
       (match read_job_fields store ~id with
        | Some (attempts, status, _) ->
            Alcotest.(check int) "attempts after 2nd fail" 2 attempts;
@@ -379,10 +381,11 @@ let test_backoff_schedule () =
        | None -> Alcotest.fail "job missing after 2nd backoff");
       (* third claim (attempts 3 = max) + fail -> dead *)
       make_due store ~id;
-      (match J.claim_due ~store with
-       | None -> Alcotest.fail "no job to claim (3rd)"
-       | Some j -> J.record_failed ~store ~id ~error:"boom3"
-             ~max_attempts:3 ());
+      ignore
+        (match J.claim_due ~store () with
+         | None -> Alcotest.fail "no job to claim (3rd)"
+         | Some _j -> J.record_failed ~store ~id ~error:"boom3"
+               ?max_attempts:(Some 3) ());
       (match read_job_fields store ~id with
        | Some (_, status, _) ->
            Alcotest.(check string) "exhausted -> dead" "dead" status
@@ -478,7 +481,7 @@ let test_reaper_never_steals_live_lease () =
           ~branch:"system/main" ~submitted_by:"alice"
       in
       make_due store ~id:mine;
-      (match J.claim_due ~store with
+      (match J.claim_due ~store () with
        | None -> Alcotest.fail "no job to claim"
        | Some j ->
            Alcotest.(check string) "claimed id" mine j.J.id;
@@ -503,7 +506,7 @@ let test_heartbeat_renews_and_guards () =
       in
       make_due store ~id;
       let claimed =
-        match J.claim_due ~store with
+        match J.claim_due ~store () with
         | None -> Alcotest.fail "no job to claim"
         | Some j -> j
       in
@@ -522,7 +525,7 @@ let test_heartbeat_renews_and_guards () =
                  WHERE id=$1::uuid")
        | None -> ());
       Alcotest.(check bool) "heartbeat renews a held lease" true
-        (J.heartbeat ~store ~id);
+        (J.heartbeat ~store ~id ());
       (match read_lease store ~id with
        | Some (owner, hb, dl) ->
            Alcotest.(check string) "lease owner unchanged" claimed.J.runner_id
@@ -543,18 +546,20 @@ let test_heartbeat_renews_and_guards () =
       set_lease store ~id ~owner:"boot-otherhost#4242"
         ~deadline_ms:(Int64.add (now_ms ()) 60000L);
       Alcotest.(check bool) "heartbeat reports a lost lease" false
-        (J.heartbeat ~store ~id);
+        (J.heartbeat ~store ~id ());
       (* ...and a late terminal write from the old owner is REFUSED, so it
          cannot overwrite the new attempt's status/result. *)
-      J.record_done ~store ~owner:claimed.J.runner_id ~id
-        ~result_json:"\"stale\"" ();
+      ignore
+        (J.record_done ~store ~owner:claimed.J.runner_id ~id
+           ~result_json:"\"stale\"" ());
       (match read_job_fields store ~id with
        | Some (_, status, _) ->
            Alcotest.(check string) "stale done write refused" "running" status
        | None -> Alcotest.fail "job missing after stale write");
       (* The owner-CAS also lets the RIGHT holder write; drop it and finish. *)
-      J.record_done ~store ~owner:"boot-otherhost#4242" ~id
-        ~result_json:"\"fresh\"" ();
+      ignore
+        (J.record_done ~store ~owner:"boot-otherhost#4242" ~id
+           ~result_json:"\"fresh\"" ());
       (match read_job_fields store ~id with
        | Some (_, status, _) ->
            Alcotest.(check string) "current owner finishes the row" "done"
@@ -603,6 +608,151 @@ let test_preempt_dead_host_leases () =
       delete_job store ~id:dead;
       delete_job store ~id:foreign;
       delete_job store ~id:mine)
+
+(* ------------------------------------------------------------------ *)
+(* EXTERNAL CLAIMANT (step 1 of the local-execution plan).            *)
+(*                                                                    *)
+(* The queue was multi-claimable in SCHEMA after 045 but only the      *)
+(* in-image runner could exercise it, because claim_due/heartbeat read *)
+(* the module-global runner_id. These cases pin the parts that make an *)
+(* out-of-image worker (pp-lens --work) safe rather than merely        *)
+(* possible.                                                          *)
+(* ------------------------------------------------------------------ *)
+
+(* Owner-id normalization is a SAFETY property, not cosmetics: the ext-
+   namespace is what keeps a remote worker's lease out of reach of
+   preempt_dead_host_leases, which decides death by probing /proc on THIS
+   host. A worker that could name itself `boot-…` would be claimable by
+   that probe. *)
+let test_external_owner_namespace () =
+  Alcotest.(check string) "a plain tag is namespaced"
+    "ext-aurora" (J.external_owner "aurora");
+  Alcotest.(check string) "an already-namespaced tag is left alone"
+    "ext-aurora" (J.external_owner "ext-aurora");
+  Alcotest.(check string) "an empty tag still gets a stable id"
+    "ext-unnamed" (J.external_owner "   ");
+  (* The security case: a caller must not smuggle itself into the boot
+     namespace, where the same-host pid probe applies. The separator is
+     neutralized (# -> _), so the result can never match the
+     `boot-<host>#%` LIKE pattern preempt_dead_host_leases scans with, and
+     it carries the ext- prefix on top. Both facts are asserted; the exact
+     spelling is an implementation detail. *)
+  let bootish = J.external_owner "boot-host#1" in
+  Alcotest.(check bool) "a boot-shaped tag lands in the ext- namespace" true
+    (String.length bootish >= 4 && String.sub bootish 0 4 = "ext-");
+  Alcotest.(check bool) "...and can never match the preempt LIKE pattern" true
+    (not (contains_sub bootish (J.host_prefix)));
+  Alcotest.(check bool) "normalization is idempotent" true
+    (J.external_owner bootish = bootish);
+  Alcotest.(check bool) "separator and wildcard chars are neutralized" true
+    (let s = J.external_owner "a#b/c d%" in
+     not (String.contains s '#') && not (String.contains s '/')
+     && not (String.contains s ' ')
+     && not (String.contains s '%'));
+  Alcotest.(check bool) "normalization is idempotent" true
+    (J.external_owner (J.external_owner "weird tag") = J.external_owner "weird tag")
+
+(* The whole point of the change: two DISTINCT owners can take work from one
+   queue, and each is confined to its own lease. *)
+let test_second_claimant () =
+  with_store (fun store ->
+      clear_jobs store;
+      let id = submit_future store ~fn:"jfn" ~args_json:"{}"
+          ~branch:"system/main" ~submitted_by:"alice"
+      in
+      make_due store ~id;
+      (* An out-of-image worker claims under its own owner id. *)
+      let worker = J.external_owner "alice-lens" in
+      (match J.claim_due ~store ~owner:worker () with
+       | None -> Alcotest.fail "external owner could not claim a due job"
+       | Some j ->
+           Alcotest.(check string) "the row records the external owner"
+             worker j.J.runner_id;
+           Alcotest.(check string) "claimed row is running" "running"
+             j.J.status;
+           Alcotest.(check bool) "claim stamped a live lease" true
+             (Int64.compare j.J.lease_deadline (now_ms ()) > 0));
+      (* A DIFFERENT owner cannot renew or finish it. *)
+      let other = J.external_owner "bob-lens" in
+      Alcotest.(check bool) "a foreign owner cannot renew the lease" false
+        (J.heartbeat ~store ~id ~owner:other ());
+      Alcotest.(check bool) "a foreign owner cannot finish the row" false
+        (J.record_done ~store ?owner:(Some other) ~id
+           ~result_json:"\"stolen\"" ());
+      (* The holder can. Both writes report their verdict. *)
+      Alcotest.(check bool) "the holder can renew" true
+        (J.heartbeat ~store ~id ~owner:worker ());
+      Alcotest.(check bool) "the holder finishes, CAS reports success" true
+        (J.record_done ~store ?owner:(Some worker) ~id
+           ~result_json:"\"ok\"" ());
+      (match read_job_fields store ~id with
+       | Some (_, status, _) ->
+           Alcotest.(check string) "row is done" "done" status
+       | None -> Alcotest.fail "job missing after external finish");
+      (* And a SECOND external claim AFTER completion is empty, not an error —
+     the worker loop's steady state. *)
+      Alcotest.(check bool) "an empty queue yields None, not an error" true
+        (J.claim_due ~store ~owner:worker () = None);
+      delete_job store ~id)
+
+(* The safety edge that makes ext- load-bearing rather than cosmetic: a boot
+   on this machine probes /proc for boot-<host>#pids. A remote worker's pid
+   is not in our process table, so if external owners shared that namespace
+   every boot would declare live laptops dead and steal their rows. *)
+let test_preempt_ignores_external_owners () =
+  with_store (fun store ->
+      clear_jobs store;
+      let id = submit_future store ~fn:"jfn" ~args_json:"{}"
+          ~branch:"system/main" ~submitted_by:"alice"
+      in
+      (* Owner looks like a boot-<host>#<dead pid> claim in every way EXCEPT
+         the ext- prefix, which is what must protect it. *)
+      let remote = J.external_owner (Printf.sprintf "boot-%s#2147483646" J.host_tag) in
+      Alcotest.(check bool) "the fixture really is ext-namespaced" true
+        (String.length remote >= 4 && String.sub remote 0 4 = "ext-");
+      set_lease store ~id ~owner:remote
+        ~deadline_ms:(Int64.add (now_ms ()) 600_000L);
+      let n = J.preempt_dead_host_leases ~store in
+      Alcotest.(check int) "preempt recovered nothing it cannot judge" 0 n;
+      (match read_job_fields store ~id with
+       | Some (_, status, _) ->
+           Alcotest.(check string) "a remote worker's live lease survives boot"
+             "running" status
+       | None -> Alcotest.fail "remote row missing after preempt");
+      delete_job store ~id)
+
+(* The retry budget belongs to the ROW. A worker that could pass its own
+   max_attempts could retry a poisoned job forever; omitted, the comparison
+   must read jobs.max_attempts. *)
+let test_retry_budget_is_row_derived () =
+  with_store (fun store ->
+      clear_jobs store;
+      let id = submit_future store ~fn:"jfn" ~args_json:"{}"
+          ~branch:"system/main" ~submitted_by:"alice"
+      in
+      make_due store ~id;
+      let worker = J.external_owner "alice-lens" in
+      (match J.claim_due ~store ~owner:worker () with
+       | None -> Alcotest.fail "no job to claim"
+       | Some j ->
+           Alcotest.(check int) "claim consumed attempt 1" 1 j.J.attempts);
+      (* Exhaust the budget the way the row itself records it. *)
+      (match S.conn_of store with
+       | Some conn ->
+           ignore
+             (S.exec conn
+                ~params:[ Pgx.Value.of_string id ]
+                "UPDATE jobs SET attempts = max_attempts WHERE id = $1::uuid")
+       | None -> Alcotest.fail "no conn");
+      (* No max_attempts argument: the row's own column must decide 'dead'. *)
+      Alcotest.(check bool) "finish-as-failed reports the CAS verdict" true
+        (J.record_failed ~store ?owner:(Some worker) ~id ~error:"boom" ());
+      (match read_job_fields store ~id with
+       | Some (_, status, _) ->
+           Alcotest.(check string) "exhausted row goes dead without a hint"
+             "dead" status
+       | None -> Alcotest.fail "job missing after failed finish");
+      delete_job store ~id)
 
 (* runner identity is host-scoped so same-host recovery can be exact. *)
 let test_runner_id_shape () =
@@ -1016,7 +1166,15 @@ let () =
         ; Alcotest.test_case "same-host boot preempt" `Quick
             test_preempt_dead_host_leases
         ; Alcotest.test_case "runner id is host-scoped" `Quick
-            test_runner_id_shape ] )
+            test_runner_id_shape
+        ; Alcotest.test_case "external owner namespace" `Quick
+            test_external_owner_namespace
+        ; Alcotest.test_case "second claimant holds its own lease" `Quick
+            test_second_claimant
+        ; Alcotest.test_case "preempt ignores external owners" `Quick
+            test_preempt_ignores_external_owners
+        ; Alcotest.test_case "retry budget is row-derived" `Quick
+            test_retry_budget_is_row_derived ] )
     ; ( "args-bug"
       , [ Alcotest.test_case "eval_src splices jsonb args as literal" `Quick
             test_eval_src_args ] )
