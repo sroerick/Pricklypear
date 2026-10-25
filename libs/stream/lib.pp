@@ -230,31 +230,60 @@
                (todo/db/update-field "stream-star" (car srow) "last_seen"
                  (date-today))))))
 
-(define (stream/deal-today)
-    "Deal today's portion if today has none: most-starred first. Returns count."
-    (if (null? (stream/todays-deals))
-        (let ((pool (stream/gather-pool)))
-          (let ((l5 (stream/pick-level pool "*****"))
-                (l4 (stream/pick-level pool "****"))
-                (l3 (stream/pick-level pool "***"))
-                (l2 (stream/pick-level pool "**"))
-                (l1 (stream/pick-level pool "*"))
-                (l0 (stream/pick-level pool "")))
-            (let ((ordered (stream/list-merge5 l5 l4 l3 l2 l1 l0)))
-              (let ((take (min stream/daily-count (length ordered))))
-                (let ((portion (stream/first-n ordered take)))
-                  (seq
-                    (list/map (lambda (p)
-                                (seq
-                                  (todo/tree/create "stream-deal"
-                                    (dict-set* "{}" (list
-                                      "date" (stream/today-key)
-                                      "item_id" (as-str (car p))
-                                      "served" "0")))
-                                  (stream/mark-seen (car p))))
-                              portion)
-                    (length portion)))))))
-        (length (stream/todays-deals))))
+(define (stream/dealt-item-ids)
+  "Item ids that have ever been dealt."
+  (list/map (lambda (p) (as-str (dict-get (cdr p) "item_id")))
+            (stream/deal-rows)))
+
+(define (stream/fresh-pool)
+  "Never-dealt items: they appear once; star saves them for resurfacing."
+  (let ((dealt (stream/dealt-item-ids)))
+    (list/filter (lambda (p)
+                   (if (stream/id-in-list (car p) dealt)
+                       (string-eq "1" "0")
+                       (string-eq "1" "1")))
+                 (stream/gather-pool))))
+
+(define (stream/resurfacing)
+  "Starred items whose interval has elapsed - the save-and-resurface lane."
+  (let ((srows (todo/tree/rows "stream-star" 500)))
+    (let ((candidates
+            (list/map (lambda (id) (cons id (dict-get srows id)))
+                      (dict-keys srows))))
+      (list/filter
+        (lambda (p)
+          (let ((iid (as-str (dict-get (cdr p) "item_id"))))
+            (let ((item (todo/tree/get "stream-item" iid)))
+              (if (null? item)
+                (string-eq "1" "0")
+                (stream/eligible (cons iid item))))))
+        candidates))))(define (stream/deal-today)
+  "Deal today's portion if today has none: starred-due first, then fresh."
+  (if (null? (stream/todays-deals))
+    (let ((res (stream/resurfacing)))
+      (let ((res-ids (list/map car res)))
+        (let ((fresh (list/filter
+                       (lambda (p)
+                         (if (stream/id-in-list (car p) res-ids)
+                           (string-eq "1" "0")
+                           (string-eq "1" "1")))
+                       (stream/fresh-pool))))
+          (let ((ordered (stream/list-merge2 res fresh)))
+            (let ((take (min stream/daily-count (length ordered))))
+              (let ((portion (stream/first-n ordered take)))
+                (seq
+                  (list/map (lambda (p)
+                              (seq
+                                (todo/tree/create "stream-deal"
+                                  (dict-set* "{}" (list
+                                    "date" (stream/today-key)
+                                    "item_id" (as-str (car p))
+                                    "served" "0")))
+                                (stream/mark-seen (car p))))
+                            portion)
+                  (length portion))))))))
+    (length (stream/todays-deals))))
+
 
 (define (stream/portion)
     "Today's dealt, unconsumed items as (id . fields) pairs."
@@ -311,9 +340,31 @@
                (stream/done id)))
            (redirect "/stream"))))
 
-(define (stream/card-html id fields)
-    (let ((srow (stream/star-row-for id)))
-      (let ((tally (if (null? srow) "" (as-str (dict-get (cdr srow) "stars")))))
+(define (stream/rows-pairs rows)
+  "Normalize tree/rows output (dict when non-empty, () when empty) to pairs."
+  (if (null? rows)
+      ()
+      (list/map (lambda (id) (cons id (dict-get rows id)))
+                (dict-keys rows))))
+
+(define (stream/star-row-for-in item-id rows)
+  "Star row lookup against a pre-read star table."
+  (let ((pairs (stream/rows-pairs rows)))
+    (let ((mine (list/filter
+                  (lambda (p)
+                    (string-eq (as-str (dict-get (cdr p) "item_id"))
+                               (as-str item-id)))
+                  pairs)))
+      (if (null? mine) () (car mine)))))
+
+(define (stream/card-html id fields stars seens)
+  (let ((srow (stream/star-row-for-in id stars)))
+    (let ((tally (if (null? srow) "" (as-str (dict-get (cdr srow) "stars")))))
+      (let ((seencount (length (list/filter
+                                 (lambda (p)
+                                   (string-eq (as-str (dict-get (cdr p) "item_id"))
+                                              (as-str id)))
+                                 (stream/rows-pairs seens)))))
         (html/div (html/attr "class" "card stream-card")
           (html/join (list
             (html/div (html/attr "class" "stream-kind")
@@ -326,27 +377,23 @@
               (as-str (dict-get fields "body")))
             (html/div (html/attr "class" "stream-meta")
               (string-append "seen "
-                             (as-str (stream/seen-count id))
+                             (as-str seencount)
                              " times"))
             (html/div (html/attr "class" "stream-stars")
               (stream/stars-display tally))
             (html/div (html/attr "class" "stream-actions")
-              (html/join (list
-                (html/a (string-append "/stream/star?id=" (as-str id)) "star")
-                (html/span (html/attr "class" "stream-sep") " - ")
-                (html/a (string-append "/stream/fade?id=" (as-str id)) "fade")
-                (html/span (html/attr "class" "stream-sep") " - ")
-                (html/a (string-append "/stream/done?id=" (as-str id)) "release"))))))))))
+              (html/a (string-append "/stream/star?id=" (as-str id)) "star")))))))))
+
 
 (define (stream/portion-html)
-    "Deal (idempotent) then render today's portion."
-    (seq (stream/deal-today)
-         (let ((items (stream/portion)))
-           (if (null? items)
-               (html/div (html/attr "class" "card stream-end")
-                 (html/h2 "Today's portion is finished."))
-               (html/join (list/map (lambda (p) (stream/card-html (car p) (cdr p)))
-                                    items))))))
+  (seq (stream/deal-today)
+    (let ((deals (stream/todays-deals)))
+      (let ((items (todo/tree/rows "stream-item" 200)))
+        (let ((stars (todo/tree/rows "stream-star" 500)))
+          (let ((seens (todo/tree/rows "stream-seen" 2000)))
+            (if (null? deals)
+              (html/div (html/attr "class" "card stream-end") (html/h2 "Today's portion is finished."))
+              (html/join (list/map (lambda (p) (let ((iid (as-str (dict-get (cdr p) "item_id")))) (let ((fields (dict-get items iid))) (if (null? fields) "" (stream/card-html iid fields stars seens))))) deals)))))))))
 
 (define (stream/css)
     ".stream-card{text-align:center;max-width:34rem;margin:0 auto 14px}
