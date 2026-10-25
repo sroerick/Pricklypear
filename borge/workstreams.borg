@@ -169,6 +169,68 @@
          "a denied or failed file attempt appears as an attributed ledger row — no silent vanish"
          "existing list + card ids survive the move to the shared space")))
 
+ (section issue-triage
+  (doc "The process from a filed issue to a closed one: what the triage pass
+   decides, and who owns the response. Grounded in the 09-28 convergence
+   (an issue IS one object: a kind-tagged Board card; the card id is the
+   issue id; the log/issues ledger is a frozen archive) and in the shared
+   register (shared-register): every authenticated identity files and
+   follows; column and transition control stays operator/worker-side.
+   Supersedes the ledger-shaped flow in work-triage issue-board-bridge
+   for NEW issues.
+
+   FILING. Any authenticated user files via (notes/issues/add KIND TITLE
+   BODY), the /issues face. One line + repro is
+   enough; kind is BUG / DESIGN / SMELL / CLEANUP and may be corrected at
+   triage. Every file attempt (ok or denied) rows the activity ledger: a
+   report is a knock, and knocks must never be silent.
+
+   TRIAGE DECISIONS. The triage pass (work-triage triage-pass: the
+   read-plan-act loop, planner output before mutations) or the operator
+   at intake decides, per new Board TODO card:
+   1. KIND: confirm or correct the card kind; it picks the lane.
+   2. STREAM: place by the stream placement rule (AUTO < KERNEL < FACES,
+      by kind + blast radius; when in doubt the MORE gated stream).
+   3. PRIORITY: set P1..P3 on the card.
+   4. VISIBILITY: until the shared-ledger decision lands (work-triage
+      shared-ledger), the Board list is the shared triage surface; an
+      issue must never rest in a garden Inbox the operator register
+      cannot see (the 2026-10-02 blindness, shared-register agent
+      notes).
+
+   RESPONSE OWNERSHIP. Every filed issue has ONE response owner: the
+   operator while the card sits unplaced in Board TODO, then the owner
+   of the stream or card it was placed in (a [user] title prefix or a
+   todo-item assignee names the owner explicitly). Ownership is a
+   RESPONSE duty, not a fix duty: the owner's minimum response is a
+   transition with evidence on the card thread (executor runs post the
+   claim/brief evidence comment on every transition), or an explicit
+   PARKED with a stated reason. The filer does not own the response and
+   does not expand session scope to fix the issue (file, don't fix,
+   habitat-workflow session-ritual); the filer follows the card and
+   reopens when a resolution does not hold.
+
+   AUDIT. The standing audit is kanban/stale (open cards, state not
+   DONE or ARCHIVED) plus the /pulse stale flags (open >3 days) and the
+   HUMAN-REVIEW rollup; the auditor runs stale() on cadence and the
+   report feeds the next triage pass. Stale is FLAGGED, never hidden:
+   the pass never moves a card to hide staleness.
+
+   RESOLUTION. card-resolve sets DONE on the card pipeline;
+   card-reopen re-enters the same pipeline; PARKED carries a reason on
+   the card. An issue closes only when its evidence lives on the card
+   thread.")
+  (implements "libs/notes/lib.pp (notes/issues/add; notes/issues/resolve; notes/issues/board-list-id)"
+              "libs/kanban/lib.pp (kanban/stale; kanban/move-card; todo/item/set-state)"
+              "libs/workstreams/lib.pp (/pulse stale flags + HUMAN-REVIEW rollup)"
+              "work-triage triage-pass (read-plan-act loop; stream placement rule)")
+  (status implemented-live)
+  (verify
+   (test "a filed issue is ONE object on the Board TODO column in the shared space, visible in the operator register"
+         "a triaged issue carries kind, stream, priority, and an owner; the stream matches its kind + blast radius"
+         "every open issue card is either in the operator's TODO intake or carries an owner"
+         "an issue open >3 days without movement shows stale on /pulse and in kanban/stale output"
+         "card-resolve lands DONE on the card pipeline and card-reopen re-enters it")))
  (section stream-pipelines
   (doc "Per-stream pipelines for UI-affecting vs under-the-hood vs
    fully-mechanical work (2026-09-26 plan pass; AUTO lane added 2026-09-27

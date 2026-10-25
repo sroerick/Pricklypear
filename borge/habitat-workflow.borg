@@ -158,10 +158,14 @@
             flopping; half the time it will realize the old
             approach was right and something ELSE is broken.
 
-         3. FILE, DON'T FIX. Out-of-scope discoveries go to the
-            log/issues doc, one line each, instead of expanding
-            session scope. This is borge issue new for the
-            habitat — and since notes docs are data, it needs no
+         3. FILE, DON'T FIX. Out-of-scope discoveries are filed,
+            one line + repro, instead of expanding session scope:
+            (notes/issues/add KIND TITLE BODY) files a kind-tagged
+            card on the shared Board, and the card IS the issue (the
+            log/issues ledger is a frozen archive since 2026-09-28).
+            This is borge issue new for the habitat;
+            workstreams.borg issue-triage owns triage and response
+            ownership. The card is one tree object, so it needs no
             gitignored directory.
 
          4. HANDOFF NOTE. Session ends with ~3 lines appended to
@@ -182,10 +186,8 @@
    (status implemented)
    (implements
     scripts/eval_json.sh
-    scripts/file-issue.sh
     scripts/recover_agents_outline.py)
    (verify
-    (smoke "scripts/file-issue.sh submits one line to the habitat log/issues register (opens the /issues face or POSTs notes/issues/add)")
     (smoke "sourcing scripts/eval_json.sh gives smoke scripts python3-json assertions over pp_eval -j / POST /api/eval responses instead of brittle grep -q '"ok":true'")
     (smoke "scripts/recover_agents_outline.py rebuilds a notes doc outline from latest tree_versions rows and writes it back via POST /api/eval (2026-09-04 agents-note incident recovery; node.toml one-off tool for doc-level recovery)"))
   )
