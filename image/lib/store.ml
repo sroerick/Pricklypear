@@ -56,6 +56,7 @@ let reraise = Store_db.reraise
 let is_unique_violation = Store_db.is_unique_violation
 let is_serialization_failure = Store_db.is_serialization_failure
 let is_invalid_input_syntax = Store_db.is_invalid_input_syntax
+let is_syntax_error = Store_db.is_syntax_error
 
 (** Staleness stamp (image.per-identity-sessions); lives in Store_common
     with its substrate peers, re-exported for session.ml. *)

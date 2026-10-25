@@ -501,6 +501,19 @@ let launch (env : route_env) (page_fn : Session.t -> unit) : unit =
                  ~content_type:"text/plain" "invalid id or input syntax";
                ()
              end
+             else if Store_db.is_syntax_error exn then begin
+               (* Syntax error (SQLSTATE 42601, e.g. an invalid ltree label
+                  cast into ::ltree by a handler): a 400, not a 500 — the
+                  client, not the server, is at fault. Same client-fault
+                  class as 22P02 above. Logged, but no [ops] incident card. *)
+               ignore
+                 (Ops_log.info ~component:"http"
+                     ~context:[ ("path", path) ]
+                     "syntax error (42601); 400");
+               text_response reqd ~status:`Bad_request
+                 ~content_type:"text/plain" "invalid input syntax";
+               ()
+             end
              else begin
                (* Log the real exception to ops; never echo raw exception text
                   back to the client (500 bodies are generic — incident is
