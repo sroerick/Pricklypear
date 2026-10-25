@@ -442,7 +442,7 @@
             (html/attr "class" "card bible-go")
             (html/attr "hx-get" "/dabar")
             (html/attr "hx-target" "#dabar-panel")
-            (html/attr "hx-swap" "innerHTML")
+            (html/attr "hx-swap" "outerHTML")
             (html/attr "hx-push-url" "true")
             (html/attr "hx-trigger" "submit, change from:select")))
         (html/join
@@ -773,7 +773,7 @@
           (html/attr "class" "card bible-search")
           (html/attr "hx-get" "/dabar")
           (html/attr "hx-target" "#dabar-panel")
-          (html/attr "hx-swap" "innerHTML")
+          (html/attr "hx-swap" "outerHTML")
           (html/attr "hx-push-url" "true")))
       (html/join
         (list
