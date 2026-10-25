@@ -95,6 +95,9 @@ let () =
   let sync_flag = ref false in
   let sync_loop_flag = ref false in
   let sync_interval = ref 30.0 in
+  let work_loop_flag = ref false in
+  let worker_tag = ref None in
+  let work_interval = ref 5.0 in
   let serve_flag = ref false in
   let open_browser = ref false in
   let model = ref None in
@@ -130,6 +133,9 @@ let () =
         ("--sync", Arg.Unit (fun () -> sync_flag := true), "push local lens data up to the image (two-way, data-only v1) then pull server-only paths; records the new (branch, generation) snapshot");
         ("--sync-loop", Arg.Unit (fun () -> sync_loop_flag := true), "run the sync round on a timer in the background (the invisible part; needs --lens)");
         ("--sync-interval", Arg.Float (fun f -> sync_interval := f), "SECONDS between background sync rounds (default 30)");
+        ("--work-loop", Arg.Unit (fun () -> work_loop_flag := true), "claim and run jobs from the image's queue in the background (borge/jobs.borg fleet question); bodies it cannot faithfully run are released back to the image runner");
+        ("--worker-tag", Arg.String (fun s -> worker_tag := Some s), "TAG names THIS worker in lease ids (default: hostname); the image derives the owner as ext-<user>-<tag>");
+        ("--work-interval", Arg.Float (fun f -> work_interval := f), "SECONDS to sleep when the queue is empty (default 5)");
         ("--serve", Arg.Set serve_flag, "serve the Nopales-authored HTML surface (chat + eval box + /code lens browser) on 127.0.0.1:random-port until Ctrl-C");
         ("--open", Arg.Set open_browser, "with --serve: best-effort browser launch");
         ("--model", Arg.String (fun s -> model := Some s), "NAME provider model (AGENT_MODEL)");
@@ -608,6 +614,51 @@ let () =
                in
                Eio.Time.sleep clock backoff
            done));
+
+  (* ---- --work-loop: the out-of-process worker (borge/jobs.borg THE
+     FLEET QUESTION). Claims jobs from the image's queue, runs the ones it
+     can faithfully execute, and releases the ones it cannot.
+
+     TWO EVAL PATHS, DELIBERATELY. The protocol verbs (claim-job,
+     job-heartbeat, job-release, job-finish) are register_server_only, so
+     /api/prim REFUSES them — Primitives.dispatch is the only reader of that
+     flag. They therefore go over raw /api/eval as whole expressions. The job
+     BODY goes through Remote.eval (hybrid placement), so its defs
+     materialize locally and its prims proxy: that is the point of running it
+     here at all rather than POSTing it wholesale. Collapsing the two would
+     either break the protocol or throw away local execution. *)
+  (if !work_loop_flag then begin
+     let tag =
+       match !worker_tag with
+       | Some t -> t
+       | None -> (try Unix.gethostname () with _ -> "worker")
+     in
+     let clock = Eio.Stdenv.clock env in
+     (* The branch this client is CONNECTED to — derived, not assumed. That
+        is the scope handed to claim-job, and it is load-bearing: the image
+        would otherwise hand this worker rows from branches whose fns do not
+        resolve here (see the claim-job branch-scope note). Empty on an
+        unreachable image; the loop then fails on the claim and retries. *)
+     let branch =
+       match (try transport "current-branch" [] with _ -> Error (Failure "offline")) with
+       | Ok (Ast.VStr b) -> b
+       | _ -> ""
+     in
+     let env' : Job_worker.env =
+       { tag
+       ; branch
+       ; interval = !work_interval
+       ; server_eval = remote_eval
+       ; local_eval = (fun src -> Remote.eval t src)
+       ; def_source = (fun name -> Remote.fetch_def t name)
+       ; sleep = (fun secs -> Eio.Time.sleep clock secs)
+       ; log = (fun msg -> Printf.eprintf "[work] %s\n%!" msg)
+       }
+     in
+     Printf.eprintf "[work] tag=%s branch=%s every %.0fs against %s\n%!" tag
+       branch !work_interval cfg.base_url;
+     Eio.Fiber.fork ~sw (fun () -> Job_worker.run_forever env')
+   end);
 
   let print_local_notices () =
     (* bumpers M2 (borge/bumpers.borg notices-envelope): lens local
