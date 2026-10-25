@@ -349,7 +349,7 @@ comment_batch() { pp_todo_val "(string-append (as-str (todo/comment/add $1 $2)) 
 COLSEP="PPCUTCOLS${RANDOM}${RANDOM}PPCUT"
 state_brief_cols() {
   MARK="PPCUT${RANDOM}${RANDOM}PPCUT"
-  pp_todo_val "(let ((it (todo/item/get $1))) (string-append (as-str (todo/item/state it)) \"\\n$MARK\\n\" (as-str (todo/flow-brief $1)) \"\\n$COLSEP\\n\" (list/foldl (lambda (a c) (string-append a \",\" (as-str c))) \"\" (todo/state/columns-for-list (as-str (todo/item/list-id it)))))))"
+  pp_todo_val "(let ((it (todo/item/get $1))) (string-append (as-str (todo/item/state it)) \"\\n$MARK\\n\" (as-str (todo/flow-brief $1)) \"\\n$COLSEP\\n\" (list/foldl (lambda (a c) (string-append a \",\" (as-str c))) \"\" (todo/state/columns-for-list (as-str (todo/item/list-id it))))))"
 }
 
 # ONE eval: pick the next claimable card for an unattended drain loop.
