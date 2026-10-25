@@ -1,105 +1,45 @@
-;; package streams -- the daily portion. Verses (fixed canon) + RSS/news (the river).
-;; Star levels (1-5, tally): star = save + resurface, 5 stars = every 3 days,
-;; 1 star = every 60. Fade steps a star DOWN; star rows are never deleted.
-;; Exposures are a dated ledger (stream-seen). Deal priority: starred-due first,
-;; then fresh verses, then fresh river. The stream rests on shabbat.
+;; package streams -- the daily portion. Verses, RSS, tasks.
+;; Star levels (1-5, tally "*" .. "*****"): 5 stars = every 3 days, 1 = every 60.
+;; Fade steps a star DOWN; star rows are never deleted. Exposures are a dated
+;; ledger (stream-seen). Deal priority: most-starred first. Exodus 16: one
+;; day's gather, consumed = finished.
 ;; Sync: scripts/load_forms.py libs/stream/lib.pp "package stream"
 
-(package streams
+(package stream
   (export
-    define
-    define
-    define
-    define
-    define
-    define
-    define
-    define
-    define
-    define
-    define
-    define
-    define
-    define
-    define
-    define
-    define
-    define
-    define
-    define
-    define
-    define
-    define
-    define
-    define
-    define
-    define
-    define
-    define
-    define
-    define
-    define
-    define
-    define
-    define
-    define
-    define)
+    stream/item/add
+    stream/items-all
+    stream/interval-for
+    stream/stars-display
+    stream/star-row-for
+    stream/star
+    stream/unstar
+    stream/seen-rows
+    stream/seen-count
+    stream/id-in-list
+    stream/served-item-ids
+    stream/gather-pool
+    stream/as-num0
+    stream/eligible
+    stream/today-key
+    stream/deal-rows
+    stream/todays-deals
+    stream/first-n
+    stream/pick-level
+    stream/list-merge2
+    stream/list-merge5
+    stream/mark-seen
+    stream/deal-today
+    stream/portion
+    stream/done
+    stream/action-star
+    stream/action-fade
+    stream/action-done
+    stream/card-html
+    stream/portion-html
+    stream/css
+    stream/page)
 
-  (deftype 'stream-item 'kind 'source 'title 'ref 'body 'served)
-  (deftype 'stream-deal 'date 'item_id 'served)
-  (deftype 'stream-star 'item_id 'stars 'last_seen)
-  (deftype 'stream-seen 'item_id 'date)
-
-  (define stream/daily-count 8)
-
-  (define (stream/weekday)
-    "0=Sun .. 6=Sat. Epoch day 0 was a Thursday (=4)."
-    (mod (+ 4 (date-diff-days "1970-01-01" (stream/today-key))) 7))
-
-  (define (stream/shabbat?)
-    (string-eq (as-str (stream/weekday)) "6"))
-
-(define (stream/deal-today)
-  "Deal today's portion if today has none: starred-due, then fresh verses,
-   then fresh river. The stream rests on shabbat (weekday 6): no dealing."
-  (if (stream/shabbat?)
-    0
-    (if (null? (stream/todays-deals))
-      (let ((res (stream/resurfacing)))
-        (let ((res-ids (list/map car res)))
-          (let ((fresh (list/filter
-                         (lambda (p)
-                           (if (stream/id-in-list (car p) res-ids)
-                             (string-eq "1" "0")
-                             (string-eq "1" "1")))
-                         (stream/fresh-pool))))
-            (let ((verses (list/filter
-                            (lambda (p)
-                              (string-eq (as-str (dict-get (cdr p) "kind")) "verse"))
-                            fresh)))
-              (let ((river (list/filter
-                             (lambda (p)
-                               (if (string-eq (as-str (dict-get (cdr p) "kind")) "verse")
-                                 (string-eq "1" "0")
-                                 (string-eq "1" "1")))
-                             fresh)))
-                (let ((ordered (stream/list-merge2 res
-                                  (stream/list-merge2 verses river))))
-                  (let ((take (min stream/daily-count (length ordered))))
-                    (let ((portion (stream/first-n ordered take)))
-                      (seq
-                        (list/map (lambda (p)
-                                    (seq
-                                      (todo/tree/create "stream-deal"
-                                        (dict-set* "{}" (list
-                                          "date" (stream/today-key)
-                                          "item_id" (as-str (car p))
-                                          "served" "0")))
-                                      (stream/mark-seen (car p))))
-                                  portion)
-                      (length portion)))))))))
-      (length (stream/todays-deals)))))
-)
 (define (stream/item/add kind source title ref body)
     "Add a stream item (verse | rss | task). Returns the row id."
     (todo/tree/create "stream-item"
@@ -173,6 +113,8 @@
               (todo/db/update-field "stream-star" sid "stars" down)
               down)))))))
 
+(define (stream/list-append lst x) (if (null? lst) (list x) (cons (car lst) (stream/list-append (cdr lst) x))))
+(define (stream/reverse lst) (if (null? lst) () (stream/list-append (stream/reverse (cdr lst)) (car lst))))
 (define (stream/seen-rows)
     "All exposure rows as (id . fields) pairs."
     (let ((rows (todo/tree/rows "stream-seen" 2000)))
@@ -249,6 +191,14 @@
                      (string-eq (as-str (dict-get (cdr p) "date")) today))
                    (stream/deal-rows))))
 
+(define (stream/drop-n lst n)
+  "Skip the first n items."
+  (if (null? lst)
+    ()
+    (if (string-eq (as-str n) "0")
+      lst
+      (stream/drop-n (cdr lst) (- n 1)))))
+
 (define (stream/first-n lst n)
     "First n pairs of lst."
     (if (null? lst)
@@ -317,7 +267,33 @@
               (if (null? item)
                 (string-eq "1" "0")
                 (stream/eligible (cons iid item))))))
-        candidates))))
+        candidates))))(define (stream/deal-today)
+  "Deal today's portion if today has none: starred-due first, then fresh."
+  (if (null? (stream/todays-deals))
+    (let ((res (stream/resurfacing)))
+      (let ((res-ids (list/map car res)))
+        (let ((fresh (list/filter
+                       (lambda (p)
+                         (if (stream/id-in-list (car p) res-ids)
+                           (string-eq "1" "0")
+                           (string-eq "1" "1")))
+                       (stream/fresh-pool))))
+          (let ((ordered (stream/list-merge2 res fresh)))
+            (let ((take (min stream/daily-count (length ordered))))
+              (let ((portion (stream/first-n ordered take)))
+                (seq
+                  (list/map (lambda (p)
+                              (seq
+                                (todo/tree/create "stream-deal"
+                                  (dict-set* "{}" (list
+                                    "date" (stream/today-key)
+                                    "item_id" (as-str (car p))
+                                    "served" "0")))
+                                (stream/mark-seen (car p))))
+                            portion)
+                  (length portion))))))))
+    (length (stream/todays-deals))))
+
 
 (define (stream/portion)
     "Today's dealt, unconsumed items as (id . fields) pairs."
@@ -418,15 +394,12 @@
             (html/div (html/attr "class" "stream-actions")
               (html/a (string-append "/stream/star?id=" (as-str id)) "star")))))))))
 
+
+(define stream/page-size 12)
+(define (stream/page-html p) (let ((all (stream/reverse (stream/items-all))))(let ((start (* (- p 1) stream/page-size)))(let ((page (stream/first-n (stream/drop-n all start) stream/page-size)))(let ((items (todo/tree/rows "stream-item" 200)))(let ((stars (todo/tree/rows "stream-star" 500)))(let ((seens (todo/tree/rows "stream-seen" 2000)))(let ((res (if (= p 1) (stream/resurfacing) ()))) (html/join (list (if (null? res) "" (html/join (list/map (lambda (rp) (let ((iid (as-str (dict-get (cdr rp) "item_id")))) (let ((fields (dict-get items iid))) (if (null? fields) "" (stream/card-html iid fields stars seens))))) res))) (if (null? page) (html/div (html/attr "class" "card stream-end") (html/p "caught up.")) (html/join (list/map (lambda (pair) (let ((iid (as-str (car pair)))) (let ((fields (dict-get items iid))) (if (null? fields) "" (stream/card-html iid fields stars seens))))) page))) (html/div (html/attr "class" "stream-more") (html/a (string-append "/stream?p=" (as-str (+ p 1))) "more"))))))))))))
+
 (define (stream/portion-html)
-  (seq (stream/deal-today)
-    (let ((deals (stream/todays-deals)))
-      (let ((items (todo/tree/rows "stream-item" 200)))
-        (let ((stars (todo/tree/rows "stream-star" 500)))
-          (let ((seens (todo/tree/rows "stream-seen" 2000)))
-            (if (null? deals)
-              (html/div (html/attr "class" "card stream-end") (html/h2 "Today's portion is finished."))
-              (html/join (list/map (lambda (p) (let ((iid (as-str (dict-get (cdr p) "item_id")))) (let ((fields (dict-get items iid))) (if (null? fields) "" (stream/card-html iid fields stars seens))))) deals)))))))))
+  (stream/page-html 1))
 
 (define (stream/css)
     ".stream-card{text-align:center;max-width:34rem;margin:0 auto 14px}
@@ -448,10 +421,6 @@
         "The daily portion. Star what you want to keep - it comes back around.")
       (stream/portion-html)))))
 
-(route "/streams" "stream/page")
-(route "/streams/star" "stream/action-star")
-(route "/streams/fade" "stream/action-fade")
-(route "/streams/done" "stream/action-done")
 (route "/stream" "stream/page")
 (route "/stream/star" "stream/action-star")
 (route "/stream/fade" "stream/action-fade")

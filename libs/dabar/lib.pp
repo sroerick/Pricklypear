@@ -224,15 +224,20 @@
                 (string-append "&inter=" (as-str inter)))))))
         (if
           (hx-request?)
-          (dabar/panel-for-request)
+          ;; the panel fragment carries its own #dabar-panel container
+          ;; (card 508335a4): the menu's hx-target must resolve inside
+          ;; the filmstrip pane too, not only the classic page --
+          ;; otherwise the swap falls back onto the trigger and the
+          ;; panel (menu included) nests inside itself.
+          (html/div
+            (html/attr "id" "dabar-panel")
+            (dabar/panel-for-request))
           (if
             (filmstrip/shell-user?)
             (filmstrip/page-with-open (dabar/current-url))
             (html/page
               (list
-                (html/div
-                  (html/attr "id" "dabar-panel")
-                      (dabar/panel-for-request)))))))))
+                (dabar/panel-for-request))))))))
 
 (define dabar/panel
   (lambda
@@ -331,7 +336,7 @@
               "hx-get"
               (dabar/study-href book chapter verse next))
             (html/attr "hx-target" "#dabar-panel")
-            (html/attr "hx-swap" "innerHTML")
+            (html/attr "hx-swap" "outerHTML")
             (html/attr "hx-push-url" "true")
             (html/attr "class" "dabar-inter-toggle")))
         label))))
