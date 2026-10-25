@@ -42,3 +42,8 @@
  (name agent_memory_test)
  (modules agent_memory_test)
  (libraries pricklypear-remote.lib pricklypear-lisp alcotest str unix yojson pricklypear-lens))
+
+(test
+ (name job_worker_test)
+ (modules job_worker_test)
+ (libraries pricklypear-remote.lib pricklypear-lisp alcotest))
