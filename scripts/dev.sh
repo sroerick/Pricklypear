@@ -7,7 +7,7 @@
 # Note: agent eval (pp-eval) targets PP_URL and normally bypasses this
 # stack — this is the kernel-lab for OCaml work, not the default eval path.
 #
-# Usage:
+# USAGE:
 #   scripts/dev.sh start    # boot PG + image
 #   scripts/dev.sh stop     # kill the image (leaves PG running)
 #   scripts/dev.sh restart  # stop + start
@@ -19,10 +19,37 @@
 # Per AGENTS.md: scripts use ksh (no bash-isms). All paths assume
 # the script is run from the pricklypear repo root.
 
+## VULTR RUNTIME PREREQUISITES
+#
+# dev.sh requires the following runtime dependencies:
+#
+# 1) PostgreSQL (source-built, dev/shell)
+#    - pg_ctl, psql, createdb at /home/al/pg/bin (PATH)
+#    - LD_LIBRARY_PATH=/home/al/pg/lib (libpq linkage)
+#    - Ensure library search path includes /home/al/pg/lib
+#    - Example: export LD_LIBRARY_PATH=/home/al/pg/lib:"$LD_LIBRARY_PATH"
+#
+# 2) Opam (>= 2.5.0, /home/al/.local/bin/opam)
+#    - Existing opam switch: poohstack
+#    - Run `opam env --switch=poohstack --set-switch` before build
+#    - All build artifacts go to _build/default/ under this switch
+#
+# 3) Wayland/Compositor (development host, optional for UI modes)
+#    - ocaml-wayland library (opam package)
+#    - wayland-scanner-ocaml tool (or vendor protocol XMLs via dune rules)
+#    - River window-management-v1 XMLs vendored in native/protocol/
+#    - For native/soil_strip: depends on river 0.4.x with window-management protocol
+#    - Path: _build/default/native/protocol/river-window-management-v1.xml
+#
+# QUICK START:
+#   export LD_LIBRARY_PATH=/home/al/pg/lib:"$LD_LIBRARY_PATH"
+#   eval $(opam env --switch=poohstack --set-switch)
+#   ksh scripts/dev.sh start
+
 set -e
 
 # --- Config (override via env) ---
-PP_ROOT="${PP_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
+PP_ROOT="${PP_ROOT:=$(cd "$(dirname "$0")/.." && pwd)}"
 PP_DATA_DIR="${PP_DATA_DIR:-/tmp/pp-pgsup}"
 PP_SOCKET_DIR="${PP_SOCKET_DIR:-/tmp}"
 PP_DB_PORT="${PP_DB_PORT:-5433}"
@@ -88,7 +115,7 @@ apply_migrations() {
   for m in "$PP_ROOT/migrations"/[0-9][0-9][0-9]_*.sql; do
     base="$(basename "$m" .sql)"
     ver=$(( 10#${base%%_*} ))   # 013 -> 13 (strip leading zeros, no octal)
-    case ",${applied}," in *",${ver},"*) continue ;; esac
+    case ",${applied}," in *","${ver}""*) continue ;; esac
     echo "[dev]   applying ${base}"
     psql -h "$PP_SOCKET_DIR" -p "$PP_DB_PORT" -U "$PP_DB_USER" -d "$PP_DB_NAME" \
       -f "$m" -q
