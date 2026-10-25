@@ -286,6 +286,55 @@ let test_handler_thunk_force_in_snapshot_env () =
             (Printf.sprintf "thunk force escaped the snapshot env: %s" msg))
 
 
+(** Regression (card b851a9a0, "[ops] handler: unbound: stream/drop-n"):
+    a parked session's env can silently lose a package binding while the
+    cached body registry (and the store) still has it — the 2026-10-18
+    load_skips heal only runs inside load-library, which the factory no
+    longer wraps calls in. Dispatch now heals the missing binding from the
+    registry and retries once; a name no def ever had stays a precise
+    Handler_error. *)
+let test_handler_heals_lost_package_binding () =
+  let t = anon_session () in
+  (* Package-style lazy binding, exactly what load_defs binds for stored
+     defs: a VThunk in the env + a body row in the registry. *)
+  (match Pricklypear_lisp.Reader.read_one "(lambda () 41)" with
+   | body_expr ->
+       let force _env' expr' = S.force_thunk_body t expr' in
+       Pricklypear_lisp.Env.define_thunk (S.env t) "heal-target" ~force body_expr;
+       Hashtbl.replace t.eval_state.thunk_bodies "heal-target" body_expr
+   | exception exn -> Alcotest.fail (Printexc.to_string exn));
+  ignore (eval_value t "(define (heal-page) (heal-target))");
+  (* Simulate the lost binding: the env drops the name, the registry keeps it. *)
+  Hashtbl.remove (S.env t).bindings "heal-target";
+  (match S.call_handler t "heal-page" with
+   | S.Handler_ok v ->
+       let s = Pricklypear_lisp.Reader.pp_value v in
+       if s <> "41" then Alcotest.fail ("healed but value=[" ^ s ^ "]")
+   | S.Handler_unbound ->
+       Alcotest.fail "healable binding reported unbound"
+   | S.Handler_error msg ->
+       Alcotest.fail ("heal did not recover the lost binding: " ^ msg));
+  (* A name no def ever had is NOT healed: the miss cache records it and
+     dispatch keeps the precise error path. Assert the heal contract
+     directly, then end-to-end through dispatch — in this no-DB fixture a
+     FILED incident's Crud.create raises Crud.no_db (a pre-existing
+     artifact of the filing path), so an Interp_error raise from dispatch
+     is accepted as the no-DB shape of the same failure. *)
+  Alcotest.(check bool) "unknown name is not healed" false
+    (S.heal_unbound_binding t (S.env t) "heal-targat");
+  ignore (eval_value t "(define (typo-page) (heal-targat))");
+  (match S.call_handler t "typo-page" with
+   | S.Handler_error msg ->
+       Alcotest.(check bool) "typo stays a handler error naming the name" true
+         (let n = String.length "heal-targat" in
+          let rec go i =
+            i + n <= String.length msg
+            && (String.sub msg i n = "heal-targat" || go (i + 1))
+          in
+          go 0)
+   | S.Handler_ok _ -> Alcotest.fail "typo healed into a false success"
+   | S.Handler_unbound -> Alcotest.fail "typo reported unbound"
+   | exception Pricklypear_lisp.Ast.Interp_error _ -> ())
 (* Control_rim captures Eio effects, so eval-touching cases run inside
    the Eio scheduler (rls_floor_test precedent). *)
 let in_eio f = Eio_main.run (fun _ -> f ())
@@ -307,6 +356,8 @@ let () =
 
           ; Alcotest.test_case "handler thunk force resolves in the snapshot env" `Quick
               (fun () -> in_eio test_handler_thunk_force_in_snapshot_env)
+          ; Alcotest.test_case "handler heals a lost package binding" `Quick
+              (fun () -> in_eio test_handler_heals_lost_package_binding)
 
         ; Alcotest.test_case "boot seed re-exports" `Quick
             test_boot_seed_reexports
