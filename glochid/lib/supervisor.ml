@@ -93,7 +93,7 @@ type t = {
   log_root : string;                  (* per-run artifact dirs *)
   identity : string;                  (* runner_identity recorded on rows *)
   supervisor_id : string;             (* stable claim owner per host *)
-  instance_id : string;               (* pid@boot-ts sidecar instance *)
+  instance_id : string;               (* pid:<p>/host:<h>/start:<ISO> sidecar instance *)
   max_tokens : int;                   (* advisory; 0 = unlimited *)
   max_requests : int;                 (* advisory; 0 = unlimited *)
   runner : string;                    (* when set: child PP_FLOW_PI *)
@@ -122,6 +122,18 @@ let env_str (default : string) (name : string) : string =
   | Some v when String.trim v <> "" -> String.trim v
   | _ -> default
 
+(* ISO 8601 UTC, byte-identical to the habitat's (now-iso):
+   "YYYY-MM-DDTHH:MM:SSZ". ISO strings sort lexicographically — the same
+   trick the run-rows prims use (run-expired? has no seconds arithmetic;
+   neither does this side). *)
+let iso_at (t : float) : string =
+  let tm = Unix.gmtime t in
+  Printf.sprintf "%04d-%02d-%02dT%02d:%02d:%02dZ"
+    (tm.Unix.tm_year + 1900) (tm.Unix.tm_mon + 1) tm.Unix.tm_mday
+    tm.Unix.tm_hour tm.Unix.tm_min tm.Unix.tm_sec
+
+let iso_now () : string = iso_at (Unix.gettimeofday ())
+
 let config () : t =
   let host = try Unix.gethostname () with _ -> "localhost" in
   {
@@ -141,9 +153,15 @@ let config () : t =
         "SUPERVISOR_LOG_ROOT";
     identity = env_str "pp-supervisor" "SUPERVISOR_IDENTITY";
     supervisor_id = "glochid-supervisor@" ^ host;
+    (* Self-describing on purpose. The previous form was "pid@<epoch>",
+       which reads exactly like pid@boot-ts: it cost a hunt across three
+       hosts to learn the number was the process START time, not a boot
+       time. Nothing parses this field (it is written to run rows as
+       runner_instance and never compared), so the format is free to be
+       legible. Old rows keep the old form as historical record. *)
     instance_id =
-      Printf.sprintf "%d@%d" (Unix.getpid ())
-        (int_of_float (Unix.gettimeofday ()));
+      Printf.sprintf "pid:%d/host:%s/start:%s" (Unix.getpid ()) host
+        (iso_at (Unix.gettimeofday ()));
     max_tokens = env_nonneg 0 "SUPERVISOR_MAX_TOKENS";
     max_requests = env_nonneg 0 "SUPERVISOR_MAX_REQUESTS";
     runner = env_str "" "SUPERVISOR_RUNNER";
@@ -162,18 +180,6 @@ let config () : t =
 (* ------------------------------------------------------------------ *)
 (* Time + small helpers                                                *)
 (* ------------------------------------------------------------------ *)
-
-(* ISO 8601 UTC, byte-identical to the habitat's (now-iso):
-   "YYYY-MM-DDTHH:MM:SSZ". ISO strings sort lexicographically — the same
-   trick the run-rows prims use (run-expired? has no seconds arithmetic;
-   neither does this side). *)
-let iso_at (t : float) : string =
-  let tm = Unix.gmtime t in
-  Printf.sprintf "%04d-%02d-%02dT%02d:%02d:%02dZ"
-    (tm.Unix.tm_year + 1900) (tm.Unix.tm_mon + 1) tm.Unix.tm_mday
-    tm.Unix.tm_hour tm.Unix.tm_min tm.Unix.tm_sec
-
-let iso_now () : string = iso_at (Unix.gettimeofday ())
 
 let iso_after (secs : int) : string =
   iso_at (Unix.gettimeofday () +. float_of_int secs)
