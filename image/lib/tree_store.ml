@@ -705,14 +705,19 @@ let select_cols =
 (** Fetch one node by exact path. *)
 let get_by_path (conn : Store_db.conn) ~(path : string) : node option =
   (* conn: Store_db.conn (tx-aware) *)
-        let sql =
-        "SELECT " ^ select_cols ^ " FROM tree_nodes WHERE path = $1::ltree" in
-      let rows =
-        Store_db.exec conn ~params:[ Pgx.Value.of_string path ] sql
-      in
-      (match rows with
-       | row :: _ -> (node_of_row row)
-       | [] -> None)
+  if path = "" then None
+  (* ''::ltree is a PG 42601 syntax error ("Unexpected end of input"), never
+     a node — an unresolvable path resolves to None, not a crash. *)
+  else
+    let sql =
+      "SELECT " ^ select_cols ^ " FROM tree_nodes WHERE path = $1::ltree"
+    in
+    let rows =
+      Store_db.exec conn ~params:[ Pgx.Value.of_string path ] sql
+    in
+    (match rows with
+     | row :: _ -> (node_of_row row)
+     | [] -> None)
 
 (** A versioned-leaf row (tree-time: one version row per (path, gen) write).
     Field names are v_-prefixed to avoid clashing with the `node` record. *)
@@ -861,10 +866,15 @@ let rec resolve_in_chain (conn : Store_db.conn) ~(mk_path : string -> string)
   match chain with
   | [] -> None
   | branch_id :: rest ->
-      let n = get_by_path conn ~path:(mk_path branch_id) in
-      (match n with
-       | Some _ -> n
-       | None -> resolve_in_chain conn ~mk_path rest)
+      (* mk_path "" = this branch cannot carry the suffix (empty/malformed
+         lens suffix); skip it — an empty path must never reach PG as
+         ''::ltree (42601 ltree syntax error). *)
+      let p = mk_path branch_id in
+      if p = "" then resolve_in_chain conn ~mk_path rest
+      else
+        (match get_by_path conn ~path:p with
+         | Some _ as n -> n
+         | None -> resolve_in_chain conn ~mk_path rest)
 
 (** Lens prefixing for a RELATIVE logical path. The store-tree path grammar
     uses b.<branch_id>.<rest> for branch-lensed code nodes (fn/type/route/
@@ -896,7 +906,7 @@ let lens_get_in_chain (conn : Store_db.conn) ~(suffix : string)
   let mk_path branch_id =
     match lens_suffix_path ~branch_id suffix with
     | Some p -> p
-    | None -> "" (* empty suffix can never match a real ltree node *)
+      | None -> "" (* "" sentinel: resolve_in_chain skips it, never hits PG *)
   in
   resolve_in_chain conn ~mk_path chain
 
