@@ -2236,13 +2236,30 @@
 (define todo/list/merge
   (lambda
     (garden shared)
-    (append garden shared))
-  "PERF-5 (2026-10-22): O(n) append replaces the per-row merge-one walk
-     (889 calls, ~40k steps per deleg render). The old dedup was head-only
-     (merge-one checked only the FIRST garden row), so it never actually
-     deduped beyond row one; garden and shared subtrees are disjoint by
-     construction (one node = one path), so ids cannot collide across
-     pools. Garden rows still come first, as every caller expects.")
+    (let
+      ((seen
+        (list/foldl
+          (lambda (acc row) (dict-set acc (as-str (car row)) "1"))
+          (list)
+          garden)))
+      (append
+        garden
+        (list/filter
+          (lambda (row) (null? (dict-get seen (as-str (car row)))))
+          shared))))
+  "PERF-5 correction (2026-10-25, card a4fb7706): restore the id-dedupe this
+     contract always promised, at native cost. OBITUARY: PERF-5 (2026-10-22)
+     made this a bare append on the claim that garden and shared subtrees are
+     disjoint by construction, so ids cannot collide across pools. The live
+     store disproved that: deferred mirrors file the SAME (type,id) under
+     both data.u.<user>.* and data.s.* (workstreams.borg 2026-10-03 note),
+     and the merged pool double-counted. Probe 2026-10-25: todo/item/all
+     516 rows / 343 ids, todo/list/all 18 rows / 10 ids. The seen-set is an
+     ALIST: dict-set/dict-get assoc/cons natively (no JSON re-parse per op),
+     so the cost is native O(|shared| * |garden|) pair steps, not the old
+     interpreted O(n^2) merge-one walk. Garden rows still come first, as
+     every caller expects, and the result stays a PROPER list (append),
+     which strict (count) requires.")
 
 (define todo/list/merge-one
   (lambda
