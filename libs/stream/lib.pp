@@ -219,9 +219,9 @@
   ;; ---------- html ----------
 
   (define (stream/card-html id fields)
-    (html/div (html/attr "class" "stream-card")
+    (html/div (html/attr "class" "card stream-card")
       (html/join (list
-        (html/span (html/attr "class" "stream-kind")
+        (html/div (html/attr "class" "stream-kind")
           (string-append (as-str (dict-get fields "kind"))
                          " - "
                          (as-str (dict-get fields "ref"))))
@@ -232,9 +232,9 @@
         (html/div (html/attr "class" "stream-actions")
           (html/join (list
             (html/a (string-append "/stream/star?id=" (as-str id)) "star")
-            (html/span (html/attr "class" "stream-sep") " | ")
+            (html/span (html/attr "class" "stream-sep") " - ")
             (html/a (string-append "/stream/fade?id=" (as-str id)) "fade")
-            (html/span (html/attr "class" "stream-sep") " | ")
+            (html/span (html/attr "class" "stream-sep") " - ")
             (html/a (string-append "/stream/done?id=" (as-str id)) "done"))))))))
 
   (define (stream/portion-html)
@@ -242,23 +242,24 @@
     (seq (stream/deal-today)
          (let ((items (stream/portion)))
            (if (null? items)
-               (html/div (html/attr "class" "stream-end")
+               (html/div (html/attr "class" "card stream-end")
                  (html/h2 "Today's portion is finished."))
                (html/join (list/map (lambda (p) (stream/card-html (car p) (cdr p)))
                                     items))))))
 
   (define (stream/css)
-    ".stream-card{border:1px solid #d8d2c4;border-radius:8px;padding:18px;margin:0 0 14px;background:#faf8f2}
-.stream-kind{font:700 .72rem monospace;letter-spacing:.08em;text-transform:uppercase;color:#8a7d5c}
-.stream-title{font-weight:700;margin:6px 0 4px}
-.stream-body{white-space:pre-wrap;line-height:1.5}
-.stream-actions{margin-top:10px;font-size:.85rem}
-.stream-actions a{color:#5c6e58;text-decoration:none;margin-right:4px}
-.stream-sep{color:#c9c2b2}
-.stream-end{text-align:center;padding:60px 0;color:#777}")
+    ".stream-card{text-align:center;max-width:34rem;margin:0 auto 14px}
+.stream-kind{font:700 .72rem var(--font-mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.stream-title{font-weight:700;margin:8px 0 6px;font-size:1.08rem}
+.stream-body{white-space:pre-wrap;line-height:1.7;margin:0 auto;max-width:30rem}
+.stream-actions{margin-top:12px;font-size:.85rem}
+.stream-actions a{color:var(--muted);text-decoration:none}
+.stream-sep{color:var(--muted);opacity:.5}
+.stream-end{text-align:center;padding:60px 0;color:var(--muted)}")
 
   (define (stream/page)
     (html/page (list
+      (html/join (list "<style>" (stream/css) "</style>"))
       (html/h1 "manna")
       (html/p* (html/attr "class" "muted")
         "The daily portion. Star what you want to keep; the rest fades.")
