@@ -287,6 +287,7 @@
         (list "chat" "/chat")
         (list "weather" "/weather")
         (list "agent" "/agent")
+        (list "repl" "/repl")
         (list "calories" "/cal")
         (list "bookmarks" "/bookmarks")
           (list "plans" "/plans")
