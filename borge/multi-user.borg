@@ -265,18 +265,29 @@
          Package libs/chat seeds:
 
            (deftype 'chat-room
-             'kind          ; "lobby" | "dm"
-             'room_id       ; "lobby" | "dm:a:b"
+             'kind          ; "lobby" | "room" | "dm"
+             'room_id       ; "lobby" | "dm:a:b" | "<name>"
              'title         ; display
              'members       ; JSON array of usernames; lobby = []
              'created_by
-             'created_at)   ; ISO string from Nopales or server
+             'created_at    ; ISO string from Nopales or server
+             'protocol)     ; "addressed" | "legacy" — see 2b
 
            (deftype 'chat-message
              'room_id
              'from          ; username (whoami at post)
              'body          ; plain text (escape on render)
-             'created_at)
+             'created_at
+             'turn          ; OPTIONAL "true": this row may summon a turn
+             'to            ; OPTIONAL explicit addressee; required with turn
+             'mirrored_by)  ; OPTIONAL identity that wrote a mirrored row
+
+         chat-message declares only room_id/from/body/created_at; turn,
+         to and mirrored_by are TOLERATED EXTRAS carried by the addressing
+         layer (2b). Read them defensively — never assume the schema
+         declares them, and never infer addressing from a body substring.
+         A reader that wants addressing asks agent/addressed?, which parses
+         the fields, not the text.
 
          data_rows are SHARED across branches (storage rule)
          BUT USER-SCOPED since migration 013 — 'access control
@@ -298,11 +309,54 @@
          (idempotent create-if-missing).
 
          ==========================================================
+         2b. ADDRESSING (transport vs inference)
+         ==========================================================
+
+         The chat log is an append-only RECORD. A message arriving is
+         not a request to think. Three tiers:
+
+           Tier 0  no turn field              recorded, wakes nobody
+           Tier 1  turn:"true" + to:<user>    exactly one deliberate turn
+           Tier 2  bounded scheduled digest   bridge-owned, not a kernel concern
+
+         Addressing is an EXPLICIT FIELD, never an @name scan. A body
+         containing "@gregor" is Tier 0 text; only turn+to summons a
+         turn. This is what keeps two agents from volleying forever:
+         agent replies are written WITHOUT turn/to (see the agent
+         stanza's reply writer), so an answer can never wake another
+         reader. The cursor never advances past an unaddressed row —
+         unaddressed rows are held, not dropped.
+
+         Per-room opt-in, because a deploy must not silence anyone:
+
+           protocol:"legacy"      wake on any non-self message
+                                  (pre-addressing behaviour)
+           protocol:"addressed"   wake only on turn:true + to:
+
+         The mode is a FIELD on the room, not an inference. An earlier
+         heuristic answered "has this room EVER carried an addressed
+         row"; a quiet room never has, so it read as legacy forever —
+         and a freshly created DM would have woken the other party on
+         every message. Absent field (grandfathered rows): lobby stays
+         legacy so no agent goes silent on deploy; everything else,
+         including new rooms and DMs, defaults to addressed.
+
+         New DM rooms stamp protocol:"addressed" at creation.
+
+         ==========================================================
          3. LISP API (libs/chat)
          ==========================================================
 
            (chat/say body)              ; post to lobby as whoami
            (chat/say-in room_id body)   ; post to room if allowed
+           (chat/say-in-addressed room_id body to)
+                                        ; post WITH turn:true + to:
+           (chat/mirror-in room_id from body)
+                                        ; mirror an external message:
+                                        ; from = attested speaker,
+                                        ; mirrored_by = writing identity
+           (chat/rooms)                 ; non-DM rooms whoami can see
+           (chat/room-protocol room_id) ; "addressed" | "legacy"
            (chat/lobby [limit])         ; recent lobby messages
            (chat/history room_id [limit])
            (chat/dm peer)               ; ensure dm room; return room_id

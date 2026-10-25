@@ -145,6 +145,25 @@ newest-first ordering or pagination in the scan; this buys headroom.")
           (list "white-space" "pre-wrap")))))
   "Chat paint (borge/filmstrip lookbook): the structural layout is DECLARED\n   on the elements through the pads size grammar; this sheet carries paint\n   only.")
 
+(define chat/bad-peer?
+  (lambda
+    (peer)
+    (let
+      ((p (as-str peer)))
+      (if
+        (string-contains? p ":")
+        #t
+        (if
+          (string-eq p chat/lobby-id)
+          #t
+          #f))))
+  "Whether a supposed peer name is really a room id or a reserved token.
+   chat/dm CREATES a room on first message, so feeding it a room id mints a
+   junk DM whose title embeds the id - observed live as the malformed room
+   'dm:admin:dm:admin:gregor', created when a room id was passed where a
+   peer belonged. A username never contains ':' and never equals the lobby
+   id, so both are rejected before any row is written.")
+
 (define chat/dm
   (lambda
     (peer)
@@ -156,31 +175,36 @@ newest-first ordering or pagination in the scan; this buys headroom.")
         (if
           (string-eq them me)
           ""
-          (let
-            ((rid (chat/dm-room-id them))
-              (found (chat/find-room (chat/dm-room-id them))))
-            (if
-              (null? found)
-              (seq
-                (create
-                  (quote chat-room)
-                  (dict-set*
-                    "{}"
-                    (list
-                      "kind"
-                      "dm"
-                      "room_id"
-                      rid
-                      "title"
-                      (string-append "DM " me "/" them)
-                      "members"
-                      (chat/members-json me them)
-                      "created_by"
-                      me
-                      "created_at"
-                      (chat/timestamp)))))
-              rid))))))
-  "Get or create a DM room id for a peer. Room rows stamp created_at\n     with (chat/timestamp) — was hardcoded \"\".")
+          (if
+            (chat/bad-peer? them)
+            ""
+            (let
+              ((rid (chat/dm-room-id them))
+                (found (chat/find-room (chat/dm-room-id them))))
+              (if
+                (null? found)
+                (seq
+                  (create
+                    (quote chat-room)
+                    (dict-set*
+                      "{}"
+                      (list
+                        "kind"
+                        "dm"
+                        "room_id"
+                        rid
+                        "title"
+                        (string-append "DM " me "/" them)
+                        "members"
+                        (chat/members-json me them)
+                        "created_by"
+                        me
+                        "created_at"
+                        (chat/timestamp)
+                        "protocol"
+                        "addressed"))))
+                rid)))))))
+  "Get or create a DM room id for a peer. Room rows stamp created_at\n     with (chat/timestamp) — was hardcoded \"\". New DM rooms declare\n     protocol 'addressed': a DM is recorded, but it summons a turn only when\n     a row carries turn:true plus an explicit to:.")
 
 (define chat/dm-kids
   (lambda
@@ -348,22 +372,109 @@ newest-first ordering or pagination in the scan; this buys headroom.")
         (string-append "dm:" them ":" me))))
   "Compute the canonical DM room id for two users.")
 
+(define chat/id-seen?
+  (lambda
+    (rid rows)
+    (pair?
+      (filter
+        (lambda (r) (string-eq (chat/room-id-of (chat/row-fields r)) rid))
+        rows)))
+  "Whether rid already appears among rows' room_id fields.")
+
+(define chat/dedupe-rooms
+  (lambda
+    (rows)
+    (reverse
+      (foldl
+        (lambda
+          (acc row)
+          (let
+            ((rid (chat/room-id-of (chat/row-fields row))))
+            (if
+              (chat/id-seen? rid acc)
+              acc
+              (cons row acc))))
+        (list)
+        rows)))
+  "Keep the FIRST row per room_id, preserving order.
+
+     chat-room is not a seed type, so rows are author-scoped and the same
+     logical room can exist more than once - prod carries TWO rows with
+     kind=lobby (one authored by admin, one by gregor, both pre-dating the
+     open space). Returning both would make a bridge poll and answer the
+     same room twice. Discovery surfaces therefore collapse by room_id;
+     anything that needs the canonical row asks chat/find-room, which
+     resolves one row on its own.")
+
 (define chat/dms
   (lambda
     ()
     (let
       ((me (as-str (whoami))))
-      (list/filter
-        (lambda
-          (row)
-          (let
-            ((f (chat/row-fields row)))
-            (if
-              (string-eq (as-str (dict-get f "kind")) "dm")
-              (chat/member? (dict-get f "members") me)
-              #f)))
-        (rows (quote chat-room) 100))))
-  "List all DM rooms the current user is a member of.")
+      (chat/dedupe-rooms
+        (list/filter
+          (lambda
+            (row)
+            (let
+              ((f (chat/row-fields row)))
+              (if
+                (string-eq (as-str (dict-get f "kind")) "dm")
+                (chat/member? (dict-get f "members") me)
+                #f)))
+          (rows (quote chat-room) 100)))))
+  "List all DM rooms the current user is a member of. Collapsed by room_id
+     (see chat/dedupe-rooms): the same DM can exist once per author.")
+
+(define chat/rooms
+  (lambda
+    ()
+    (let
+      ((me (as-str (whoami))))
+      (chat/dedupe-rooms
+        (list/filter
+          (lambda
+            (row)
+            (let*
+              ((f (chat/row-fields row)) (kind (as-str (dict-get f "kind"))))
+              (if
+                (string-eq kind "dm")
+                #f
+                (if
+                  (string-eq kind "lobby")
+                  #t
+                  (chat/member? (dict-get f "members") me)))))
+          (rows (quote chat-room) 100)))))
+  "List non-DM chat rooms the current user can see: open lobby rooms plus\n     every kind=room the user is an EXPLICIT member of.
+
+     The read-side counterpart of chat/dms, and the discovery step an agent\n     or bridge needs before it can poll a room at all - nothing else\n     enumerates joined rooms (chat/find-room wants an id up front and\n     chat/room-rows wants one too, so 'which rooms am I in' had no answer).\n     Membership is tested with chat/member? (whole-element compare, never a\n     substring), and kind=dm is excluded so DMs keep their own surface.\n     Collapsed by room_id (chat/dedupe-rooms): prod holds two lobby rows,\n     and returning both would have a bridge answer the lobby twice.")
+
+(define chat/room-protocol
+  (lambda
+    (room-id)
+    (let
+      ((rid (as-str room-id)))
+      (if
+        (blank? rid)
+        "addressed"
+        (let
+          ((row (chat/find-room rid)))
+          (if
+            (null? row)
+            "addressed"
+            (let*
+              ((f (chat/row-fields row))
+                (declared (as-str (dict-get f "protocol"))))
+              (if
+                (blank? declared)
+                (if
+                  (string-eq (as-str (dict-get f "kind")) "lobby")
+                  "legacy"
+                  "addressed")
+                declared)))))))
+  "How a room decides when a message becomes an inference turn.
+
+     'addressed' - a row wakes a reader only when it carries turn:true plus\n     an explicit to: (Tier 1). Arrival alone is Tier 0: recorded, no turn.\n     'legacy' - wake on any non-self message (pre-addressing behaviour).\n
+     The declaration is a FIELD on the room, not a guess. Deriving the mode\n     by scanning whether a room has 'ever' carried an addressed row reads a\n     quiet room as legacy forever, which is exactly the wrong answer for a\n     freshly created DM: it would make every DM wake the other party.\n     Absent field: lobby rooms stay 'legacy' so deploying this does not\n     silence an agent mid-conversation, and everything else - new rooms and\n     DMs - defaults to 'addressed'.")
 
 (define chat/ensure-lobby
   (lambda
