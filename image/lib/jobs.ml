@@ -37,6 +37,42 @@ let runner_id : string = Printf.sprintf "boot-%s#%d" host_tag (Unix.getpid ())
 (** Host prefix shared by every runner id this machine issues. *)
 let host_prefix : string = Printf.sprintf "boot-%s#" host_tag
 
+(** Prefix for workers that are NOT this image process — pp-lens and any
+    other external claimant (borge/jobs.borg, THE FLEET QUESTION).
+
+    Deliberately DISJOINT from [host_prefix]. [preempt_dead_host_leases]
+    scans `boot-<host>#%` and decides death by probing /proc for that pid ON
+    THIS MACHINE. A worker on another host would fail that probe — its pid is
+    simply not in our process table — so including it in the same namespace
+    would let a booting image declare a perfectly live foreign worker dead and
+    steal its rows. Keeping external owners in their own prefix means the
+    preempt path cannot see them at all, and an external owner recovers on the
+    lease TTL alone: extra latency, never a stolen live claim. *)
+let external_prefix : string = "ext-"
+
+(** Normalize an external worker's self-declared owner id.
+
+    The worker names itself (`(claim-job "aurora")` on a laptop, say) because
+    only it knows what it is; the image must not guess from its own hostname.
+    Sanitized to be punctuation-free so the value is safe inside a SQL LIKE
+    pattern and readable in an error column, then forced under [external_prefix]
+    so a caller cannot smuggle itself into the boot namespace by passing a
+    `boot-…` string. *)
+let external_owner (raw : string) : string =
+  let cleaned =
+    String.map
+      (fun c ->
+        if c = '#' || c = '/' || c = ' ' || c = '%' || c = '\'' then '_'
+        else c)
+      (String.trim raw)
+  in
+  if cleaned = "" then external_prefix ^ "unnamed"
+  else if
+    String.length cleaned >= String.length external_prefix
+    && String.sub cleaned 0 (String.length external_prefix) = external_prefix
+  then cleaned
+  else external_prefix ^ cleaned
+
 (* ---- lease ---- *)
 
 (** Lease TTL. A claim stamps `lease_deadline = now + ttl` and the runner
@@ -284,7 +320,7 @@ let cancel ~(store : Store.t) ~(id : string) ~(caller : string) ~(is_admin : boo
 
 (* ---- claim: SKIP LOCKED, mark running ---- *)
 
-let claim_due ~(store : Store.t) : job option =
+let claim_due ~(store : Store.t) ?(owner : string = runner_id) () : job option =
   match pg_conn store with
   | None -> None
   | Some _ ->
@@ -314,7 +350,7 @@ let claim_due ~(store : Store.t) : job option =
         let rows =
           Store_db.exec conn
             ~params:
-              [ Pgx.Value.of_string runner_id
+              [ Pgx.Value.of_string owner
               ; Pgx.Value.of_int64 now_ms
               ; Pgx.Value.of_int64 lease_until
               ]
@@ -351,11 +387,16 @@ let rec expt_backoff (store : Store.t) (id : string) : int =
 
 (* The trailing [()] makes the optional [owner] erasable: without it the
    optional can never be resolved, because every other argument is labelled
-   (warning 16 as error under this dune profile). *)
+   (warning 16 as error under this dune profile).
+
+   Returns [true] iff the CAS actually landed. The in-image runner ignores
+   this (it already tracks lease loss through [heartbeat]), but an EXTERNAL
+   claimant cannot: it learns it lost the row no other way, and a worker that
+   assumed success would silently drop a result. *)
 let record_done ~(store : Store.t) ?(owner : string option)
-    ~(id : string) ~(result_json : string) () : unit =
+    ~(id : string) ~(result_json : string) () : bool =
   match pg_conn store with
-  | None -> ()
+  | None -> false
   | Some conn ->
     (* With [owner], the write is a CAS on the lease: only the runner that
        still holds the row may finish it. Without it a worker whose lease
@@ -372,50 +413,81 @@ let record_done ~(store : Store.t) ?(owner : string option)
       Printf.sprintf
         "UPDATE jobs SET status = 'done', result = $2::jsonb, error = '', \
          lease_deadline = 0 \
-         WHERE id = $1::uuid %s"
+         WHERE id = $1::uuid %s \
+         RETURNING id::text"
         guard
     in
     (* Wrap the result in a JSON string value so it's always valid jsonb. *)
     let wrapped = Printf.sprintf "%s" (Yojson.Safe.to_string (`String result_json)) in
-    ignore
-      (Store_db.exec conn
-         ~params:
-           ([ Pgx.Value.of_string id; Pgx.Value.of_string wrapped ] @ extra)
-         sql)
+    let rows =
+      Store_db.exec conn
+        ~params:
+          ([ Pgx.Value.of_string id; Pgx.Value.of_string wrapped ] @ extra)
+        sql
+    in
+    rows <> []
 
+(* [max_attempts] is OPTIONAL ON PURPOSE (2026-10 external-claimant pass).
+   Callers used to pass it, and boot.ml only ever echoed back the value it
+   read off the row in the claim's RETURNING — so the parameter added no
+   information while giving any caller the power to inflate the retry budget
+   by passing a bigger number. Now an external worker (claim-job / job-finish)
+   cannot touch it: omitted, the UPDATE compares against the row's own
+   max_attempts column. The in-image runner may still pass it explicitly,
+   which is byte-equivalent to what it passed before. *)
 let record_failed ~(store : Store.t) ?(owner : string option)
-    ~(id : string) ~(error : string) ~(max_attempts : int) () : unit =
+    ?(max_attempts : int option) ~(id : string) ~(error : string)
+    () : bool =
   match pg_conn store with
-  | None -> ()
+  | None -> false
   | Some conn ->
     (* If attempts >= max_attempts → dead; else pending with backoff. *)
     let now_ms = Int64.of_float (Unix.gettimeofday () *. 1000.0) in
-    let guard, extra =
+    let run_at =
+      Int64.add now_ms (Int64.of_int (expt_backoff store id))
+    in
+    (* PARAMETER NUMBERING depends on whether a budget was supplied, because
+       the row-derived form does not reference $3 at all. Numbering by hand
+       (six literals) instead of by position is what keeps SQL and params in
+       lockstep: leaving a $3 in the text with no param — or passing one the
+       text never mentions — is PostgreSQL 42P18 "could not determine data
+       type of parameter $3", a hard error at prepare time. *)
+    let budget_sql, run_at_idx, next =
+      match max_attempts with
+      | Some _ -> ("$3", 4, 5)
+      | None -> ("max_attempts", 3, 4)
+    in
+    let guard, guard_params =
       match owner with
       | Some rid ->
-          ( "AND status = 'running' AND runner_id = $5",
+          ( Printf.sprintf "AND status = 'running' AND runner_id = $%d" next,
             [ Pgx.Value.of_string rid ] )
       | None -> ("", [])
     in
     let sql =
       Printf.sprintf
-        "UPDATE jobs SET status = CASE WHEN attempts >= $3 THEN 'dead' \
+        "UPDATE jobs SET status = CASE WHEN attempts >= %s THEN 'dead' \
                                   ELSE 'pending' END, \
          error = $2, lease_deadline = 0, \
-         run_at = CASE WHEN attempts >= $3 THEN run_at \
-                                    ELSE $4 END \
-         WHERE id = $1::uuid %s"
-        guard
+         run_at = CASE WHEN attempts >= %s THEN run_at \
+                                    ELSE $%d END \
+         WHERE id = $1::uuid %s \
+         RETURNING status"
+        budget_sql budget_sql run_at_idx guard
     in
-    ignore (Store_db.exec conn
-              ~params:
-                ([ Pgx.Value.of_string id
-                 ; Pgx.Value.of_string error
-                 ; Pgx.Value.of_int max_attempts
-                 ; Pgx.Value.of_int64
-                     (Int64.add now_ms (Int64.of_int (expt_backoff store id)))
-                 ] @ extra)
-              sql)
+    let params =
+      [ Pgx.Value.of_string id; Pgx.Value.of_string error ]
+      @ (match max_attempts with
+         | Some n -> [ Pgx.Value.of_int n ]
+         | None -> [])
+      @ [ Pgx.Value.of_int64 run_at ]
+      @ guard_params
+    in
+    (* RETURNING makes the CAS verdict observable in the same statement: an
+       empty result means the guard did not match, i.e. we no longer own the
+       row. An external claimant needs this — losing the lease is otherwise
+       invisible to it. *)
+    Store_db.exec conn ~params sql <> []
 
 (* ---- lease heartbeat ---- *)
 
@@ -428,7 +500,8 @@ let record_failed ~(store : Store.t) ?(owner : string option)
     the [false] to stop treating the eval as authoritative; it does NOT abort
     the fiber (v1 has no mid-eval cancellation, jobs.borg hard edges), but the
     stopped-renews path is logged so a duplicate eval is never silent. *)
-let heartbeat ~(store : Store.t) ~(id : string) : bool =
+let heartbeat ~(store : Store.t) ~(id : string)
+    ?(owner : string = runner_id) () : bool =
   match pg_conn store with
   | None -> false
   | Some conn ->
@@ -440,7 +513,7 @@ let heartbeat ~(store : Store.t) ~(id : string) : bool =
           [ Pgx.Value.of_string id
           ; Pgx.Value.of_int64 now_ms
           ; Pgx.Value.of_int64 deadline
-          ; Pgx.Value.of_string runner_id
+          ; Pgx.Value.of_string owner
           ]
         "UPDATE jobs SET lease_heartbeat_at = $2, lease_deadline = $3 \
          WHERE id = $1::uuid AND status = 'running' AND runner_id = $4 \
