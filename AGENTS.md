@@ -272,14 +272,15 @@ docs (seeded: `spec/todo`). Spec chapter: `borge/habitat-workflow.borg`.
    directly on `system/main`. Promote is the gate.
 2. **Obituary rule** — no silent reversals; before replacing an
    implementation, write what/why in `spec/<pkg>` DECISIONS.
-3. **File, don't fix** — out-of-scope items → the `log/issues` register
-   (notes doc slug `log/issues`, kind `issue`). Three ways in: browser
-   `/issues` (dedicated face: Kind BUG/DESIGN/SMELL/CLEANUP + title +
-   body, per-row resolve/reopen/delete), shell
-   `scripts/file-issue.sh "BUG: title" "body"`, or REPL
+3. **File, don't fix** — out-of-scope items → a kind-tagged card on the
+   shared Board (the issues register; the `log/issues` ledger is a frozen
+   archive since 2026-09-28). Two ways in: browser `/issues`
+   (dedicated face: Kind BUG/DESIGN/SMELL/CLEANUP + title + body,
+   per-row resolve/reopen/delete) or REPL
    `(notes/issues/add KIND TITLE BODY)` (+ `notes/issues/resolve` |
-   `reopen` | `delete`). Sparse one-liners still fine. This is the
-   **habitat product track**; `borge issue new` is the separate
+   `reopen` | `delete`). Sparse one-liners still fine. Triage and
+   response ownership: `borge/workstreams.borg` § issue-triage. This is
+   the **habitat product track**; `borge issue new` is the separate
    git/spec track for make-mode spec drift — don't conflate them.
 4. **Handoff** — end of session ~3 lines → `log/sessions`.
 
@@ -489,7 +490,7 @@ auth is **in-process** in the image.
   `(route "/x" "fn" 'public)` / `(public-route …)` for anonymous GET.
   Kernel paths (`/data`, `/admin`, `/api/eval`, …) stay hard-private.
   Package-provided routes live in `libs/*` — e.g. the `notes` library
-  serves `/issues` (the `log/issues` register face; see § File, don't fix).
+   serves `/issues` (the issues register face; see § File, don't fix).
   Anonymous identity uses `system/main` (package public routes inherit).
 - Nopales primitives: pure (`+ - * = < > <= >= not list car cdr cons
   null? pair? count string-append str type-of whoami current-author
