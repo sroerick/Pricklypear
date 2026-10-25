@@ -24,6 +24,14 @@
   (implements "libs (planned: libs/triage)" "image/lib/prims_data.ml link/out-links")
   (status partial)
   (* agent note (|2026-09-11 phase 1 shipped as plain defines on gregor/personal: triage/list-id, triage/cards (open cards, updated_at DESC), triage/issues (my ledger), triage/stale (data-history age >= 3d), triage/plan (pure planner, returns placements + flags + matches), apply via kanban/move-card + link. Planner is pure: act only after eyeballing the plan.|) *)
+  (* agent note (|2026-10-17 (card eacc88a5): the 09-28 convergence rewired
+     the issue half of this loop. An issue IS one object now: notes/issues/add
+     files a kind-tagged Board card and the card id is the issue id; the
+     log/issues ledger is a frozen archive, so 'my open issues via the ledger'
+     reads 'the Board's open issue cards'. Triage decisions and RESPONSE
+     OWNERSHIP are specified in workstreams.borg issue-triage;
+     issue-board-bridge edges remain legacy (historical issue ids keep
+     resolving against the archive).|) *)
   (verify
    (test "a pass leaves a lobby line listing every move, flag, and close with refs"
          "planner output precedes every mutation; no card moves without a plan entry"
