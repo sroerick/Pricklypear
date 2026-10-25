@@ -537,10 +537,11 @@
               (workstreams/pulse-summary rows)
               (workstreams/pulse-table rows)
               (workstreams/pulse-rollup-from nodes streams)
+              (workstreams/factory-html)
               (html/p*
                 (html/attr "class" "muted ws-board-link")
                 (html/a "/workstreams" "per-stream detail"))))))))
-  "GET /pulse — the cross-stream indicator. ONE scan feeds the whole\n     page: counts, stale flags, and the HUMAN-REVIEW rollup all derive\n     from the same node list.")
+  "GET /pulse — the cross-stream indicator. ONE scan of todo nodes feeds\n     the stream counts, stale flags, and the HUMAN-REVIEW rollup (they all\n     derive from the same node list). The factory block is the one part\n     that does NOT read that scan: run rows are counted through filtered\n     find-rows reads, because folding them in Lisp cost 261945 eval steps\n     and blew the 400k per-request budget on a page that already costs\n     170104 (borge/workstreams.borg factory-indicator).")
 
 (define workstreams/pulse-rollup-from
   (lambda
