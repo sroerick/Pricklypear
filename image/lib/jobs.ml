@@ -1079,7 +1079,13 @@ let list_schedules ~(store : Store.t) () : value =
           rows
       in
       VList vals
-    with _ -> VList [])
+     with exn ->
+       (* A silent [] here hid prod's missing schedules.tz column (42703) for
+          13 days (card 6ab0722c): (schedules) looked empty while every
+          schedule was overdue. Keep the value contract, log loudly. *)
+       Printf.eprintf "[jobs] schedules listing failed: %s\n%!"
+         (Printexc.to_string exn);
+       VList [])
 
 (** Claim a single DUE enabled schedule (oldest next_run first), returning
     it (and leaving the row unlocked for the caller to advance). Used by the
@@ -1137,6 +1143,23 @@ let advance_schedule ~(store : Store.t) ~(name : string) ~(fired_at : int64)
          (Store_db.exec conn ~params:[ Pgx.Value.of_string name ]
             "UPDATE schedules SET enabled = false WHERE name = $1"))
 
+(** Push a schedule's next_run forward unconditionally. Last-resort companion
+    to [advance_schedule] for the runner's fire loop: when advancing itself
+    raises, the loop must still leave the row NOT due, or claim_due_schedule
+    hands the same row straight back and the fire loop spins (2026-10-12
+    scheduler stall, card 6ab0722c). Best effort: false when the write itself
+    fails. *)
+let push_schedule_forward ~(store : Store.t) ~(name : string)
+    ~(not_before : int64) : bool =
+  match pg_conn store with
+  | None -> false
+  | Some conn ->
+    (try
+       Store_db.exec conn
+         ~params:[ Pgx.Value.of_string name; Pgx.Value.of_int64 not_before ]
+         "UPDATE schedules SET next_run = $2 WHERE name = $1"
+       <> []
+     with _ -> false)
 (* The runner loop (eval_job + runner_loop) lives in boot.ml to avoid a
    dependency cycle: Jobs (DB ops) must not depend on Session, which
    depends on Prims_db, which depends on Jobs. boot.ml can depend on
