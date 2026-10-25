@@ -754,6 +754,102 @@ let test_retry_budget_is_row_derived () =
        | None -> Alcotest.fail "job missing after failed finish");
       delete_job store ~id)
 
+(* ELIGIBILITY (the fence that makes worker claim a self-service right rather
+   than a cross-tenant privilege).
+
+   The rule: a non-admin worker may claim only rows it submitted; a verified
+   admin may claim anyone's. jobs.submitted_by is pinned at submit, so the row
+   already names the owner — no separate eligibility column exists or is
+   needed. *)
+let test_claim_eligibility () =
+  with_store (fun store ->
+      clear_jobs store;
+      let alice_id =
+        submit_future store ~fn:"alicefn" ~args_json:"{}"
+          ~branch:"system/main" ~submitted_by:"alice"
+      in
+      make_due store ~id:alice_id;
+      let bob = J.external_owner "bob-lens" in
+      (* Bob is scoped to his own rows: alice's due row is invisible to him.
+         Nothing is claimed and nothing is consumed — his worker loop just
+         sleeps and retries, which is the correct steady state. *)
+      Alcotest.(check bool) "a scoped worker cannot claim another's row" true
+        (J.claim_due ~store ~owner:bob ~eligible_for:(Some "bob") () = None);
+      (match read_job_fields store ~id:alice_id with
+       | Some (attempts, status, _) ->
+           Alcotest.(check int) "the untouched row keeps its attempts" 0 attempts;
+           Alcotest.(check string) "...and stays pending" "pending" status
+       | None -> Alcotest.fail "alice's row vanished");
+      (* Alice's own worker takes it. *)
+      let alice = J.external_owner "alice-lens" in
+      (match
+         J.claim_due ~store ~owner:alice ~eligible_for:(Some "alice") ()
+       with
+       | None -> Alcotest.fail "a worker could not claim its OWN row"
+       | Some j ->
+           Alcotest.(check string) "self-claim succeeds" alice_id j.J.id);
+      delete_job store ~id:alice_id;
+      (* Ample power still works: unrestricted (admin / in-image runner) is
+         not narrowed by the new fence. *)
+      let id =
+        submit_future store ~fn:"anyfn" ~args_json:"{}"
+          ~branch:"system/main" ~submitted_by:"carol"
+      in
+      make_due store ~id;
+      Alcotest.(check bool) "an unrestricted claimant still spans tenants" true
+        (match J.claim_due ~store ~owner:(J.external_owner "admin-lens") () with
+         | Some j -> j.J.id = id
+         | None -> false);
+      delete_job store ~id)
+
+(* STARVATION — why the eligibility predicate is inside the SELECT and not on
+   the outer UPDATE.
+
+   If the scope were a WHERE on the UPDATE, the inner query would still pick
+   the oldest due row (someone else's), the UPDATE would then match zero rows,
+   and claim_due would return None even though an ELIGIBLE row was waiting.
+   One foreign row would wedge every worker forever. This case fails loudly if
+   that regression is ever reintroduced — it is the difference between the
+   fence working and the fence being a deadlock. *)
+let test_claim_skips_ineligible_older_rows () =
+  with_store (fun store ->
+      clear_jobs store;
+      (* An OLDER foreign row, then a NEWER row belonging to the worker. *)
+      let foreign =
+        submit_future store ~fn:"foreignfn" ~args_json:"{}"
+          ~branch:"system/main" ~submitted_by:"mallory"
+      in
+      make_due store ~id:foreign;
+      ignore
+        (S.exec
+           (Option.get (S.conn_of store))
+           ~params:[ Pgx.Value.of_string foreign ]
+           "UPDATE jobs SET run_at = 1 WHERE id = $1::uuid");
+      let mine =
+        submit_future store ~fn:"minefn" ~args_json:"{}"
+          ~branch:"system/main" ~submitted_by:"dave"
+      in
+      make_due store ~id:mine;
+      match
+        J.claim_due ~store ~owner:(J.external_owner "dave-lens")
+          ~eligible_for:(Some "dave") ()
+      with
+      | None ->
+          Alcotest.fail
+            "claim was starved by an ineligible older row (scope must be \
+             inside the SELECT)"
+      | Some j ->
+          Alcotest.(check string)
+            "the older foreign row is stepped over, mine is claimed" mine j.J.id;
+      (* The foreign row is still there, still pending, still mallory's. *)
+      (match read_job_fields store ~id:foreign with
+       | Some (attempts, status, _) ->
+           Alcotest.(check int) "the skipped row was not consumed" 0 attempts;
+           Alcotest.(check string) "...and is still pending" "pending" status
+       | None -> Alcotest.fail "foreign row vanished");
+      delete_job store ~id:foreign;
+      delete_job store ~id:mine)
+
 (* runner identity is host-scoped so same-host recovery can be exact. *)
 let test_runner_id_shape () =
   Alcotest.(check bool) "runner id carries the host prefix" true
@@ -1174,7 +1270,11 @@ let () =
         ; Alcotest.test_case "preempt ignores external owners" `Quick
             test_preempt_ignores_external_owners
         ; Alcotest.test_case "retry budget is row-derived" `Quick
-            test_retry_budget_is_row_derived ] )
+            test_retry_budget_is_row_derived
+        ; Alcotest.test_case "claim eligibility is self-or-admin" `Quick
+            test_claim_eligibility
+        ; Alcotest.test_case "claim skips ineligible older rows" `Quick
+            test_claim_skips_ineligible_older_rows ] )
     ; ( "args-bug"
       , [ Alcotest.test_case "eval_src splices jsonb args as literal" `Quick
             test_eval_src_args ] )
