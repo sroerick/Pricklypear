@@ -294,32 +294,65 @@ let jobs_runner_loop ~(session : Session.t) : unit =
   let rec loop () =
     (try Jobs.reap_dead ~store:session.store with _ -> ());
     retention_sweep ();
-    (* Fire due schedules: submit a job per due schedule, then advance its
-       next_run. Downtime collapses to one catch-up run (cron searches
-       strictly after now; every-ms just adds the interval). Spec:
-       borge/jobs.borg schedules. *)
-    (let rec fire_schedules () =
-       match Jobs.claim_due_schedule ~store:session.store with
-       | None -> ()
-       | Some sch ->
-           let fired_at =
-             Int64.of_float (Unix.gettimeofday () *. 1000.0)
-           in
-           (try
-              ignore
-                (Jobs.submit ~store:session.store
-                   ~fn:sch.Jobs.s_fn ~args_json:sch.Jobs.s_args
-                   ~branch:sch.Jobs.s_branch
-                   ~submitted_by:sch.Jobs.s_submitted_by
-                   ~run_at_ms:fired_at ());
-               Jobs.advance_schedule ~store:session.store
-                 ~name:sch.Jobs.s_name ~fired_at
-                 ~cron:sch.Jobs.s_cron ~every_ms:sch.Jobs.s_every_ms
-                 ~tz:sch.Jobs.s_tz
-            with _ -> ());
-           fire_schedules ()
-     in
-     try fire_schedules () with _ -> ());
+      (* Fire due schedules: submit a job per due schedule, then advance its
+         next_run. Downtime collapses to one catch-up run (cron searches
+         strictly after now; every-ms just adds the interval). Spec:
+         borge/jobs.borg schedules.
+
+         2026-10-25 scheduler-stall fix (card 6ab0722c): the pass used to be
+         wrapped in a bare [try ... with _ -> ()] and advanced next_run only
+         when submit AND advance both succeeded. A persistently failing fire
+         path (prod: missing schedules.tz column, 42703 every tick) left
+         next_run in the past forever; claim_due_schedule always returns the
+         OLDEST due row first, so the loop re-claimed it endlessly — and
+         every failure vanished without a log line, which is why the stall
+         ran 13 days unnoticed. Now: submit failures are logged, the
+         schedule is ALWAYS advanced (a failed fire retries on its next due
+         tick, never on this one), advance has a last-resort forward-push
+         fallback, and catch-up per tick is bounded. *)
+      (let rec fire_schedules budget =
+         if budget <= 0 then
+           Printf.eprintf
+             "[jobs] schedule catch-up budget exhausted; resuming next tick\n%!"
+         else
+           match Jobs.claim_due_schedule ~store:session.store with
+           | None -> ()
+           | Some sch ->
+               let fired_at =
+                 Int64.of_float (Unix.gettimeofday () *. 1000.0)
+               in
+               (match
+                  (try
+                     Jobs.submit ~store:session.store
+                       ~fn:sch.Jobs.s_fn ~args_json:sch.Jobs.s_args
+                       ~branch:sch.Jobs.s_branch
+                       ~submitted_by:sch.Jobs.s_submitted_by
+                       ~run_at_ms:fired_at ()
+                   with exn -> Error (Printexc.to_string exn))
+                with
+                | Ok _ -> ()
+                | Error msg ->
+                    Printf.eprintf "[jobs] schedule %s: submit failed: %s\n%!"
+                      sch.Jobs.s_name msg);
+               (* Advance on EVERY path: a stale next_run would re-claim this
+                  same row next iteration and starve the whole runner. *)
+               (try
+                  Jobs.advance_schedule ~store:session.store
+                    ~name:sch.Jobs.s_name ~fired_at
+                    ~cron:sch.Jobs.s_cron ~every_ms:sch.Jobs.s_every_ms
+                    ~tz:sch.Jobs.s_tz
+                with exn ->
+                  Printf.eprintf "[jobs] schedule %s: advance failed: %s\n%!"
+                    sch.Jobs.s_name (Printexc.to_string exn);
+                  ignore
+                    (Jobs.push_schedule_forward ~store:session.store
+                       ~name:sch.Jobs.s_name
+                       ~not_before:(Int64.add fired_at 60_000L)));
+               fire_schedules (budget - 1)
+       in
+       try fire_schedules 64 with exn ->
+         Printf.eprintf "[jobs] schedule fire pass failed: %s\n%!"
+           (Printexc.to_string exn));
     let claimed =
       (try Jobs.claim_due ~store:session.store ~owner:Jobs.runner_id ()
        with _ -> None)
@@ -391,26 +424,45 @@ let start_eio ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t) : unit =
   (** Fork the jobs runner fiber — a background loop that claims due
       jobs and evals them. It gets its own store+session so it doesn't
       race HTTP on the shared session's branch. Spec: borge/jobs.borg. *)
-  Eio.Fiber.fork ~sw (fun () ->
-      try
-        let cfg = Store.config_from_env () in
-        let runner_store = Store.make ~cfg ~branch_id:Store.system_main_id () in
-        Store.connect runner_store;
-        let manifest =
-          Pricklypear_common.Manifest.make
-            ~user_id:"jobs-runner"
-            ~username:"admin"
-            ~branch_id:Store.system_main_id
-            ~branch_name:"system/main"
-            ~boot_mode:Pricklypear_common.Manifest.Boot_always_on
-            ~image_version:session.manifest.image_version
-            ()
+    Eio.Fiber.fork ~sw (fun () ->
+        (* The scheduler must never die permanently. A transient failure here
+           (DB unreachable at boot, session setup error) used to kill the
+           fiber until the next image restart, leaving every schedule overdue
+           and every job unclaimed (2026-10-25 scheduler-stall card
+           6ab0722c). Setup and loop failures now log and retry with capped
+           backoff; on image shutdown the cancelled sleep ends the fiber. *)
+        let rec runner_attempt (delay_s : float) : unit =
+          let () =
+            try
+              let cfg = Store.config_from_env () in
+              let runner_store =
+                Store.make ~cfg ~branch_id:Store.system_main_id ()
+              in
+              Store.connect runner_store;
+              let manifest =
+                Pricklypear_common.Manifest.make
+                  ~user_id:"jobs-runner"
+                  ~username:"admin"
+                  ~branch_id:Store.system_main_id
+                  ~branch_name:"system/main"
+                  ~boot_mode:Pricklypear_common.Manifest.Boot_always_on
+                  ~image_version:session.manifest.image_version
+                  ()
+              in
+              let runner_session =
+                Session.make ~manifest ~store:runner_store ()
+              in
+              jobs_runner_loop ~session:runner_session
+              (* jobs_runner_loop never returns normally; either way we
+                 retry below. *)
+            with exn ->
+              Printf.eprintf "[boot] jobs runner fiber failed: %s\n%!"
+                (Printexc.to_string exn)
+          in
+          Io_eio.sleep delay_s;
+          runner_attempt (Float.min (delay_s *. 2.0) 60.0)
         in
-        let runner_session = Session.make ~manifest ~store:runner_store () in
-        jobs_runner_loop ~session:runner_session
-      with exn ->
-        Printf.eprintf "[boot] jobs runner fiber exited: %s\n%!"
-          (Printexc.to_string exn));
+        runner_attempt 5.0);
 
   (* i-20260914-agents-note-async: the living agents-note seed runs in the
      background, once per boot, on its OWN store+session (jobs-runner
