@@ -421,13 +421,18 @@
 
 (define agent/addressed-room?
   (lambda
-    (rows)
-    (pair?
-      (filter (lambda (r) (agent/addressed? r)) rows)))
-  "Whether this room has EVER carried an addressed row. Used as the rollout
-   signal: a room with addressing speaks the new protocol and wakes only on
-   turn:true, while a room with none keeps legacy wake-on-any-message so no
-   agent goes silent before its bridge learns to write turn.")
+    (room)
+    (string-eq (chat/room-protocol room) "addressed"))
+  "Whether this room speaks the addressing protocol, read from the room's
+   DECLARED 'protocol' field via chat/room-protocol.
+
+   This used to scan the room's rows and answer 'has it EVER carried an
+   addressed row'. That heuristic reads a quiet room as legacy forever: a
+   freshly created DM has no addressed rows yet, so it fell through to
+   legacy wake-on-any-message and every DM summoned a turn - the precise
+   behaviour we do not want. The declaration lives on the room row instead,
+   so a new room is 'addressed' from its first message while the
+   grandfathered rooms stay 'legacy' and nobody goes silent on deploy.")
 
 (define agent/wake-room
   (lambda
@@ -465,7 +470,7 @@
                     ((talk (agent/notbot newm ()))
                      (trig
                        (if
-                         (agent/addressed-room? all)
+                         (agent/addressed-room? room)
                          (agent/addressed-to-me newm)
                          talk)))
                     (if
