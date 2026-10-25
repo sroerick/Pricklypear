@@ -218,8 +218,35 @@
 (define workstreams/pulse-nodes
   (lambda
     ()
-    (tree/list (todo/tree/prefix "todo-item") 1 2000))
-  "ONE garden scan for the whole face: the caller's todo-item nodes.\n     Cards live in their creator's garden, so an identity sees its own\n     cards plus shared-space cards it can read — by the privacy model.")
+    (let
+      ((garden (tree/list (todo/tree/prefix "todo-item") 1 2000)))
+      (let
+        ((seen
+          (list/foldl
+            (lambda (acc n) (dict-set acc (as-str (workstreams/node-id n)) "1"))
+            (list)
+            garden)))
+        (append
+          garden
+          (list/filter
+            (lambda
+              (n)
+              (and
+                (string-eq (as-str (dict-get n "type")) "todo-item")
+                (null? (dict-get seen (as-str (workstreams/node-id n))))))
+            (tree/list (todo/tree/shared-prefix) 3 5000))))))
+  "ONE scan for the whole face: the caller's todo-item nodes — garden
+     (data.u.<user>.todo-item.*) MERGED with the shared data space
+     (data.s.* todo-items, the Board) and DEDUPED BY ID, garden rows first.
+     OBITUARY (2026-10-25, card a4fb7706): this was a garden-only scan, so
+     the face missed shared-only Board cards even though stream-rows reads
+     (todo/list/all) and the Board is a stream like any other; and the
+     deferred mirrors file the SAME (type,id) under both subtrees, so a
+     naive union would double-count mirrored cards. This is the same
+     merged-pool discipline as todo/list/merge: garden first, shared only
+     where the id is unseen. Cards live in their creator's garden, so an
+     identity sees its own cards plus shared-space cards it can read — by
+     the privacy model.")
 
 (define workstreams/pulse-page
   (lambda
