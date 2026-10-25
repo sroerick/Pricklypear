@@ -2336,6 +2336,14 @@ type handler_call =
   | Handler_unbound
   | Handler_error of string
 
+(* card 1b76bdcf: dispatch surface - a name whose binding is not callable
+   (VLambda | VPrim) can only fail at eval; route it to the precise-error
+   arm instead of a blind "(name)" eval. *)
+let callable_value (v : Pricklypear_lisp.Ast.value) : bool =
+  match v with
+  | Pricklypear_lisp.Ast.VLambda _ | Pricklypear_lisp.Ast.VPrim _ -> true
+  | _ -> false
+
 (* Invoke a named handler function (looked up via env). The handler
    must be a zero-arg VLambda or a VPrim name.
    When [~request] is provided, request-* prims see that context for
@@ -2354,7 +2362,7 @@ let call_handler (t : t) ?request (handler_name : string)
   in
   match Pricklypear_lisp.Env.lookup env handler_name with
   | None -> Handler_unbound
-  | Some _fn ->
+  | Some fn when callable_value fn ->
       (* i-1788669761 (TOCTOU): the publish-time gate is not enough —
          (define h …) AFTER (route "/x" "h" 'public) re-points the route
          with zero re-gate, and boot rehydrate loads stored routes
@@ -2452,6 +2460,24 @@ let call_handler (t : t) ?request (handler_name : string)
                Fun.protect
                  ~finally:(fun () -> t.current_request <- prev_req)
                  run)
+
+  | Some v ->
+      (* card 1b76bdcf ("[ops] handler: not a function: 12"): a rehydrated
+         route or a stale define can leave a handler name bound to a
+         non-function (e.g. a page-size variable). Evaluating the name
+         blind died "not a function: 12" - an opaque, filed reliability
+         incident that never names the handler. A non-function binding is
+         branch state (same class as the unbound path above): log it
+         precisely and return a Handler_error naming the handler and the
+         bound value; no reliability incident. *)
+      let msg =
+        Printf.sprintf "handler %s is bound to a non-function value (%s)"
+          handler_name (Pricklypear_lisp.Reader.pp_value v)
+      in
+      (Ops_incidents.emit_and_maybe_file t
+         ~level:Ops_log.Error ~component:"handler" ~file:false
+         ~context:[ ("handler", handler_name) ] msg;
+       Handler_error msg)
 
 (* Late-bind the route/dispatch thunk now that call_handler exists. *)
 let () =

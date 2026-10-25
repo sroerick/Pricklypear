@@ -211,6 +211,34 @@ let test_handler_body_callee_evals_in_snapshot_env () =
           Alcotest.fail
             (Printf.sprintf "body callee died after env divergence: %s" msg))
 
+(** Regression (card 1b76bdcf, "[ops] handler: not a function: 12"):
+    dispatch must not eval a handler name blind. A handler name bound
+    to a non-function (e.g. a page-size variable) returns a Handler_error
+    that names the handler and the bound value - logged, not filed as a
+    reliability incident. *)
+let test_handler_non_function_binding () =
+  let t = anon_session () in
+  ignore (eval_value t "(define stream/page-size 12)");
+  match S.call_handler t "stream/page-size" with
+  | S.Handler_error msg ->
+      let contains sub =
+        let n = String.length sub in
+        let rec go i =
+          i + n <= String.length msg
+          && (String.sub msg i n = sub || go (i + 1))
+        in
+        go 0
+      in
+      Alcotest.(check bool) "error names the handler" true
+        (contains "stream/page-size");
+      Alcotest.(check bool) "error shows the bound value" true
+        (contains "12")
+  | S.Handler_ok _ ->
+      Alcotest.fail "non-function binding dispatched as ok"
+  | S.Handler_unbound ->
+      Alcotest.fail "bound non-function name reported unbound"
+
+
 (* Control_rim captures Eio effects, so eval-touching cases run inside
    the Eio scheduler (rls_floor_test precedent). *)
 let in_eio f = Eio_main.run (fun _ -> f ())
@@ -227,7 +255,9 @@ let () =
           ; Alcotest.test_case "handler evals in the snapshot env" `Quick
               (fun () -> in_eio test_handler_evals_in_snapshot_env)
           ; Alcotest.test_case "handler body callee evals in the snapshot env" `Quick
-              (fun () -> in_eio test_handler_body_callee_evals_in_snapshot_env)
+              (fun () -> in_eio test_handler_body_callee_evals_in_snapshot_env)          ; Alcotest.test_case "handler non-function binding errors precisely" `Quick
+              (fun () -> in_eio test_handler_non_function_binding)
+
         ; Alcotest.test_case "boot seed re-exports" `Quick
             test_boot_seed_reexports
         ]) ]
