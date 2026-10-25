@@ -199,6 +199,17 @@ let is_invalid_input_syntax (exn : exn) : bool =
   match exn with
   | Pgx.PostgreSQL_Error (_, fields) ->
       String.equal fields.Pgx.Error_response.code "22P02"
+    | _ -> false
+(** syntax_error (SQLSTATE 42601): the other client-fault class — a handler
+    passed a string Postgres cannot parse for its cast target, e.g. an
+    invalid ltree label into a ::ltree cast (the "[ops] handler ... 42601
+    ltree syntax error" 500 class, card 8538f64e). Same treatment as 22P02
+    above: the HTTP boundary converts this to a 400 Bad Request instead of a
+    500 + ops incident card; every other class propagates. *)
+let is_syntax_error (exn : exn) : bool =
+  match exn with
+  | Pgx.PostgreSQL_Error (_, fields) ->
+      String.equal fields.Pgx.Error_response.code "42601"
   | _ -> false
 (** i-1788671060-2 (swallow-and-default retirement): a FAILED query is an
     error, not an empty result. Store/auth_store DB-error catch-arms call

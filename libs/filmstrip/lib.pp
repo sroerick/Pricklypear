@@ -287,6 +287,7 @@
         (list "chat" "/chat")
         (list "weather" "/weather")
         (list "agent" "/agent")
+        (list "repl" "/repl")
         (list "calories" "/cal")
         (list "bookmarks" "/bookmarks")
           (list "plans" "/plans")
@@ -1009,6 +1010,16 @@ between strip and rail).")
               "overflow-y"
               "auto"))
           (css/rule ".fs-shell:has(#fs-axis.col) .fs-rmode" (list "flex" "1 1 auto"))
+            ;; card c0ad9354: the strip WRAPS instead of clipping. Every
+            ;; text-bearing row item (logo, start, rail word, mode tabs,
+            ;; the file-issue button, keys glyph) has min-width:auto and
+            ;; cannot shrink below its content, so a full strip overflowed
+            ;; #fs-rail's overflow-x:hidden and pushed the file-issue
+            ;; button off the rail. flex-wrap keeps every affordance ON
+            ;; the strip: overflow lands on a second strip row (coltabs
+            ;; keeps min-width:0 and scrolls its chips). Zero JS, declared
+            ;; in the same sheet as the strip itself.
+            (css/rule ".fs-railtabs" (list "flex-wrap" "wrap"))
           (css/media
             "max-width:48rem"
             (list
