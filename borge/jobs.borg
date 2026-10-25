@@ -170,16 +170,23 @@
         THE WORKER PRIMS (host side, server-only)
         =========================================================
           (claim-job "tag")                    → job row | null
+          (claim-job "tag" "branch")           → ...narrowed to branch
           (job-heartbeat id "tag")             → bool
+          (job-release id "tag")               → bool
           (job-finish id "tag" "done" v)       → bool
           (job-finish id "tag" "failed" msg)   → bool
 
-        These are register_server_only, NOT guest prims: no Nopales
-        code evaluated on a branch can call them, exactly as with
-        the other host-side prims. They exist so an out-of-process
-        worker (pp-remote's lens client, the Blender bridge shape)
-        drives the SAME rows through the SAME protocol the in-image
-        runner uses, instead of a second private queue.
+        These are register_server_only. BE PRECISE ABOUT WHAT
+        THAT BUYS: it marks the prim refused by a remote client's
+        /api/prim proxy (Primitives.dispatch is the only reader of
+        that flag), so a proxy rim cannot forward them. It does NOT
+        stop Nopales evaluated on a branch from calling them —
+        eval resolves prims by plain table lookup
+        (Hashtbl.find_opt prims name) and never consults the flag.
+        Guest reachability is therefore bounded by the ELIGIBILITY
+        rule below, not by the registration marking. The
+        consequence for a worker: it calls this surface as WHOLE
+        EXPRESSIONS over /api/eval, never as proxied prim calls.
 
         CONTRACT. null from claim-job is not an error — an empty
         queue is the steady state, so a worker loop is
@@ -190,6 +197,31 @@
         reclaimed), and a worker must treat it as "stop, my result
         is no longer authoritative". A worker cannot reconstruct
         that verdict locally, so it has to come back over the prim.
+
+        BRANCH SCOPE. claim-job takes an optional branch, and a
+        worker should pass it. The in-image runner evals a job
+        under a synthetic context pinned to job.branch (boot.ml
+        eval_job); an external worker evaluates under the branch it
+        is CONNECTED to and cannot retarget that, because there is
+        no branch-scoped eval prim — only checkout, which mutates
+        shared session state. So a worker handed a row from another
+        branch would resolve fn against the wrong tree and fail for
+        a reason that has nothing to do with the job. Omitted, the
+        claim is unscoped, which is only correct for a worker whose
+        connection branch is known to match.
+
+        DECLINE WITH release, NOT finish. A worker that discovers
+        it cannot faithfully run a body — it carries Txn/Step
+        effects (in-image only, see the fleet question), or its def
+        does not resolve locally — has not used an attempt: nothing
+        ran, nothing failed. job-release returns the row to pending
+        and REFUNDS the attempt (attempts - 1, floored at 0) under
+        the same ownership CAS. Without it, declining a job would
+        march it to 'dead' through the retry budget it never spent.
+        Releasing leaves run_at untouched, so the row is
+        immediately claimable by the next eligible worker — the
+        image taking a Txn job a lens worker declined is the
+        intended handoff, not a fallback.
 
         OWNER IS DERIVED, NEVER SELF-DECLARED. The owner id is
         ext-<authenticated-caller>-<tag> (Jobs.external_owner).
@@ -455,6 +487,8 @@
         (test "job budget: a job stepping past 100k (long counter loop) completes done, does not die budget-exceeded - the same loop on the request path still budget-exceeds")
     (smoke "submit a job that sleeps, watch status pending→running→done with result via (job-status)")
     (smoke "a non-admin worker claims its own submitted job and nothing else; one foreign older row cannot starve it (claim skips ineligible older rows)")
+    (smoke "a worker scoped to one branch is never handed another branch's due row, and the off-branch row survives untouched (claim respects branch scope)")
+    (smoke "a worker that declines a job (job-release) leaves attempts unchanged — declining cannot march a job to dead")
     (smoke "submit a job whose fn raises → attempts increments, retry, eventual dead")
     (smoke "restart image mid-job → expired-lease row recovered per attempts rule; a live row on another host is left alone")))
 

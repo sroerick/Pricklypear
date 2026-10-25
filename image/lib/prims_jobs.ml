@@ -169,6 +169,14 @@ let register (t : t) (tbl : Primitives.t) : unit =
      exercise it was the in-image runner, whose id was baked into
      Jobs.runner_id. These three prims are the missing verb.
 
+     register_server_only HERE MEANS ONLY "refused by the /api/prim proxy".
+     Primitives.dispatch is the sole reader of that flag (http_pages.ml
+     api_prim); eval resolves prims by plain table lookup and never consults
+     it. So Nopales evaluated on a branch CAN call these names, and guest
+     reachability is bounded by the ELIGIBILITY rule below — not by the
+     registration. A worker consequently calls this surface as WHOLE
+     EXPRESSIONS via /api/eval, never as proxied prim calls.
+
      GATE — SELF OR VERIFIED ADMIN. Claiming picks up work submitted by ANY
      user, and the runner then evals that job's fn on the job's branch, so
      "may claim WHOSE work" is really "may execute whose submitted code".
@@ -218,12 +226,23 @@ let register (t : t) (tbl : Primitives.t) : unit =
     | Pricklypear_lisp.Ast.VStr s -> s
     | other -> Pricklypear_lisp.Reader.pp_value other
   in
-  (* (claim-job "worker-tag") -> the claimed job row | null.
-     null is NOT an error: an empty queue is the normal steady state. *)
+  (* (claim-job "worker-tag")                 -> the claimed job row | null
+     (claim-job "worker-tag" "branch")        -> ...also scoped to branch
+
+     null is NOT an error: an empty queue is the normal steady state.
+
+     The BRANCH argument is for external workers, and it is not optional in
+     spirit even though it is in arity. The in-image runner evals a job under
+     a synthetic context pinned to job.branch; an external worker evaluates
+     under the branch it is CONNECTED to and cannot retarget that (there is no
+     branch-scoped eval prim). A worker that omits the branch could therefore
+     be handed a row whose fn does not resolve against its own tree — the job
+     would fail for a reason that has nothing to do with the job. *)
   Primitives.register_server_only tbl "claim-job"
     (fun args ->
       match args with
-      | [ Pricklypear_lisp.Ast.VStr tag ] ->
+      | [ Pricklypear_lisp.Ast.VStr tag ]
+      | [ Pricklypear_lisp.Ast.VStr tag; Pricklypear_lisp.Ast.VStr "" ] ->
         let eligible_for = claim_scope ~op:"claim-job" in
         (match
            Jobs.claim_due ~store:t.store ~owner:(worker_owner tag) ~eligible_for
@@ -231,11 +250,43 @@ let register (t : t) (tbl : Primitives.t) : unit =
          with
          | Some j -> Jobs.job_to_value j
          | None -> Pricklypear_lisp.Ast.VNil)
+      | [ Pricklypear_lisp.Ast.VStr tag; Pricklypear_lisp.Ast.VStr branch ] ->
+        let eligible_for = claim_scope ~op:"claim-job" in
+        (match
+           Jobs.claim_due ~store:t.store ~owner:(worker_owner tag) ~eligible_for
+             ~branch:(Some branch) ()
+         with
+         | Some j -> Jobs.job_to_value j
+         | None -> Pricklypear_lisp.Ast.VNil)
       | _ ->
         raise
           (Pricklypear_lisp.Ast.Interp_error
              (Pricklypear_lisp.Ast.Prim_error
-                ("claim-job", "need worker-tag-str", "bad-args"))));
+                ("claim-job", "need worker-tag-str [, branch-str]", "bad-args"))));
+
+  (* (job-release id "worker-tag") -> bool.
+
+     Hand a claimed row back UNRUN so another eligible worker can take it.
+     This is what a worker calls when it declines a job it cannot faithfully
+     run — a body carrying Txn/Step effects, or a def that does not resolve
+     locally — because nothing ran and nothing failed, so no attempt should be
+     spent. Without it, declining a job would silently march it to 'dead'.
+     Same ownership CAS as the other terminal writes: the returned bool is
+     false when this worker no longer holds the row. *)
+  Primitives.register_server_only tbl "job-release"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr id; Pricklypear_lisp.Ast.VStr tag ] ->
+        require_worker ~op:"job-release";
+        Pricklypear_lisp.Ast.VBool
+          (Jobs.release ~store:t.store ~id ~owner:(worker_owner tag) ())
+      | _ ->
+        raise
+          (Pricklypear_lisp.Ast.Interp_error
+             (Pricklypear_lisp.Ast.Prim_error
+                ( "job-release",
+                  "need job-id-str, worker-tag-str",
+                  "bad-args" ))));
 
   (* (job-heartbeat id "worker-tag") -> bool.
 
