@@ -320,7 +320,20 @@ let cancel ~(store : Store.t) ~(id : string) ~(caller : string) ~(is_admin : boo
 
 (* ---- claim: SKIP LOCKED, mark running ---- *)
 
-let claim_due ~(store : Store.t) ?(owner : string = runner_id) () : job option =
+(** Claim one due job.
+
+    [eligible_for] is the TENANT SCOPE of the claim, and it is the only place
+    scope has to be decided: claiming is the single step that CHOOSES a row.
+    [None] = unrestricted (the in-image runner, and verified admins);
+    [Some uname] = only rows [submitted_by] that user.
+
+    Note this needs no new column: [submitted_by] is pinned at submit
+    (Jobs.submit) from the authenticated caller, so it already IS the owner of
+    the work. Self-claim is not an escalation — submitting a job already means
+    "eval this fn on my branch as me" — while claiming ANOTHER user's job
+    would be, which is why that stays admin-only. *)
+let claim_due ~(store : Store.t) ?(owner : string = runner_id)
+    ?(eligible_for = (None : string option)) () : job option =
   match pg_conn store with
   | None -> None
   | Some _ ->
@@ -336,24 +349,33 @@ let claim_due ~(store : Store.t) ?(owner : string = runner_id) () : job option =
       match pg_conn store with
       | None -> None
       | Some conn ->
+        (* The eligibility predicate lives INSIDE the subquery, not on the
+           UPDATE: filtering after the LIMIT 1 would let an ineligible row
+           occupy the single slot and starve the claimant forever. *)
+        let scope_sql, scope_params =
+          match eligible_for with
+          | Some uname -> ("AND submitted_by = $4", [ Pgx.Value.of_string uname ])
+          | None -> ("", [])
+        in
         let sql =
           Printf.sprintf
             "UPDATE jobs SET status = 'running', runner_id = $1, \
              attempts = attempts + 1, lease_heartbeat_at = $2, \
              lease_deadline = $3 \
              WHERE id = (SELECT id FROM jobs WHERE status = 'pending' \
-                         AND run_at <= $2 ORDER BY run_at, id \
+                         AND run_at <= $2 %s ORDER BY run_at, id \
                          FOR UPDATE SKIP LOCKED LIMIT 1) \
              RETURNING %s"
-            select_cols
+            scope_sql select_cols
         in
         let rows =
           Store_db.exec conn
             ~params:
-              [ Pgx.Value.of_string owner
-              ; Pgx.Value.of_int64 now_ms
-              ; Pgx.Value.of_int64 lease_until
-              ]
+              ([ Pgx.Value.of_string owner
+               ; Pgx.Value.of_int64 now_ms
+               ; Pgx.Value.of_int64 lease_until
+               ]
+              @ scope_params)
             sql
         in
         (match rows with

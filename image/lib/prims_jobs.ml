@@ -169,20 +169,27 @@ let register (t : t) (tbl : Primitives.t) : unit =
      exercise it was the in-image runner, whose id was baked into
      Jobs.runner_id. These three prims are the missing verb.
 
-     GATE — verified admin, not the session flag. A claimant picks up work
-     submitted by ANY user and the runner then evals that job's fn on the job's
-     branch, so "may claim" is equivalent to "may execute arbitrary submitted
-     code across tenants". t.is_admin is exactly the wrong authority to trust
-     here: on prod the SHARED BOOT session derives is_admin from
-     username="admin", which is the situation is_verified_admin was written
-     for. Fail closed when the row is missing.
+     GATE — SELF OR VERIFIED ADMIN. Claiming picks up work submitted by ANY
+     user, and the runner then evals that job's fn on the job's branch, so
+     "may claim WHOSE work" is really "may execute whose submitted code".
+     That is the whole eligibility question, and it needs NO new column:
+     jobs.submitted_by is pinned at submit from the authenticated caller, so
+     it already names the owner of the work.
 
-     OPEN (recorded, not decided here): this makes a worker a
-     cross-tenant privilege, so the only workers today are admin
-     ones. Scoping eligibility — "this lens may claim only its own
-     owner's jobs" — needs an eligibility column on the row and is
-     the design question left open in the chapter. Admin-gating is
-     the conservative floor, not the intended ceiling. *)
+       - non-admin ⇒ eligible only for their OWN rows (Some caller).
+         Self-claim is not an escalation: submitting a job already means
+         "eval this fn on my branch as me". This is what lets an ordinary
+         user's lens worker drain their own queue — the intended ceiling,
+         not a concession.
+       - verified admin ⇒ unrestricted (None), because that is exactly the
+         cross-tenant authority the admin check already grants.
+
+     is_verified_admin is not the session flag on purpose: on prod the SHARED
+     BOOT session derives is_admin from username="admin", which is the
+     situation it was written for. Fail closed when the row is missing.
+
+     The scope is enforced INSIDE claim_due's SELECT (see the note there) so
+     an ineligible row cannot occupy the LIMIT 1 slot and starve the worker. *)
   let worker_owner (tag : string) : string =
     (* Owner id is derived from the AUTHENTICATED caller plus the worker's own
        tag: the image must not accept a self-declared identity, or a worker
@@ -193,12 +200,18 @@ let register (t : t) (tbl : Primitives.t) : unit =
     Jobs.external_owner (Printf.sprintf "%s-%s" (job_caller ()) tag)
   in
   let require_worker ~(op : string) : unit =
+    (* Anonymous denial only. Heartbeat and finish need no further gate: both
+       are lease CASes keyed on the DERIVED owner id below, so a caller can
+       only ever touch a row they already hold. *)
     if job_caller () = "anonymous" then Prims_db_common.deny_anon op
-    else if not (Prims_db_common.is_verified_admin ~t ()) then
-      raise
-        (Pricklypear_lisp.Ast.Interp_error
-           (Pricklypear_lisp.Ast.User_error
-              (op ^ ": denied: worker claim requires verified admin", "denied")))
+  in
+  (* The tenant scope of ONE claim. [None] = unrestricted. This is read fresh
+     per call, never cached: the DB row is what decides, so a demotion lands
+     on the next claim rather than at the next restart. *)
+  let claim_scope ~(op : string) : string option =
+    require_worker ~op;
+    if Prims_db_common.is_verified_admin ~t () then None
+    else Some (job_caller ())
   in
   let as_json (v : Pricklypear_lisp.Ast.value) : string =
     match v with
@@ -211,8 +224,11 @@ let register (t : t) (tbl : Primitives.t) : unit =
     (fun args ->
       match args with
       | [ Pricklypear_lisp.Ast.VStr tag ] ->
-        require_worker ~op:"claim-job";
-        (match Jobs.claim_due ~store:t.store ~owner:(worker_owner tag) () with
+        let eligible_for = claim_scope ~op:"claim-job" in
+        (match
+           Jobs.claim_due ~store:t.store ~owner:(worker_owner tag) ~eligible_for
+             ()
+         with
          | Some j -> Jobs.job_to_value j
          | None -> Pricklypear_lisp.Ast.VNil)
       | _ ->

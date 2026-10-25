@@ -206,12 +206,36 @@
         the retry budget is a property of the ROW. A worker able to
         pass its own budget could retry a poisoned job forever.
 
-        OPEN (recorded, not decided here): claim requires a
-        verified admin, which makes a worker a cross-tenant
-        privilege. Per-owner eligibility ("this lens may claim only
-        its own owner's jobs") needs an eligibility column on the
-        row. Admin-gating is the conservative floor, not the
-        intended ceiling.
+        ELIGIBILITY — SELF OR VERIFIED ADMIN (no new column).
+        Claiming picks up work and the worker then evals that
+        job's fn on the job's branch, so the real question is
+        "may execute WHOSE submitted code". jobs.submitted_by is
+        pinned at submit from the authenticated caller, so the row
+        already names the owner of the work — an eligibility column
+        would be a second copy of a fact the row states once, free
+        to drift from it.
+
+          - non-admin ⇒ eligible only for their OWN rows. This is
+            not an escalation: submitting a job already means "eval
+            this fn on my branch as me". It is what makes an
+            ordinary user's lens worker able to drain that user's
+            queue, which is the intended shape.
+          - verified admin ⇒ unrestricted, the same cross-tenant
+            authority the admin check already carries.
+
+        The scope MUST be enforced inside the claim's SELECT, not
+        as a WHERE on the outer UPDATE: filtering after LIMIT 1
+        lets one ineligible older row occupy the only slot and
+        starve every worker forever. There is a test that fails
+        loudly if this is ever moved (runner, "claim skips
+        ineligible older rows").
+
+        Verified-admin, not the session flag, deliberately: on
+        prod the SHARED BOOT session derives is_admin from
+        username="admin", which is the exact situation
+        is_verified_admin exists for. The DB row decides, read
+        fresh per claim, so a demotion takes effect on the next
+        claim rather than at the next restart.
 
         =========================================================
         THE RUNNER (host side)
@@ -430,6 +454,7 @@
     (test "image/test: jobs_test.ml runner — EXTERNAL CLAIMANT (worker prims): a distinct owner can claim a due row without the in-image runner, and each lease is confined (a foreign owner cannot renew or finish it, both CAS writes report their verdict); owner ids are normalized into the ext- namespace and no tag can spell a boot-<host># pid id, so preempt_dead_host_leases leaves remote workers to TTL-only recovery; the retry budget stays row-derived when no max_attempts argument is passed")
         (test "job budget: a job stepping past 100k (long counter loop) completes done, does not die budget-exceeded - the same loop on the request path still budget-exceeds")
     (smoke "submit a job that sleeps, watch status pending→running→done with result via (job-status)")
+    (smoke "a non-admin worker claims its own submitted job and nothing else; one foreign older row cannot starve it (claim skips ineligible older rows)")
     (smoke "submit a job whose fn raises → attempts increments, retry, eventual dead")
     (smoke "restart image mid-job → expired-lease row recovered per attempts rule; a live row on another host is left alone")))
 
