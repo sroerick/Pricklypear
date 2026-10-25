@@ -384,6 +384,45 @@
         ineligible automatically. A curated allowlist of package
         names would rot the first time someone edits a body.
 
+        THE SHIPPED EXTERNAL WORKER (pp-remote --work-loop).
+        remote/lib/job_worker.ml is the client loop the protocol
+        above was designed for: it claims, decides, and either
+        runs the body locally or hands it back.
+
+        TWO EVAL PATHS, and collapsing them breaks one half or
+        the other. The protocol verbs are register_server_only,
+        so /api/prim REFUSES them — Primitives.dispatch is the
+        only reader of that flag, and it is wired only to that
+        route. They therefore travel as WHOLE EXPRESSIONS over
+        /api/eval. The job BODY travels through the client's
+        hybrid placement, so its defs materialize locally and its
+        prims proxy — which is the entire reason to run it on the
+        client rather than posting it wholesale. (Note the precise
+        meaning of the marking: it stops a proxy rim from
+        FORWARDING the prim, not a guest from reaching it. Guest
+        reach is bounded by eligibility, not registration.)
+
+        CLAIM IS BRANCH-SCOPED, and not optionally. The in-image
+        runner evaluates under a synthetic context pinned to
+        job.branch; the client evaluates under the branch it is
+        CONNECTED to and cannot retarget, because there is no
+        branch-scoped eval prim — only checkout, which mutates
+        shared session state. A worker handed another branch's row
+        would resolve fn against the wrong tree and fail for a
+        reason unrelated to the job.
+
+        DECLINE IS release, NEVER finish. A body carrying Txn/
+        Branch effects, or a def that does not resolve locally, is
+        handed back with the attempt REFUNDED: nothing ran, so
+        nothing is owed to the retry budget. Releasing leaves
+        run_at untouched, so the row is immediately claimable by
+        the image runner — the image taking a Txn job a lens
+        worker declined is the intended handoff, not a fallback.
+        The gate is deliberately conservative in the same
+        direction: an unrunnable job handed back costs one claim
+        cycle, while a wrongly-run one stores a WRONG RESULT that
+        looks authoritative.
+
         =========================================================
         STEP CHECKPOINTS (the DBOS idea, Nopales-shaped)
         =========================================================
