@@ -1145,6 +1145,12 @@ let test_filmstrip_file_issue ~rt () =
     (has "/issues" hxvals && has "route" hxvals);
   Alcotest.(check bool) "rail: file-issue posts /filmstrip/open" true
     (has "hx-post=\"/filmstrip/open\"" rail);
+    (* card c0ad9354: the strip wraps instead of clipping -- a full
+       railtabs row must never push the file-issue button off the rail
+       (#fs-rail clips overflow-x). The wrap rule rides filmstrip/css. *)
+    Alcotest.(check bool) "rail css: railtabs strip wraps, never clips" true
+      (has ".fs-railtabs{flex-wrap:wrap"
+             (eval_str ~what:"filmstrip css" {|(css/render (filmstrip/css))|}));
   (* hyper/expect: stub /issues, then POST /filmstrip/open through the
      real route machinery; the OOB fragment must carry the opened pane
      rendering the issues face. *)
