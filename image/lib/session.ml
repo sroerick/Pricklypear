@@ -2350,6 +2350,59 @@ let set_route (t : t) ~(route : string) ~(handler : string)
   in
   ()
 
+(* card b851a9a0 ("[ops] handler: unbound: stream/drop-n"): a parked
+   session's env can silently lose a package binding while the store still
+   has it — the 2026-10-18 load_skips self-heal only runs inside
+   load-library / reseed-package, and the software factory no longer wraps
+   calls in load-library (cddd0a9). Every request through the affected
+   handler chain then dies "unbound: <def>" and auto-files a reliability
+   incident while the store is fine. Heal at dispatch: when a handler body
+   dies Unbound_var for a name the env genuinely lacks, re-bind that def —
+   from the cached body registry first (no DB), else one chain-row fetch —
+   and retry the handler once. Names the store does not know are
+   negatively cached per (branch, name): a typo stays cheap and keeps
+   surfacing on every touch. *)
+let heal_miss_cache : (string * string, unit) Hashtbl.t = Hashtbl.create 16
+
+let heal_unbound_binding (t : t) (env : Pricklypear_lisp.Ast.env)
+    (name : string) : bool =
+  let kernel = List.exists (fun (n, _) -> n = name) t.kernel_catalog in
+  let bound =
+    Pricklypear_lisp.Env.bound_raw env name
+    || Pricklypear_lisp.Env.bound_raw t.eval_state.env name in
+  if kernel || bound then false
+  else
+    let rebind body =
+      let force _env' expr' = force_thunk_body t expr' in
+      Pricklypear_lisp.Env.define_thunk env name ~force body;
+      Pricklypear_lisp.Env.define_thunk t.eval_state.env name ~force body;
+      Hashtbl.replace t.eval_state.thunk_bodies name body
+    in
+    match Hashtbl.find_opt t.eval_state.thunk_bodies name with
+    | Some body -> rebind body; true
+    | None ->
+        let key = (t.store.Store_db.branch_id, name) in
+        if Hashtbl.mem heal_miss_cache key then false
+        else
+          let disabled_pkgs = Store.disabled_package_names t.store in
+          let name_disabled n =
+            List.exists (fun d ->
+                n = d || String.starts_with ~prefix:(d ^ "/") n) disabled_pkgs in
+          match Store.lookup_function_pkg t.store name with
+          | Some (body_json, pkg)
+            when (match pkg with
+                  | Some p -> not (List.mem p disabled_pkgs)
+                  | None -> true)
+                 && not (name_disabled name) ->
+              (match Pricklypear_lisp.Ast.expr_of_body_json body_json with
+               | Some body -> rebind body; true
+               | None -> Hashtbl.replace heal_miss_cache key (); false)
+          | _ ->
+              if Hashtbl.length heal_miss_cache > 4096 then
+                Hashtbl.reset heal_miss_cache;
+              Hashtbl.replace heal_miss_cache key ();
+              false
+
 (** Result of invoking a route handler. Errors keep the real message
     (e.g. "budget exceeded") so HTTP can show it — never mask as bare None. *)
 type handler_call =
@@ -2398,43 +2451,59 @@ let call_handler (t : t) ?request (handler_name : string)
           t.routes false
       in
       let public_gate_result = ref (Ok ()) in
-      let run () =
-        (try
-        let v =
-                 (* Eval in the SAME env the lookup resolved against (the
-                    per-request snapshot, image.per-request-context): a
-                    concurrent rehydrate can swap t.eval_state.env to
-                    system/main mid-request, and evaluating the found handler
-                    in the live env then dies "unbound: <handler>" — the
-                    "[ops] handler: unbound: marked" incident class. *)
-                 eval_string_rim t ~env ("(" ^ handler_name ^ ")")
-               in
-               (Handler_ok v)
-    with exn ->
-      let msg = pp_interp_exn exn in
-             Ops_incidents.emit_and_maybe_file t
-               ~level:Ops_log.Error ~component:"handler"
-               ~file:(not (Ops_incidents.is_expected_runtime_error exn))
-               ~context:[("handler", handler_name)]
-               msg;
-             (* i-1787971008: the CLIENT-facing message must not carry raw
-                exception text. Controlled surface (Interp_error / Reader
-                _error — the interpreter's own error values, including
-                handler-deliberate (error "...") prims) passes through so
-                handler UX keeps its messages. Everything else (PG/pgx
-                errors, Match_failure, Nopales exceptions from OCaml
-                land) is an UNCONTROLLED exn: full detail stays in the
-                ops incident above; the client gets a generic line. The
-                raw-exn 500 path in http.ml is already generic — this
-                closes the same leak for the Handler_error render sites. *)
-             let client_msg =
-               match exn with
-               | Pricklypear_lisp.Ast.Interp_error _
-               | Pricklypear_lisp.Reader.Reader_error _ -> msg
-               | _ -> "handler error (correlated in the ops log)"
-               
-             in
-             (Handler_error client_msg))
+        let run () =
+          let eval_handler () =
+            (* Eval in the SAME env the lookup resolved against (the
+               per-request snapshot, image.per-request-context): a
+               concurrent rehydrate can swap t.eval_state.env to
+               system/main mid-request, and evaluating the found handler
+               in the live env then dies "unbound: <handler>" — the
+               "[ops] handler: unbound: marked" incident class. *)
+            eval_string_rim t ~env ("(" ^ handler_name ^ ")")
+          in
+          let handler_error exn =
+            let msg = pp_interp_exn exn in
+            Ops_incidents.emit_and_maybe_file t
+              ~level:Ops_log.Error ~component:"handler"
+              ~file:(not (Ops_incidents.is_expected_runtime_error exn))
+              ~context:[("handler", handler_name)]
+              msg;
+            (* i-1787971008: the CLIENT-facing message must not carry raw
+               exception text. Controlled surface (Interp_error / Reader
+               _error — the interpreter's own error values, including
+               handler-deliberate (error "...") prims) passes through so
+               handler UX keeps its messages. Everything else (PG/pgx
+               errors, Match_failure, Nopales exceptions from OCaml
+               land) is an UNCONTROLLED exn: full detail stays in the
+               ops incident above; the client gets a generic line. The
+               raw-exn 500 path in http.ml is already generic — this
+               closes the same leak for the Handler_error render sites. *)
+            let client_msg =
+              match exn with
+              | Pricklypear_lisp.Ast.Interp_error _
+              | Pricklypear_lisp.Reader.Reader_error _ -> msg
+              | _ -> "handler error (correlated in the ops log)"
+            in
+            (Handler_error client_msg)
+          in
+          (try Handler_ok (eval_handler ())
+           with
+           | Pricklypear_lisp.Ast.Interp_error
+               (Pricklypear_lisp.Ast.Unbound_var miss) as exn ->
+               (* card b851a9a0 ("[ops] handler: unbound: stream/drop-n"):
+                  a lost package binding heals from the cached body
+                  registry / the branch chain and the handler retries
+                  ONCE. A name the store does not know stays on the same
+                  precise error path — no loop, no masking. *)
+               if heal_unbound_binding t env miss then begin
+                 Ops_incidents.emit_and_maybe_file t
+                   ~level:Ops_log.Warn ~component:"handler" ~file:false
+                   ~context:[("handler", handler_name); ("rebound", miss)]
+                   ("unbound " ^ miss ^ " re-bound from the branch chain; handler retried");
+                 (try Handler_ok (eval_handler ()) with exn -> handler_error exn)
+               end
+               else handler_error exn
+           | exn -> handler_error exn)
       in
       if is_public_handler () then begin
         public_gate_result :=

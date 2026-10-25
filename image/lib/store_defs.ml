@@ -59,6 +59,40 @@ let lookup_function (t : Store_db.t) (name : string)
   : (string * string * string option) option =
   lookup_function_at t ~branch_id:t.branch_id name
 
+(** card b851a9a0: single-def chain lookup WITH the package column — the
+    dispatch-time unbound-binding heal fetches exactly one (body, package)
+    row instead of the whole visible chain, so healing a lost binding (or
+    establishing that a typo is not a def) costs one indexed read. Same
+    override semantics as [lookup_function_at]: closest ancestor wins;
+    None on a miss or with no DB configured (the no-DB arm). *)
+let lookup_function_pkg (t : Store_db.t) (name : string)
+  : (string * string option) option =
+  match t.conn with
+  | None -> None
+  | Some conn ->
+      (try
+         let sql =
+           Store_common.chain_sql ("SELECT fd.body, fd.package FROM " ^ Store_common.fn_rel () ^ " fd " ^
+             "JOIN chain ON fd.branch_id = chain.id " ^
+             "WHERE fd.name = $2 " ^
+             "ORDER BY chain.depth ASC LIMIT 1") in
+         let rows =
+           Store_db.exec conn
+             ~params:[ Pgx.Value.of_string t.branch_id;
+                       Pgx.Value.of_string name ]
+             sql in
+         (match rows with
+          | [] -> None
+          | row :: _ ->
+              (match row with
+               | [ body_cell; pkg_cell ] ->
+                   (match Pgx.Value.to_string body_cell with
+                    | Some body_str ->
+                        Some (body_str, Pgx.Value.to_string pkg_cell)
+                    | None -> None)
+               | _ -> None))
+      with exn -> Store_db.reraise ~op:"lookup_function_pkg" exn)
+
 (* List all function names visible to this branch (via the same
    recursive-CTE override walk). Used at session-make time to load
    persisted definitions into the env. *)
