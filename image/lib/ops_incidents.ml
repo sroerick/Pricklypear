@@ -6,6 +6,50 @@ open Pricklypear_lisp.Ast
 
 let type_name = "ops-incident"
 
+(** FIELDS the type DECLARES (2026-10-26).
+
+    THE BUG THIS FIXES. [type_name] was never declared in [type_defs], so
+    every [Crud.create] on it was rejected by the one-tree declared-type
+    write gate ("undeclared type"), and the result was discarded by a bare
+    [let _ =]. Nothing surfaced: the incident row never landed, so
+    [find_open_incident] always answered [None], so EVERY occurrence filed a
+    fresh [ops] TODO card instead of bumping a count. Evidence: [ops-incident]
+    rows stop dead at 2026-09-25 (the day the gate landed) while [ops] todo
+    cards start the same day and reach 57; 299 incident rows carry only 12
+    distinct fingerprints, one of them 264 deep.
+
+    WHY THIS SET. [Tree_store.validate_fields] rejects a write MISSING a
+    declared field but tolerates EXTRA ones, so the declaration is the
+    INTERSECTION of what every write path always supplies — the 12 below sit
+    in both [record_event] and [file_security_incident]. The extras stay
+    undeclared on purpose: [context] is written only by [record_event], and
+    [kind]/[actor] only by security, so declaring them would reject the other
+    path. Declaring a type is also load-bearing for form UI, so keep this list
+    honest if a field becomes universal. *)
+let declared_fields =
+  [ "fingerprint"; "level"; "severity"; "component"; "count"; "first_seen"
+  ; "last_seen"; "status"; "note_slug"; "todo_id"; "sample_msg"
+  ; "ai_enriched" ]
+
+(** Declare the incident type if this branch has never seen it. Idempotent:
+    a no-op once declared, and an upsert if an ancestor already declared it.
+    Self-healing on purpose — the writer here is the IMAGE, not a user
+    session, and there is no boot step that seeds this type (unlike
+    todo-comment/todo-event, which declare lazily from their own libs).
+
+    Piggybacking on the incident-filing path is what keeps this from
+    regressing silently: if the declaration is ever lost by a reseed, the next
+    filed incident re-declares it instead of failing invisibly for a month.
+    A failure here must never recurse into [record_event] — [Crud.deftype] is
+    called directly (no logging prim), and the caller wraps this in [try]. *)
+let ensure_type ~(store : Store.t) : unit =
+  match Store.lookup_type_fields store ~name:type_name with
+  | None ->
+      ignore
+        (Crud.deftype store ~author:"ops"
+           ~args:(VStr type_name :: List.map (fun f -> VStr f) declared_fields))
+  | Some _ -> ()
+
 let iso_now () =
   let tm = Unix.gmtime (Unix.gettimeofday ()) in
   Printf.sprintf "%04d-%02d-%02dT%02d:%02d:%02dZ"
@@ -128,6 +172,8 @@ let file_security_incident ~(store : Store.t) ~(fingerprint : string)
     ~(kind : string) ~(actor : string) ~(title : string)
     ~(count0 : int) : string =
   let now = iso_now () in
+  (* Same self-heal as record_event: a security knock must dedupe too. *)
+  (try ensure_type ~store with _ -> ());
   match find_open_incident store ~fingerprint with
   | Some (id, fields) ->
       let count = json_get_int fields "count" 1 + count0 in
@@ -147,8 +193,7 @@ let file_security_incident ~(store : Store.t) ~(fingerprint : string)
       in
       let _ = Crud.update store ~type_name ~id ~fields_json in
       id
-  | None ->
-      let sfp = short_fp fingerprint in
+  | None ->      let sfp = short_fp fingerprint in
       let fields_json =
         Yojson.Safe.to_string
           (`Assoc
@@ -178,6 +223,9 @@ let record_event (session : Session_types.t) (ev : Ops_log.event)
   | Ops_log.Error | Ops_log.Fatal ->
       Ops_stats.note_error ~fatal:(ev.level = Ops_log.Fatal);
       let store = session.store in
+      (* Self-heal the type declaration BEFORE any row write. Wrapped so a
+         failure to declare can never turn into a recursive incident. *)
+      (try ensure_type ~store with _ -> ());
       let now = iso_now () in
         let ctx_str =
           if ev.context = [] then "(none)"
@@ -250,9 +298,27 @@ let record_event (session : Session_types.t) (ev : Ops_log.event)
                   ; ("ai_enriched", `String "false")
                   ])
            in
-           let _ =
+           let created =
              Crud.create store ~type_name ~fields_json ~author:"ops"
            in
+           (* NEVER discard this result. The reject used to be swallowed by a
+              bare [let _ =], which is why an undeclared-type gate could make
+              every incident write a no-op for a MONTH while the [ops] TODO
+              cards piled up with no dedupe. warn (not error) so a failure
+              here cannot recurse into record_event. *)
+           (match created with
+            | VStr id when String.length id = 36 -> ()
+            | other ->
+                ignore
+                  (Ops_log.warn ~component:"ops"
+                     (Printf.sprintf
+                        "incident row NOT stored (fp=%s): %s. The TODO was filed \
+                         but its incident row is missing, so the NEXT occurrence \
+                         files a duplicate card instead of bumping a count"
+                        sfp
+                        (match other with
+                         | VStr s -> s
+                         | _ -> "non-uuid result"))));
            ignore
              (Ops_log.info ~component:"ops"
                 ("filed incident " ^ sfp
