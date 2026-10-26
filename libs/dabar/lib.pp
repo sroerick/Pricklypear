@@ -235,9 +235,15 @@
           (if
             (filmstrip/shell-user?)
             (filmstrip/page-with-open (dabar/current-url))
+            ;; ONE container in BOTH branches (card 508335a4): the
+            ;; classic page must carry #dabar-panel too, or the menu's
+            ;; first hx-get has no target to resolve and nests the
+            ;; panel inside the trigger before any fragment arrives.
             (html/page
               (list
-                (dabar/panel-for-request))))))))
+                (html/div
+                  (html/attr "id" "dabar-panel")
+                    (dabar/panel-for-request)))))))))
 
 (define dabar/panel
   (lambda
