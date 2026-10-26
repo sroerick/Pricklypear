@@ -1533,12 +1533,16 @@
 ;; ops incident (card bf2d6e46, 2026-10-18): a habitat /todos dispatch
 ;; called todo/item/for-list-from, which no branch bound (no caller in
 ;; git; the call site is store content on another identity's branch).
-;; Same contract as todo/item/for-list; boot seed re-binds the name
-;; additively on system/main so the call site resolves chain-wide.
+;; Same contract as todo/item/for-list; the boot seed upserts this define
+;; onto system/main so the call site resolves chain-wide.
 (define todo/item/for-list-from
   (lambda
     (list-id)
-    (todo/item/for-list list-id)))
+    (todo/item/for-list list-id))
+  "Rows of one list: same contract as todo/item/for-list (list-id is a list
+   id; an item with an empty list field belongs to the Inbox). Exists as a
+   NAMED alias so store-side callers that reach for this name resolve
+   chain-wide from system/main. Keep it 1-arg.")
 
 (define todo/item/for-user
   (lambda
