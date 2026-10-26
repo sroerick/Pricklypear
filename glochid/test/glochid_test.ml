@@ -1184,8 +1184,11 @@ let test_filmstrip_file_issue ~rt () =
       (match Runtime.eval_string ~rt {|(hyper/expect pg ".fs-dialog-title" "file an issue")|} with
        | Ast.VBool b -> b
        | other -> Alcotest.fail ("expect: " ^ Reader.pp_value other));
+    (* glochid registers its own /filmstrip shell (glochid/lib/surface.ml);
+       the habitat filmstrip shell is the lib composition this card changes,
+       and it is the one that carries the rail affordance + #fs-layers sink. *)
     ignore (Runtime.eval_string ~rt
-      {|(define shell (soup/parse (route/dispatch (route/lookup "/filmstrip") "GET" "/filmstrip" (list) (list (cons "hx-request" "true")))))|});
+      {|(define shell (soup/parse (render-html (filmstrip/shell-html (list) (list) 0))))|});
     ignore (Runtime.eval_string ~rt
       {|(define pg2 (hyper/click shell "#fs-file-issue" (list (cons "route" "/issues") (cons "title" "file an issue"))))|});
     Alcotest.(check bool) "hyper: file-issue click swaps the dialog into #fs-layers" true
