@@ -173,7 +173,9 @@ let test_handler_evals_in_snapshot_env () =
       | S.Handler_unbound ->
           Alcotest.fail "handler bound in the snapshot env resolved as unbound"
       | S.Handler_error msg ->
-          Alcotest.fail (Printf.sprintf "handler died after env divergence: %s" msg))
+            Alcotest.fail (Printf.sprintf "handler died after env divergence: %s" msg)
+        | S.Handler_client_error msg ->
+            Alcotest.fail ("unexpected client error: " ^ msg))
 
 (** Regression (card 0eaf31d5, "[ops] handler: unbound: todo/ensure-space"):
     the same request-snapshot divergence as d93d8292, but the unbound name
@@ -215,7 +217,9 @@ let test_handler_body_callee_evals_in_snapshot_env () =
           Alcotest.fail "handler bound in the snapshot env resolved as unbound"
       | S.Handler_error msg ->
           Alcotest.fail
-            (Printf.sprintf "body callee died after env divergence: %s" msg))
+              (Printf.sprintf "body callee died after env divergence: %s" msg)
+        | S.Handler_client_error msg ->
+            Alcotest.fail ("unexpected client error: " ^ msg))
 
 (** Regression (card 1b76bdcf, "[ops] handler: not a function: 12"):
     dispatch must not eval a handler name blind. A handler name bound
@@ -242,7 +246,9 @@ let test_handler_non_function_binding () =
   | S.Handler_ok _ ->
       Alcotest.fail "non-function binding dispatched as ok"
   | S.Handler_unbound ->
-      Alcotest.fail "bound non-function name reported unbound"
+        Alcotest.fail "bound non-function name reported unbound"
+    | S.Handler_client_error msg ->
+        Alcotest.fail ("unexpected client error: " ^ msg)
 
 (** Regression (card d189fa94, "[ops] handler: unbound: stream/page-size"):
     the d93d8292/0eaf31d5 snapshot-env discipline held only for EAGER
@@ -289,7 +295,9 @@ let test_handler_thunk_force_in_snapshot_env () =
           Alcotest.fail "thunk-bound handler resolved as unbound"
       | S.Handler_error msg ->
           Alcotest.fail
-            (Printf.sprintf "thunk force escaped the snapshot env: %s" msg))
+              (Printf.sprintf "thunk force escaped the snapshot env: %s" msg)
+        | S.Handler_client_error msg ->
+            Alcotest.fail ("unexpected client error: " ^ msg))
 
 
 (** Regression (card b851a9a0, "[ops] handler: unbound: stream/drop-n"):
@@ -319,7 +327,9 @@ let test_handler_heals_lost_package_binding () =
    | S.Handler_unbound ->
        Alcotest.fail "healable binding reported unbound"
    | S.Handler_error msg ->
-       Alcotest.fail ("heal did not recover the lost binding: " ^ msg));
+        Alcotest.fail ("heal did not recover the lost binding: " ^ msg)
+     | S.Handler_client_error msg ->
+         Alcotest.fail ("unexpected client error: " ^ msg));
   (* A name no def ever had is NOT healed: the miss cache records it and
      dispatch keeps the precise error path. Assert the heal contract
      directly, then end-to-end through dispatch — in this no-DB fixture a
@@ -340,7 +350,9 @@ let test_handler_heals_lost_package_binding () =
           go 0)
    | S.Handler_ok _ -> Alcotest.fail "typo healed into a false success"
    | S.Handler_unbound -> Alcotest.fail "typo reported unbound"
-   | exception Pricklypear_lisp.Ast.Interp_error _ -> ())
+     | S.Handler_client_error msg ->
+         Alcotest.fail ("unexpected client error: " ^ msg)
+     | exception Pricklypear_lisp.Ast.Interp_error _ -> ())
 
 (** Regression (card 6b8edbe4, "[ops] handler: unbound: stream/list-append"):
     the b851a9a0 heal treated a name bound in the session's LIVE env as
@@ -383,7 +395,9 @@ let test_handler_heals_from_live_env () =
       | S.Handler_unbound -> Alcotest.fail "snapshot handler reported unbound"
       | S.Handler_error msg ->
           Alcotest.fail
-            ("heal left the snapshot env without the callee: " ^ msg))
+              ("heal left the snapshot env without the callee: " ^ msg)
+        | S.Handler_client_error msg ->
+            Alcotest.fail ("unexpected client error: " ^ msg))
 (* Control_rim captures Eio effects, so eval-touching cases run inside
    the Eio scheduler (rls_floor_test precedent). *)
 let in_eio f = Eio_main.run (fun _ -> f ())

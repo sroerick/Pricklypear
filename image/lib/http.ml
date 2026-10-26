@@ -558,6 +558,9 @@ let launch_book_handler (env : route_env) (handler : string) : unit =
             (String.concat " " [ handler; "unbound — (load-library \"book\")" ])
       | Session.Handler_error msg ->
           text_response env.reqd ~status:`Internal_server_error
+            ~content_type:"text/plain" msg
+      | Session.Handler_client_error msg ->
+          text_response env.reqd ~status:`Bad_request
             ~content_type:"text/plain" msg)
 
 (** habitat-book.eval-examples: run-button target for nopales example
@@ -756,6 +759,18 @@ let invoke_user_route (env : route_env)
                   (chrome ~session ~title:"Route handler error"
                      [ HTML.h1 [] [ txt "Route handler error" ];
                        HTML.p [] [ txt "handler %s" handler_name ];
+                       HTML.pre [] [ txt "%s" msg ] ])
+          | Session.Handler_client_error msg ->
+              (* card fb492910: the handler raised a client-fault SQLSTATE
+                 (22P02 / 42601); the request, not the image, is wrong. *)
+              if fragment then
+                fragment_response env.reqd ~status:`Bad_request
+                  ("handler " ^ handler_name ^ ": " ^ msg)
+              else
+                html_response env.reqd ~session ~status:`Bad_request
+                  (chrome ~session ~title:"Bad request"
+                     [ HTML.h1 [] [ txt "Bad request" ];
+                       HTML.p [] [ txt "handler %s" handler_name ];
                        HTML.pre [] [ txt "%s" msg ] ]))
 
 (* Public-face user-route arm: [serve] answers both "no route bound"
@@ -929,6 +944,10 @@ let routes : route list =
                   text_response env.reqd ~status:`Internal_server_error
                     ~content_type:"text/plain" msg;
                   true
+              | Session.Handler_client_error msg ->
+                  text_response env.reqd ~status:`Bad_request
+                    ~content_type:"text/plain" msg;
+                  true
             in
             let served =
               serve_handler "book/page"
@@ -999,6 +1018,9 @@ let routes : route list =
                   "spec/book-page unbound — (load-library \"spec\")"
             | Session.Handler_error msg ->
                 text_response env.reqd ~status:`Internal_server_error
+                  ~content_type:"text/plain" msg
+            | Session.Handler_client_error msg ->
+                text_response env.reqd ~status:`Bad_request
                   ~content_type:"text/plain" msg));
     (* ---- public release face (hard-public file serving) ---- *)
     rt "book-pdf" [ `GET ] (Exact "/book.pdf")
@@ -1432,6 +1454,9 @@ let routes : route list =
                       "notes/page unbound — (load-library \"notes\")"
                 | Session.Handler_error msg ->
                     text_response env.reqd ~status:`Internal_server_error
+                      ~content_type:"text/plain" msg
+                | Session.Handler_client_error msg ->
+                    text_response env.reqd ~status:`Bad_request
                       ~content_type:"text/plain" msg)
         | _ ->
             bad_path_page env ~title:"Bad notes path"

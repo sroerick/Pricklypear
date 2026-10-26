@@ -7,6 +7,15 @@
     session or store. *)
 open Pricklypear_lisp.Ast
 
+(* A Pgx error carrying [code] — the client-fault SQLSTATEs (22P02 bad id
+   cast, 42601 unparsable cast target) are the card fb492910 class: the
+   request is malformed, not the image, so no ops incident is filed. *)
+let pgx_err code =
+  let fields =
+    { Pgx.Error_response.code; severity = "ERROR"; message = "x"; custom = [] }
+  in
+  Pgx.PostgreSQL_Error ("msg", fields)
+
 let expected = [
   ("budget exceeded is expected", `Quick, fun () ->
     Alcotest.(check bool) "budget" true
@@ -28,6 +37,14 @@ let expected = [
     Alcotest.(check bool) "type_mismatch" true
       (Pricklypear_image_lib.Ops_incidents.is_expected_runtime_error
          (Interp_error (Type_mismatch ("list", VNil)))));
+  ("22P02 invalid id cast is a client fault, not an incident", `Quick, fun () ->
+    Alcotest.(check bool) "22P02" true
+      (Pricklypear_image_lib.Ops_incidents.is_expected_runtime_error
+         (pgx_err "22P02")));
+  ("42601 unparsable cast target is a client fault, not an incident", `Quick, fun () ->
+    Alcotest.(check bool) "42601" true
+      (Pricklypear_image_lib.Ops_incidents.is_expected_runtime_error
+         (pgx_err "42601")));
 ]
 
 let still_file = [
@@ -50,6 +67,14 @@ let still_file = [
   ("non-Interp_error is filed", `Quick, fun () ->
     Alcotest.(check bool) "other" false
       (Pricklypear_image_lib.Ops_incidents.is_expected_runtime_error (Failure "boom")));
+  ("unique violation is still filed", `Quick, fun () ->
+    Alcotest.(check bool) "23505" false
+      (Pricklypear_image_lib.Ops_incidents.is_expected_runtime_error
+         (pgx_err "23505")));
+  ("serialization failure is still filed", `Quick, fun () ->
+    Alcotest.(check bool) "40001" false
+      (Pricklypear_image_lib.Ops_incidents.is_expected_runtime_error
+         (pgx_err "40001")));
 ]
 
 let () =

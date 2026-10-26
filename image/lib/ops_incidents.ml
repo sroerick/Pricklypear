@@ -328,30 +328,39 @@ let record_event (session : Session_types.t) (ev : Ops_log.event)
                 | None -> ""));
            ())
 
-(** Classify an exception as an *expected* runtime/user error that
-    should be logged but NOT filed as a reliability incident.
+  (** Classify an exception as an *expected* runtime/user error that
+      should be logged but NOT filed as a reliability incident.
 
-    Route-handler eval can raise deterministic [Interp_error] variants
-    that are the user's fault (bad input, wrong arity, runaway step
-    budget), not a reliability fault in the image. These still get
-    emitted to the ops log (stderr + ring) so they're observable, but
-    [record_event] is skipped so they don't spawn a TODO/incident row
-    for every user mistake.
+      Route-handler eval can raise deterministic [Interp_error] variants
+      that are the user's fault (bad input, wrong arity, runaway step
+      budget), not a reliability fault in the image. These still get
+      emitted to the ops log (stderr + ring) so they're observable, but
+      [record_event] is skipped so they don't spawn a TODO/incident row
+      for every user mistake.
 
-    Genuine faults — [Not_a_function], [Prim_error], [Unbound_var],
-    [Parse_error] (a seeded route shouldn't fail to parse at runtime),
-    and any non-[Interp_error] exception — are still filed. *)
-let is_expected_runtime_error (exn : exn) : bool =
-  match exn with
-  | Interp_error e ->
-      (match e with
-       | Budget_exceeded -> true
-       | User_error (_, _) -> true
-       | Arity_mismatch _ -> true
-       | Wrong_arg_count _ -> true
-       | Type_mismatch _ -> true
-       | _ -> false)
-  | _ -> false
+      The same applies to the client-fault SQLSTATEs (card fb492910): a
+      handler passing request input straight into a ::uuid / int / ::ltree
+      cast raises 22P02 (invalid_text_representation) or 42601
+      (syntax_error). The request is malformed, not the image; http.ml
+      answers 400 for both. Filing an ops incident for each probe with a
+      bad id buried the real reliability faults.
+
+      Genuine faults — [Not_a_function], [Prim_error], [Unbound_var],
+      [Parse_error] (a seeded route shouldn't fail to parse at runtime),
+      every other SQLSTATE, and any non-[Interp_error] exception — are
+      still filed. *)
+  let is_expected_runtime_error (exn : exn) : bool =
+    match exn with
+    | Interp_error e -> (
+        match e with
+        | Budget_exceeded -> true
+        | User_error (_, _) -> true
+        | Arity_mismatch _ -> true
+        | Wrong_arg_count _ -> true
+        | Type_mismatch _ -> true
+        | _ -> false)
+    | _ ->
+        Store_db.is_invalid_input_syntax exn || Store_db.is_syntax_error exn
 
 let emit_and_maybe_file (session : Session_types.t) ?(context = [])
     ?(file = true) ~(level : Ops_log.level) ~(component : string)
