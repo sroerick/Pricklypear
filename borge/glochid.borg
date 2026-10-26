@@ -148,7 +148,7 @@
   (subsection agent-loop
    (doc "The minimal agent turn loop and tool registry")
    (status partial)
-   (implements llm/lib/loop.ml llm/lib/provider.ml llm/lib/tools.ml common/lib/llm_codec.ml llm/lib/envcfg.ml llm/lib/harness.ml llm/lib/mock.ml httpc/pp_http.ml)
+    (implements llm/lib/loop.ml llm/lib/provider.ml llm/lib/tools.ml llm/lib/default_host.ml llm/test/loop_test.ml common/lib/llm_codec.ml llm/lib/envcfg.ml llm/lib/harness.ml llm/lib/mock.ml httpc/pp_http.ml)
    (verify
     (test "a mock provider emitting one tool call round-trips: tool executes, result message is appended, loop makes exactly one follow-up model call")
     (test "budget: the loop stops after a configurable max turns and reports rather than spinning")
@@ -156,13 +156,20 @@
     (smoke "openai-compat provider streams a real reply end-to-end when GLOCHID_API_KEY is set (legacy AGENT_API_KEY)"))
    (details
     (doc (|
-         HOST SEAM. loop/provider/tools live in the shared llm/ package
-         (pricklypear-llm) factored over a small [Loop.host] record
-         (tool_order, tool_entry, fire, eval_tool_body, call_prim);
-         glochid/lib/runtime.ml supplies Runtime.loop_host. The same
-         library is linked by pp-remote, which supplies Remote.loop_host
-         over the proxy rim — ONE loop, two hosts (prim-seam.borg
-         agent-loop owns the client half).
+          HOST SEAM. loop/provider/tools live in the shared llm/ package
+          (pricklypear-llm) factored over a small [Loop.host] record
+          (tool_order, tool_entry, fire, eval_tool_body, call_prim). Every
+          value crossing that seam is Yojson, so pricklypear-llm links no
+          interpreter; each host translates its own value type at the
+          adapter. glochid/lib/runtime.ml supplies Runtime.loop_host and
+          pp-remote supplies Remote.loop_host over the proxy rim (both
+          through hostkit/host_seam.ml) — ONE loop, two Nopales hosts
+          (prim-seam.borg agent-loop owns the client half).
+          llm/lib/default_host.ml is the third host: builtin read/bash
+          only, no Nopales, and llm/test/loop_test.ml drives the three
+          loop behaviours above through it. remote/test/loop_test.ml keeps
+          the proxy-rim assertions (a plugin tool's DB prim crosses the
+          wire exactly once; builtin bash makes zero crossings).
 
          SHAPE. One assistant turn = one streaming provider call. If
          the reply contains tool calls, execute them (serialized eval

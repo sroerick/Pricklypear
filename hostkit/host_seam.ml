@@ -64,7 +64,7 @@ type t = {
   (** Tool registry (builtin read/bash + Nopales register-tool
       plugins) + event handlers ((on "event" …) hooks) — the backing
       of the shared LLM turn loop's [Loop.host] seam. *)
-  tools : (string, Loop.registry_entry) Hashtbl.t;
+  tools : (string, Ast.value Loop.registry_entry) Hashtbl.t;
   mutable tool_order : string list;
   handlers : (string, (Ast.value list -> Ast.value) list ref) Hashtbl.t;
   (** Establish the host rim for an OCaml caller OUTSIDE an active
@@ -450,6 +450,25 @@ let fire (t : t) (ev : string) (payload : Ast.value list) : Ast.value list =
                    ])))
         !hs
 
+
+(** Parse a host/plugin-produced value back to host JSON. VStr is treated
+    as raw JSON first (dict prims produce JSON strings), else a plain
+    string. Lives here rather than in llm/lib/loop.ml because the loop seam
+    is Yojson-only; hosts re-export it for their callers. *)
+let rec json_of_value (v : Ast.value) : Yojson.Safe.t =
+  match v with
+  | Ast.VStr s -> (
+      try Yojson.Safe.from_string s
+      with Yojson.Json_error _ -> `String s)
+  | VInt i -> `Intlit (Int64.to_string i)
+  | VFloat f -> `Float f
+  | VBool b -> `Bool b
+  | VNil -> `Null
+  | VSymbol s -> `String s
+  | VList vs -> `List (List.map json_of_value vs)
+  | VLambda _ -> `String "<lambda>"
+  | VPrim n -> `String ("<prim " ^ n ^ ">")
+  | other -> `String (Reader.pp_value other)
 (** Run a plugin tool's closure with JSON args, containing errors into
     a {"error": ...} JSON string. *)
 let eval_tool_body (t : t) (name : string) (args_json : string) : Ast.value =
@@ -501,14 +520,45 @@ let register_builtin_tool (t : t) (name : string)
     small [Loop.host] seam — live tool order, registry lookup, event
     fire, tool-body eval, and serialized prim dispatch through
     [run_in_rim]. This is the ONLY coupling the loop has to a host. *)
+(** Host adapter for the shared agent turn loop (llm/lib/loop.ml): the
+    small [Loop.host] seam — live tool order, registry lookup, event
+    fire, tool-body eval, and serialized prim dispatch through
+    [run_in_rim]. Every value crossing into the loop is Yojson; the
+    registry entry's own [run] payload stays host-side. This is the ONLY
+    coupling the loop has to a host. *)
 let loop_host (t : t) : Loop.host =
   {
     Loop.tool_order = (fun () -> t.tool_order);
-    tool_entry = (fun name -> Hashtbl.find_opt t.tools name);
-    fire = fire t;
-    eval_tool_body = eval_tool_body t;
+    tool_entry =
+      (fun name ->
+        match Hashtbl.find_opt t.tools name with
+        | None -> None
+        | Some e -> (
+            match e.Loop.run with
+            | Ast.VPrim prim -> Some (Loop.Builtin prim)
+            | _ -> Some Loop.Plugin));
+    fire =
+      (fun ev payloads ->
+        List.map json_of_value
+          (fire t ev
+             (List.map (fun j -> Ast.VStr (Yojson.Safe.to_string j)) payloads)));
+    eval_tool_body =
+      (fun name args ->
+        json_of_value (eval_tool_body t name (Yojson.Safe.to_string args)));
     call_prim =
-      (fun name args -> t.run_in_rim (fun () -> (Hashtbl.find t.prims name) args));
+      (fun name args ->
+        let args_json = Yojson.Safe.to_string args in
+        (* Builtin bodies are host OCaml running under the rim: contain
+           their errors here so the loop only ever renders a value. *)
+        try
+          json_of_value
+            (t.run_in_rim (fun () ->
+                 (Hashtbl.find t.prims name) [ Ast.VStr args_json ]))
+        with
+        | Ast.Interp_error ie ->
+            `Assoc [ ("error", `String (Ast.pp_interp_error ie)) ]
+        | Not_found ->
+            `Assoc [ ("error", `String ("no prim named " ^ name)) ]);
   }
 
 (** Install the shared pure-prim catalog (pure/prims_pure.ml
