@@ -286,12 +286,12 @@ newest-first ordering or pagination in the scan; this buys headroom.")
    fragment, so an HX-Request GET WITHOUT partial serves the pane body
    (shell + composer) when the thread opens as a filmstrip pane.")
 
-(define chat/dm-messages-html
+  (define chat/dm-messages-html
   (lambda
     (peer)
     (let
       ((rid (chat/dm peer))
-        (xs (chat/history (chat/dm peer))))
+        (xs (chat/history rid chat/window-size)))
       (html/div
         (html/attr "id" "dm-messages")
         (if
@@ -300,7 +300,9 @@ newest-first ordering or pagination in the scan; this buys headroom.")
           (html/ul
             (html/attr "class" "chat-list")
             (html/join (list/map chat/msg-li xs)))))))
-  "Render DM message history for a peer.")
+  "Render the DM live window: the newest chat/window-size messages for a peer.
+   The read is bounded in SQL (chat/history), so this legacy list render no
+   longer pulls the whole thread; older pages come from chat/dm-older-html.")
 
 (define chat/dm-page
   (lambda
@@ -697,15 +699,19 @@ newest-first ordering or pagination in the scan; this buys headroom.")
    lookbook/elements: a captured snapshot would make lookbook/elements
    refer to itself after a reload -> cyclic thunk force).")
 
-;; ---- lookbook registration ----
-;; Every lookbook/elements definition (the lib default, layout, calendar) calls
-;; lookbook/base-elements at CALL time, so a package extends base-elements rather
-;; than redefining lookbook/elements: that gets clobbered by the next package to
-;; load. Membership-checked appends keep a reload from duplicating names.
-(define chat/lookbook-seed
-  (lookbook/base-elements)
-  "Base inventory as captured when libs/chat loads (a plain name list, never the
-   composite lookbook/elements -- capturing that binds the seam to itself).")
+  ;; ---- lookbook registration ----
+  ;; Every lookbook/elements definition (the lib default, layout, calendar) calls
+  ;; lookbook/base-elements at CALL time, so a package extends base-elements rather
+  ;; than redefining lookbook/elements: that gets clobbered by the next package to
+  ;; load. Membership-checked appends keep a reload from duplicating names.
+  (define chat/lookbook-seed
+    (list "ui/button" "ui/badge" "ui/card")
+    "The libs/lookbook seed inventory as LITERAL names, not (lookbook/base-elements).
+     A define body is a lazy recipe, so calling the seam there forces it on first
+     touch -- after libs/chat has already replaced lookbook/base-elements with the
+     chat extension, which forces this very def: cyclic thunk force, and the whole
+     inventory answers an error instead of names (proven live: (lookbook/elements)
+     -> 'cyclic thunk force'). Literal data breaks the loop.")
 
 (define chat/lookbook-add
   (lambda (names extra)
@@ -787,11 +793,11 @@ newest-first ordering or pagination in the scan; this buys headroom.")
       "\"]"))
   "Build a 2-member JSON array string for a DM room.")
 
-(define chat/messages-html
+  (define chat/messages-html
   (lambda
     ()
     (let
-      ((xs (chat/lobby)))
+      ((xs (chat/latest chat/lobby-id)))
       (html/div
         (html/attrs
           (list
@@ -807,7 +813,9 @@ newest-first ordering or pagination in the scan; this buys headroom.")
           (html/ul
             (html/attr "class" "chat-list")
             (html/join (list/map chat/msg-li xs)))))))
-  "Render lobby messages with auto-refresh htmx polling.")
+  "Render the lobby live window with auto-refresh htmx polling. Reads
+   chat/latest: only the newest chat/window-size messages, bounded in SQL, so
+   this legacy poll render never pulls the whole lobby (card 70015a74).")
 
 (define chat/msg-body
   (lambda (fields) (as-str (dict-get fields "body")))
