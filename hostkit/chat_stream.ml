@@ -36,9 +36,10 @@ let part_alist ~html ~target ~swap : Ast.value =
     plus the turn knobs. [history] is the shared conversation;
     [complete] the provider-completion function; [cfg] is read at turn
     start (the agent's model dial is a ref that POST /settings may have
-    just retargeted); [eval_repl] enables the REPL branch (a prompt
-    whose first non-space char is "(" evaluates as Nopales in the
-    shared env — no model call). *)
+    just retargeted); [eval_repl] enables the
+    REPL branch (a prompt that reads as exactly one complete Nopales
+    form evaluates in the shared env, no model call; see
+    [repl_prompt]). *)
 type t = {
   seam : Host_seam.t;
   history : Provider.message list ref;
@@ -84,12 +85,12 @@ let run ~(env : Eio_unix.Stdenv.base) (h : t) (reqd : Httpun.Reqd.t) : unit =
   let seam = h.seam in
   let body_raw = Http_kit.read_body reqd in
   let prompt = Http_kit.form_field body_raw "msg" in
-    (* REPL rule (same as the stdin REPL): a prompt that reads as one complete
-       Nopales form evaluates in the shared env — no model call. Anything else
-       is a chat body and goes to the model (see [repl_prompt]: chat prose
-       with a period or a quote must not be mistaken for code). *)
-    let trimmed = String.trim prompt in
-    let repl_expr = repl_prompt prompt in
+  (* REPL rule: a prompt that reads as exactly one complete Nopales form
+     evaluates in the shared env, no model call. Anything else is a chat
+     body and goes to the model (see [repl_prompt]: chat prose with a
+     period or a quote must not be mistaken for code). *)
+  let trimmed = String.trim prompt in
+  let repl_expr = repl_prompt prompt in
   let boundary = Printf.sprintf "pp%x%x" (Random.bits ()) (Random.bits ()) in
   let rid = Printf.sprintf "llm-%d" (Random.bits () land 0xFFFFFF) in
   let headers =
