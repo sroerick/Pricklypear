@@ -154,10 +154,11 @@ let handle_chat (env : Eio_unix.Stdenv.base) (sw : Eio.Switch.t)
       (* The model dial is a ref (POST /settings retargets the running
          loop); read at turn start, inside the producer fiber. *)
       cfg = (fun () -> !(st.cfg));
-      (* REPL rule (same as the stdin REPL): a prompt whose first
-         non-space char is ( evaluates as Nopales in the shared env —
-         no model call. Render interp errors like the stdin REPL does —
-         the OCaml default printer shows the opaque Interp_error(_). *)
+      (* REPL rule: a prompt that reads as exactly one complete Nopales
+         form evaluates in the shared env, no model call
+         (Chat_stream.repl_prompt; prose that merely opens with a paren
+         is chat). Render interp errors like the stdin REPL does, the
+         OCaml default printer shows the opaque Interp_error(_). *)
       (* turn cap: env-overridable (GLOCHID_MAX_TURNS; legacy AGENT_MAX_TURNS), engine default 40 *)
       max_turns = Config.max_turns ();
       on_msg = Some st.on_msg;
