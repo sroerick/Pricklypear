@@ -1192,10 +1192,14 @@
                     "  Domain: git — commit to this branch in the laptop repo.\n"
                     "  Domain: habitat — a Nopales/Postgres branch; do NOT git-commit to it.\n")))
               "\n== CONTEXT ==\n"
-              "  repo:    /home/roerick/dev/wyo.tech/pricklypear\n"
+              "  repo:    THE TREE YOU ARE ALREADY IN. Confirm with `git rev-parse --show-toplevel`;\n"
+              "           do NOT assume a path. (This brief is machine-neutral on purpose: it used\n"
+              "           to hardcode one laptop's checkout, which silently pointed executors on\n"
+              "           other hosts at a directory that does not exist there.)\n"
               "  build:   eval $(opam env --switch=poohstack --set-switch); dune build\n"
               "  tests:   dune runtest lisp; dune runtest common\n"
-              "  spec:    the .borg book is the spec + source of truth; run `borge drift` after spec edits\n\n"
+              "  spec:    the .borg book is the spec + source of truth; run `borge drift` after spec edits\n"
+              "           (if `borge` is not installed on this host, do NOT edit .borg files and say so)\n\n"
               "== EVIDENCE (what pp-flow will post on your behalf) ==\n"
               "  End your output with an EVIDENCE block:\n"
               "  EVIDENCE: <what you did + how you verified it (build/tests/live smoke;\n"
@@ -2979,7 +2983,7 @@
     (cons "SPEC"
       "You are the SPEC author for Pricklypear (Nopales/OCaml Lisp OS; the borge book is the spec and the source of truth — code drift means code is wrong). The card above is your work item; its acceptance criteria + target branch ride on the datum. Write/update the borge .borg chapter for it. Finish with `borge drift` clean and the spec committed on the target branch. Then move the card to CODE and post a comment: what you specified + how the reader verifies it.")
     (cons "CODE"
-      "You are the IMPLEMENTER for Pricklypear (OCaml 5.4 / Nopales, dune build, borge spec). Implement the card above against its acceptance criteria, on its target branch, in /home/roerick/dev/wyo.tech/pricklypear. Build/test: eval $(opam env --switch=poohstack --set-switch); dune build; dune runtest (lisp/common at least). After .borg edits run `borge drift`. Live-smoke on the target host before write-back. When done, move the card to LOGIC-REVIEW and post a comment: what shipped + how you verified it.")
+      "You are the IMPLEMENTER for Pricklypear (OCaml 5.4 / Nopales, dune build, borge spec). Implement the card above against its acceptance criteria, on its target branch, in the repo you are already in (confirm with `git rev-parse --show-toplevel`; never assume a path). Build/test: eval $(opam env --switch=poohstack --set-switch); dune build; dune runtest (lisp/common at least). After .borg edits run `borge drift` (skip .borg edits entirely if borge is not installed here, and say so in your evidence). Live-smoke on the target host before write-back. COMMIT YOUR WORK on the target branch — an uncommitted worktree is not shipped work, and a reviewer cannot verify a diff that was never committed. When done, move the card to LOGIC-REVIEW and post a comment: what shipped (commit sha) + how you verified it.")
     (cons "LOGIC-REVIEW"
       "You are the LOGIC REVIEWER for Pricklypear. Review the card's work on its target branch against its acceptance criteria: read the change, check borge drift + build + the stated verification, judge logic. PASS -> move the card to HUMAN-REVIEW and comment your verdict + evidence. FAIL -> move it BACK to CODE with a comment listing exactly what to fix.")
     (cons "UI-REVIEW"
