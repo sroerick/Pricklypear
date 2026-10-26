@@ -1036,9 +1036,13 @@ formals, tokens resolved through glochid/tg.")
     (append
       lb/seed-elements
       (list
-        "ui/railtab" "ui/start-entry" "ui/bubble" "ui/tool-line"
-        "ui/turn-open" "ui/think-open" "ui/tool-open" "ui/turn-error"
-            "ui/swatch" "ui/palette" "ui/file-issue" "ui/dialog")))
+          "ui/railtab" "ui/start-entry" "ui/bubble" "ui/tool-line"
+          "ui/turn-open" "ui/think-open" "ui/tool-open" "ui/turn-error"
+          "ui/swatch" "ui/palette" "ui/file-issue" "ui/dialog"
+          ;; card c7be7174: the optimistic-loader verb attrs are a declared
+          ;; element too -- the strip chrome's triggers compose it, so the
+          ;; inspector must inventory it beside the surfaces it marks.
+          "filmstrip/optimistic-attrs")))
   "Glochid's lookbook inventory: the lib seed elements + glochid's own
 shell chrome. Every entry answers a <name>/examples card; the ui rail
 root + /lookbook face read this one def.")
