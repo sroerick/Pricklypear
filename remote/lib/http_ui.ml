@@ -136,8 +136,11 @@ let handle_chat (env : Eio_unix.Stdenv.base) (sw : Eio.Switch.t)
       cfg = (fun () -> st.cfg);
       (* No REPL branch on the client: every prompt is a model turn
          (the client has no shared local env to eval into — the agent's
-         REPL-mode prompt rule is host-specific). *)
+         REPL-mode prompt rule is host-specific). [repl_known] is the
+         callability oracle that rule needs; with no eval branch there is
+         nothing to ask, so it stays None. *)
       eval_repl = None;
+      repl_known = None;
       max_turns = Loop.max_turns_default;
       (* pp-remote has no local session store (sessions live in the
          agent's .agent store); turns are not persisted here. *)

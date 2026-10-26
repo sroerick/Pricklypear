@@ -98,14 +98,18 @@ let run ~(env : Eio_unix.Stdenv.base) (h : t) (reqd : Httpun.Reqd.t) : unit =
   let body_raw = Http_kit.read_body reqd in
   let prompt = Http_kit.form_field body_raw "msg" in
   (* REPL rule: a prompt that reads as exactly one complete Nopales form
-     evaluates in the shared env, no model call. Anything else is a chat
-     body and goes to the model (see [repl_prompt]: chat prose with a
-     period or a quote must not be mistaken for code). *)
+     whose operator the host's env can call evaluates in the shared env, no
+     model call. Anything else is a chat body and goes to the model (see
+     [repl_prompt]: chat prose with a period or a quote must not be mistaken
+     for code). A host with no eval branch never enters REPL mode, and a
+     host with an eval branch but no callability oracle does not guess —
+     evaluating on "it lexed" is exactly the bounce this rule exists to
+     prevent. *)
   let trimmed = String.trim prompt in
   let repl_expr =
-    match h.repl_known with
-    | Some known -> repl_prompt ~known prompt
-    | None -> repl_prompt prompt
+    match (h.eval_repl, h.repl_known) with
+    | Some _, Some known -> repl_prompt ~known prompt
+    | Some _, None | None, _ -> false
   in
   let boundary = Printf.sprintf "pp%x%x" (Random.bits ()) (Random.bits ()) in
   let rid = Printf.sprintf "llm-%d" (Random.bits () land 0xFFFFFF) in
