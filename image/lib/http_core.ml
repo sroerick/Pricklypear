@@ -355,6 +355,9 @@ let try_ui_fn (session : Session.t) (name : string) : string option =
       | Session.Handler_error msg ->
           Printf.eprintf "[http] try_ui_fn %s: %s\n%!" name msg;
           None
+      | Session.Handler_client_error msg ->
+          Printf.eprintf "[http] try_ui_fn %s: client error: %s\n%!" name msg;
+          None
     with exn ->
       Printf.eprintf "[http] try_ui_fn %s failed: %s\n%!"
         name (Printexc.to_string exn);

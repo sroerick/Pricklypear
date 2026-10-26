@@ -2418,11 +2418,17 @@ let heal_unbound_binding (t : t) (env : Pricklypear_lisp.Ast.env)
                   false
 
 (** Result of invoking a route handler. Errors keep the real message
-    (e.g. "budget exceeded") so HTTP can show it — never mask as bare None. *)
+    (e.g. "budget exceeded") so HTTP can show it — never mask as bare None.
+    [Handler_client_error] is the client-fault arm: the handler raised a
+    Postgres SQLSTATE that means the REQUEST was malformed (22P02 bad id
+    cast, 42601 unparsable cast target, card fb492910). HTTP answers 400
+    and no ops incident is filed — same class http.ml's raw-exn arm maps
+    to 400. *)
 type handler_call =
   | Handler_ok of Pricklypear_lisp.Ast.value
   | Handler_unbound
   | Handler_error of string
+  | Handler_client_error of string
 
 (* card 1b76bdcf: dispatch surface - a name whose binding is not callable
    (VLambda | VPrim) can only fail at eval; route it to the precise-error
@@ -2475,31 +2481,47 @@ let call_handler (t : t) ?request (handler_name : string)
                "[ops] handler: unbound: marked" incident class. *)
             eval_string_rim t ~env ("(" ^ handler_name ^ ")")
           in
-          let handler_error exn =
-            let msg = pp_interp_exn exn in
-            Ops_incidents.emit_and_maybe_file t
-              ~level:Ops_log.Error ~component:"handler"
-              ~file:(not (Ops_incidents.is_expected_runtime_error exn))
-              ~context:[("handler", handler_name)]
-              msg;
-            (* i-1787971008: the CLIENT-facing message must not carry raw
-               exception text. Controlled surface (Interp_error / Reader
-               _error — the interpreter's own error values, including
-               handler-deliberate (error "...") prims) passes through so
-               handler UX keeps its messages. Everything else (PG/pgx
-               errors, Match_failure, Nopales exceptions from OCaml
-               land) is an UNCONTROLLED exn: full detail stays in the
-               ops incident above; the client gets a generic line. The
-               raw-exn 500 path in http.ml is already generic — this
-               closes the same leak for the Handler_error render sites. *)
-            let client_msg =
-              match exn with
-              | Pricklypear_lisp.Ast.Interp_error _
-              | Pricklypear_lisp.Reader.Reader_error _ -> msg
-              | _ -> "handler error (correlated in the ops log)"
+            let handler_error exn =
+              let msg = pp_interp_exn exn in
+              (* card fb492910: a handler that passes request input straight
+                 into a ::uuid / int / ::ltree cast raises SQLSTATE 22P02 or
+                 42601. The client can fix that request, so it is a 400, NOT
+                 a reliability incident — the same client-fault class the
+                 raw-exn arm in http.ml already answers with 400. Logged at
+                 Info so the occurrence is still observable. *)
+              let client_fault =
+                Store_db.is_invalid_input_syntax exn
+                || Store_db.is_syntax_error exn
+              in
+              Ops_incidents.emit_and_maybe_file t
+                ~level:(if client_fault then Ops_log.Info else Ops_log.Error)
+                ~component:"handler"
+                ~file:
+                  (not
+                     (client_fault
+                     || Ops_incidents.is_expected_runtime_error exn))
+                ~context:[ ("handler", handler_name) ] msg;
+              (* i-1787971008: the CLIENT-facing message must not carry raw
+                 exception text. Controlled surface (Interp_error / Reader
+                 _error — the interpreter's own error values, including
+                 handler-deliberate (error "...") prims) passes through so
+                 handler UX keeps its messages. Everything else (PG/pgx
+                 errors, Match_failure, Nopales exceptions from OCaml
+                 land) is an UNCONTROLLED exn: full detail stays in the
+                 ops incident above; the client gets a generic line. The
+                 raw-exn 500 path in http.ml is already generic — this
+                 closes the same leak for the Handler_error render sites. *)
+              let client_msg =
+                match exn with
+                | Pricklypear_lisp.Ast.Interp_error _
+                | Pricklypear_lisp.Reader.Reader_error _ ->
+                    msg
+                | _ -> "handler error (correlated in the ops log)"
+              in
+              if client_fault then
+                Handler_client_error "invalid id or input syntax"
+              else Handler_error client_msg
             in
-            (Handler_error client_msg)
-          in
           (try Handler_ok (eval_handler ())
            with
            | Pricklypear_lisp.Ast.Interp_error
@@ -2608,7 +2630,10 @@ let () =
           Pricklypear_lisp.Ast.VStr
             (Printf.sprintf "route/dispatch: unbound handler %s" handler)
         | Handler_error msg ->
-          Pricklypear_lisp.Ast.VStr (Printf.sprintf "route/dispatch: %s" msg)))
+          Pricklypear_lisp.Ast.VStr (Printf.sprintf "route/dispatch: %s" msg)
+        | Handler_client_error msg ->
+          Pricklypear_lisp.Ast.VStr
+            (Printf.sprintf "route/dispatch: client error: %s" msg)))
 
 (* Late-bind the bumpers M4 verify-route thunk now that call_handler
    (and the env/route/request machinery it needs) exists. The report is
