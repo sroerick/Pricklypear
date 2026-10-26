@@ -3,3 +3,8 @@
  (modules host_seam_test)
  (libraries pricklypear-hostkit pricklypear-lisp pricklypear-pure-prims
             pricklypear-llm alcotest))
+
+(test
+ (name chat_stream_test)
+ (modules chat_stream_test)
+ (libraries pricklypear-hostkit pricklypear-lisp alcotest))
