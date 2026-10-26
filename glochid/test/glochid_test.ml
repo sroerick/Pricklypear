@@ -1051,6 +1051,19 @@ let test_filmstrip_optimistic ~rt () =
   in
   Alcotest.(check bool) "lookbook: optimistic-attrs card declares the element" true
     (has "filmstrip/optimistic-attrs" card);
+  (* the host inventory: the ui rail root + /lookbook face read this def *)
+  Alcotest.(check bool) "lookbook: optimistic-attrs registered in the inventory" true
+    (has "filmstrip/optimistic-attrs"
+           (eval_str ~what:"lookbook/elements" {|(json-emit (lookbook/elements))|}));
+  (match
+     Runtime.dispatch_route ~rt ~handler:"lookbook/page" ~method_:"POST"
+       ~path:"/lookbook" ~params:[ ("name", "filmstrip/optimistic-attrs") ]
+       ~headers:[ ("hx-request", "true") ] ~body:""
+   with
+   | Ast.VStr s ->
+       Alcotest.(check bool) "lookbook pane: the attrs card answers the inventory" true
+         (has "Optimistic htmx loader attrs" s)
+   | other -> Alcotest.fail ("lookbook pane: " ^ Reader.pp_value other));
   (* hyper/expect over the changed route: POST /filmstrip/open through the
      real route machinery, parse the OOB response fragment, then click the
      optimistic close verb. The full shell render exceeds the 400k eval
@@ -1819,7 +1832,7 @@ let test_lookbook ~rt () =
            {|(list/map (lambda (n) (lb/get n "open")) (glochid/ui-tree ""))|}
    with
    | Ast.VList opens ->
-          Alcotest.(check int) "ui root: lib seeds + glochid host elements + ui/file-issue + ui/dialog" 15
+           Alcotest.(check int) "ui root: lib seeds + glochid host elements + filmstrip/optimistic-attrs" 16
          (List.length opens);
        Alcotest.(check bool) "ui rows open-or-focus the /lookbook pane" true
          (List.exists
