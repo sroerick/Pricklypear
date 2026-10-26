@@ -2361,15 +2361,20 @@ let set_route (t : t) ~(route : string) ~(handler : string)
    from the cached body registry first (no DB), else one chain-row fetch —
    and retry the handler once. Names the store does not know are
    negatively cached per (branch, name): a typo stays cheap and keeps
-   surfacing on every touch. *)
+   surfacing on every touch.
+   card 6b8edbe4 ("[ops] handler: unbound: stream/list-append"): the check
+   used to treat a binding in the session's LIVE env as satisfied. The
+   handler evaluates in the per-request SNAPSHOT env (call_handler); when a
+   concurrent rehydrate/checkout swaps t.eval_state.env mid-request the two
+   records diverge, the snapshot is the older one, and a name only the live
+   env has is invisible to the eval. Heal the env the handler actually
+   evaluates in: copy the live binding over (no DB) and retry. *)
 let heal_miss_cache : (string * string, unit) Hashtbl.t = Hashtbl.create 16
 
 let heal_unbound_binding (t : t) (env : Pricklypear_lisp.Ast.env)
     (name : string) : bool =
   let kernel = List.exists (fun (n, _) -> n = name) t.kernel_catalog in
-  let bound =
-    Pricklypear_lisp.Env.bound_raw env name
-    || Pricklypear_lisp.Env.bound_raw t.eval_state.env name in
+  let bound = Pricklypear_lisp.Env.bound_raw env name in
   if kernel || bound then false
   else
     let rebind body =
@@ -2378,30 +2383,39 @@ let heal_unbound_binding (t : t) (env : Pricklypear_lisp.Ast.env)
       Pricklypear_lisp.Env.define_thunk t.eval_state.env name ~force body;
       Hashtbl.replace t.eval_state.thunk_bodies name body
     in
-    match Hashtbl.find_opt t.eval_state.thunk_bodies name with
-    | Some body -> rebind body; true
-    | None ->
-        let key = (t.store.Store_db.branch_id, name) in
-        if Hashtbl.mem heal_miss_cache key then false
-        else
-          let disabled_pkgs = Store.disabled_package_names t.store in
-          let name_disabled n =
-            List.exists (fun d ->
-                n = d || String.starts_with ~prefix:(d ^ "/") n) disabled_pkgs in
-          match Store.lookup_function_pkg t.store name with
-          | Some (body_json, pkg)
-            when (match pkg with
-                  | Some p -> not (List.mem p disabled_pkgs)
-                  | None -> true)
-                 && not (name_disabled name) ->
-              (match Pricklypear_lisp.Ast.expr_of_body_json body_json with
-               | Some body -> rebind body; true
-               | None -> Hashtbl.replace heal_miss_cache key (); false)
-          | _ ->
-              if Hashtbl.length heal_miss_cache > 4096 then
-                Hashtbl.reset heal_miss_cache;
-              Hashtbl.replace heal_miss_cache key ();
-              false
+    match Pricklypear_lisp.Env.find_raw t.eval_state.env name with
+    | Some v when env != t.eval_state.env ->
+        (* Live-env-only binding: the handler cannot see it (card
+           6b8edbe4). Copy the cell as-is — a thunk keeps its own force
+           closure, and force_thunk_env still resolves under the request
+           snapshot. *)
+        Pricklypear_lisp.Env.define env name v;
+        true
+    | _ ->
+        match Hashtbl.find_opt t.eval_state.thunk_bodies name with
+        | Some body -> rebind body; true
+        | None ->
+            let key = (t.store.Store_db.branch_id, name) in
+            if Hashtbl.mem heal_miss_cache key then false
+            else
+              let disabled_pkgs = Store.disabled_package_names t.store in
+              let name_disabled n =
+                List.exists (fun d ->
+                    n = d || String.starts_with ~prefix:(d ^ "/") n) disabled_pkgs in
+              match Store.lookup_function_pkg t.store name with
+              | Some (body_json, pkg)
+                when (match pkg with
+                      | Some p -> not (List.mem p disabled_pkgs)
+                      | None -> true)
+                     && not (name_disabled name) ->
+                  (match Pricklypear_lisp.Ast.expr_of_body_json body_json with
+                   | Some body -> rebind body; true
+                   | None -> Hashtbl.replace heal_miss_cache key (); false)
+              | _ ->
+                  if Hashtbl.length heal_miss_cache > 4096 then
+                    Hashtbl.reset heal_miss_cache;
+                  Hashtbl.replace heal_miss_cache key ();
+                  false
 
 (** Result of invoking a route handler. Errors keep the real message
     (e.g. "budget exceeded") so HTTP can show it — never mask as bare None. *)

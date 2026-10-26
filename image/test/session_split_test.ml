@@ -335,6 +335,49 @@ let test_handler_heals_lost_package_binding () =
    | S.Handler_ok _ -> Alcotest.fail "typo healed into a false success"
    | S.Handler_unbound -> Alcotest.fail "typo reported unbound"
    | exception Pricklypear_lisp.Ast.Interp_error _ -> ())
+
+(** Regression (card 6b8edbe4, "[ops] handler: unbound: stream/list-append"):
+    the b851a9a0 heal treated a name bound in the session's LIVE env as
+    satisfied. call_handler evaluates the handler in the per-request
+    SNAPSHOT env, and a concurrent rehydrate/checkout swaps
+    t.eval_state.env mid-request, so the snapshot can be the older record.
+    A name only the live env has is then invisible to the eval: /stream
+    died "unbound: stream/list-append" (its page chain reaches it through
+    stream/reverse) and filed a reliability incident. The heal must repair
+    the env the handler evaluates in by copying the live binding across. *)
+let test_handler_heals_from_live_env () =
+  let t = anon_session () in
+  let bind_thunk env name src =
+    match Pricklypear_lisp.Reader.read_one src with
+    | body ->
+        Pricklypear_lisp.Env.define_thunk env name
+          ~force:(fun _e body -> S.force_thunk_body t body) body
+    | exception exn -> Alcotest.fail (Printexc.to_string exn)
+  in
+  bind_thunk (S.env t) "stream/list-append" "(lambda (lst x) x)";
+  bind_thunk (S.env t) "stream/page"
+    "(lambda () (stream/list-append () 7))";
+  (* The per-request snapshot: the older env record a mid-request
+     rehydrate leaves behind. It holds the handler, not the callee. *)
+  let snapshot_env = Pricklypear_lisp.Env.create () in
+  (match Pricklypear_lisp.Env.find_raw (S.env t) "stream/page" with
+   | Some v -> Pricklypear_lisp.Env.define snapshot_env "stream/page" v
+   | None -> Alcotest.fail "handler binding missing from the live env");
+  let ctx =
+    Pricklypear_image_lib.Request_context.make
+      ~manifest:(S.manifest t) ~env:snapshot_env ~is_admin:false
+      ~routes:(Pricklypear_image_lib.Request_context.copy_routes (S.routes t))
+      ~source_ip:None
+  in
+  Pricklypear_image_lib.Request_context.with_current ctx (fun () ->
+      match S.call_handler t "stream/page" with
+      | S.Handler_ok v ->
+          Alcotest.(check string) "healed from the live env" "7"
+            (Pricklypear_lisp.Reader.pp_value v)
+      | S.Handler_unbound -> Alcotest.fail "snapshot handler reported unbound"
+      | S.Handler_error msg ->
+          Alcotest.fail
+            ("heal left the snapshot env without the callee: " ^ msg))
 (* Control_rim captures Eio effects, so eval-touching cases run inside
    the Eio scheduler (rls_floor_test precedent). *)
 let in_eio f = Eio_main.run (fun _ -> f ())
@@ -358,6 +401,9 @@ let () =
               (fun () -> in_eio test_handler_thunk_force_in_snapshot_env)
           ; Alcotest.test_case "handler heals a lost package binding" `Quick
               (fun () -> in_eio test_handler_heals_lost_package_binding)
+
+          ; Alcotest.test_case "handler heals a live-env-only binding" `Quick
+              (fun () -> in_eio test_handler_heals_from_live_env)
 
         ; Alcotest.test_case "boot seed re-exports" `Quick
             test_boot_seed_reexports
