@@ -1665,6 +1665,8 @@
                 (html/span
                   (html/attr "class" "todo-title")
                   (html/text title)))
+                (lookbook/html
+                  (todo/ui/assignee-badge (todo/item/assignee fields)))
               (if
                 (string-eq state "DONE")
                 (html/form
@@ -3663,11 +3665,10 @@
                                 "state"
                                 (html/attr "id" "state")
                                 (todo/state/options-for-item state id))
-                              (html/label (html/attr "for" "assignee") "Assignee")
-                              (html/select
-                                "assignee"
-                                (html/attr "id" "assignee")
-                                (todo/ui/assignee-options (todo/item/assignee fields)))
+                                (lookbook/html
+                                  (todo/ui/assignee-field
+                                    (todo/item/assignee fields)
+                                    (list-usernames)))
                               (html/label (html/attr "for" "due") "Due (YYYY-MM-DD)")
                               (html/text-input
                                 "due"
@@ -3868,20 +3869,193 @@
         (todo/item/add
           (todo/list/ensure-inbox)
           (request-param "title")))))))
-(define todo/ui/assignee-option (lambda (u sel) (html/option u u sel)))
-(define todo/ui/assignee-options (lambda
-  (cur)
-  (html/join
-    (cons
-      (html/option
-        ""
-        "(unassigned)"
-        (string-eq (as-str cur) ""))
-      (list/map
-        (lambda
-          (u)
-          (todo/ui/assignee-option u (string-eq u (as-str cur))))
-        (list-usernames))))))
+;; ---- declared assignment vocabulary (lookbook: declare, never render) ----
+;; The assignee control is a DECLARED element value (ui/elm), projected through
+;; lookbook/html at the two markup sites: the item detail form and the card row.
+;; OBITUARY (2026-10-26): the pre-card defs answered markup strings
+;; (html/option + html/join), so the lookbook inspector could not see or stage
+;; the one control that makes a Board card claimable. Examples ARE the
+;; declaration: each def below has a sibling <name>/examples card and is
+;; inventoried through the lookbook seam at the end of this block.
+
+(define todo/ui/users-list
+  (lambda (users)
+    (cond
+      ((null? users) (list))
+      ((pair? users) users)
+      ((string? users)
+        (if (string-eq (as-str users) "")
+            (list)
+            (string-split (as-str users) " ")))
+      (else (list))))
+  "Normalize the users param: a real call passes the name list; the lookbook
+stages string params, so a space-separated string is accepted too (a staged
+variant answers a value, never an error).")
+
+(define todo/ui/assignee-option
+  (lambda (value label selected)
+    (ui/elm
+      "option"
+      (append
+        (list "value" (as-str value))
+        (if (string-eq (as-str selected) "")
+            (list)
+            (list "selected" "selected")))
+      (list (ui/text (as-str label)))))
+  "One assignee <option>: value, label, and `selected` as a PRESENCE flag
+(\"selected\" declares the attribute, empty declares its absence -- never
+selected=\"\").")
+
+(define todo/ui/assignee-select
+  (lambda (cur users)
+    (ui/elm
+      "select"
+      (list "name" "assignee" "id" "assignee" "class" "todo-assignee")
+      (cons
+        (todo/ui/assignee-option
+          ""
+          "(unassigned)"
+          (if (string-eq (as-str cur) "") "selected" ""))
+        (list/map
+          (lambda (u)
+            (todo/ui/assignee-option
+              u
+              u
+              (if (string-eq (as-str u) (as-str cur)) "selected" "")))
+          (todo/ui/users-list users)))))
+  "The assignee <select>: an empty option clears the claim, one option per
+user, the current assignee carrying the selected flag. Composes
+todo/ui/assignee-option.")
+
+(define todo/ui/assignee-field
+  (lambda (cur users)
+    (ui/elm
+      "div"
+      (list "class" "todo-field todo-assignee-field")
+      (list
+        (ui/elm "label" (list "for" "assignee") (list (ui/text "Assignee")))
+        (todo/ui/assignee-select cur users))))
+  "Label + select as one field: the detail form's assignee control. Composes
+todo/ui/assignee-select (reuse is a def call; the composed value nests as
+kids).")
+
+(define todo/ui/assignee-badge
+  (lambda (who)
+    (if (string-eq (as-str who) "")
+        (ui/text "")
+        (ui/elm
+          "span"
+          (list
+            "class" "todo-assignee-badge"
+            "title" (string-append "assigned to " (as-str who)))
+          (list (ui/text (string-append "@" (as-str who)))))))
+  "The card row's ownership mark: a declared span naming the claimant, or an
+empty text kid when unassigned (so a caller always projects a value).")
+
+;; ---- the examples cards: the declaration ----
+
+(define todo/ui/assignee-option/examples
+  (lambda ()
+    (lb/obj
+      (list
+        "name" "todo/ui/assignee-option"
+        "doc" "One <option> kid of the assignee select: value, label, selected as declared presence."
+        "file" "libs/todo/lib.pp"
+        "formals" (json-emit (list "value" "label" "selected"))
+        "variants"
+        (json-emit
+          (list
+            (lb/obj (list "value" "" "label" "(unassigned)" "selected" ""))
+            (lb/obj (list "value" "alice" "label" "alice" "selected" "selected"))))
+        "source"
+        "(todo/ui/assignee-option value label selected) ->\n  (ui/elm \"option\"\n    (append (list \"value\" (as-str value))\n            (if (string-eq (as-str selected) \"\")\n                (list) (list \"selected\" \"selected\")))\n    (list (ui/text (as-str label))))")))
+  "The todo/ui/assignee-option card.")
+
+(define todo/ui/assignee-select/examples
+  (lambda ()
+    (lb/obj
+      (list
+        "name" "todo/ui/assignee-select"
+        "doc" "The assignee select: clear option + one option per user, the current assignee selected."
+        "file" "libs/todo/lib.pp"
+        "formals" (json-emit (list "cur" "users"))
+        "variants"
+        (json-emit
+          (list
+            (lb/obj (list "cur" "" "users" "alice bob"))
+            (lb/obj (list "cur" "alice" "users" "alice bob"))))
+        "source"
+        "(todo/ui/assignee-select cur users) ->\n  (ui/elm \"select\"\n    (list \"name\" \"assignee\" \"id\" \"assignee\" \"class\" \"todo-assignee\")\n    (cons (todo/ui/assignee-option \"\" \"(unassigned)\" ...)\n          (list/map (lambda (u) (todo/ui/assignee-option u u ...))\n                    (todo/ui/users-list users))))")))
+  "The todo/ui/assignee-select card.")
+
+(define todo/ui/assignee-field/examples
+  (lambda ()
+    (lb/obj
+      (list
+        "name" "todo/ui/assignee-field"
+        "doc" "Label + assignee select as one field (composes the select)."
+        "file" "libs/todo/lib.pp"
+        "formals" (json-emit (list "cur" "users"))
+        "variants"
+        (json-emit
+          (list
+            (lb/obj (list "cur" "alice" "users" "alice bob"))))
+        "source"
+        "(todo/ui/assignee-field cur users) ->\n  (ui/elm \"div\" (list \"class\" \"todo-field todo-assignee-field\")\n    (list (ui/elm \"label\" (list \"for\" \"assignee\")\n            (list (ui/text \"Assignee\")))\n          (todo/ui/assignee-select cur users)))")))
+  "The todo/ui/assignee-field card.")
+
+(define todo/ui/assignee-badge/examples
+  (lambda ()
+    (lb/obj
+      (list
+        "name" "todo/ui/assignee-badge"
+        "doc" "The card row ownership mark: @user when assigned, an empty text kid when not."
+        "file" "libs/todo/lib.pp"
+        "formals" (json-emit (list "who"))
+        "variants"
+        (json-emit
+          (list
+            (lb/obj (list "who" "alice"))
+            (lb/obj (list "who" ""))))
+        "source"
+        "(todo/ui/assignee-badge who) ->\n  (if (string-eq (as-str who) \"\")\n      (ui/text \"\")\n      (ui/elm \"span\"\n        (list \"class\" \"todo-assignee-badge\"\n              \"title\" (string-append \"assigned to \" (as-str who)))\n        (list (ui/text (string-append \"@\" (as-str who))))))")))
+  "The todo/ui/assignee-badge card.")
+
+;; ---- lookbook registration ----
+;; Every lookbook/elements definition (the lib default, layout, calendar) calls
+;; lookbook/base-elements at CALL time. Todo therefore extends base-elements
+;; rather than redefining lookbook/elements: appending there would be clobbered
+;; by the next package to load (calendar seeds after todo). Membership-checked
+;; appends keep a reload from duplicating the rows.
+(define lookbook/todo-elements
+  (list
+    "todo/ui/assignee-field"
+    "todo/ui/assignee-select"
+    "todo/ui/assignee-option"
+    "todo/ui/assignee-badge")
+  "Todo's declared ui vocabulary: the assignment control and its kids.")
+
+(define lookbook/todo-seed
+  (lookbook/base-elements)
+  "The inventory this package extends: base-elements as captured at load (a
+plain name list, never the composite lookbook/elements -- capturing that
+would bind the seam to itself on a reload).")
+
+(define lookbook/add-elements
+  (lambda (names extra)
+    (list/foldl
+      (lambda (acc n)
+        (if (null? (member n acc)) (append acc (list n)) acc))
+      names
+      extra))
+  "Append the names not already present (idempotent registration).")
+
+(define lookbook/base-elements
+  (lambda ()
+    (lookbook/add-elements lookbook/todo-seed lookbook/todo-elements))
+  "The lib seed inventory extended with todo's declared vocabulary. Every
+lookbook/elements definition appends to this name at call time, so the todo
+registration holds whichever package's definition wins the load order.")
 
 
 ;; ---- todo-shared-spaces: T3/T5/T7 chain (note-todos, cross-identity mirror) ----
