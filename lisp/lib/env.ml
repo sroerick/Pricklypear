@@ -125,13 +125,20 @@ let rec lookup (e : env) (name : string) : value option =
        | None -> None)
 
 
-(** [bound_raw e name] is true when [name] is present in [e] or any
+(** [find_raw e name] returns the binding cell for [name] in [e] or any
     ancestor WITHOUT forcing VThunk cells. card b851a9a0: the dispatch-time
     unbound-binding heal must distinguish a genuinely missing binding from
-    a bound thunk whose force raised — the latter surfaces, never re-binds. *)
-let rec bound_raw (e : env) (name : string) : bool =
-  Hashtbl.mem e.bindings name
-  || (match e.parent with Some p -> bound_raw p name | None -> false)
+    a bound thunk whose force raised — the latter surfaces, never re-binds.
+    card 6b8edbe4: it also lets a caller holding one env COPY a binding into
+    another (the per-request snapshot a handler evaluates in vs the
+    session's live env). *)
+let rec find_raw (e : env) (name : string) : value option =
+  match Hashtbl.find_opt e.bindings name with
+  | Some v -> Some v
+  | None -> (match e.parent with Some p -> find_raw p name | None -> None)
+
+let bound_raw (e : env) (name : string) : bool =
+  match find_raw e name with Some _ -> true | None -> false
 (** Bind [name] to [v] in [e], replacing any existing binding locally
     (does not touch parents). Mirrors the image-layer [(define ...)]
     which in the IMAGE also persists to the store. *)
