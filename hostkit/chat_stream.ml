@@ -60,6 +60,22 @@ type t = {
   max_turns : int;
 }
 
+(** [repl_prompt s] is true when [s] is REPL input: it starts with "(" AND
+    reads as exactly ONE complete Nopales form. The first character alone is
+    not enough. Prose that merely opens with a parenthesis ("(note: ...)")
+    used to be forced through the reader, which bounced on the first sentence
+    period or on an unbalanced quote with a bogus "dotted-pair notation (.) is
+    not supported" error instead of reaching the model. A chat body is never
+    code just because it starts with a paren; it is code when it reads cleanly
+    as one form. *)
+let repl_prompt (s : string) : bool =
+  let s = String.trim s in
+  String.length s > 0
+  && s.[0] = '('
+  &&
+  match (try Some (Reader.read_all s) with _ -> None) with
+  | Some [ _ ] -> true
+  | _ -> false
 (** Run one streamed turn for [reqd] (POST /chat, form field "msg").
     Serialization is the CALLER's concern: the agent holds its
     turn_mutex across [run]; pp-remote holds its whole-surface
@@ -68,10 +84,12 @@ let run ~(env : Eio_unix.Stdenv.base) (h : t) (reqd : Httpun.Reqd.t) : unit =
   let seam = h.seam in
   let body_raw = Http_kit.read_body reqd in
   let prompt = Http_kit.form_field body_raw "msg" in
-  (* REPL rule (same as the stdin REPL): a prompt whose first non-space
-     char is ( evaluates as Nopales in the shared env — no model call. *)
-  let trimmed = String.trim prompt in
-  let repl_expr = String.length trimmed > 0 && trimmed.[0] = '(' in
+    (* REPL rule (same as the stdin REPL): a prompt that reads as one complete
+       Nopales form evaluates in the shared env — no model call. Anything else
+       is a chat body and goes to the model (see [repl_prompt]: chat prose
+       with a period or a quote must not be mistaken for code). *)
+    let trimmed = String.trim prompt in
+    let repl_expr = repl_prompt prompt in
   let boundary = Printf.sprintf "pp%x%x" (Random.bits ()) (Random.bits ()) in
   let rid = Printf.sprintf "llm-%d" (Random.bits () land 0xFFFFFF) in
   let headers =
