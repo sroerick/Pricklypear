@@ -74,6 +74,7 @@ AUTOLITH_BIN="${AUTOLITH_BIN:-autolith}"
 # Note both the IMPLEMENTER and the REVIEWER need this: a LOGIC-REVIEW that
 # cannot run `dune build`/`dune runtest` is not a review, it is an opinion.
 : "${PP_FLOW_AUTOLITH_PERM:=auto}"
+PERM="$PP_FLOW_AUTOLITH_PERM"
 TIMEOUT="${PP_FLOW_AUTOLITH_TIMEOUT:-3000}"
 ROLE="${PP_FLOW_AUTOLITH_ROLE:-executor}"
 # JOB_ID is assigned per attempt (see the retry loop); this is the initial value.
