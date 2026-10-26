@@ -337,10 +337,16 @@
          table), rendered by Nopales via libs/html — NOT compiled
          OCaml pages and NOT vanilla-JS SSE. The surface is
          redefinable live (same env as plugins/REPL). REPL RULE: a
-         chat prompt whose first non-space char is ( evaluates as
-         Nopales in the shared env (Runtime.eval_string — same rule
-         as the stdin REPL), rendering the last value as a
-         chat/repl-bubble; anything else is a model turn.
+         chat prompt that READS as exactly one complete Nopales form
+         whose operator the shared env can call (a kernel special form,
+         prim, or defined name) evaluates in that env
+         (Runtime.eval_string — same rule as the stdin REPL), rendering
+         the last value as a chat/repl-bubble; anything else is a model
+         turn. A leading paren is not enough: chat prose carrying a
+         quote or a period can lex as one list ("(I can't reproduce
+         this. It's odd.)"), so the reader alone must never decide —
+         and a host with no callability oracle does not run REPL mode
+         at all (card 610071dc).
 
          STREAMING IS OCAML. A chat/agent turn's stream is a compiled
          host concern: provider SSE -> delta assembly -> per-part
