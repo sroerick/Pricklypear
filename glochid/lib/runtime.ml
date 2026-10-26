@@ -19,7 +19,7 @@ open Ast
 (** Tool/command registry entry — alias of the shared loop's record
     (llm/lib/loop.ml owns the definition now that agent + pp-remote
     share the loop). *)
-type registry_entry = Loop.registry_entry
+type registry_entry = Ast.value Loop.registry_entry
 
 type t = {
   seam : Host_seam.t;
@@ -35,9 +35,9 @@ let cwd = ref (Sys.getcwd ())
 
 (** Parse a plugin-produced value back to host JSON. VStr is treated
     as raw JSON first (dict prims produce JSON strings), else a plain
-    string. Live codec owned by the shared loop (llm/lib/loop.ml,
-    agent + pp-remote); re-exported for host callers. *)
-let json_of_value = Loop.json_of_value
+    string. The codec lives in hostkit/host_seam.ml (the loop seam itself
+    is Yojson-only); re-exported here for host callers. *)
+let json_of_value = Host_seam.json_of_value
 
 let str_arg = Host_seam.str_arg
 

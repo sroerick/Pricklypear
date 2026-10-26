@@ -143,18 +143,26 @@ let test_tool_seam () =
   in
   Alcotest.(check bool) "loop_host sees the builtin in tool order" true
     (List.mem "echo" (v2.Loop.tool_order ()));
-  let entry =
-    match v2.Loop.tool_entry "echo" with Some e -> e | None -> Alcotest.fail "builtin missing"
-  in
-  Alcotest.check pp_value "builtin dispatches through the rim's local table"
-    (Ast.VStr "echoed") (v2.Loop.call_prim "__builtin__echo" [ Ast.VStr "{}" ]);
-  ignore entry;
-  (match v2.Loop.call_prim "__builtin__echo" [ Ast.VStr "not json" ] with
-   | Ast.VStr s when String.length s >= 16 && String.sub s 0 16 = "{\"error\":\"bad js" -> ()
-   | other ->
-       Alcotest.fail
-         ("builtin bad json must be contained into an error JSON, got: "
-          ^ Pricklypear_lisp.Reader.pp_value other))
+    let entry =
+      match v2.Loop.tool_entry "echo" with
+      | Some e -> e
+      | None -> Alcotest.fail "builtin missing"
+    in
+    Alcotest.check
+      (Alcotest.testable (fun fmt b -> Format.pp_print_string fmt (match b with Loop.Builtin p -> p | Loop.Plugin -> "plugin")) ( = ))
+      "registry entry dispatches through a prim" (Loop.Builtin "__builtin__echo") entry;
+    Alcotest.check (Alcotest.testable Yojson.Safe.pp ( = ))
+      "builtin dispatches through the rim's local table"
+      (`String "echoed") (v2.Loop.call_prim "__builtin__echo" (`Assoc []));
+    (* The seam serializes args as JSON, so a malformed payload can only
+       reach the prim through its own table entry: the builtin body still
+       contains bad JSON into an error value. *)
+    (match (Hashtbl.find t.prims "__builtin__echo") [ Ast.VStr "not json" ] with
+     | Ast.VStr s when String.length s >= 16 && String.sub s 0 16 = "{\"error\":\"bad js" -> ()
+     | other ->
+         Alcotest.fail
+           ("builtin bad json must be contained into an error JSON, got: "
+            ^ Pricklypear_lisp.Reader.pp_value other))
 
 let test_registered_tracking_and_catalog () =
   let t = make_seam () in

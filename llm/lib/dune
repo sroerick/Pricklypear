@@ -1,10 +1,14 @@
+;; pricklypear-llm — the host-agnostic agent turn loop. The [Loop.host]
+;; seam is typed in Yojson, so this package links NO interpreter: the
+;; Nopales hosts (glochid, pp-remote) translate at Host_seam.loop_host,
+;; and the interpreter-free Default_host runs the builtin read/bash
+;; bodies with no Nopales at all (see borge/glochid.borg agent-loop).
 (library
  (name pricklypear_llm)
  (public_name pricklypear-llm)
  (wrapped false)
- (modules envcfg harness mock provider loop tools)
+ (modules envcfg harness mock provider loop tools default_host)
  (libraries
-  pricklypear-lisp
   pricklypear-common
   pricklypear-httpc
   yojson

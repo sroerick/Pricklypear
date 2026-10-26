@@ -1,0 +1,8 @@
+;; The interpreter-free loop suite: drives Default_host (builtin read/bash
+;; only) over the shared turn loop. No Nopales is linked here by design —
+;; the proxy-rim behaviours stay in remote/test/loop_test.ml, which runs
+;; the same loop over the Nopales host.
+(test
+ (name loop_test)
+ (modules loop_test)
+ (libraries pricklypear-llm alcotest eio eio.unix eio_main yojson))
