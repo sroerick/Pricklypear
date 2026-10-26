@@ -27,7 +27,7 @@
       (list
         (layout/hero
           "Stay in the loop"
-          "Drop your email if you want updates when Pricklypear grows. No spam, no list-sold nonsense &mdash; just a note in my inbox."
+            "Drop your email if you want updates when Pricklypear grows. No spam, no list-sold nonsense: just a note in my inbox."
           (html/join
             (list
               (layout/cta "/welcome" "Welcome")
@@ -76,7 +76,7 @@
           (html/join
             (list
               (html/a "/welcome" (html/text "welcome"))
-              (html/text " &middot; ")
+                (html/text " · ")
               (html/a "/roadmap" (html/text "roadmap")))))))))
 
 (define signup/looks-like-email?
@@ -150,7 +150,7 @@
       (list
         (layout/hero
           "You're on the list"
-          (string-append "Thanks &mdash; " (as-str email) ".")
+            (string-append "Thanks, " (as-str email) ".")
           (html/join
             (list
               (layout/cta "/welcome" "Back to welcome")
