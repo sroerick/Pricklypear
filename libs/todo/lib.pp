@@ -3414,7 +3414,12 @@
   (lambda
     (p)
     "The id segment of a stored node path: everything after the last dot
-     (paths are dot-separated labels; the datum id is the final one)."
+     (paths are dot-separated labels; the datum id is the final one). PP
+     substring takes (start LENGTH), so the 1-char dot probe is
+     (substring s i 1). The pre-2026-10-26 form read (+ i 1) CHARS, never
+     matched a dot, and returned the WHOLE path; a path where an id
+     belongs (card a4fb7706 probe: a 30-char ghost tail came back as
+     data.s.dG9kbw2.dG9kby1pdGVt0.<id>)."
     (todo/tree/path-segment* (as-str p) 0 -1)))
 
 (define todo/tree/path-segment*
@@ -3425,11 +3430,14 @@
       (todo/tree/path-segment*
         s
         (+ i 1)
-        (if (string-eq (substring s i (+ i 1)) ".") i seen))
+        (if (string-eq (substring s i 1) ".") i seen))
       (if
         (< seen 0)
         s
-        (substring s (+ seen 1) (string-length s))))))
+        (substring
+          s
+          (+ seen 1)
+          (- (string-length s) (+ seen 1)))))))
 
 (define todo/tree/path-id
   (lambda
@@ -3443,9 +3451,12 @@
      the char before a 32-char tail (n-33) or a 36-char tail (n-37) must
      be the boundary dot; anything else falls back to the path-segment
      char loop. The old always-loop version cost ~600 steps per node and
-     blew the supervisor scan's eval budget (boot scan budget exceeded,
+     blows the supervisor scan's eval budget (boot scan budget exceeded,
      10-18). The 32-char check runs FIRST: a dashed UUID has no dot at
-     n-33, but a short type label can put a dot at n-37."
+     n-33, but a short type label can put a dot at n-37. A tail that is
+     neither 32 nor 36 chars (imported / ghost rows) falls back to
+     path-segment, which returns the FINAL segment VERBATIM, never the
+     whole path (a path is not an id; card a4fb7706 probe)."
     (let
       ((s (as-str p)))
       (let
