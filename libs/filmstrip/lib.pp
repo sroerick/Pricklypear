@@ -4312,7 +4312,7 @@ the dialog never strings its own markup.")
     ()
     (let*
       ((r (string-trim (as-str (request-param "route"))))
-          (t (string-trim (as-str (request-param "title"))))
+            (t (string-trim (as-str (request-param "title")))))
       (if
         (or
           (< (string-length r) 1)
@@ -4329,7 +4329,7 @@ the dialog never strings its own markup.")
               (filmstrip/oob-msg
                 (string-append "filmstrip: no route " path)))
             (render-html
-              (lookbook/html (ui/dialog title r)))))))))
+                (lookbook/html (ui/dialog title r))))))))
   "POST /filmstrip/dialog: route (+ optional title) vals -> the modal
 dialog (ui/dialog) swapped into #fs-layers. Bad/missing routes answer
 with the launcher status line only; the dialog body hx-gets the route
