@@ -295,8 +295,15 @@ projections).")
 ;; vocabulary) redefines it, appending to lookbook/base-elements. Neither
 ;; side may capture the other at load time -- a reload that snapshots the
 ;; composite would bind the seam to itself (cyclic thunk force).
+(define lookbook/seed-elements
+  (list "ui/button" "ui/badge" "ui/card")
+  "The lib's seed ui element names as a VALUE. A package that must extend
+base-elements itself (rather than redefining lookbook/elements) appends to
+this value: env defs are lazy recipes, so capturing base-elements by name
+would force the seam from inside the seam (cyclic thunk force).")
+
 (define lookbook/base-elements
-  (lambda () (list "ui/button" "ui/badge" "ui/card"))
+  (lambda () lookbook/seed-elements)
   "The lib's seed ui element names (stable; the seam appends to this).")
 
 (define lookbook/elements

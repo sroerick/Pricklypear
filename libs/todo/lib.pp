@@ -4050,27 +4050,27 @@ empty text kid when unassigned (so a caller always projects a value).")
     "todo/ui/assignee-badge")
   "Todo's declared ui vocabulary: the assignment control and its kids.")
 
-(define lookbook/todo-seed
-  (lookbook/base-elements)
-  "The inventory this package extends: base-elements as captured at load (a
-plain name list, never the composite lookbook/elements -- capturing that
-would bind the seam to itself on a reload).")
-
 (define lookbook/add-elements
   (lambda (names extra)
     (list/foldl
       (lambda (acc n)
-        (if (null? (member n acc)) (append acc (list n)) acc))
+        (if (member n acc) acc (append acc (list n))))
       names
       extra))
-  "Append the names not already present (idempotent registration).")
+  "Append the names not already present (idempotent registration). `member`
+answers #f for an absent name, so test TRUTHINESS: (null? (member ...)) is
+FALSE for #f and registers nothing (the same #f-vs-() trap the chat vocabulary
+fixed).")
 
 (define lookbook/base-elements
   (lambda ()
-    (lookbook/add-elements lookbook/todo-seed lookbook/todo-elements))
+    (lookbook/add-elements lookbook/seed-elements lookbook/todo-elements))
   "The lib seed inventory extended with todo's declared vocabulary. Every
 lookbook/elements definition appends to this name at call time, so the todo
-registration holds whichever package's definition wins the load order.")
+registration holds whichever package's definition wins the load order. The
+seed is read from lookbook/seed-elements (a VALUE, not a call to the seam):
+defs are lazy recipes, so (lookbook/base-elements) here would bind the seam to
+itself (cyclic thunk force).")
 
 
 ;; ---- todo-shared-spaces: T3/T5/T7 chain (note-todos, cross-identity mirror) ----
