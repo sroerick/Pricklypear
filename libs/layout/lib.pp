@@ -375,12 +375,12 @@ answers a <name>/examples card.")
         ".err{color:#c00;font-weight:700}"
         ".ok{color:#070;font-weight:700}"
         ".gb-list{list-style:none;padding:0;margin:1rem 0}"
-        ".gb-entry{border:2px solid #000;background:#fff;padding:.6rem;margin:.5rem 0;box-shadow:3px 3px 0 #000}"
+          ".gb-entry{border:2px solid #000;background:#fff;padding:.6rem;margin:.5rem 0;box-shadow:3px 3px 0 #000;overflow-wrap:anywhere}"
         ".gb-name{font-weight:700;color:#000}"
         ".gb-site{color:#000080;text-decoration:underline;font-size:.85rem}"
         ".gb-msg{margin-top:.3rem;color:#222;line-height:1.4}"
         ".gb-form{max-width:30rem}"
-        ".gb-form input,.gb-form textarea{width:100%;font-family:monospace;padding:.3rem;margin:.2rem 0;border:2px solid #000;background:#fff}"))))
+          ".gb-form input,.gb-form textarea{box-sizing:border-box;width:100%;font-family:monospace;padding:.3rem;margin:.2rem 0;border:2px solid #000;background:#fff}"))))
 
 (define layout/neocities-top
   (lambda
