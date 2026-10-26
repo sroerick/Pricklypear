@@ -716,8 +716,8 @@ newest-first ordering or pagination in the scan; this buys headroom.")
 (define chat/lookbook-add
   (lambda (names extra)
     (list/foldl
-      (lambda (acc n)
-        (if (null? (member n acc)) (append acc (list n)) acc))
+        (lambda (acc n)
+          (if (member n acc) acc (append acc (list n))))
       names
       extra))
   "Append the names not already present (idempotent registration).")
