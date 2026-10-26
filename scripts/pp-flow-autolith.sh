@@ -24,8 +24,9 @@
 #                    cryptic 35s :PROCESS-FAILURE.
 #   PP_FLOW_AUTOLITH_IGNORE_EFFORT  =1 to skip that preflight and attempt anyway
 #   AUTOLITH_BIN     default: autolith
-#   PP_FLOW_AUTOLITH_PERM  run-job permission mode (default: sandbox; use
-#                    full only for cards that must touch the real repo)
+#   PP_FLOW_AUTOLITH_PERM  run-job permission mode (default: auto).
+#                    sandbox CANNOT execute anything and is only useful for a
+#                    read-only probe; see the measured note below.
 #   PP_FLOW_AUTOLITH_FAILDIR  failure-archive dir (default: $PWD/.ralph/failures)
 #   PP_FLOW_AUTOLITH_RETRIES  retries after a TRANSIENT provider fault
 #                    (default 2). Deterministic failures never retry — see the
@@ -56,7 +57,23 @@ AUTOLITH_BIN="${AUTOLITH_BIN:-autolith}"
 # provider-pinned to Synthetic (roerick), and a stale or absent AUTOLITH_MODEL
 # must not silently fall back to whatever the laptop's durable preference is.
 : "${AUTOLITH_MODEL:=syn:large:text}"
-PERM="${PP_FLOW_AUTOLITH_PERM:-sandbox}"
+# PERMISSION MODE — MEASURED 2026-10-26 on gregor (autolith 0.62.1).
+# The old default was `sandbox`, and it made every real card a source-only
+# review: `shell.run` was denied on every attempt, so `dune build`/`runtest`
+# and live smoke never ran. The evidence contract then still reported
+# `rc=0 evidence=yes`, because the harness was grading itself, not the work.
+#
+#   sandbox: "echo PP_SHELL_OK" -> :CHILD-FAILURE, denied on every attempt,
+#            279,342 input tokens, 151s, zero output.
+#   auto:    same command -> :SUCCEEDED, 39,405 input tokens, 14s.
+#   auto:    write a file + git init/add/commit -> :SUCCEEDED, 59,298 tokens.
+#
+# So `sandbox` is not a safe default, it is a broken one: it burns ~7x the
+# tokens to produce nothing. `auto` is what actually executes work.
+#
+# Note both the IMPLEMENTER and the REVIEWER need this: a LOGIC-REVIEW that
+# cannot run `dune build`/`dune runtest` is not a review, it is an opinion.
+: "${PP_FLOW_AUTOLITH_PERM:=auto}"
 TIMEOUT="${PP_FLOW_AUTOLITH_TIMEOUT:-3000}"
 ROLE="${PP_FLOW_AUTOLITH_ROLE:-executor}"
 # JOB_ID is assigned per attempt (see the retry loop); this is the initial value.
