@@ -200,8 +200,8 @@
           target
           "hx-swap"
           "innerHTML"
-            "hx-on::after-request"
-            "if(event.detail.successful){this.reset();var l=document.querySelector(this.getAttribute('hx-target'));if(l){delete l.dataset.read;l.scrollTop=l.scrollHeight}}"))
+              "hx-on::after-request"
+              "if(event.detail.successful){this.reset();var l=document.querySelector(this.getAttribute('hx-target'));if(l){l.scrollTop=l.scrollHeight}}"))
       (list
         (ui/elm
           "textarea"
@@ -263,13 +263,11 @@
           "chat-log"
           ";min-height:0;overflow-y:auto"
           (list "id" id))
-        (list
-          "hx-on::after-swap"
-          "if(!this.dataset.read||this.scrollHeight-this.scrollTop-this.clientHeight<160)this.scrollTop=this.scrollHeight"
-          "hx-on:wheel"
-          "this.dataset.read=1"
-          "hx-on:touchmove"
-          "this.dataset.read=1")
+          (list
+            "hx-on::before-swap"
+            "this.dataset.stick=(this.dataset.init&&this.scrollHeight-this.scrollTop-this.clientHeight>=160)?'':'1';this.dataset.init=1"
+            "hx-on::after-swap"
+            "if(this.dataset.stick)this.scrollTop=this.scrollHeight")
         (if
           (string-eq poll "")
           (list)
@@ -281,7 +279,12 @@
             "hx-swap"
             "innerHTML")))
       (chat/kid-list body)))
-  "One declared transcript region. Autoscroll: every swap snaps to the\n     latest message unless the reader scrolled up (wheel/touchmove sets the\n     read flag); the poll also fires on load, so the initial view lands at\n     the bottom.")
+    "One declared transcript region. Autoscroll: the swap records whether the
+     reader was parked at the bottom BEFORE the swap (hx-on::before-swap) and
+     snaps there after it (hx-on::after-swap); the first swap always snaps, so
+     the initial view lands at the latest message. Position is measured, not
+     inferred from wheel events: keyboard and touch scrolling count the same,
+     and returning to the bottom re-arms the snap.")
 
 (define ui/chat-log/examples
   (lambda
@@ -308,7 +311,7 @@
                 "body"
                 "Say hi to the box."))))
         "source"
-          "(ui/chat-log id poll body) -> a chat-log div with autoscroll hooks: hx-on::after-swap snaps to the latest unless the reader scrolled up (wheel/touchmove set a read flag); poll trigger is load, every 4s")))
+            "(ui/chat-log id poll body) -> a chat-log div with autoscroll hooks:\n  hx-on::before-swap records stick-to-bottom (first swap always sticks),\n  hx-on::after-swap snaps the log to the latest when it was stuck;\n  poll trigger is load, every 4s")))
     "The ui/chat-log card.")
 
 (define ui/chatpage
