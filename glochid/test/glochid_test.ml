@@ -1060,9 +1060,11 @@ let test_filmstrip_optimistic ~rt () =
        ~path:"/lookbook" ~params:[ ("name", "filmstrip/optimistic-attrs") ]
        ~headers:[ ("hx-request", "true") ] ~body:""
    with
-   | Ast.VStr s ->
-       Alcotest.(check bool) "lookbook pane: the attrs card answers the inventory" true
-         (has "Optimistic htmx loader attrs" s)
+     | Ast.VStr s ->
+         Alcotest.(check bool) "lookbook pane: the attrs card answers the inventory" true
+           (has "Optimistic htmx loader attrs" s);
+         Alcotest.(check bool) "lookbook pane: attrs badge (no element projection)" true
+           (has "declared attribute value" s)
    | other -> Alcotest.fail ("lookbook pane: " ^ Reader.pp_value other));
   (* hyper/expect over the changed route: POST /filmstrip/open through the
      real route machinery, parse the OOB response fragment, then click the

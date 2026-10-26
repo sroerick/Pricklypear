@@ -2102,19 +2102,33 @@ every live main pane of the desktop, so the heal picks the ring only
 (define (lookbook/call-src name kvs)
   (string-append "(" name (lb/src-walk kvs "") ")"))
 
+;; A declared element value is an el dict (t=el); the inventory also
+;; carries declared ATTRIBUTE values (filmstrip/optimistic-attrs: hx verb
+;; attrs, no standalone element), so the stage badges those instead of
+;; handing them to the element projections.
+(define (lb/el-value? res)
+  (and (string? res)
+       (string-starts-with? res "{")
+       (string-eq (lb/get res "t") "el")))
+
 ;; The stage: the LIVE variant call (lookbook/eval), its html
 ;; projection on stage, and both other views folded beside it --
 ;; declared value + text projection + the card's source. One value,
-;; three views, zero markup authored outside the projections.
+;; three views, zero markup authored outside the projections. A value
+;; that declares attrs rather than an element (no el projection) keeps
+;; the declared-value + source folds and says so.
 (define (lookbook/stage-html card name v)
   (let*
     ((sid (string-append "lb-stage-" (lb/stage-id name)))
      (kvs (lookbook/variant-kvs card v))
      (src (lookbook/call-src name kvs))
      (res (lookbook/eval src))
-     (err? (string-eq (lb/get res "t") "err"))
-     (proj (if err? "" (lookbook/html res)))
-     (txt (if err? "" (lookbook/text res 0))))
+     (err? (and (string? res)
+                (string-starts-with? res "{")
+                (string-eq (lb/get res "t") "err")))
+     (el? (if err? #f (lb/el-value? res)))
+     (proj (if el? (lookbook/html res) ""))
+     (txt (if el? (lookbook/text res 0) "")))
     (string-append
       "<div id=\"" sid "\" class=\"lb-stage\">"
       (if err?
@@ -2122,17 +2136,19 @@ every live main pane of the desktop, so the heal picks the ring only
             "<p class=\"muted\">lookbook: "
             (html-escape (lb/get res "v"))
             "</p>")
-          (string-append
-            "<div data-lb-projection=\"html\">" proj "</div>"))
+          (if el?
+              (string-append
+                "<div data-lb-projection=\"html\">" proj "</div>")
+              "<p class=\"muted\">lookbook: declared attribute value -- no element projection (compose it into a trigger).</p>"))
       "<details class=\"lb-fold\"><summary>declared value</summary><pre>"
-      (html-escape (as-str res))
+        (html-escape (if (string? res) res (json-emit res)))
       "</pre></details>"
-      (if err?
-          ""
+      (if el?
           (string-append
             "<details class=\"lb-fold\"><summary>text projection</summary><pre>"
             (html-escape txt)
-            "</pre></details>"))
+            "</pre></details>")
+          "")
       "<details class=\"lb-fold\"><summary>source</summary><pre>"
       (html-escape (lb/get card "source"))
       "</pre></details>"
