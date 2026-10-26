@@ -202,9 +202,15 @@ let test_handler_body_callee_evals_in_snapshot_env () =
       ~routes:(Pricklypear_image_lib.Request_context.copy_routes (S.routes t))
       ~source_ip:None
   in
+  (* Handler_ok alone would also cover a body that short-circuited before the
+     call; the incident is a CALLEE resolving in the wrong env, so pin the
+     value the callee returned from the snapshot env. *)
+  let expected = Pricklypear_lisp.Reader.pp_value (eval_value t "\"space-ok\"") in
   Pricklypear_image_lib.Request_context.with_current ctx (fun () ->
       match S.call_handler t "issues-page" with
-      | S.Handler_ok _ -> ()
+      | S.Handler_ok v ->
+          Alcotest.(check string) "callee value comes from the snapshot env"
+            expected (Pricklypear_lisp.Reader.pp_value v)
       | S.Handler_unbound ->
           Alcotest.fail "handler bound in the snapshot env resolved as unbound"
       | S.Handler_error msg ->
@@ -394,7 +400,8 @@ let () =
           ; Alcotest.test_case "handler evals in the snapshot env" `Quick
               (fun () -> in_eio test_handler_evals_in_snapshot_env)
           ; Alcotest.test_case "handler body callee evals in the snapshot env" `Quick
-              (fun () -> in_eio test_handler_body_callee_evals_in_snapshot_env)          ; Alcotest.test_case "handler non-function binding errors precisely" `Quick
+              (fun () -> in_eio test_handler_body_callee_evals_in_snapshot_env)
+          ; Alcotest.test_case "handler non-function binding errors precisely" `Quick
               (fun () -> in_eio test_handler_non_function_binding)
 
           ; Alcotest.test_case "handler thunk force resolves in the snapshot env" `Quick
