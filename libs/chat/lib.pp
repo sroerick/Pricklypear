@@ -635,20 +635,20 @@ newest-first ordering or pagination in the scan; this buys headroom.")
   "Render the lobby message form with htmx submit.")
 
 (define chat/history
-  (lambda
-    (room-id)
-    (let
-      ((want (as-str room-id)))
-      (if
-        (chat/can-access? want)
-        (find-rows (quote chat-message) "room_id" want 2000)
-        (list))))
-  "Get messages for a room the user can access.
-   Filtered in SQL, not in Lisp: fetching (chat/all-messages) and dropping
-   non-matching rows cost a full-table scan per room read and silently
-   truncated once the store passed the scan cap (10-21 read-fork). find-rows
-   pushes room_id into the WHERE clause under the same visible_sql floor that
-   (rows ...) applies, so access semantics are unchanged.")
+  (lambda (room-id limit)
+    (let ((want (as-str room-id)))
+      (if (chat/can-access? want)
+          (reverse
+            (find-rows (quote chat-message) "room_id" want limit "created_at DESC"))
+          (list))))
+  "The newest LIMIT messages for a room the user can access, oldest-first.
+   The limit and the order are pushed into SQL (ORDER BY created_at DESC LIMIT
+   n on the data_rows column), so a live window or one history page never pulls
+   the whole room. Filtered in SQL, not in Lisp: fetching (chat/all-messages)
+   and dropping non-matching rows cost a full-table scan per room read and
+   silently truncated once the store passed the scan cap (10-21 read-fork).
+   find-rows pushes room_id into the WHERE clause under the same visible_sql
+   floor that (rows ...) applies, so access semantics are unchanged.")
 
 (define chat/kid
   (lambda
@@ -685,10 +685,42 @@ newest-first ordering or pagination in the scan; this buys headroom.")
     "ui/bubble"
     "ui/chat-log"
     "ui/chat-composer"
-      "ui/chatpage"
-      "chat/channel-row"
-      "chat/dm-starter")
-  "This host's declared chat vocabulary (literal list, NOT a snapshot of\n   lookbook/elements: a captured snapshot would make lookbook/elements\n   refer to itself after a reload -> cyclic thunk force).")
+    "ui/chatpage"
+    "chat/channel-row"
+    "chat/dm-starter"
+      "chat/older-bar"
+      "chat/older-more"
+      "chat/older-oob"
+    "chat/older-gone"
+    "chat/older-region")
+  "This host's declared chat vocabulary (literal list, NOT a snapshot of
+   lookbook/elements: a captured snapshot would make lookbook/elements
+   refer to itself after a reload -> cyclic thunk force).")
+
+;; ---- lookbook registration ----
+;; Every lookbook/elements definition (the lib default, layout, calendar) calls
+;; lookbook/base-elements at CALL time, so a package extends base-elements rather
+;; than redefining lookbook/elements: that gets clobbered by the next package to
+;; load. Membership-checked appends keep a reload from duplicating names.
+(define chat/lookbook-seed
+  (lookbook/base-elements)
+  "Base inventory as captured when libs/chat loads (a plain name list, never the
+   composite lookbook/elements -- capturing that binds the seam to itself).")
+
+(define chat/lookbook-add
+  (lambda (names extra)
+    (list/foldl
+      (lambda (acc n)
+        (if (null? (member n acc)) (append acc (list n)) acc))
+      names
+      extra))
+  "Append the names not already present (idempotent registration).")
+
+(define lookbook/base-elements
+  (lambda () (chat/lookbook-add chat/lookbook-seed chat/lb-elements))
+  "The lib seed inventory extended with chat's declared vocabulary. Every
+   lookbook/elements definition appends to this name at call time, so the chat
+   registration holds whichever package's definition wins the load order.")
 
 (define chat/lobby
   (lambda
@@ -1175,15 +1207,16 @@ newest-first ordering or pagination in the scan; this buys headroom.")
   "Last n elements of xs, original order.")
 
 (define chat/room-rows
-  (lambda (room-id) (chat/sort-rows (chat/history room-id)))
-   "All messages for an accessible room, (created_at,id)-ascending ((rows)
-   gives no order promise). Bounded by chat/all-messages' 200-row cap.")
+  (lambda (room-id) (chat/history room-id chat/window-size))
+  "A room's live window: the newest chat/window-size messages, chronological.
+   The read is bounded in SQL (chat/history), so a room read never pulls the
+   whole transcript.")
 
 (define chat/latest
-  (lambda (room-id)
-    (chat/take-last chat/window-size (chat/room-rows room-id)))
-    "The live window: latest chat/window-size messages for a room,
-   chronological. The live surface never renders more than this.")
+  (lambda (room-id) (chat/room-rows room-id))
+  "The live window: latest chat/window-size messages for a room, chronological.
+   The live surface never renders more than this, and the 4s poll re-reads only
+   this bounded window instead of the whole room.")
 
 (define chat/more-older?
   (lambda (rows before)
@@ -1197,91 +1230,195 @@ newest-first ordering or pagination in the scan; this buys headroom.")
 
 (define chat/older-bar
   (lambda (href)
-    (html/button
-      (html/attrs
-        (list
-          (html/attr "hx-get" href)
-          (html/attr "hx-target" "#chat-older")
-          (html/attr "hx-swap" "outerHTML")))
-      "Load older messages"))
-  "Lazy-history control: fetches one older page and replaces the
-   #chat-older region with it plus the next control.")
+    (ui/elm
+      "button"
+      (list
+        "type" "button"
+        "class" "chat-older-btn"
+        "hx-get" href
+        "hx-target" "#chat-older"
+        "hx-swap" "afterbegin")
+      (list (ui/text "Load older messages"))))
+  "Lazy-history control: fetches one older page and PREPENDS it above the pages
+   already loaded (afterbegin into #chat-older), so history accumulates instead
+   of being replaced page by page. The id lives on the chat/older-more carrier,
+   not here: an OOB refresh replaces that carrier wholesale.")
+
+(define chat/older-bar/examples
+  (lambda ()
+    (lb/obj
+      (list
+        "name" "chat/older-bar"
+        "doc" "Load-older button for the chat history region: hx-get href, hx-target #chat-older, hx-swap afterbegin (accumulates older pages)."
+        "file" "libs/chat/lib.pp"
+        "formals" (json-emit (list "href"))
+        "variants" (json-emit (list (lb/obj (list "href" "/chat?before=abc"))))
+        "source"
+        "(chat/older-bar href) ->\n  (ui/elm \"button\"\n    (list \"type\" \"button\" \"class\" \"chat-older-btn\"\n          \"hx-get\" href \"hx-target\" \"#chat-older\" \"hx-swap\" \"afterbegin\")\n    (list (ui/text \"Load older messages\")))")))
+  "The chat/older-bar card: this def IS the element's declaration.")
+
+(define chat/older-more
+  (lambda (href)
+    (ui/elm
+      "div"
+      (list "id" "chat-older-more")
+      (list (chat/older-bar href))))
+  "The load-older carrier in the page: a stable #chat-older-more element around
+   the button, so the OOB refresh has one swap target and ids stay unique.")
+
+(define chat/older-more/examples
+  (lambda ()
+    (lb/obj
+      (list
+        "name" "chat/older-more"
+        "doc" "Load-older carrier: div#chat-older-more around the chat/older-bar button."
+        "file" "libs/chat/lib.pp"
+        "formals" (json-emit (list "href"))
+        "variants" (json-emit (list (lb/obj (list "href" "/chat?before=abc"))))
+        "source"
+        "(chat/older-more href) ->\n  (ui/elm \"div\" (list \"id\" \"chat-older-more\")\n    (list (chat/older-bar href)))")))
+  "The chat/older-more card.")
+
+(define chat/older-oob
+  (lambda (href)
+    (ui/elm
+      "div"
+      (list "id" "chat-older-more" "hx-swap-oob" "outerHTML")
+      (list (chat/older-bar href))))
+  "Out-of-band carrier for the NEXT load-older button: a history fragment
+   replaces #chat-older-more with it, keeping the control out of the afterbegin
+   row insert.")
+
+(define chat/older-oob/examples
+  (lambda ()
+    (lb/obj
+      (list
+        "name" "chat/older-oob"
+        "doc" "OOB wrapper replacing #chat-older-more with the next load-older button (hx-swap-oob outerHTML)."
+        "file" "libs/chat/lib.pp"
+        "formals" (json-emit (list "href"))
+        "variants" (json-emit (list (lb/obj (list "href" "/chat?before=abc"))))
+        "source"
+        "(chat/older-oob href) ->\n  (ui/elm \"div\"\n    (list \"id\" \"chat-older-more\" \"hx-swap-oob\" \"outerHTML\")\n    (list (chat/older-bar href)))")))
+  "The chat/older-oob card.")
+
+(define chat/older-gone
+  (lambda ()
+    (ui/elm "div" (list "id" "chat-older-more" "hx-swap-oob" "delete") (list)))
+  "Out-of-band removal of the load-older control once the oldest page loads.")
+
+(define chat/older-gone/examples
+  (lambda ()
+    (lb/obj
+      (list
+        "name" "chat/older-gone"
+        "doc" "OOB delete of #chat-older-more at the oldest message."
+        "file" "libs/chat/lib.pp"
+        "formals" (json-emit (list))
+        "variants" (json-emit (list (lb/obj (list))))
+        "source"
+        "(chat/older-gone) ->\n  (ui/elm \"div\" (list \"id\" \"chat-older-more\" \"hx-swap-oob\" \"delete\") (list))")))
+  "The chat/older-gone card.")
 
 (define chat/older-region
   (lambda (kids href)
-    (html/div
-      (html/attrs
-        (list (html/attr "id" "chat-older") (html/attr "class" "chat-older")))
-      (html/join
-        (append
-          (list (chat/kids-html kids))
-          (if (string-eq href "") (list) (list (chat/older-bar href)))))))
-  "The #chat-older region: accumulated older pages + the load-older control.
-   It sits ABOVE the polled log as a page sibling, so the 4s poll (which
-   re-swaps the log window) never clobbers loaded history.")
+    (ui/elm
+      "div"
+      (list "id" "chat-older" "class" "chat-older")
+      (append
+        (chat/kid-list kids)
+          (if (string-eq href "") (list) (list (chat/older-more href))))))
+  "The #chat-older region: accumulated older pages + the load-older control. It
+   sits ABOVE the polled log as a page sibling, so the 4s poll (which re-swaps
+   the log window) never clobbers loaded history.")
+
+(define chat/older-region/examples
+  (lambda ()
+    (lb/obj
+      (list
+        "name" "chat/older-region"
+        "doc" "The #chat-older region: accumulated history pages plus the load-older control; composed from declared kids by def call."
+        "file" "libs/chat/lib.pp"
+        "formals" (json-emit (list "kids" "href"))
+        "variants" (json-emit (list (lb/obj (list "kids" "()" "href" "/chat?before=abc"))))
+        "source"
+          "(chat/older-region kids href) ->\n  (ui/elm \"div\" (list \"id\" \"chat-older\" \"class\" \"chat-older\")\n    (append (chat/kid-list kids)\n            (if (string-eq href \"\") (list) (list (chat/older-more href)))))")))
+  "The chat/older-region card.")
+
+(define chat/older-page-html
+  (lambda (rows next-href)
+    (chat/kids-html
+      (append
+        (list/map chat/bubble rows)
+        (list (if (null? rows) (chat/older-gone) (chat/older-oob next-href))))))
+  "One accumulated history response: the page rows (chronological, prepended by
+   afterbegin) plus an OOB refresh (or removal) of the load-older control.")
 
 (define chat/older-rows
   (lambda (room-id before)
-    (let* ((rows (chat/room-rows room-id))
+    (chat/older-probe room-id before (* 2 chat/window-size)))
+  "One older page: the window-size rows immediately before the cursor row, or ()
+   when the cursor is already the oldest. Reads bounded newest-first pages (100,
+   200, 400 ... rows) until the cursor is inside the window, so a page click
+   never pulls the whole room unless the reader is that deep.")
+
+(define chat/older-probe
+  (lambda (room-id before n)
+    (let* ((rows (chat/history room-id n))
            (i (chat/row-index rows before 0)))
       (if (< i 0)
-        ()
-        (chat/take-last chat/window-size (chat/take-n i rows)))))
-  "One older page: the window-size ordered rows immediately before the
-   cursor row's position (position-based, so any stored id shape works).
-   Cursor not found -> ().")
+          (if (< (length rows) n) () (chat/older-probe room-id before (* n 2)))
+          (chat/take-last chat/window-size (chat/take-n i rows)))))
+  "Bounded cursor probe for chat/older-rows: double the newest-first window
+   until the cursor row is inside it, or the room is exhausted.")
 
 (define chat/older-html
   (lambda (before)
     (let ((rows (chat/older-rows chat/lobby-id before)))
-      (if
-        (null? rows)
-        (chat/older-region (list (chat/no-older-kid)) "")
-        (chat/older-region
-          (list/map chat/bubble rows)
-          (string-append "/chat?before=" (chat/row-id (car rows)))))))
+      (chat/older-page-html
+        rows
+        (if (null? rows) "" (string-append "/chat?before=" (chat/row-id (car rows)))))))
   "Lobby older-history fragment (GET /chat?before=<id> under HX-Request).")
 
 (define chat/older-initial
   (lambda ()
-    (let* ((rows (chat/room-rows chat/lobby-id))
+    (let* ((rows (chat/history chat/lobby-id (+ chat/window-size 1)))
            (window (chat/take-last chat/window-size rows)))
       (if
         (null? window)
         ""
         (if
           (chat/more-older? rows (chat/row-id (car window)))
-          (chat/older-region
-            (list)
-            (string-append "/chat?before=" (chat/row-id (car window))))
+          (lookbook/html
+            (chat/older-region
+              (list)
+              (string-append "/chat?before=" (chat/row-id (car window)))))
           ""))))
   "Initial lobby #chat-older region: the control only when history exists
-   beyond the live window, empty otherwise.")
+   beyond the live window, empty otherwise (one extra row tells us).")
 
 (define chat/dm-older-html
   (lambda (peer before)
     (let ((rows (chat/older-rows (chat/dm peer) before)))
-      (if
-        (null? rows)
-        (chat/older-region (list (chat/no-older-kid)) "")
-        (chat/older-region
-          (list/map chat/bubble rows)
-          (string-append "/chat/dm?peer=" (as-str peer) "&before=" (chat/row-id (car rows)))))))
+      (chat/older-page-html
+        rows
+        (if (null? rows) "" (string-append "/chat/dm?peer=" (as-str peer) "&before=" (chat/row-id (car rows)))))))
   "DM older-history fragment (GET /chat/dm?peer=..&before=<id> under
    HX-Request).")
 
 (define chat/dm-older-initial
   (lambda (peer)
-    (let* ((rows (chat/room-rows (chat/dm peer)))
+    (let* ((rows (chat/history (chat/dm peer) (+ chat/window-size 1)))
            (window (chat/take-last chat/window-size rows)))
       (if
         (null? window)
         ""
         (if
           (chat/more-older? rows (chat/row-id (car window)))
-          (chat/older-region
-            (list)
-            (string-append "/chat/dm?peer=" (as-str peer) "&before=" (chat/row-id (car window))))
+          (lookbook/html
+            (chat/older-region
+              (list)
+              (string-append "/chat/dm?peer=" (as-str peer) "&before=" (chat/row-id (car window)))))
           ""))))
   "Initial DM #chat-older region: the control only when history exists
    beyond the live window, empty otherwise.")
@@ -1486,27 +1623,26 @@ fragment, so an HX-Request GET WITHOUT partial serves the pane body
 (define chat/room-older-html
   (lambda (room-id before)
     (let ((rows (chat/older-rows room-id before)))
-      (if (null? rows)
-          (chat/older-region (list (chat/no-older-kid)) "")
-          (chat/older-region
-            (list/map chat/bubble rows)
-            (string-append "/chat/room?id=" room-id "&before=" (chat/row-id (car rows)))))))
+      (chat/older-page-html
+        rows
+        (if (null? rows) "" (string-append "/chat/room?id=" room-id "&before=" (chat/row-id (car rows)))))))
   "Room older-history fragment (GET /chat/room?id=..&before=<id> under
-HX-Request).")
+   HX-Request).")
 
 (define chat/room-older-initial
   (lambda (room-id)
-    (let* ((rows (chat/room-rows room-id))
+    (let* ((rows (chat/history room-id (+ chat/window-size 1)))
            (window (chat/take-last chat/window-size rows)))
       (if (null? window)
           ""
           (if (chat/more-older? rows (chat/row-id (car window)))
-              (chat/older-region
-                (list)
-                (string-append "/chat/room?id=" room-id "&before=" (chat/row-id (car window))))
+              (lookbook/html
+                (chat/older-region
+                  (list)
+                  (string-append "/chat/room?id=" room-id "&before=" (chat/row-id (car window)))))
               ""))))
   "Initial room #chat-older region: the control only when history exists
-beyond the live window, empty otherwise.")
+   beyond the live window, empty otherwise.")
 
 (define chat/room-page
   (lambda ()

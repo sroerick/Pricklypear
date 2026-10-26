@@ -104,7 +104,9 @@ consolidated message, not streamed narration. Private-DM mode may stream later
 ## Shipped: windowed live view + lazy history (2026-10-18, card 70015a74)
 
 - Live surface (initial GET, 4s poll, POST response) renders only the last
-  `chat/window-size` (50) messages, id-sorted - no full-chat fetch/render.
+  `chat/window-size` (50) messages, oldest-first - no full-chat fetch/render.
+  The read is bounded in SQL (`find-rows` on `room_id`, `ORDER BY created_at
+  DESC LIMIT 50`), so the poll fetches 50 rows per tick, not the room.
 - Sticky scroll: `ui/chat-log` snaps to bottom on every swap and on load
   (`hx-trigger="load, every 4s"`) unless the reader scrolled up
   (wheel/touchmove sets a read flag on the log); sending a message clears
@@ -112,9 +114,16 @@ consolidated message, not streamed narration. Private-DM mode may stream later
 - DM parity: the DM log now polls `GET /chat/dm?peer=` (an HX-Request GET
   returns the windowed transcript fragment), so DMs get the same autoscroll
   and catch-up behavior as the lobby.
-- Known gap: a message that falls out of the 50-window between loaded older
-  pages stays hidden until reload; the incremental `after=` poll is the fix
-  (P1 above).
+- History accumulates: the load-older control swaps `afterbegin` into
+  `#chat-older`, so each page is prepended above the pages already loaded; the
+  response carries an out-of-band refresh of the next control (`chat/older-oob`)
+  and deletes it at the oldest message (`chat/older-gone`). One page is a
+  bounded cursor probe (`chat/older-rows`, doubling 100/200/400-row newest-first
+  reads) rather than a whole-room scan.
+- The old "message hidden after it falls out of the window" gap is gone: the
+  live window is fetched by id-ordered `created_at` around the newest rows and
+  the poll re-reads only that window, so catch-up no longer depends on a
+  whole-chat scan.
 
 ## Open questions
 
