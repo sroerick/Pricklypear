@@ -53,6 +53,12 @@ type t = {
     (Provider.reply, string) Result.t;
   cfg : unit -> Provider.cfg;
   eval_repl : (string -> (Ast.value, string) Result.t) option;
+  (* REPL gate refinement (card 610071dc): can [name] be called in the
+     shared env? A list whose operator is an unknown bare word is prose
+     that happened to lex ("(I can't reproduce this...)"), so it must
+     reach the model instead of bouncing on an unbound word. None =
+     syntactic gate only (a surface with no eval env). *)
+  repl_known : (string -> bool) option;
   (* persistence sink (the loop's on_msg): each provider message the
      turn appends to history is mirrored into the current session
      transcript. None = no persistence (tests, replays). *)
@@ -61,20 +67,26 @@ type t = {
   max_turns : int;
 }
 
-(** [repl_prompt s] is true when [s] is REPL input: it starts with "(" AND
-    reads as exactly ONE complete Nopales form. The first character alone is
-    not enough. Prose that merely opens with a parenthesis ("(note: ...)")
-    used to be forced through the reader, which bounced on the first sentence
-    period or on an unbalanced quote with a bogus "dotted-pair notation (.) is
-    not supported" error instead of reaching the model. A chat body is never
-    code just because it starts with a paren; it is code when it reads cleanly
-    as one form. *)
-let repl_prompt (s : string) : bool =
+(** [repl_prompt ?known s] is true when [s] is REPL input: it starts
+    with "(" AND reads as exactly ONE complete Nopales form AND that
+    form's operator is callable. A leading paren alone is not enough, and
+    neither is a clean read: chat prose carrying quote characters often
+    lexes as one list — "(I can't reproduce this. It's odd.)" reads as a
+    call of `I` because the apostrophe is quote sugar — so evaluating it
+    bounced on an unbound word (or, when a period stands after a closing
+    quote, on a bogus "dotted-pair notation (.) is not supported" reader
+    error) instead of reaching the model. [known] answers "is this name
+    callable in the shared env?" (special form, prim, or defined
+    binding); the default accepts every name, which is the pure syntactic
+    gate for a surface with no eval env. A form whose head is not a bare
+    symbol (a literal or a nested call) is code. *)
+let repl_prompt ?(known = fun _ -> true) (s : string) : bool =
   let s = String.trim s in
   String.length s > 0
   && s.[0] = '('
   &&
   match (try Some (Reader.read_all s) with _ -> None) with
+  | Some [ Ast.App (Ast.Var head, _) ] -> known head
   | Some [ _ ] -> true
   | _ -> false
 (** Run one streamed turn for [reqd] (POST /chat, form field "msg").
@@ -90,7 +102,11 @@ let run ~(env : Eio_unix.Stdenv.base) (h : t) (reqd : Httpun.Reqd.t) : unit =
      body and goes to the model (see [repl_prompt]: chat prose with a
      period or a quote must not be mistaken for code). *)
   let trimmed = String.trim prompt in
-  let repl_expr = repl_prompt prompt in
+  let repl_expr =
+    match h.repl_known with
+    | Some known -> repl_prompt ~known prompt
+    | None -> repl_prompt prompt
+  in
   let boundary = Printf.sprintf "pp%x%x" (Random.bits ()) (Random.bits ()) in
   let rid = Printf.sprintf "llm-%d" (Random.bits () land 0xFFFFFF) in
   let headers =

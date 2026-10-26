@@ -154,11 +154,13 @@ let handle_chat (env : Eio_unix.Stdenv.base) (sw : Eio.Switch.t)
       (* The model dial is a ref (POST /settings retargets the running
          loop); read at turn start, inside the producer fiber. *)
       cfg = (fun () -> !(st.cfg));
-      (* REPL rule: a prompt that reads as exactly one complete Nopales
-         form evaluates in the shared env, no model call
-         (Chat_stream.repl_prompt; prose that merely opens with a paren
-         is chat). Render interp errors like the stdin REPL does, the
-         OCaml default printer shows the opaque Interp_error(_). *)
+        (* REPL rule: a prompt that reads as exactly one complete Nopales
+           form AND whose operator the env can call evaluates in the shared
+           env, no model call (Chat_stream.repl_prompt). Prose that merely
+           opens with a paren, or that lexes as one list around ordinary
+           words ("(I can't reproduce this...)"), is chat. Render interp
+           errors like the stdin REPL does, the OCaml default printer shows
+           the opaque Interp_error(_). *)
       (* turn cap: env-overridable (GLOCHID_MAX_TURNS; legacy AGENT_MAX_TURNS), engine default 40 *)
       max_turns = Config.max_turns ();
       on_msg = Some st.on_msg;
@@ -169,6 +171,14 @@ let handle_chat (env : Eio_unix.Stdenv.base) (sw : Eio.Switch.t)
             with
             | Ast.Interp_error ie -> Error (Ast.pp_interp_error ie)
             | e -> Error (Printexc.to_string e));
+        (* card 610071dc: the gate also needs the ENV, not just the reader.
+           A kernel special form resolves without a binding; anything else
+           must be a prim or defined name before a chat body is evaluated. *)
+        repl_known =
+          Some
+            (fun name ->
+              Eval.is_special_form name
+              || Env.bound_raw st.rt.seam.env name);
     }
   in
   (* Serialize turns: a long turn must not interleave with the next
