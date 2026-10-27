@@ -1270,6 +1270,63 @@ let test_filmstrip_start_menu_cap ~rt () =
     (has "max-height:66vh;overflow-y:auto"
            (eval_str ~what:"served style" {|(hyper/text pg "style")|}))
 
+(** start-menu /repl entry (card 74ab6a06): the repl face is routed but the
+    zero-JS start menu is the shell affordance that reaches it. Asserts the
+    menu renders the repl entry through the declared ui/start-entry element
+    (label + the route it posts to /filmstrip/open), and that the element
+    answers its examples card and is registered in (lookbook/elements).
+    hyper/expect rides a real GET / through the route machinery. *)
+let test_start_menu_repl ~rt () =
+  Surface.load ~rt;
+  let eval_str ~what str =
+    match Runtime.eval_string ~rt str with
+    | Ast.VStr s -> s
+    | other -> Alcotest.fail (what ^ ": " ^ Reader.pp_value other)
+    | exception Ast.Interp_error e ->
+        Alcotest.fail
+          (what ^ ": INTERP "
+           ^ (match e with
+              | Ast.Prim_error (k, n, m) -> k ^ "/" ^ n ^ ": " ^ m
+              | _ -> "opaque"))
+  in
+  let bool_of ~what str =
+    match Runtime.eval_string ~rt str with
+    | Ast.VBool b -> b
+    | other -> Alcotest.fail (what ^ ": " ^ Reader.pp_value other)
+  in
+  let page =
+    match
+        Runtime.dispatch_route ~rt ~handler:"glochid/shell" ~method_:"GET"
+        ~path:"/" ~params:[] ~headers:[] ~body:""
+    with
+    | Ast.VStr s -> s
+    | other -> Alcotest.fail ("page: " ^ Reader.pp_value other)
+  in
+  Runtime.add_prim rt "page-html" (fun _ -> Ast.VStr page);
+  ignore (Runtime.eval_string ~rt {|(define pg (soup/parse (page-html)))|});
+  (* hyper/expect over the changed route: GET / serves the start menu with
+     the repl entry. *)
+  Alcotest.(check bool) "hyper: GET / renders the repl start entry" true
+    (bool_of ~what:"hyper/expect repl entry"
+       {|(hyper/expect pg ".fs-start-entry[title=\"open repl\"]" "repl")|});
+  (* the entry posts the repl ROUTE as a pane, never a whole-window anchor. *)
+  Alcotest.(check string) "repl entry opens /repl as a pane"
+    {|{"route":"/repl"}|}
+    (eval_str ~what:"repl entry hx-vals"
+       {|(hyper/attr (car (soup/select pg ".fs-start-entry[title=\"open repl\"]")) "hx-vals")|});
+  (* the lib composition (filmstrip/start-menu) renders the same entry. *)
+  Alcotest.(check string) "filmstrip/start-menu composes the repl entry" "repl"
+    (eval_str ~what:"filmstrip menu repl entry"
+       {|(hyper/text (soup/parse (render-html (filmstrip/start-menu))) ".fs-start-entry[title=\"open repl\"]")|});
+  (* lookbook evidence: the element the menu composes is registered and
+     answers its examples card. *)
+  Alcotest.(check bool) "lookbook inventory registers ui/start-entry" true
+    (bool_of ~what:"lookbook inventory"
+       {|(string-contains? (json-emit (lookbook/elements)) "ui/start-entry")|});
+  Alcotest.(check string) "ui/start-entry examples card" "ui/start-entry"
+    (eval_str ~what:"start-entry examples card"
+       {|(lb/get (ui/start-entry/examples) "name")|})
+
 (** rail trees (borge/filmstrip.borg rail-trees-v4): the windows tree
     renders from DECLARED ws state (3 desktop dirs + shelf subtree on an
     empty workspace), level fragments splice lazy, dir rows carry
@@ -2319,6 +2376,8 @@ let () =
                 (test_filmstrip_file_issue ~rt)
             ; Alcotest.test_case "start-menu-cap" `Quick
                   (test_filmstrip_start_menu_cap ~rt)
+            ; Alcotest.test_case "start-menu-repl" `Quick
+                  (test_start_menu_repl ~rt)
         ; Alcotest.test_case "lookbook" `Quick
             (test_lookbook ~rt)
         ; Alcotest.test_case "habitat-panes" `Quick

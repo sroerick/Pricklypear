@@ -4215,6 +4215,22 @@ data: the hx-* verbs ride attrs verbatim through the projection.")
         "hx-swap" "innerHTML")
       (list (ui/text label))))
   "One start-menu entry: opens `route` as a pane via /filmstrip/open.")
+(define ui/start-entry/examples
+  (lambda ()
+    (lb/obj
+      (list
+        "name" "ui/start-entry"
+        "doc" "One start-menu entry (filmstrip shell chrome): opens route as a pane via /filmstrip/open."
+        "file" "libs/filmstrip/lib.pp"
+        "formals" (json-emit (list "label" "route"))
+        "variants" (json-emit
+                     (list
+                       (lb/obj (list "label" "repl" "route" "/repl"))
+                       (lb/obj (list "label" "todos" "route" "/todos"))))
+        "source"
+        "(ui/start-entry label route) ->\n  (ui/elm \"button\"\n    (list \"class\" \"fs-btn fs-start-entry\"\n          \"title\" (string-append \"open \" label)\n          \"hx-post\" \"/filmstrip/open\"\n          \"hx-vals\" (string-append \"{\\\"route\\\":\\\"\" route \"\\\"}\")\n          \"hx-target\" \"#fs-sink\"\n          \"hx-swap\" \"innerHTML\")\n    (list (ui/text label)))")))
+  "The ui/start-entry card (lib layer): this def IS the element's declaration
+for the start menu the habitat shell renders (filmstrip/start-menu).")
 
 (define ui/file-issue
   (lambda (label)
