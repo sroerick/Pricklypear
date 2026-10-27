@@ -96,13 +96,21 @@ if (!base) { console.error('FAIL glochid never printed its URL'); process.exit(1
 console.log('OK   glochid at ' + base);
 
 chrome = spawn(CHROME, ['--remote-debugging-port=' + PORTC, '--user-data-dir=' + USER_DATA,
-  '--headless=new', '--disable-gpu', '--no-sandbox', '--disable-dev-shm-usage', '--window-size=1400,1000', 'about:blank'], { stdio: 'ignore' });
+  '--headless=new', '--disable-gpu', '--no-sandbox', '--disable-dev-shm-usage', '--window-size=1400,1000', 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
+// This box is a single vCPU: chromium can take well over the 7.5s the first
+// draft allowed, so wait up to 30s and keep the browser's stderr for a verdict.
+const chromeErr = [];
+chrome.stderr.on('data', (c) => { chromeErr.push(String(c)); });
 let ready = false;
-for (let i = 0; i < 50; i++) {
+for (let i = 0; i < 120; i++) {
   try { const v = await httpReq('http://127.0.0.1:' + PORTC + '/json/version'); if (v.status === 200) { ready = true; break; } } catch (_) {}
-  await sleep(150);
+  await sleep(250);
 }
-if (!ready) { console.error('FAIL chromium CDP not ready'); process.exit(1); }
+if (!ready) {
+  console.error('FAIL chromium CDP not ready on port ' + PORTC + ' after 30s');
+  console.error((chromeErr.join('') || '(no stderr)').split('\n').filter((l) => !/dbus|bus\.cc|object_proxy/.test(l)).slice(-10).join('\n'));
+  process.exit(1);
+}
 const list = JSON.parse((await httpReq('http://127.0.0.1:' + PORTC + '/json/list')).body);
 const page = list.find((t) => t.type === 'page');
 const ws = new globalThis.WebSocket(page.webSocketDebuggerUrl);
