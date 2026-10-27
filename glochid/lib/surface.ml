@@ -1109,7 +1109,8 @@ retired, see the obituary above.")
         (list "bindings" "/bindings")
         (list "lookbook" "/lookbook")
         (list "sessions" "/sessions")
-        (list "settings" "/settings"))
+        (list "settings" "/settings")
+        (list "repl" "/repl"))
       (glochid/fwd-apps)))
   "Column 0: glochid's interfaces + the habitat's app faces the
 panes wear (glochid/fwd-apps), ALL route leaves
