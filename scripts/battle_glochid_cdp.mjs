@@ -76,6 +76,7 @@ let glochid, chrome;
 const cleanup = () => {
   try { if (glochid) glochid.kill('SIGTERM'); } catch (_) {}
   try { if (chrome) chrome.kill('SIGKILL'); } catch (_) {}
+  try { if (stub) stub.close(); } catch (_) {}
   try { fs.rmSync(USER_DATA, { recursive: true, force: true }); } catch (_) {}
   try { fs.rmSync(DIR, { recursive: true, force: true }); } catch (_) {}
 };
@@ -102,7 +103,32 @@ fs.writeFileSync(path.join(DIR, '.glochid', 'workspace.json'), JSON.stringify({
 }));
 fs.writeFileSync(MOCK, JSON.stringify([{ text: 'battle reply', calls: [] }]) + NL);
 
-glochid = spawn(GLOCHID, ['--serve', '--port', '0', '--mock-script', MOCK], { stdio: ['ignore', 'pipe', 'pipe'], cwd: DIR });
+// deterministic stub habitat: the habitat-pane faces are forwarded, so a
+// battle test must not depend on a live prod (9-30s per face). The stub owns
+// the wire contract only: full page for an address-bar GET, fragment when the
+// caller is htmx-shaped (HX-Request), an empty board for /todos.
+const STUB_PORT = 9300 + (process.pid % 300);
+const STUB_URL = 'http://127.0.0.1:' + STUB_PORT;
+const STUB_FACES = {
+  todos: '<div id="stub-todos"><h1>Kanban</h1><table><thead><tr><th>Card</th><th>State</th></tr></thead><tbody></tbody></table><p class="muted">no cards in this column</p></div>',
+  notes: '<div id="stub-notes"><h1>Notes</h1><ul class="notes-list"><li class="muted">no notes yet</li></ul></div>',
+  calendar: '<div id="stub-calendar"><h1>Calendar</h1><table class="cal-grid"><tbody><tr><td>1</td><td>2</td></tr></tbody></table></div>',
+};
+const stub = http.createServer((req, res) => {
+  const u = new URL(req.url, 'http://stub');
+  if (u.pathname === '/login') { res.writeHead(200, { 'content-type': 'text/html' }); res.end('ok'); return; }
+  const face = u.pathname.replace(/^\//, '');
+  const frag = STUB_FACES[face];
+  if (!frag) { res.writeHead(404, { 'content-type': 'text/plain' }); res.end('stub 404'); return; }
+  const hx = (req.headers['hx-request'] || '') !== '';
+  const body = hx ? frag : '<!doctype html><html lang="en"><head><title>stub ' + face + '</title></head><body><h1>' + face + '</h1>' + frag + '</body></html>';
+  res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+  res.end(body);
+});
+await new Promise((r) => stub.listen(STUB_PORT, '127.0.0.1', r));
+console.log('OK   stub habitat at ' + STUB_URL);
+
+glochid = spawn(GLOCHID, ['--serve', '--port', '0', '--mock-script', MOCK], { stdio: ['ignore', 'pipe', 'pipe'], cwd: DIR, env: { ...process.env, PP_URL: STUB_URL, PP_TOKEN: 'battle-token', PP_USER: 'battle', PP_PASS: 'battle', GLOCHID_HABITAT_URL: '', GLOCHID_HABITAT_TOKEN: '', GLOCHID_HABITAT_USER: '', GLOCHID_HABITAT_PASS: '' } });
 let base = '';
 let buf = '';
 glochid.stdout.on('data', (c) => {
@@ -184,7 +210,7 @@ const SNAP = '(function(){' +
 const A11Y = '(function(){' +
   'var btns=Array.prototype.slice.call(document.querySelectorAll("button")).filter(function(b){return !(b.getAttribute("aria-label")||(b.textContent||"").trim()||b.getAttribute("title"))});' +
   'var links=Array.prototype.slice.call(document.querySelectorAll("a[href]")).filter(function(a){return !(a.getAttribute("aria-label")||(a.textContent||"").trim()||a.getAttribute("title"))});' +
-  'var inputs=Array.prototype.slice.call(document.querySelectorAll("input:not([type=hidden]),select,textarea")).filter(function(e){var id=e.id;var lab=id?document.querySelector("label[for=\""+id+"\"]"):null;return !(lab||e.getAttribute("aria-label")||e.getAttribute("aria-labelledby")||e.getAttribute("title"))});' +
+    'var inputs=Array.prototype.slice.call(document.querySelectorAll("input:not([type=hidden]),select,textarea")).filter(function(e){var id=e.id;var lab=id?document.querySelector(\'label[for="\'+id+\'"]\'):null;return !(lab||e.getAttribute("aria-label")||e.getAttribute("aria-labelledby")||e.getAttribute("title"))});' +
   'var imgs=Array.prototype.slice.call(document.images).filter(function(i){return !i.hasAttribute("alt")});' +
   'return JSON.stringify({lang:document.documentElement.getAttribute("lang")||"",title:document.title||"",badButtons:btns.map(function(b){return b.outerHTML.slice(0,60)}),badLinks:links.length,badInputs:inputs.map(function(e){return e.tagName+"#"+(e.id||"?")}),badImgs:imgs.length});' +
   '})()';
@@ -300,13 +326,32 @@ const sessTable = sessParts.length > 1 ? sessParts[1].split('</table>')[0] : '';
 ok(sessTable.indexOf('<td') < 0, '/sessions fresh boot renders zero rows (empty state, no crash)');
 ok(sess.body.includes('transcripts:'), '/sessions shows the transcripts hint line');
 
-// ============ PHASE E: kanban / notes / calendar (RENDERED, not bare 200) ============
-for (const face of [{ app: 'todos', minText: 200 }, { app: 'notes', minText: 100 }, { app: 'calendar', minText: 100 }]) {
-  const r = await httpGet(base + '/' + face.app);
-  ok(r.status === 200, face.app + ': face serves 200 through the harness forward', 'status ' + r.status);
-  await goto(base + '/' + face.app, 2500);
-  await assertSurface(face.app, base + '/' + face.app, { path: '/' + face.app, minText: face.minText, shot: 'face-' + face.app });
+// ============ PHASE E: forwarded habitat faces (deterministic stub) ============
+// The gate pipes the habitat's page; the contract under test is the harness's:
+// address-bar GET keeps document chrome, HX-Request yields a fragment, the
+// face forwards with the operator's session, and an empty board renders as an
+// empty state (no crash, no phantom rows).
+for (const face of ['todos', 'notes', 'calendar']) {
+  const full = await httpGet(base + '/' + face);
+  ok(full.status === 200 && full.body.includes('id="stub-' + face + '"'),
+    face + ': address-bar GET forwards the habitat page', 'status ' + full.status);
+  ok(full.body.toLowerCase().indexOf('<!doctype html>') === 0,
+    face + ': address-bar GET keeps the full document chrome');
+  const frag = await httpReq(base + '/' + face, { 'HX-Request': 'true' });
+  ok(frag.status === 200 && frag.body.includes('id="stub-' + face + '"')
+    && frag.body.toLowerCase().indexOf('<!doctype') < 0,
+    face + ': HX-Request forwards a pane fragment', 'status ' + frag.status);
+  await goto(base + '/' + face, 1200);
+  await assertSurface(face, base + '/' + face, { path: '/' + face, minText: 20, shot: 'face-' + face });
 }
+const todoFull = await httpGet(base + '/todos');
+ok(todoFull.body.includes('no cards in this column'),
+  'todos: forwarded empty board renders its empty state');
+const paneForward = await httpReq(base + '/filmstrip/open',
+  { 'HX-Request': 'true', 'Content-Type': 'application/x-www-form-urlencoded' },
+  'POST', 'route=/todos');
+ok(paneForward.status === 200 && paneForward.body.includes('id="stub-todos"'),
+  'filmstrip/open /todos: in-process fwd face renders the habitat fragment inside the pane');
 
 // ============ PHASE F: unknown route ============
 const unknown = await httpGet(base + '/definitely-not-a-route');
