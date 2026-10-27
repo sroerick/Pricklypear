@@ -1,0 +1,97 @@
+[
+  {
+    "name": "render: two panes",
+    "pass": true,
+    "detail": "2"
+  },
+  {
+    "name": "render: no error chrome",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "name": "decl: width trigger declared",
+    "pass": true,
+    "detail": "width"
+  },
+  {
+    "name": "decl: close trigger declared",
+    "pass": true,
+    "detail": "close"
+  },
+  {
+    "name": "decl: open trigger declared",
+    "pass": true,
+    "detail": "open"
+  },
+  {
+    "name": "decl: move before-request transposes",
+    "pass": true,
+    "detail": "var v=this.getAttribute('hx-vals')||'';var d=v.indexOf('left')>=0?'left':'right';var f=doc"
+  },
+  {
+    "name": "decl: move after-request clears",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "name": "css: trigger fade rule",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "name": "css: pane :has fade rule",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "name": "css: fs-optimistic rule",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "name": "move: starting order p1,p2",
+    "pass": true,
+    "detail": "p1,p2"
+  },
+  {
+    "name": "move: order transposes before the roundtrip returns",
+    "pass": false,
+    "detail": "p1,p2 -> p1,p2"
+  },
+  {
+    "name": "move: transposed pane carries fs-optimistic",
+    "pass": false,
+    "detail": "0"
+  },
+  {
+    "name": "move: transposed pane is semi-faded while pending",
+    "pass": false,
+    "detail": "opacity null"
+  },
+  {
+    "name": "screenshot 07-move-pending-fade",
+    "pass": true,
+    "detail": "/home/al/pricklypear/screenshots/review-c7be7174/07-move-pending-fade.png"
+  },
+  {
+    "name": "move: server truth keeps the transposed order",
+    "pass": true,
+    "detail": "p2,p1"
+  },
+  {
+    "name": "move: unfaded after settle",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "name": "move: settled pane fully opaque",
+    "pass": true,
+    "detail": "1"
+  },
+  {
+    "name": "screenshot 08-move-settled",
+    "pass": true,
+    "detail": "/home/al/pricklypear/screenshots/review-c7be7174/08-move-settled.png"
+  }
+]
