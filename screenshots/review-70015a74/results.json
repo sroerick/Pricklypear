@@ -1,0 +1,192 @@
+{
+ "base": "http://127.0.0.1:18080",
+ "results": [
+  {
+   "name": "room has history beyond one page",
+   "pass": true,
+   "detail": "total=56"
+  },
+  {
+   "name": "live window renders exactly chat/window-size",
+   "pass": true,
+   "detail": "bubbles=50 total=56 window=50"
+  },
+  {
+   "name": "initial DOM is a window, not the whole room",
+   "pass": true,
+   "detail": "dom=50 < room=56"
+  },
+  {
+   "name": "lazy-history control present",
+   "pass": true,
+   "detail": "text=\"Load older messages\""
+  },
+  {
+   "name": "control carries a before= cursor",
+   "pass": true,
+   "detail": "/chat?before=503f8ab0-d59b-42ec-b508-0307342b8e0b"
+  },
+  {
+   "name": "load snaps the log to the latest message",
+   "pass": true,
+   "detail": "gap=0 scrollHeight=2239 clientHeight=2239"
+  },
+  {
+   "name": "log is actually scrollable (not a short list)",
+   "pass": false,
+   "detail": "scrollHeight=2239 clientHeight=2239"
+  },
+  {
+   "name": "lookbook registers ui/chat-log",
+   "pass": true,
+   "detail": "elements=19"
+  },
+  {
+   "name": "lookbook registers ui/chatpage",
+   "pass": true,
+   "detail": "elements=19"
+  },
+  {
+   "name": "lookbook registers chat/older-region",
+   "pass": true,
+   "detail": "elements=19"
+  },
+  {
+   "name": "lookbook registers chat/older-bar",
+   "pass": true,
+   "detail": "elements=19"
+  },
+  {
+   "name": "lookbook registers chat/older-more",
+   "pass": true,
+   "detail": "elements=19"
+  },
+  {
+   "name": "lookbook registers chat/older-oob",
+   "pass": true,
+   "detail": "elements=19"
+  },
+  {
+   "name": "lookbook registers chat/older-gone",
+   "pass": true,
+   "detail": "elements=19"
+  },
+  {
+   "name": "#chat-older sits above the polled log, carrier wraps the button",
+   "pass": true,
+   "detail": "{\"olderAboveLog\":true,\"btnInCarrier\":true}"
+  },
+  {
+   "name": "log renders the measured-position autoscroll hooks",
+   "pass": true,
+   "detail": "before=this.dataset.stick=(this.dataset.init&&this.scrollHeight-thi"
+  },
+  {
+   "name": "log polls load + every 4s",
+   "pass": true,
+   "detail": "load, every 4s"
+  },
+  {
+   "name": "composer is the declared .chat-composer inside .chatpage",
+   "pass": true,
+   "detail": ""
+  },
+  {
+   "name": "a11y tree exposes a button named \"Load older messages\"",
+   "pass": true,
+   "detail": "nodeId=149"
+  },
+  {
+   "name": "the 4s poll actually issued /chat/partial",
+   "pass": true,
+   "detail": "requests=2"
+  },
+  {
+   "name": "poll re-renders the same bounded window",
+   "pass": true,
+   "detail": "bubbles=50"
+  },
+  {
+   "name": "poll keeps a parked reader at the latest",
+   "pass": true,
+   "detail": "gap=0"
+  },
+  {
+   "name": "poll fragment carries only the window",
+   "pass": true,
+   "detail": "fragment bubbles=50"
+  },
+  {
+   "name": "wheel-up actually scrolls the reader away from the bottom",
+   "pass": false,
+   "detail": "gap=0"
+  },
+  {
+   "name": "4s poll does NOT yank a scrolled-up reader to the latest",
+   "pass": false,
+   "detail": "gap=0 stick=null"
+  },
+  {
+   "name": "reader back at the bottom re-arms the snap",
+   "pass": true,
+   "detail": "gap=0"
+  },
+  {
+   "name": "next poll holds the re-armed reader at the latest",
+   "pass": true,
+   "detail": "gap=0"
+  },
+  {
+   "name": "Load older prepends one page of history into #chat-older",
+   "pass": true,
+   "detail": "older=6 expected=6"
+  },
+  {
+   "name": "live log is untouched by the history load",
+   "pass": true,
+   "detail": "bubbles=50"
+  },
+  {
+   "name": "control is removed at the oldest message (OOB delete)",
+   "pass": false,
+   "detail": "olderMore=true"
+  },
+  {
+   "name": "history load does not move the parked log",
+   "pass": true,
+   "detail": "gap=0 before=0"
+  },
+  {
+   "name": "loaded history renders above the log",
+   "pass": true,
+   "detail": "olderTop=-1847 logTop=-1534"
+  },
+  {
+   "name": "history fragment carries exactly one page",
+   "pass": true,
+   "detail": "fragment bubbles=6 url=/chat?before=503f8ab0-d59b-42ec-b508-0307342b8e0b"
+  },
+  {
+   "name": "send snaps the log to the latest message",
+   "pass": true,
+   "detail": "gap=0"
+  },
+  {
+   "name": "send clears the composer",
+   "pass": false,
+   "detail": "\"ui review 70015a74: lazy history + autoscroll\""
+  },
+  {
+   "total": 56,
+   "windowSize": 50,
+   "sentMarker": "ui review 70015a74: lazy history + autoscroll",
+   "sentAt": 1793083635802,
+   "screenshots": [
+    "/home/al/pricklypear/screenshots/review-70015a74/01-chat-window-bottom.png",
+    "/home/al/pricklypear/screenshots/review-70015a74/02-chat-reader-scrolled-up.png",
+    "/home/al/pricklypear/screenshots/review-70015a74/03-chat-history-loaded.png",
+    "/home/al/pricklypear/screenshots/review-70015a74/04-chat-after-send.png"
+   ]
+  }
+ ]
+}
