@@ -108,9 +108,11 @@ consolidated message, not streamed narration. Private-DM mode may stream later
   The read is bounded in SQL (`find-rows` on `room_id`, `ORDER BY created_at
   DESC LIMIT 50`), so the poll fetches 50 rows per tick, not the room.
 - Sticky scroll: `ui/chat-log` snaps to bottom on every swap and on load
-  (`hx-trigger="load, every 4s"`) unless the reader scrolled up
-  (wheel/touchmove sets a read flag on the log); sending a message clears
-  the flag and snaps the target log to the latest (composer after-request).
+  (`hx-trigger="load, every 4s"`) unless the reader scrolled up; the position
+  is measured at `htmx:before:swap` / `htmx:after:swap` (htmx 4 event names;
+  the 2.x `before-swap` spelling never fires under htmx 4). The composer's
+  `htmx:after:request` resets the input and sets a send flag, so sending snaps
+  the target log to the latest even from a scrolled-up position.
 - DM parity: the DM log now polls `GET /chat/dm?peer=` (an HX-Request GET
   returns the windowed transcript fragment), so DMs get the same autoscroll
   and catch-up behavior as the lobby.
