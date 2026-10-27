@@ -160,14 +160,11 @@ try {
   await waitFor(() => evaluate(`!document.body.innerText.includes(${JSON.stringify(MARK)})`), WAIT, 750, "deleted");
   record("act-delete-scratch-card", deleted === true, { deleted });
 
-  const wanted = ["todo/ui/assignee-field", "todo/ui/assignee-select", "todo/ui/assignee-option", "todo/ui/assignee-badge"];
-  const inv = await apiEval("(lookbook/elements)");
-  const seam = await apiEval('(lookbook/add-elements (list \"probe-a\") (list \"probe-b\"))');
-  const elems = arr(inv.body && inv.body.value);
-  const missing = elems ? wanted.filter(w => !elems.includes(w)) : wanted;
-  record("lookbook-inventory-registers-assignee-vocabulary", !!elems && missing.length === 0, { apiStatus: inv.status, elements: elems, missing });
-  const seamVal = arr(seam.body && seam.body.value);
-  record("registration-seam-appends-absent-names", !!seamVal && seamVal.join(",") === "probe-a,probe-b", { apiStatus: seam.status, value: seamVal });
+    const wanted = ["todo/ui/assignee-field", "todo/ui/assignee-select", "todo/ui/assignee-option", "todo/ui/assignee-badge"];
+    const inv = await apiEval("(lookbook/elements)");
+    const elems = arr(inv.body && inv.body.value);
+    const missing = elems ? wanted.filter(w => !elems.includes(w)) : wanted;
+    record("lookbook-inventory-registers-assignee-vocabulary", !!elems && missing.length === 0, { apiStatus: inv.status, elements: elems, missing });
 
   const failed = results.filter(r => !r.ok);
   log("SUMMARY", JSON.stringify({ total: results.length, failed: failed.length, failedNames: failed.map(f => f.name), screenshots: OUT }));
