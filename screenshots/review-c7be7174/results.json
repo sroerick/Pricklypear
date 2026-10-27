@@ -1,0 +1,187 @@
+[
+  {
+    "name": "filmstrip: document snapshot answered",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "name": "filmstrip: browser on /filmstrip",
+    "pass": true,
+    "detail": "/filmstrip"
+  },
+  {
+    "name": "filmstrip: no route-handler error chrome",
+    "pass": true,
+    "detail": "/chat\nwidth\nclose\nglochid — /code · /bindings · /sessions · /settings · model: \nhf:zai-org/GLM-4.7-Flash\nglochid ready.\nsend\n/notes\nwidth\nclose\nNotes\nstub notes\nstart\nrail\nwindows\ncode\nprims\nui\n⌨\nwind"
+  },
+  {
+    "name": "filmstrip: #fs-shell rendered",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "name": "filmstrip: two seeded panes rendered",
+    "pass": true,
+    "detail": "[{\"id\":\"p1\",\"cls\":\"fs-pane fs-half focused\",\"w\":\"half\"},{\"id\":\"p2\",\"cls\":\"fs-pane fs-half\",\"w\":\"half\"}]"
+  },
+  {
+    "name": "screenshot 01-filmstrip-render",
+    "pass": true,
+    "detail": "/home/al/pricklypear/screenshots/review-c7be7174/01-filmstrip-render.png"
+  },
+  {
+    "name": "decl: pane-head width button carries data-optimistic=\"width\"",
+    "pass": false,
+    "detail": ""
+  },
+  {
+    "name": "decl: pane-head close button carries data-optimistic=\"close\"",
+    "pass": false,
+    "detail": ""
+  },
+  {
+    "name": "decl: app-link open carries data-optimistic=\"open\"",
+    "pass": false,
+    "detail": ""
+  },
+  {
+    "name": "decl: move sentinel carries data-optimistic=\"move\"",
+    "pass": false,
+    "detail": ""
+  },
+  {
+    "name": "decl: move before-request transposes + marks fs-optimistic",
+    "pass": false,
+    "detail": null
+  },
+  {
+    "name": "decl: move after-request clears fs-optimistic",
+    "pass": false,
+    "detail": ""
+  },
+  {
+    "name": "css: [data-optimistic].htmx-request fade rule present",
+    "pass": false,
+    "detail": ""
+  },
+  {
+    "name": "css: .fs-pane:has(...htmx-request) fade rule present",
+    "pass": false,
+    "detail": ""
+  },
+  {
+    "name": "css: .fs-pane.fs-optimistic rule present",
+    "pass": false,
+    "detail": ""
+  },
+  {
+    "name": "lookbook: filmstrip/optimistic-attrs card answers 200",
+    "pass": true,
+    "detail": "http 200"
+  },
+  {
+    "name": "lookbook: card names the registered element",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "name": "lookbook: card renders the declared attribute values",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "name": "lookbook: inventory lists filmstrip/optimistic-attrs",
+    "pass": false,
+    "detail": "http 200"
+  },
+  {
+    "name": "close: htmx-request lands on the declared trigger instantly",
+    "pass": true,
+    "detail": "{\"gone\":false,\"req\":true,\"cls\":\"fs-pane fs-half\",\"op\":\"0.55\"}"
+  },
+  {
+    "name": "close: pane is semi-faded while the roundtrip is pending",
+    "pass": true,
+    "detail": "opacity 0.55"
+  },
+  {
+    "name": "screenshot 02-close-pending-fade",
+    "pass": true,
+    "detail": "/home/al/pricklypear/screenshots/review-c7be7174/02-close-pending-fade.png"
+  },
+  {
+    "name": "close: server truth removes the pane",
+    "pass": true,
+    "detail": "{\"gone\":true,\"count\":1,\"restOp\":\"1\",\"staleReq\":0,\"opt\":0}"
+  },
+  {
+    "name": "close: unfaded after settle (no htmx-request / fs-optimistic left)",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "name": "close: remaining panes are fully opaque",
+    "pass": true,
+    "detail": "opacity 1"
+  },
+  {
+    "name": "screenshot 03-close-settled",
+    "pass": true,
+    "detail": "/home/al/pricklypear/screenshots/review-c7be7174/03-close-settled.png"
+  },
+  {
+    "name": "width: instant semi-fade while pending",
+    "pass": true,
+    "detail": "{\"req\":true,\"op\":\"0.55\"}"
+  },
+  {
+    "name": "width: server truth applies a new width class",
+    "pass": true,
+    "detail": "fs-pane fs-half focused -> fs-pane fs-full focused"
+  },
+  {
+    "name": "width: settled class is a declared width",
+    "pass": true,
+    "detail": "fs-pane fs-full focused"
+  },
+  {
+    "name": "screenshot 04-width-settled",
+    "pass": true,
+    "detail": "/home/al/pricklypear/screenshots/review-c7be7174/04-width-settled.png"
+  },
+  {
+    "name": "move: a focused pane exists before the key",
+    "pass": true,
+    "detail": "p1"
+  },
+  {
+    "name": "move: pane order transposes before the roundtrip returns",
+    "pass": false,
+    "detail": "p1 -> p1"
+  },
+  {
+    "name": "move: transposed pane carries fs-optimistic while pending",
+    "pass": false,
+    "detail": ""
+  },
+  {
+    "name": "screenshot 05-move-pending",
+    "pass": true,
+    "detail": "/home/al/pricklypear/screenshots/review-c7be7174/05-move-pending.png"
+  },
+  {
+    "name": "move: server truth keeps the transposed order",
+    "pass": true,
+    "detail": "p1"
+  },
+  {
+    "name": "move: unfaded after settle",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "name": "screenshot 06-move-settled",
+    "pass": true,
+    "detail": "/home/al/pricklypear/screenshots/review-c7be7174/06-move-settled.png"
+  }
+]
