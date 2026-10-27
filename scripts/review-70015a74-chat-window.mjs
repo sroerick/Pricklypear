@@ -247,8 +247,8 @@ const dom = await js(`(() => {
     olderAboveLog: o.getBoundingClientRect().top < l.getBoundingClientRect().top,
     btnInCarrier: !!(more && more.querySelector('button.chat-older-btn')),
     logClasses: l.className, olderClasses: o.className,
-    beforeSwap: l.getAttribute('hx-on::before-swap') || '',
-    afterSwap: l.getAttribute('hx-on::after-swap') || '',
+      beforeSwap: l.getAttribute('hx-on::before:swap') || '',
+      afterSwap: l.getAttribute('hx-on::after:swap') || '',
     trigger: l.getAttribute('hx-trigger') || '',
     pageComposer: !!document.querySelector('.chatpage form.chat-composer'),
   };
@@ -321,7 +321,7 @@ fs.writeFileSync(path.join(OUT, 'dom-after-lazy.html'), domAll);
 const shot3 = await snap('03-chat-history-loaded.png');
 
 // ---- 7. sending snaps the log to the latest ----
-const marker = 'ui review 70015a74: lazy history + autoscroll';
+const marker = 'ui review 70015a74: lazy history + autoscroll ' + Date.now();
 const sentAt = Date.now();
 await js(`(() => {
   const f = document.querySelector('.chatpage form.chat-composer');

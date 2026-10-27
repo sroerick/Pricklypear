@@ -48,13 +48,6 @@
 <div class="bubble-body">smoke-4</div>
 </div>
 
-
-
-<div id="chat-older-more"><button type="button" class="chat-older-btn" hx-get="/chat?before=7d2b4370-f69f-49be-a6df-9f313c0e396e" hx-target="#chat-older" hx-swap="afterbegin" data-htmx-powered="true">Load older messages</button></div>
-</div>
-
-<div class="chatpage" style="display:flex;flex-direction:column;flex:1;min-height:0" id="chat-main">
-<div class="chat-log" style="display:flex;flex-direction:column;flex:1;min-height:0;overflow-y:auto" id="chat-main-log" hx-on::before-swap="this.dataset.stick=(this.dataset.init&amp;&amp;this.scrollHeight-this.scrollTop-this.clientHeight&gt;=160)?'':'1';this.dataset.init=1" hx-on::after-swap="if(this.dataset.stick)this.scrollTop=this.scrollHeight" hx-get="/chat/partial" hx-trigger="load, every 4s" hx-swap="innerHTML" data-htmx-powered="true">
 <div class="bubble user">
 <div class="bubble-meta">admin · 2026-10-26 23:23</div>
 
@@ -73,6 +66,13 @@
 <div class="bubble-body">smoke-7</div>
 </div>
 
+
+
+
+</div>
+
+<div class="chatpage" style="display:flex;flex-direction:column;flex:1;min-height:0" id="chat-main">
+<div class="chat-log" style="display:flex;flex-direction:column;flex:1;min-height:0;overflow-y:auto" id="chat-main-log" hx-on::before:swap="this.dataset.stick=(this.dataset.send||!this.dataset.init||this.scrollHeight-this.scrollTop-this.clientHeight&lt;160)?'1':'';this.dataset.init=1;delete this.dataset.send" hx-on::after:swap="if(this.dataset.stick)this.scrollTop=this.scrollHeight" hx-get="/chat/partial" hx-trigger="load, every 4s" hx-swap="innerHTML" data-htmx-powered="true" data-stick="1" data-init="1">
 <div class="bubble user">
 <div class="bubble-meta">admin · 2026-10-26 23:23</div>
 
@@ -354,8 +354,26 @@
 
 <div class="bubble-body">smoke-54</div>
 </div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-27 06:47</div>
+
+<div class="bubble-body">ui review 70015a74: lazy history + autoscroll</div>
 </div>
 
-<form class="chat-composer" style="display:flex;flex-direction:row" method="post" action="/chat" hx-post="/chat" hx-target="#chat-main-log" hx-swap="innerHTML" hx-on::after-request="if(event.detail.successful){this.reset();var l=document.querySelector(this.getAttribute('hx-target'));if(l){l.scrollTop=l.scrollHeight}}" data-htmx-powered="true"><textarea name="body" class="chat-input" rows="1" required="required" placeholder="Write a message…" maxlength="4000" style="flex:1;min-height:2.5rem;min-width:0"></textarea><button type="submit" class="chat-send">Send</button></form>
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-27 07:25</div>
+
+<div class="bubble-body">ui review 70015a74: lazy history + autoscroll</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-27 07:28</div>
+
+<div class="bubble-body">PROBE-REAL</div>
+</div>
+</div>
+
+<form class="chat-composer" style="display:flex;flex-direction:row" method="post" action="/chat" hx-post="/chat" hx-target="#chat-main-log" hx-swap="innerHTML" hx-on::after:request="if(!(event.detail.ctx&amp;&amp;event.detail.ctx.response&amp;&amp;event.detail.ctx.response.status&gt;=400)){this.reset();var l=document.querySelector(this.getAttribute('hx-target'));if(l){l.dataset.send='1'}}" data-htmx-powered="true"><textarea name="body" class="chat-input" rows="1" required="required" placeholder="Write a message…" maxlength="4000" style="flex:1;min-height:2.5rem;min-width:0"></textarea><button type="submit" class="chat-send">Send</button></form>
 </div>
 </main>

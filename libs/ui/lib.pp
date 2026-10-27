@@ -200,8 +200,8 @@
           target
           "hx-swap"
           "innerHTML"
-              "hx-on::after-request"
-              "if(event.detail.successful){this.reset();var l=document.querySelector(this.getAttribute('hx-target'));if(l){l.scrollTop=l.scrollHeight}}"))
+                "hx-on::after:request"
+                "if(!(event.detail.ctx&&event.detail.ctx.response&&event.detail.ctx.response.status>=400)){this.reset();var l=document.querySelector(this.getAttribute('hx-target'));if(l){l.dataset.send='1'}}"))
       (list
         (ui/elm
           "textarea"
@@ -248,7 +248,7 @@
             (lb/obj
               (list "action" "/chat" "target" "#chat-main-log"))))
           "source"
-          "(ui/chat-composer action target) -> a chat-composer form row: hx-post action, hx-target target, hx-swap innerHTML; hx-on::after-request resets the input and snaps the target log to the latest on a successful send; the textarea is flex:1 + min-width:0 so the row shrinks cleanly at small widths")))
+      "(ui/chat-composer action target) -> a chat-composer form row: hx-post action, hx-target target, hx-swap innerHTML; hx-on::after:request (the htmx 4 event name) resets the input on a non-error response and sets data-send on the target log so the following swap snaps to the latest; the textarea is flex:1 + min-width:0 so the row shrinks cleanly at small widths")))
     "The ui/chat-composer card.")
 
 (define ui/chat-log
@@ -264,10 +264,10 @@
           ";min-height:0;overflow-y:auto"
           (list "id" id))
           (list
-            "hx-on::before-swap"
-            "this.dataset.stick=(this.dataset.init&&this.scrollHeight-this.scrollTop-this.clientHeight>=160)?'':'1';this.dataset.init=1"
-            "hx-on::after-swap"
-            "if(this.dataset.stick)this.scrollTop=this.scrollHeight")
+              "hx-on::before:swap"
+              "this.dataset.stick=(this.dataset.send||!this.dataset.init||this.scrollHeight-this.scrollTop-this.clientHeight<160)?'1':'';this.dataset.init=1;delete this.dataset.send"
+              "hx-on::after:swap"
+                "if(this.dataset.stick)this.scrollTop=this.scrollHeight")
         (if
           (string-eq poll "")
           (list)
@@ -279,12 +279,13 @@
             "hx-swap"
             "innerHTML")))
       (chat/kid-list body)))
-    "One declared transcript region. Autoscroll: the swap records whether the
-     reader was parked at the bottom BEFORE the swap (hx-on::before-swap) and
-     snaps there after it (hx-on::after-swap); the first swap always snaps, so
-     the initial view lands at the latest message. Position is measured, not
-     inferred from wheel events: keyboard and touch scrolling count the same,
-     and returning to the bottom re-arms the snap.")
+      "One declared transcript region. Autoscroll: the swap records whether the
+       reader was parked at the bottom BEFORE the swap (hx-on::before:swap) and
+       snaps there after it (hx-on::after:swap); the first swap always snaps, so
+       the initial view lands at the latest message, and a composer send sets the
+       send flag so its swap snaps even from a scrolled-up position. Position is
+       measured, not inferred from wheel events: keyboard and touch scrolling
+       count the same, and returning to the bottom re-arms the snap.")
 
 (define ui/chat-log/examples
   (lambda
@@ -311,7 +312,7 @@
                 "body"
                 "Say hi to the box."))))
         "source"
-            "(ui/chat-log id poll body) -> a chat-log div with autoscroll hooks:\n  hx-on::before-swap records stick-to-bottom (first swap always sticks),\n  hx-on::after-swap snaps the log to the latest when it was stuck;\n  poll trigger is load, every 4s")))
+                "(ui/chat-log id poll body) -> a chat-log div with autoscroll hooks:\n  hx-on::before:swap records stick-to-bottom (first swap always sticks,\n  a data-send flag from the composer forces it);\n  hx-on::after:swap snaps the log to the latest when it was stuck;\n  poll trigger is load, every 4s")))
     "The ui/chat-log card.")
 
 (define ui/chatpage
@@ -382,6 +383,7 @@
             (css/use (calendar/css))
             (css/use (weather/css))
             (css/use (layout/card-css))
+              (css/use (chat/css))
             (css/use (bible/css))
             (css/use (ui/theme-menu))
             (css/use (ui/theme-branches))

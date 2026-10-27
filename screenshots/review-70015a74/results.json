@@ -4,17 +4,17 @@
   {
    "name": "room has history beyond one page",
    "pass": true,
-   "detail": "total=56"
+   "detail": "total=59"
   },
   {
    "name": "live window renders exactly chat/window-size",
    "pass": true,
-   "detail": "bubbles=50 total=56 window=50"
+   "detail": "bubbles=50 total=59 window=50"
   },
   {
    "name": "initial DOM is a window, not the whole room",
    "pass": true,
-   "detail": "dom=50 < room=56"
+   "detail": "dom=50 < room=59"
   },
   {
    "name": "lazy-history control present",
@@ -24,17 +24,17 @@
   {
    "name": "control carries a before= cursor",
    "pass": true,
-   "detail": "/chat?before=503f8ab0-d59b-42ec-b508-0307342b8e0b"
+   "detail": "/chat?before=588b8d9a-93ef-4f68-88f3-61c32adac141"
   },
   {
    "name": "load snaps the log to the latest message",
    "pass": true,
-   "detail": "gap=0 scrollHeight=2239 clientHeight=2239"
+   "detail": "gap=0 scrollHeight=3150 clientHeight=496"
   },
   {
    "name": "log is actually scrollable (not a short list)",
-   "pass": false,
-   "detail": "scrollHeight=2239 clientHeight=2239"
+   "pass": true,
+   "detail": "scrollHeight=3150 clientHeight=496"
   },
   {
    "name": "lookbook registers ui/chat-log",
@@ -79,7 +79,7 @@
   {
    "name": "log renders the measured-position autoscroll hooks",
    "pass": true,
-   "detail": "before=this.dataset.stick=(this.dataset.init&&this.scrollHeight-thi"
+   "detail": "before=this.dataset.stick=(this.dataset.send||!this.dataset.init||t"
   },
   {
    "name": "log polls load + every 4s",
@@ -118,13 +118,13 @@
   },
   {
    "name": "wheel-up actually scrolls the reader away from the bottom",
-   "pass": false,
-   "detail": "gap=0"
+   "pass": true,
+   "detail": "gap=2400"
   },
   {
    "name": "4s poll does NOT yank a scrolled-up reader to the latest",
-   "pass": false,
-   "detail": "gap=0 stick=null"
+   "pass": true,
+   "detail": "gap=2400 stick=\"\""
   },
   {
    "name": "reader back at the bottom re-arms the snap",
@@ -139,7 +139,7 @@
   {
    "name": "Load older prepends one page of history into #chat-older",
    "pass": true,
-   "detail": "older=6 expected=6"
+   "detail": "older=9 expected=9"
   },
   {
    "name": "live log is untouched by the history load",
@@ -148,8 +148,8 @@
   },
   {
    "name": "control is removed at the oldest message (OOB delete)",
-   "pass": false,
-   "detail": "olderMore=true"
+   "pass": true,
+   "detail": "olderMore=false"
   },
   {
    "name": "history load does not move the parked log",
@@ -159,12 +159,12 @@
   {
    "name": "loaded history renders above the log",
    "pass": true,
-   "detail": "olderTop=-1847 logTop=-1534"
+   "detail": "olderTop=146 logTop=450"
   },
   {
    "name": "history fragment carries exactly one page",
    "pass": true,
-   "detail": "fragment bubbles=6 url=/chat?before=503f8ab0-d59b-42ec-b508-0307342b8e0b"
+   "detail": "fragment bubbles=9 url=/chat?before=588b8d9a-93ef-4f68-88f3-61c32adac141"
   },
   {
    "name": "send snaps the log to the latest message",
@@ -173,14 +173,14 @@
   },
   {
    "name": "send clears the composer",
-   "pass": false,
-   "detail": "\"ui review 70015a74: lazy history + autoscroll\""
+   "pass": true,
+   "detail": "\"\""
   },
   {
-   "total": 56,
+   "total": 59,
    "windowSize": 50,
-   "sentMarker": "ui review 70015a74: lazy history + autoscroll",
-   "sentAt": 1793083635802,
+   "sentMarker": "ui review 70015a74: lazy history + autoscroll 1793086172273",
+   "sentAt": 1793086172273,
    "screenshots": [
     "/home/al/pricklypear/screenshots/review-70015a74/01-chat-window-bottom.png",
     "/home/al/pricklypear/screenshots/review-70015a74/02-chat-reader-scrolled-up.png",

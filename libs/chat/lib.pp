@@ -1360,34 +1360,41 @@ package to load.")
     (chat/kids-html
       (append
         (list/map chat/bubble rows)
-        (list (if (null? rows) (chat/older-gone) (chat/older-oob next-href))))))
+        (list (if (string-eq (as-str next-href) "") (chat/older-gone) (chat/older-oob next-href))))))
   "One accumulated history response: the page rows (chronological, prepended by
-   afterbegin) plus an OOB refresh (or removal) of the load-older control.")
+   afterbegin) plus an OOB refresh of the load-older control, or its removal
+   (chat/older-gone) when next-href is empty, i.e. the page reached the oldest
+   message.")
 
 (define chat/older-rows
   (lambda (room-id before)
     (chat/older-probe room-id before (* 2 chat/window-size)))
-  "One older page: the window-size rows immediately before the cursor row, or ()
-   when the cursor is already the oldest. Reads bounded newest-first pages (100,
-   200, 400 ... rows) until the cursor is inside the window, so a page click
-   never pulls the whole room unless the reader is that deep.")
+  "One older page as (page . more?): the window-size rows immediately before the
+   cursor row, or () when the cursor is already the oldest, plus whether a
+   further older row exists before the page (so the control survives). Reads
+   bounded newest-first pages (100, 200, 400 ... rows) until the cursor is
+   inside the window, so a page click never pulls the whole room unless the
+   reader is that deep.")
 
 (define chat/older-probe
   (lambda (room-id before n)
     (let* ((rows (chat/history room-id n))
            (i (chat/row-index rows before 0)))
       (if (< i 0)
-          (if (< (length rows) n) () (chat/older-probe room-id before (* n 2)))
-          (chat/take-last chat/window-size (chat/take-n i rows)))))
+          (if (< (length rows) n) (cons () #f) (chat/older-probe room-id before (* n 2)))
+          (cons (chat/take-last chat/window-size (chat/take-n i rows))
+                (> i chat/window-size)))))
   "Bounded cursor probe for chat/older-rows: double the newest-first window
-   until the cursor row is inside it, or the room is exhausted.")
+   until the cursor row is inside it, or the room is exhausted. Answers
+   (page . more?); more? is true when a further older row sits before the page.")
 
 (define chat/older-html
   (lambda (before)
-    (let ((rows (chat/older-rows chat/lobby-id before)))
+    (let* ((page (chat/older-rows chat/lobby-id before))
+           (rows (car page)))
       (chat/older-page-html
         rows
-        (if (null? rows) "" (string-append "/chat?before=" (chat/row-id (car rows)))))))
+        (if (cdr page) (string-append "/chat?before=" (chat/row-id (car rows))) ""))))
   "Lobby older-history fragment (GET /chat?before=<id> under HX-Request).")
 
 (define chat/older-initial
@@ -1409,10 +1416,11 @@ package to load.")
 
 (define chat/dm-older-html
   (lambda (peer before)
-    (let ((rows (chat/older-rows (chat/dm peer) before)))
+    (let* ((page (chat/older-rows (chat/dm peer) before))
+           (rows (car page)))
       (chat/older-page-html
         rows
-        (if (null? rows) "" (string-append "/chat/dm?peer=" (as-str peer) "&before=" (chat/row-id (car rows)))))))
+        (if (cdr page) (string-append "/chat/dm?peer=" (as-str peer) "&before=" (chat/row-id (car rows))) ""))))
   "DM older-history fragment (GET /chat/dm?peer=..&before=<id> under
    HX-Request).")
 
