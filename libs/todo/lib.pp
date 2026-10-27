@@ -4037,11 +4037,11 @@ empty text kid when unassigned (so a caller always projects a value).")
   "The todo/ui/assignee-badge card.")
 
 ;; ---- lookbook registration ----
-;; Every lookbook/elements definition (the lib default, layout, calendar) calls
-;; lookbook/base-elements at CALL time. Todo therefore extends base-elements
-;; rather than redefining lookbook/elements: appending there would be clobbered
-;; by the next package to load (calendar seeds after todo). Membership-checked
-;; appends keep a reload from duplicating the rows.
+;; The package vocabulary is a declared VALUE; the one composer of
+;; lookbook/base-elements lives in libs/chat (base-elements + the todo list). A
+;; package-level redefinition here is clobbered by the next package to load
+;; (todo seeds before chat), which silently dropped these names from the
+;; inventory.
 (define lookbook/todo-elements
   (list
     "todo/ui/assignee-field"
@@ -4049,28 +4049,6 @@ empty text kid when unassigned (so a caller always projects a value).")
     "todo/ui/assignee-option"
     "todo/ui/assignee-badge")
   "Todo's declared ui vocabulary: the assignment control and its kids.")
-
-(define lookbook/add-elements
-  (lambda (names extra)
-    (list/foldl
-      (lambda (acc n)
-        (if (member n acc) acc (append acc (list n))))
-      names
-      extra))
-  "Append the names not already present (idempotent registration). `member`
-answers #f for an absent name, so test TRUTHINESS: (null? (member ...)) is
-FALSE for #f and registers nothing (the same #f-vs-() trap the chat vocabulary
-fixed).")
-
-(define lookbook/base-elements
-  (lambda ()
-    (lookbook/add-elements lookbook/seed-elements lookbook/todo-elements))
-  "The lib seed inventory extended with todo's declared vocabulary. Every
-lookbook/elements definition appends to this name at call time, so the todo
-registration holds whichever package's definition wins the load order. The
-seed is read from lookbook/seed-elements (a VALUE, not a call to the seam):
-defs are lazy recipes, so (lookbook/base-elements) here would bind the seam to
-itself (cyclic thunk force).")
 
 
 ;; ---- todo-shared-spaces: T3/T5/T7 chain (note-todos, cross-identity mirror) ----

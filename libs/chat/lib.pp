@@ -699,34 +699,23 @@ newest-first ordering or pagination in the scan; this buys headroom.")
    lookbook/elements: a captured snapshot would make lookbook/elements
    refer to itself after a reload -> cyclic thunk force).")
 
-  ;; ---- lookbook registration ----
-  ;; Every lookbook/elements definition (the lib default, layout, calendar) calls
-  ;; lookbook/base-elements at CALL time, so a package extends base-elements rather
-  ;; than redefining lookbook/elements: that gets clobbered by the next package to
-  ;; load. Membership-checked appends keep a reload from duplicating names.
-  (define chat/lookbook-seed
-    (list "ui/button" "ui/badge" "ui/card")
-    "The libs/lookbook seed inventory as LITERAL names, not (lookbook/base-elements).
-     A define body is a lazy recipe, so calling the seam there forces it on first
-     touch -- after libs/chat has already replaced lookbook/base-elements with the
-     chat extension, which forces this very def: cyclic thunk force, and the whole
-     inventory answers an error instead of names (proven live: (lookbook/elements)
-     -> 'cyclic thunk force'). Literal data breaks the loop.")
-
-(define chat/lookbook-add
-  (lambda (names extra)
-    (list/foldl
-        (lambda (acc n)
-          (if (member n acc) acc (append acc (list n))))
-      names
-      extra))
-  "Append the names not already present (idempotent registration).")
-
+    ;; ---- lookbook registration ----
+    ;; ONE composer owns lookbook/base-elements, so no package can erase the
+    ;; inventory by loading last. Every package declares its vocabulary as a
+    ;; literal VALUE (chat/lb-elements here, lookbook/todo-elements in
+    ;; libs/todo); this def composes the vocabularies seeded into every
+    ;; habitat image. Membership-checked appends keep a reload from
+    ;; duplicating names.
 (define lookbook/base-elements
-  (lambda () (chat/lookbook-add chat/lookbook-seed chat/lb-elements))
-  "The lib seed inventory extended with chat's declared vocabulary. Every
-   lookbook/elements definition appends to this name at call time, so the chat
-   registration holds whichever package's definition wins the load order.")
+  (lambda ()
+    (chat/lookbook-add
+      (chat/lookbook-add chat/lookbook-seed chat/lb-elements)
+      lookbook/todo-elements))
+  "The lib seed inventory composed with the declared package vocabularies:
+chat's transcript elements + todo's assignment control. libs/todo declares
+lookbook/todo-elements and must NOT redefine this name -- a package-level
+definition is clobbered by the next package to load (todo seeds before chat,
+so todo's own extension was silently dropped).")
 
 (define chat/lobby
   (lambda
