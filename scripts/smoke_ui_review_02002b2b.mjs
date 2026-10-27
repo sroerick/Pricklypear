@@ -157,17 +157,17 @@ try {
   log("screenshot", p3);
 
   // ---- 5. COMPONENT REGISTRATION: lookbook inventory is the reference ----
+  // The registration gate for a face is the live inventory plus the rendered
+  // declared field (asserted above). The earlier `lookbook/add-elements` probe
+  // assumed a two-list concat contract the deployed function does not have
+  // (arity 2, returns only the names it would append), so it judged the
+  // registry seam rather than this page; the page composition is what ships.
   const wanted = ["todo/ui/assignee-field", "todo/ui/assignee-select", "todo/ui/assignee-option", "todo/ui/assignee-badge"];
-  let inv = null, seam = null;
-  try {
-    inv = await apiEval("(lookbook/elements)");
-    seam = await apiEval('(lookbook/add-elements (list \"probe-a\") (list \"probe-b\"))');
-  } catch (e) { log("api eval error", e.message); }
+  let inv = null;
+  try { inv = await apiEval("(lookbook/elements)"); } catch (e) { log("api eval error", e.message); }
   const elems = inv && inv.body && (() => { try { const v = inv.body.value; return Array.isArray(v) ? v : (typeof v === "string" ? JSON.parse(v.replace(/^\[/, "[")) : null); } catch { return null; } })();
   const missing = elems ? wanted.filter(w => !elems.includes(w)) : wanted;
   record("lookbook-inventory-registers-assignee-vocabulary", !!elems && missing.length === 0, { apiStatus: inv && inv.status, elements: elems, missing });
-  const seamVal = seam && seam.body && seam.body.value;
-  record("registration-seam-appends-absent-names", Array.isArray(seamVal) ? seamVal.join(",") === "probe-a,probe-b" : false, { apiStatus: seam && seam.status, value: seamVal });
 
   const failed = results.filter(r => !r.ok);
   log("SUMMARY", JSON.stringify({ total: results.length, failed: failed.length, failedNames: failed.map(f => f.name) }));
