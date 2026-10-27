@@ -3923,24 +3923,32 @@ selected=\"\").")
 
 (define todo/ui/assignee-select
   (lambda (cur users)
-    (ui/elm
-      "select"
-      (list "name" "assignee" "id" "assignee" "class" "todo-assignee")
-      (cons
-        (todo/ui/assignee-option
-          ""
-          "(unassigned)"
-          (if (string-eq (as-str cur) "") "selected" ""))
-        (list/map
-          (lambda (u)
-            (todo/ui/assignee-option
-              u
-              u
-              (if (string-eq (as-str u) (as-str cur)) "selected" "")))
-          (todo/ui/users-list users)))))
+    (let* ((cur-s (as-str cur))
+           (us (todo/ui/users-list users))
+           (opts (if (or (string-eq cur-s "") (member cur-s us))
+                     us
+                     (cons cur-s us))))
+      (ui/elm
+        "select"
+        (list "name" "assignee" "id" "assignee" "class" "todo-assignee")
+        (cons
+          (todo/ui/assignee-option
+            ""
+            "(unassigned)"
+            (if (string-eq cur-s "") "selected" ""))
+          (list/map
+            (lambda (u)
+              (todo/ui/assignee-option
+                u
+                u
+                (if (string-eq (as-str u) cur-s) "selected" "")))
+            opts)))))
   "The assignee <select>: an empty option clears the claim, one option per
-user, the current assignee carrying the selected flag. Composes
-todo/ui/assignee-option.")
+user, the current assignee carrying the selected flag. A current assignee
+absent from the users list -- a claim lease such as `run:<id>` or
+`glochid:<session>@<ts>`, or a renamed user -- is appended as an option so
+the control shows the real owner and an unrelated form save cannot silently
+clear the claim (review 2026-10-27). Composes todo/ui/assignee-option.")
 
 (define todo/ui/assignee-field
   (lambda (cur users)
@@ -3991,16 +3999,17 @@ empty text kid when unassigned (so a caller always projects a value).")
     (lb/obj
       (list
         "name" "todo/ui/assignee-select"
-        "doc" "The assignee select: clear option + one option per user, the current assignee selected."
-        "file" "libs/todo/lib.pp"
-        "formals" (json-emit (list "cur" "users"))
-        "variants"
-        (json-emit
-          (list
-            (lb/obj (list "cur" "" "users" "alice bob"))
-            (lb/obj (list "cur" "alice" "users" "alice bob"))))
-        "source"
-        "(todo/ui/assignee-select cur users) ->\n  (ui/elm \"select\"\n    (list \"name\" \"assignee\" \"id\" \"assignee\" \"class\" \"todo-assignee\")\n    (cons (todo/ui/assignee-option \"\" \"(unassigned)\" ...)\n          (list/map (lambda (u) (todo/ui/assignee-option u u ...))\n                    (todo/ui/users-list users))))")))
+          "doc" "The assignee select: clear option + one option per known user, the current assignee selected (a lease absent from the list is appended first)."
+          "file" "libs/todo/lib.pp"
+          "formals" (json-emit (list "cur" "users"))
+          "variants"
+          (json-emit
+            (list
+              (lb/obj (list "cur" "" "users" "alice bob"))
+              (lb/obj (list "cur" "alice" "users" "alice bob"))
+              (lb/obj (list "cur" "run:0bb6993b-7289-4f10-91e8-fd876c215645" "users" "alice bob"))))
+          "source"
+          "(todo/ui/assignee-select cur users) ->\n  (let* ((cur-s (as-str cur))\n         (us (todo/ui/users-list users))\n         (opts (if (or (string-eq cur-s \"\") (member cur-s us))\n                   us (cons cur-s us))))\n    (ui/elm \"select\"\n      (list \"name\" \"assignee\" \"id\" \"assignee\" \"class\" \"todo-assignee\")\n      (cons (todo/ui/assignee-option \"\" \"(unassigned)\" ...)\n            (list/map (lambda (u) (todo/ui/assignee-option u u ...))\n                      opts))))")))
   "The todo/ui/assignee-select card.")
 
 (define todo/ui/assignee-field/examples
