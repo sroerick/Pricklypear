@@ -699,23 +699,36 @@ newest-first ordering or pagination in the scan; this buys headroom.")
    lookbook/elements: a captured snapshot would make lookbook/elements
    refer to itself after a reload -> cyclic thunk force).")
 
-    ;; ---- lookbook registration ----
-    ;; ONE composer owns lookbook/base-elements, so no package can erase the
-    ;; inventory by loading last. Every package declares its vocabulary as a
-    ;; literal VALUE (chat/lb-elements here, lookbook/todo-elements in
-    ;; libs/todo); this def composes the vocabularies seeded into every
-    ;; habitat image. Membership-checked appends keep a reload from
-    ;; duplicating names.
+;; ---- lookbook registration ----
+;; ONE composer owns lookbook/base-elements, so no package can erase the
+;; inventory by loading last. Every package declares its vocabulary as a
+;; literal VALUE (chat/lb-elements here, lookbook/todo-elements in
+;; libs/todo); this def composes the vocabularies seeded into every
+;; habitat image. Membership-checked appends keep a reload from
+;; duplicating names.
+(define chat/lookbook-add
+  (lambda (names extra)
+    (list/foldl
+      (lambda (acc n)
+        (if (member n acc) acc (append acc (list n))))
+      names
+      extra))
+  "Append the names not already present (idempotent registration). Test the
+   TRUTHINESS of (member ...): it answers #f for an absent name, so
+   (null? (member ...)) is false and would register nothing.")
+
 (define lookbook/base-elements
   (lambda ()
     (chat/lookbook-add
-      (chat/lookbook-add chat/lookbook-seed chat/lb-elements)
+      (chat/lookbook-add lookbook/seed-elements chat/lb-elements)
       lookbook/todo-elements))
   "The lib seed inventory composed with the declared package vocabularies:
-chat's transcript elements + todo's assignment control. libs/todo declares
-lookbook/todo-elements and must NOT redefine this name -- a package-level
-definition is clobbered by the next package to load (todo seeds before chat,
-so todo's own extension was silently dropped).")
+chat's transcript elements + todo's assignment control. The seed is read from
+lookbook/seed-elements (a VALUE, not a call to the seam): defs are lazy
+recipes, so capturing base-elements here would force the seam from inside the
+seam (cyclic thunk force). libs/todo declares lookbook/todo-elements and must
+NOT redefine this name -- a package-level definition is clobbered by the next
+package to load.")
 
 (define chat/lobby
   (lambda
