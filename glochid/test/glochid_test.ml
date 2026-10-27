@@ -1039,8 +1039,9 @@ let test_filmstrip_optimistic ~rt () =
     eval_str ~what:"optimistic-attrs move"
       {|(html/attrs (filmstrip/optimistic-attrs "move"))|}
   in
-  Alcotest.(check bool) "move verb: optimistic attrs" true
-    (has "data-optimistic=\"move\"" ksent && has "hx-on::before-request" ksent);
+    Alcotest.(check bool) "move verb: optimistic attrs (htmx 4 event name)" true
+      (has "data-optimistic=\"move\"" ksent && has "hx-on::before:request" ksent
+       && has "hx-on::after:request" ksent);
   (* the css pending rules ride filmstrip/css *)
   let css = eval_str ~what:"css" {|(css/render (filmstrip/css))|} in
   Alcotest.(check bool) "css: optimistic pending rules" true
