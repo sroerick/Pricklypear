@@ -2093,11 +2093,11 @@ pane owns the fixed lift). A focused rail pane is a ring, not a window
       (list
         (html/attr "data-optimistic" verb)
         (html/attr
-          "hx-on::before-request"
-          "var v=this.getAttribute('hx-vals')||'';var d=v.indexOf('left')>=0?'left':'right';var f=document.querySelector('.fs-pane.focused');if(f){var n=d=='left'?f.previousElementSibling:f.nextElementSibling;if(n&&n.classList.contains('fs-pane')){if(d=='left'){f.parentNode.insertBefore(f,n)}else{f.parentNode.insertBefore(n,f)}f.classList.add('fs-optimistic')}}")
-        (html/attr
-          "hx-on::after-request"
-          "document.querySelectorAll('.fs-optimistic').forEach(function(n){n.classList.remove('fs-optimistic')})"))
+            "hx-on::before:request"
+              "var v=this.getAttribute('hx-vals')||'';var d=v.indexOf('left')>=0?'left':'right';var f=document.querySelector('.fs-pane.focused');if(f){var n=d=='left'?f.previousElementSibling:f.nextElementSibling;if(n&&n.classList.contains('fs-pane')){if(d=='left'){f.parentNode.insertBefore(f,n)}else{f.parentNode.insertBefore(n,f)}f.classList.add('fs-optimistic')}}")
+          (html/attr
+              "hx-on::after:request"
+            "document.querySelectorAll('.fs-optimistic').forEach(function(n){n.classList.remove('fs-optimistic')})"))
       (list (html/attr "data-optimistic" verb))))
   "Optimistic-loader attrs for one strip-mutation verb (card c7be7174):
 data-optimistic marks the trigger; htmx's htmx-request class + the
@@ -2128,7 +2128,7 @@ idiom; zero script files).")
             (lb/obj (list "verb" "open"))
             (lb/obj (list "verb" "move"))))
         "source"
-        "(filmstrip/optimistic-attrs verb) -> extra trigger attrs.\ndata-optimistic=<verb>; verb=move adds hx-on::before-request\n(transpose the focused pane now) + hx-on::after-request (drop\nfs-optimistic). The fade rides filmstrip/css + htmx's htmx-request\nclass; the server's OOB swap returns the unfaded truth.")))
+        "(filmstrip/optimistic-attrs verb) -> extra trigger attrs.\ndata-optimistic=<verb>; verb=move adds hx-on::before:request\n(transpose the focused pane now) + hx-on::after:request (drop\nfs-optimistic). The fade rides filmstrip/css + htmx's htmx-request\nclass; the server's OOB swap returns the unfaded truth.")))
   "The filmstrip/optimistic-attrs card: this def IS the element's\ndeclaration (card c7be7174).")
 
 (define filmstrip/page
