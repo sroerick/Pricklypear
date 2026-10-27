@@ -856,6 +856,155 @@ let bad_path_page (env : route_env) ~(title : string) (msg : string) : unit =
 let analyze_name (prefix : string) (env : route_env) : string =
   Packages.name_decode (prefix_rest prefix env.path)
 
+(* ---- rooms-chat surface (kernel-dispatched; session identity) ----
+
+   Browser rooms view + composer for the swarm chat lib (libs/chat). The
+   chat verbs run INSIDE the selected session (launch), so (whoami) is the
+   signed-in user and chat/say-in attributes every post to them. Every URL
+   lives under /rooms/* so the glochid harness wears this face through the
+   habitat forwarder with no path rewriting, and the image serves the same
+   page directly at /rooms. OCaml only, so no lib.pp reseed rides this. *)
+
+let rooms_url_enc (s : string) : string =
+  let buf = Buffer.create (String.length s) in
+  String.iter
+    (fun c ->
+       match c with
+       | 'A' .. 'Z' | 'a' .. 'z' | '0' .. '9' | '-' | '_' | '.' | '~' ->
+           Buffer.add_char buf c
+       | c -> Buffer.add_string buf (Printf.sprintf {|%%%02X|} (Char.code c)))
+    s;
+  Buffer.contents buf
+
+let rooms_esc_html (s : string) : string =
+  let buf = Buffer.create (String.length s) in
+  String.iter
+    (fun c ->
+       match c with
+       | '&' -> Buffer.add_string buf {|&amp;|}
+       | '<' -> Buffer.add_string buf {|&lt;|}
+       | '>' -> Buffer.add_string buf {|&gt;|}
+       | '"' -> Buffer.add_string buf {|&quot;|}
+       | c -> Buffer.add_char buf c)
+    s;
+  Buffer.contents buf
+
+let rooms_run (session : Session.t) (src : string) : string =
+  try
+    match Session.eval_string_rim session src with
+    | Pricklypear_lisp.Ast.VStr s -> s
+    | v -> Pricklypear_lisp.Reader.pp_value v
+  with e -> Printf.sprintf {|rooms: %s|} (Printexc.to_string e)
+
+(* Default room: the first kind=lobby row (prod carries chat-lobby from
+   the S2 open-space migration), else the lib's own lobby id. *)
+let rooms_default_room (session : Session.t) : string =
+  try
+    match
+      Session.eval_string_rim session
+        {|(let ((rs (list/filter (lambda (r) (string-eq (as-str (dict-get (chat/row-fields r) "kind")) "lobby")) (chat/rooms)))) (if (null? rs) (as-str chat/lobby-id) (chat/row-id (car rs))))|}
+    with
+    | Pricklypear_lisp.Ast.VStr s when s <> "" -> s
+    | _ -> "lobby"
+  with _ -> "lobby"
+
+let rooms_links (session : Session.t) : string =
+  rooms_run session
+    {|(render-html (html/join (list/map (lambda (r) (let ((id (chat/row-id r))) (html/join (list (html/a (string-append "/rooms?room=" (filmstrip/url-enc id)) (chat/room-title id)) (html/span "" " | "))))) (chat/rooms))))|}
+
+let rooms_log_html ~(session : Session.t) ~(room : string) : string =
+  rooms_run session
+    (Printf.sprintf
+       {|(render-html (html/ul (html/attr "class" "chat-list") (html/join (list/map chat/msg-li (chat/latest "%s")))))|}
+       (Pricklypear_lisp.Reader.escape_string room))
+
+let rooms_body ~(session : Session.t) ~(room : string) ~(err : string) : string =
+  let q = rooms_url_enc room in
+  ignore (rooms_run session {|(chat/ensure-lobby)|});
+  String.concat ""
+    [ {|<div id="rooms-body">|}
+    ; {|<div class="card chat-channels"><h2>Channels</h2><p>|}
+    ; rooms_links session
+    ; {|</p></div>|}
+    ; (if err = "" then ""
+       else Printf.sprintf {|<p class="muted">%s</p>|} (rooms_esc_html err))
+    ; Printf.sprintf
+        {|<div id="rooms-log" hx-get="/rooms/log?room=%s" hx-trigger="every 5s" hx-target="#rooms-log" hx-swap="innerHTML">|}
+        q
+    ; rooms_log_html ~session ~room
+    ; {|</div>|}
+    ; Printf.sprintf
+        {|<form method="post" action="/rooms/say?room=%s" hx-post="/rooms/say?room=%s" hx-target="#rooms-log" hx-swap="innerHTML" hx-on::after-request="if(event.detail.successful){this.reset()}">|}
+        q q
+    ; {|<textarea id="rooms-body-input" name="body" rows="2" required="required" maxlength="4000" placeholder="Say it in the room..."></textarea>|}
+    ; {|<button type="submit">Send</button></form>|}
+    ; {|</div>|} ]
+
+let rooms_page (env : route_env) (session : Session.t) : unit =
+  let get n =
+    match List.assoc_opt n (parse_query env.target) with
+    | Some v -> String.trim v
+    | None -> ""
+  in
+  let room = match get "room" with "" -> rooms_default_room session | r -> r in
+  let body = rooms_body ~session ~room ~err:(get "err") in
+  if wants_fragment ~path:env.path ~headers:env.headers then
+    fragment_response env.reqd body
+  else
+    html_response env.reqd ~session
+      (chrome ~session ~title:"Rooms"
+         [ HTML.div [] [ txt ~raw:true "%s" body ] ])
+
+let rooms_log_page (env : route_env) (session : Session.t) : unit =
+  let room =
+    match List.assoc_opt "room" (parse_query env.target) with
+    | Some v when String.trim v <> "" -> String.trim v
+    | _ -> rooms_default_room session
+  in
+  if wants_fragment ~path:env.path ~headers:env.headers then
+    fragment_response env.reqd (rooms_log_html ~session ~room)
+  else
+    let headers =
+      Httpun.Headers.of_list
+        [("location", "/rooms?room=" ^ rooms_url_enc room); ("content-length", "0")]
+    in
+    ignore
+      (Httpun.Reqd.respond_with_string env.reqd
+         (Httpun.Response.create ~headers `See_other) "")
+
+let post_rooms_say (env : route_env) (session : Session.t) : unit =
+  let body = read_body env.reqd in
+  let room =
+    match List.assoc_opt "room" (parse_query env.target) with
+    | Some r when String.trim r <> "" -> String.trim r
+    | _ -> rooms_default_room session
+  in
+  let msg = match form_field body "body" with Some m -> m | None -> "" in
+  let res =
+    if String.trim msg = "" then ""
+    else
+      rooms_run session
+        (Printf.sprintf {|(chat/say-in "%s" "%s")|}
+           (Pricklypear_lisp.Reader.escape_string room)
+           (Pricklypear_lisp.Reader.escape_string msg))
+  in
+  if wants_fragment ~path:env.path ~headers:env.headers then
+    fragment_response env.reqd
+      (rooms_log_html ~session ~room
+       ^ if res = "" then ""
+         else Printf.sprintf {|<p class="muted">%s</p>|} (rooms_esc_html res))
+  else
+    let loc =
+      if res = "" then "/rooms?room=" ^ rooms_url_enc room
+      else
+        "/rooms?room=" ^ rooms_url_enc room ^ "&err=" ^ rooms_url_enc res
+    in
+    let headers =
+      Httpun.Headers.of_list [("location", loc); ("content-length", "0")]
+    in
+    ignore
+      (Httpun.Reqd.respond_with_string env.reqd
+         (Httpun.Response.create ~headers `See_other) "")
 (* The router table: ONE dispatch surface. Order is load-bearing —
    first match wins; exact/narrow prefixes must precede broader ones
    (assets/cm before assets, book/chapter|code|course before book/,
@@ -1461,6 +1610,14 @@ let routes : route list =
         | _ ->
             bad_path_page env ~title:"Bad notes path"
               "use /notes/<user>/<slug>");
+    (* ---- rooms-chat (kernel-dispatched; the glochid harness pane wears
+       it via the habitat forwarder; the image also serves it directly) ---- *)
+    rt "rooms" [ `GET ] (Exact "/rooms")
+      (fun env -> launch env (fun session -> rooms_page env session));
+    rt "rooms-log" [ `GET ] (Exact "/rooms/log")
+      (fun env -> launch env (fun session -> rooms_log_page env session));
+    rt "rooms-say" [ `POST ] (Exact "/rooms/say")
+      (fun env -> launch env (fun session -> post_rooms_say env session));
     (* ---- CATCH-ALLS (must stay last) ---- *)
     (* User routes: GET + POST (it33). Same path → same handler;
        request-* prims expose method/params for branching. *)

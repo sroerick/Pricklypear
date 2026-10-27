@@ -255,6 +255,8 @@ let surface_source = {pp|
     " <span class=\"muted\">— "
     (filmstrip/app-link "/code" "/code")
     " · "
+    (filmstrip/app-link "/rooms" "rooms")
+    " · "
     (filmstrip/app-link "/bindings" "/bindings")
     " · "
     (filmstrip/app-link "/sessions" "/sessions")
@@ -1165,7 +1167,8 @@ only ever names the picked route (entry-html wears it as fs-sel).")
     (list
       (list "todo" "/todos")
       (list "notes" "/notes")
-      (list "calendar" "/calendar"))))
+      (list "calendar" "/calendar")
+      (list "rooms" "/rooms"))))
 
 ;; one stable id per app so boosted anchors swap INTO the wrapper's
 ;; inner (the wrapper survives every swap); hx-boost catches anchors
@@ -1219,6 +1222,7 @@ only ever names the picked route (entry-html wears it as fs-sel).")
 (define (glochid/fwd-todo) (glochid/fwd-face "todo"))
 (define (glochid/fwd-notes) (glochid/fwd-face "notes"))
 (define (glochid/fwd-calendar) (glochid/fwd-face "calendar"))
+(define (glochid/fwd-rooms) (glochid/fwd-face "rooms"))
 
 ;; ---- 2b2. RAIL TREES (v4: the rail inventory = N trees, ONE renderer) ----
 ;; borge/filmstrip.borg rail-trees-v4. Three roots:
@@ -2279,6 +2283,7 @@ every live main pane of the desktop, so the heal picks the ring only
 (route "/todos" "glochid/fwd-todo")
 (route "/notes" "glochid/fwd-notes")
 (route "/calendar" "glochid/fwd-calendar")
+(route "/rooms" "glochid/fwd-rooms")
 
 (route "/" "glochid/shell")
 (route "/filmstrip" "glochid/shell")
