@@ -1,0 +1,361 @@
+<main><h1>/chat</h1>
+<h1>Chat</h1>
+
+<p class="muted">Lobby for everyone on this box. You are admin.</p>
+
+<div class="card chat-channels">
+<h2>Channels</h2>
+<button type="button" class="fs-applink" hx-post="/filmstrip/open" hx-vals="{&quot;route&quot;:&quot;/chat&quot;}" hx-target="#fs-sink" hx-swap="innerHTML" data-optimistic="open" data-htmx-powered="true">Lobby</button>
+<p class="muted">Start a DM:</p>
+
+<form class="chat-dm-start" hx-post="/chat/dm/open" hx-target="#fs-sink" hx-swap="innerHTML" data-htmx-powered="true"><input name="peer" placeholder="peer username" aria-label="peer username" required="required"><button type="submit">DM</button></form>
+</div>
+
+<div id="chat-older" class="chat-older">
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-test-1</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-test-2</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-1</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-2</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-3</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-4</div>
+</div>
+
+
+
+<div id="chat-older-more"><button type="button" class="chat-older-btn" hx-get="/chat?before=7d2b4370-f69f-49be-a6df-9f313c0e396e" hx-target="#chat-older" hx-swap="afterbegin" data-htmx-powered="true">Load older messages</button></div>
+</div>
+
+<div class="chatpage" style="display:flex;flex-direction:column;flex:1;min-height:0" id="chat-main">
+<div class="chat-log" style="display:flex;flex-direction:column;flex:1;min-height:0;overflow-y:auto" id="chat-main-log" hx-on::before-swap="this.dataset.stick=(this.dataset.init&amp;&amp;this.scrollHeight-this.scrollTop-this.clientHeight&gt;=160)?'':'1';this.dataset.init=1" hx-on::after-swap="if(this.dataset.stick)this.scrollTop=this.scrollHeight" hx-get="/chat/partial" hx-trigger="load, every 4s" hx-swap="innerHTML" data-htmx-powered="true">
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-5</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-6</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-7</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-8</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-9</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-10</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-11</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-12</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-13</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-14</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-15</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-16</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-17</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-18</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-19</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-20</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-21</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-22</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-23</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-24</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-25</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-26</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-27</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-28</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-29</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-30</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-31</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-32</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-33</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-34</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-35</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-36</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-37</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-38</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-39</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-40</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-41</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-42</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-43</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-44</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-45</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-46</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-47</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-48</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-49</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-50</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-51</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-52</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-53</div>
+</div>
+
+<div class="bubble user">
+<div class="bubble-meta">admin · 2026-10-26 23:23</div>
+
+<div class="bubble-body">smoke-54</div>
+</div>
+</div>
+
+<form class="chat-composer" style="display:flex;flex-direction:row" method="post" action="/chat" hx-post="/chat" hx-target="#chat-main-log" hx-swap="innerHTML" hx-on::after-request="if(event.detail.successful){this.reset();var l=document.querySelector(this.getAttribute('hx-target'));if(l){l.scrollTop=l.scrollHeight}}" data-htmx-powered="true"><textarea name="body" class="chat-input" rows="1" required="required" placeholder="Write a message…" maxlength="4000" style="flex:1;min-height:2.5rem;min-width:0"></textarea><button type="submit" class="chat-send">Send</button></form>
+</div>
+</main>
