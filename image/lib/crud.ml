@@ -1607,12 +1607,28 @@ let tree_get_many (store : Store.t) ~(paths : string list)
       VList envs)
 
 let tree_list (store : Store.t) ~(prefix : string) ?(depth : int option)
-    ?(limit : int = 50000) () : value =
+    ?(limit : int = 50000) ?(type_filter : string option = None) () : value =
   with_tree_tx store ~none:(fun () -> VList []) (fun conn ->
       let nodes =
         match depth with
         | Some 1 -> Tree_store.list_children conn ~prefix ~limit ()
           | _ -> Tree_store.cached_list_subtree conn ~prefix ~limit ()
+      in
+      (* Optional server-side type filter (prod /todos budget fix,
+         2026-10-28): moves the per-row type test out of interpreted PP
+         (todo/item/all-shared was filtering 4128 shared nodes inside the
+         eval step budget) into OCaml. The predicate mirrors
+         node_to_json's "type" field exactly - type_name when present,
+         else the kind column - so a filtered (tree/list) returns the
+         same rows, in the same order, as the old scan + interpreted
+         filter. Additive optional argument: 1-3 arg calls unchanged. *)
+      let nodes =
+        match type_filter with
+        | None -> nodes
+        | Some tf ->
+            List.filter
+              (fun n -> String.equal (Tree_store.node_type_name n) tf)
+              nodes
       in
       (VList (List.map (fun n -> VStr (Tree_store.node_to_json n)) nodes)))
 

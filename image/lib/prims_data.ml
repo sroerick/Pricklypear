@@ -329,8 +329,21 @@ let register (t : t) (tbl : Primitives.t) : unit =
         ] ->
           Crud.tree_list t.store ~prefix ~depth:(Int64.to_int depth)
             ~limit:(Int64.to_int lim) ()
+      (* 4th optional arg: server-side type filter (prod /todos budget
+         fix 2026-10-28). Filters by the same "type" field node_to_json
+         renders (type_name when present, else the kind column), so lib
+         callers can drop interpreted per-row list/filter passes that
+         fan out over the whole shared subtree inside the eval budget.
+         Additive arity: 1-3 arg calls unchanged. *)
+      | [ Pricklypear_lisp.Ast.VStr prefix
+        ; Pricklypear_lisp.Ast.VInt depth
+        ; Pricklypear_lisp.Ast.VInt lim
+        ; Pricklypear_lisp.Ast.VStr tf
+        ] ->
+          Crud.tree_list t.store ~prefix ~depth:(Int64.to_int depth)
+            ~limit:(Int64.to_int lim) ~type_filter:(Some tf) ()
       | _ ->
-          ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("tree/list", "need prefix [, depth [, limit]]", "bad-args"))))));
+          ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("tree/list", "need prefix [, depth [, limit [, type]]]", "bad-args"))))));
 
   (* (tree/children-of path [limit]) -> VList of direct-child node JSON.
      one-tree.tree-read-prims: level-predicate children read over
