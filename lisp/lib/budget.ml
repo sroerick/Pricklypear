@@ -61,8 +61,17 @@ type budget = {
     ui/nav 4k, ui/home 11k) whenever a page session refreshes it, so
     real pages like todo/page could not fit 100k alongside the render.
     400k steps ~= 0.25s of pure eval CPU; wall time is still bounded by
-    the request gate. *)
-let default_limit = 400_000
+    the request gate.
+    Raised 400k -> 2M 2026-10-28 (prod /todos regression): this is a
+    STEP budget per eval, not a row cap. The prod /todos board build
+    (todo/item/all-shared filtering 4125 shared nodes, lib.pp:1376)
+    exceeds 400k steps inside interpreted PP. At ~0.25s eval CPU per
+    400k steps, 2M ~ 1.25s; wall time stays bounded by the request
+    gate. NOTE: this is a GLOBAL knob on a multi-tenant image -
+    hollis/roerick sign-off required. Durable fix = type-filtered
+    shared scan in todo/item/all-shared (lib-body change, needs admin
+    reseed, intentionally NOT in this patch). *)
+let default_limit = 2_000_000
 
 (** Allocate a fresh [budget] with the given [limit] (default
     [default_limit]); counters start at zero. *)
