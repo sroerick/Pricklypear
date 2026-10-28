@@ -181,7 +181,7 @@ let () =
   (* habitat-pane forward prefixes (glochid.borg habitat-panes): register
      OCaml-side so the Nopales boot layer has no boot prim dependency --
      kernel paths refuse by construction in fwd_register_prefix. *)
-  ignore (List.map Habitat.fwd_register_prefix [ "/todos"; "/notes"; "/calendar" ]);
+  ignore (List.map Habitat.fwd_register_prefix [ "/todos"; "/notes"; "/calendar"; "/rooms" ]);
   Plugins.load_all rt;
   match !pipe_expr with
   | Some src ->
