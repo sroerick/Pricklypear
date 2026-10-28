@@ -1221,6 +1221,14 @@ let node_to_json (n : node) : string =
        ; ("rank", match n.rank with Some r -> `String r | None -> `Null)
        ])
 
+(* The node's effective "type" exactly as node_to_json renders it: the
+   Nopales type_name when present, else the kind column. Exposed for
+   Crud-level filtering (tree/list's optional 4th arg, 2026-10-28 prod
+   /todos budget fix) without reaching into node record fields from
+   outside this module. *)
+let node_type_name (n : node) : string =
+  match n.type_name with Some t -> t | None -> n.kind
+
 (** Render a [version] row as the JSON the reads-as-of-gen prims return.
     Mirrors node_to_json's field vocabulary (id/path/kind/type/body/author/
     hash/created_at) so a gen-as-of read has the SAME surface as a head
