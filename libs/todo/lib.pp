@@ -1369,14 +1369,14 @@
     ()
     (list/map
       todo/tree/node->pair
-      (list/filter
-        (lambda
-          (nj)
-          (string-eq (as-str (dict-get nj "type")) "todo-item"))
-        (tree/list (todo/tree/shared-prefix) 3 5000))))
+      (tree/list (todo/tree/shared-prefix) 3 5000 "todo-item")))
   "The SHARED data space's todo-items — datum rows under data.s.*. And a
      Board on any space may hold them, so scan the data.s root at type
-     depth. Same (id . fields) shape as todo/item/all.")
+     depth. 2026-10-28 budget fix: the type filter runs SERVER-SIDE
+     (tree/list's optional 4th arg) instead of an interpreted list/filter
+     over the whole shared subtree, which blew the 400k step budget on
+     prod (4128 shared nodes). Same rows, same order, same (id . fields)
+     shape as todo/item/all.")
 
 (define todo/item/all
   (lambda
@@ -2220,16 +2220,14 @@
     ()
     (list/map
       todo/tree/node->pair
-      (list/filter
-        (lambda
-          (nj)
-          (string-eq (as-str (dict-get nj "type")) "todo-list"))
-        (tree/list (todo/tree/shared-prefix) 3 5000))))
+      (tree/list (todo/tree/shared-prefix) 3 5000 "todo-list")))
   "The SHARED data space's lists — datum rows under data.s.*.space.*
      (034 row-level routing; the Board lives here). Scans the shared root
      at type depth and keeps todo-list nodes: the space label is dynamic
      (any space may hold one), so a prefix scan is more faithful than a
-     single synthesized path. Same (id . fields) shape as todo/list/all.")
+     single synthesized path. 2026-10-28 budget fix: the type filter runs
+     SERVER-SIDE (tree/list's optional 4th arg), same fix as
+     todo/item/all-shared. Same (id . fields) shape as todo/list/all.")
 
 (define todo/list/all
   (lambda
