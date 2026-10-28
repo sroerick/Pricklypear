@@ -58,6 +58,10 @@
 #                            enters the agent's environment.
 #   PP_FLOW_PI — the pi runner (default: `pi -p`); set to e.g. `true` to stub
 #                the agent for tests:  PP_FLOW_PI=true ./scripts/pp-flow.sh --run <id>
+#   (stub runs never scrape their transcript: the brief is never posted to a
+#    card comment — verify-stage 2026-10-27. A run that exits 0 with no
+#    evidence receipt is flagged by the EMPTY-EVIDENCE canary, never
+#    silently green.)
 #   PP_FLOW_LOG_DIR — where run logs + brief files go (default <repo>/.ralph)
 #   PP_FLOW_CONTEXT_FILE — file whose lines REPLACE the brief's == CONTEXT ==
 #     block (box-local repo/build/test truth, e.g. on vultr); unset = template
@@ -564,6 +568,54 @@ agent_evidence() {
   esac
 }
 
+
+# ---- JSON verdict extraction (verify-stage, 2026-10-27) -------------------------
+# Structured runners (the autolith adapter, supervised sidecars) may render
+# the verdict as a JSON object instead of an EVIDENCE:/DESTINATION: line.
+# The 10-25 walk caught gate2 going green on a JSON verdict nobody parsed.
+# Two extractors, both POSIX awk/grep (no jq dependency, matching the
+# script's no-interpreter rule; last occurrence wins, like agent_destination):
+#   json_verdict  -> last "verdict" string value (PASS / FAIL / ESCALATE / ...)
+#   json_evidence -> last "evidence" string value, unescaped (\" \\ \n \t \r)
+json_verdict() {
+  tr '\n' ' ' < "$1" 2>/dev/null | grep -o '"verdict"[[:space:]]*:[[:space:]]*"[A-Za-z][A-Za-z0-9_-]*"' | tail -n1 | sed 's/.*:[[:space:]]*"//; s/"$//'
+}
+json_evidence() {
+  # Q = dquote, B = backslash, built with sprintf so the awk program below
+  # contains no escaped quotes at all (a double-escaped revision of this
+  # block was a quote-desync landmine; variable-built chars are not).
+  awk 'BEGIN { ORS = ""
+    Q = sprintf("%c", 34); B = sprintf("%c", 92); key = Q "evidence" Q }
+    { s = s $0 " " }
+    END {
+      n = length(s); p = 0; last = ""
+      while ((q = index(substr(s, p + 1), key)) > 0) {
+        i = p + q + length(key) - 1
+        c1 = substr(s, i + 1, 1)
+        while (c1 == " " || c1 == "\t") { i++; c1 = substr(s, i + 1, 1) }
+        if (c1 != ":") { p = i; continue }
+        i++; c1 = substr(s, i + 1, 1)
+        while (c1 == " " || c1 == "\t") { i++; c1 = substr(s, i + 1, 1) }
+        if (c1 != Q) { p = i; continue }
+        i += 2; out = ""
+        while (i <= n) {
+          c = substr(s, i, 1)
+          if (c == Q) { last = out; p = i; break }
+          if (c == B) {
+            d = substr(s, i + 1, 1)
+            if (d == "n") out = out "\n"
+            else if (d == "t") out = out "\t"
+            else if (d == "r" || d == "b" || d == "f") out = out " "
+            else out = out d
+            i += 2; continue
+          }
+          out = out c; i++
+        }
+        if (i > n) break
+      }
+      printf "%s", last
+    }' "$1" 2>/dev/null
+}
 # ---- modes -----------------------------------------------------------------------
 LOG_DIR="${LOG_DIR_FLAG:-${PP_FLOW_LOG_DIR:-$ROOT/.ralph}}"
 mkdir -p "$LOG_DIR" 2>/dev/null || true
@@ -780,10 +832,15 @@ case "$MODE" in
     LOG_FILE="$LOG_DIR/flow-$SHORT.log"
     echo "pp-flow: running agent ($PI_RUNNER) on $CARD ..." >&2
     A0=$(date +%s)
-    if [ "$PI_RUNNER" = "true" ]; then
-      # explicit test stub: record the brief as the 'transcript', succeed
-      cp "$BRIEF_FILE" "$LOG_FILE"
-      rc=0
+      stub=0
+      if [ "$PI_RUNNER" = "true" ]; then
+        # explicit test stub: record the brief as the 'transcript', succeed.
+        # STUB ISOLATION (verify-stage, 2026-10-27): the stub transcript IS
+        # the brief file — it is never scraped into a card comment or a
+        # verdict below; the canary flags the empty evidence instead.
+        cp "$BRIEF_FILE" "$LOG_FILE"
+        rc=0
+        stub=1
     elif ! command -v "${PI_RUNNER%% *}" >/dev/null 2>&1; then
       # missing runner is a CONFIG error, not a successful no-op
       echo "pp-flow: runner not found: $PI_RUNNER (set PP_FLOW_PI)" >&2
@@ -795,8 +852,36 @@ case "$MODE" in
     fi
     A1=$(date +%s); AGENT_S=$(( A1 - A0 ))
     echo "pp-flow: agent rc=$rc (${AGENT_S}s); transcript -> $LOG_FILE" >&2
-    evid="$(agent_evidence "$LOG_FILE")"
-    dest="$(agent_destination "$LOG_FILE")"
+      if [ "$stub" = "1" ]; then
+        # The brief is never pushed: a stub transcript is the brief itself,
+        # so no EVIDENCE/DESTINATION scrape runs at all — an explicit empty
+        # placeholder goes out and the canary flags the run.
+        evid="(stub run: transcript is the brief; no evidence scraped — brief never leaves the box)"
+        dest=""
+      else
+        evid="$(agent_evidence "$LOG_FILE")"
+        dest="$(agent_destination "$LOG_FILE")"
+        # JSON VERDICT AS PRIMARY EVIDENCE (verify-stage, 2026-10-27): the
+        # 10-25 walk caught a structured runner emitting a JSON verdict
+        # object that the EVIDENCE-line scrape never parsed — the gate went
+        # green with zero parsed evidence. When the transcript carries a
+        # JSON verdict it IS the receipt: its evidence field becomes the
+        # card comment, ahead of any scraped EVIDENCE line. (destination
+        # from the same object is already honored by agent_destination
+        # tier 4 and validated against the card's columns.)
+        jv="$(json_verdict "$LOG_FILE")"
+        case "$jv" in
+          "") : ;;
+          *)
+            jev="$(json_evidence "$LOG_FILE" | cut -c1-500)"
+            echo "pp-flow: JSON verdict=$jv adopted as primary evidence" >&2
+            case "$jev" in
+              "") evid="(JSON verdict=$jv carried no evidence field — log: $LOG_FILE)" ;;
+              *)  evid="verdict=$jv; $jev" ;;
+            esac
+            ;;
+        esac
+      fi
     # Never obey an unvalidated column: the agent names the destination, but
     # the card's real pipeline has the final say (an AUTO PASS naming DONE is
     # honored; a hallucinated column falls back to the one-column advance).
@@ -859,7 +944,11 @@ case "$MODE" in
       # trace). Post a failure comment so the card feed shows every run —
       # in supervised mode the supervisor owns this comment instead.
       if [ "$SUPERVISED" != "1" ]; then
-        tailtxt="$(tail -c 300 "$LOG_FILE" 2>/dev/null | tr -d '\r' | tr '\n' ' ' | tr -d '\033' | tr -d '"\\')"
+        if [ "$stub" = "1" ]; then
+          tailtxt=""   # stub transcript IS the brief: never posted anywhere
+        else
+          tailtxt="$(tail -c 300 "$LOG_FILE" 2>/dev/null | tr -d '\r' | tr '\n' ' ' | tr -d '\033' | tr -d '"\\')"
+        fi
         fmsg="pp-flow: agent FAILED rc=$rc (runner: $PI_RUNNER, ${AGENT_S}s). Log: $LOG_FILE. Tail: $tailtxt"
         pp_todo_raw "(begin (todo/comment/add $(json_str "$CARD") $(json_str "$fmsg")) (todo/item/unassign $(json_str "$CARD")))" >/dev/null
       fi
@@ -877,6 +966,15 @@ case "$MODE" in
       "("*")") EVFLAG=no ;;  # the placeholder, not real evidence
       *) EVFLAG=yes ;;
     esac
+      # EMPTY-EVIDENCE CANARY (verify-stage, 2026-10-27): the 10-25 walk
+      # advanced gate1 on rc=0 alone — zero EVIDENCE lines, nothing flagged.
+      # A pass with no evidence receipt is not green, it is UNVERIFIED: flag
+      # it loudly (stderr + the card comment below). The ledger keeps
+      # evidence=no so runs.jsonl can count canaried runs.
+      if [ "$EVFLAG" = "no" ]; then
+        echo "pp-flow: CANARY pass with EMPTY evidence (rc=0, no receipt) — flagged, not silently green" >&2
+        evid="pp-flow: [EMPTY-EVIDENCE PASS (canary): exited 0 but emitted no evidence receipt — treat as unverified.] $evid"
+      fi
     if [ "$SUPERVISED" = "1" ]; then
       # supervised: the supervisor owns the write-back (transition + evidence
       # comment + lease release) and the run-row finish; this sidecar stops here.
