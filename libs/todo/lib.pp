@@ -1954,25 +1954,30 @@
                 (string-eq (as-str list-id) "")
                 (todo/list/ensure-inbox)
                 (as-str list-id))))
-          (seq
-            (todo/tree/save
-              "todo-item"
-              id
-              (dict-set*
-                fields
-                (list
-                  "title"
-                  (as-str title)
-                  "notes"
-                  (as-str notes)
-                  "due"
-                  (as-str due)
-                  "state"
-                  next
-                  "list_id"
-                  lid)))
-            (todo/node/mirror id next)
-            (todo/event/transition! id prev next)))))))
+              (if
+                (todo/state/valid-for-fields?
+                  (dict-set* fields (list "list_id" lid))
+                  next)
+                (seq
+                  (todo/tree/save
+                    "todo-item"
+                    id
+                    (dict-set*
+                      fields
+                      (list
+                        "title"
+                        (as-str title)
+                        "notes"
+                        (as-str notes)
+                        "due"
+                        (as-str due)
+                        "state"
+                        next
+                        "list_id"
+                        lid)))
+                  (todo/node/mirror id next)
+                  (todo/event/transition! id prev next))
+                (todo/state/reject id next)))))))
 
 (define todo/item/set-acceptance
   (lambda
@@ -2059,9 +2064,12 @@
         (let
           ((prev (todo/item/state cur))
             (next (as-str state)))
-          (seq
-            (todo/tree/set-field "todo-item" (as-str id) "state" next)
-            (todo/event/transition! id prev next)))))))
+            (if
+              (todo/state/valid-for-fields? cur next)
+              (seq
+                (todo/tree/set-field "todo-item" (as-str id) "state" next)
+                (todo/event/transition! id prev next))
+              (todo/state/reject id next)))))))
 
 (define todo/item/set-target
   (lambda
@@ -3065,24 +3073,29 @@
                 (string-eq (as-str list-id) "")
                 (todo/ensure-inbox)
                 (as-str list-id))))
-          (seq
-            (todo/tree/save
-              "todo-item"
-              id
-              (dict-set*
-                fields
-                (list
-                  "title"
-                  (as-str title)
-                  "notes"
-                  (as-str notes)
-                  "due"
-                  (as-str due)
-                  "state"
-                  next
-                  "list_id"
-                  lid)))
-            (todo/event/transition! id prev next)))))))
+            (if
+              (todo/state/valid-for-fields?
+                (dict-set* fields (list "list_id" lid))
+                next)
+              (seq
+                (todo/tree/save
+                  "todo-item"
+                  id
+                  (dict-set*
+                    fields
+                    (list
+                      "title"
+                      (as-str title)
+                      "notes"
+                      (as-str notes)
+                      "due"
+                      (as-str due)
+                      "state"
+                      next
+                      "list_id"
+                      lid)))
+                (todo/event/transition! id prev next))
+              (todo/state/reject id next)))))))
 
 (define todo/seqtest
   (lambda () 7))
@@ -3102,9 +3115,12 @@
         (let
           ((prev (todo/item/state cur))
             (next (as-str state)))
-          (seq
-            (todo/tree/set-field "todo-item" (as-str id) "state" next)
-            (todo/event/transition! id prev next)))))))
+            (if
+              (todo/state/valid-for-fields? cur next)
+              (seq
+                (todo/tree/set-field "todo-item" (as-str id) "state" next)
+                (todo/event/transition! id prev next))
+              (todo/state/reject id next)))))))
 
 
 
@@ -3140,6 +3156,154 @@
               ((cs (as-str cols)))
               (if (string-eq cs "") todo/state/list (json-parse cs))))))))
   "The state set (list of state strings) for a todo-list: the list's own\n     `columns` field when present and non-empty, else the global default\n     todo/state/list. THE per-list override kanban columns and the /todos\n     state machine both read through, so a list with custom columns cycles\n     only those states everywhere.")
+
+(define todo/list/find-row
+  (lambda
+    (rows id)
+    (if
+      (null? rows)
+      ()
+      (if
+        (string-eq (as-str (car (car rows))) (as-str id))
+        (car rows)
+        (todo/list/find-row (cdr rows) id))))
+  "The (id . fields) row in rows whose id matches, or () when absent. A linear scan over an already-fetched list pool, never a by-id get: a card filed to a list row that does not exist carries a non-uuid id, and a by-id get raises 22P02 on it.")
+
+(define todo/state/columns-in
+  (lambda
+    (lists list-id)
+    (let
+      ((row (todo/list/find-row lists (as-str list-id))))
+      (if
+        (null? row)
+        todo/state/list
+        (let
+          ((cols (dict-get (cdr row) "columns")))
+          (if
+            (null? cols)
+            todo/state/list
+            (let
+              ((cs (as-str cols)))
+              (if (string-eq cs "") todo/state/list (json-parse cs))))))))
+  "The column vocabulary for list-id inside an already-fetched list pool: its own non-empty `columns`, else the global default todo/state/list. Taking the pool as an argument keeps a card-by-card pass to ONE list read instead of one per card.")
+
+(define todo/state/pipeline-in
+  (lambda
+    (lists fields)
+    (let
+      ((own (as-str (dict-get fields "pipeline"))))
+      (if
+        (string-eq own "")
+        (todo/state/columns-in lists (todo/item/list-id fields))
+        (json-parse own))))
+  "The card's own effective pipeline (own `pipeline` override > its list's columns > the global default) inside an already-fetched list pool.")
+
+(define todo/state/valid-in?
+  (lambda
+    (lists fields state)
+    (let
+      ((s (as-str state)))
+      (if
+          (or
+            (string-eq s "")
+            (string-eq s "ARCHIVED")
+            (string-eq s "APPROVED"))
+        #t
+        (not
+          (null?
+            (list/filter
+              (lambda (c) (string-eq (as-str c) s))
+              (todo/state/pipeline-in lists fields)))))))
+    "True when state is a column of the card's own effective pipeline, or one\n     of the two statuses that live outside every column list: ARCHIVED (the\n     archive column) and APPROVED (the doasq approval gate). Anything else —\n     a prose body, a sentence, a card title — is not a state.")
+
+(define todo/state/valid-for-fields?
+  (lambda
+    (fields state)
+    (todo/state/valid-in? (todo/list/all) fields state))
+  "True when state is a column of the card's own effective pipeline, the empty (none) column, or ARCHIVED. THE predicate every card-state writer checks: bug 7947367 put prose bodies in `state`, which took those cards out of every filter, column and drain.")
+
+(define todo/state/entry-column
+  (lambda
+    (lists fields)
+    (let
+      ((real
+        (list/filter
+          (lambda (c) (not (string-eq (as-str c) "")))
+          (todo/state/pipeline-in lists fields))))
+      (if (null? real) "TODO" (as-str (car real)))))
+  "The first non-empty column of the card's own pipeline: where a card belongs when its state carries no column at all.")
+
+(define todo/state/reject
+  (lambda
+    (id state)
+    (err/shape
+      (string-append
+        "state \""
+        (substring (as-str state) 0 60)
+        "\" is not a column of card "
+        (as-str id)
+        "; nothing written")
+      "bad-args"))
+  "The refusal a card-state writer returns instead of writing a value that is not a column: an (error msg kind) envelope naming the value, so a bad writer sees its input echoed back instead of getting a silent write.")
+
+(define todo/state/prose?
+  (lambda
+    (lists fields)
+    (not
+      (todo/state/valid-in? lists fields (todo/item/state fields))))
+  "True when the card's `state` is not a column of its own pipeline: the prose-body corruption of bug 7947367.")
+
+(define todo/state/prose-cards
+  (lambda
+    ()
+    (let
+      ((lists (todo/list/all)))
+      (list/filter
+        (lambda (row) (todo/state/prose? lists (cdr row)))
+        (todo/item/all))))
+  "Every visible card whose `state` holds prose instead of a column: the census bug 7947367 asks for. One list read for the whole pass.")
+
+(define todo/state/repair-row
+  (lambda
+    (lists id fields apply?)
+    (if
+      (todo/state/prose? lists fields)
+      (let
+        ((prose (todo/item/state fields))
+          (notes (as-str (dict-get fields "notes")))
+          (entry (todo/state/entry-column lists fields)))
+        (seq
+          (if
+            apply?
+            (seq
+              (todo/tree/set-field
+                "todo-item"
+                (as-str id)
+                "notes"
+                (string-append
+                  (if (string-eq notes "") "" (string-append notes "\n\n"))
+                  "[state repaired "
+                  (date-today)
+                  ": the text below was sitting in the state field]\n"
+                  prose))
+              (todo/tree/set-field "todo-item" (as-str id) "state" entry)
+              (todo/event/transition! id prose entry))
+            ())
+          (as-str id)))
+        ()))
+  "Repair one card whose `state` holds prose: the body moves into `notes` (blank notes take it verbatim; an existing body keeps it and the prose is appended under a dated marker) and the state becomes the card's pipeline entry column, with one todo-event recording prose -> entry. Returns the id when the card needed repair, () otherwise. apply? false is a dry run that writes nothing.")
+
+(define todo/state/repair-prose
+  (lambda
+    (apply?)
+    (let
+      ((lists (todo/list/all)))
+      (list/filter
+        (lambda (x) (not (null? x)))
+        (list/map
+          (lambda (row) (todo/state/repair-row lists (car row) (cdr row) apply?))
+          (todo/item/all)))))
+  "Repair every visible card whose `state` holds prose (bug 7947367). Returns the repaired ids; apply? false is the dry-run census. Run (#f) first, then (#t).")
 
 (define todo/state/item-pipeline (lambda
   (item-id)
