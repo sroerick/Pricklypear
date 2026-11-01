@@ -1356,6 +1356,12 @@ let routes : route list =
       (fun env -> launch env (fun session -> api_agent session env.reqd));
     rt "api-agent-task" [ `POST ] (Exact "/api/agent-task")
       (fun env -> launch env (fun session -> api_agent_task session env.reqd));
+  rt "api-agent-job" [ `POST ] (Exact "/api/agent-job")
+    (fun env -> launch env (fun session -> api_agent_job session env.reqd));
+  rt "api-jobs-get" [ `GET ] (Prefix_nonempty "/api/jobs/")
+    (fun env ->
+      let id = prefix_rest "/api/jobs/" env.path in
+      launch env (fun session -> api_job_status session env.reqd ~id));
     rt "repl-llm" [ `POST ] (Exact "/repl-v2/llm")
       (fun env -> launch env (fun session -> repl_llm session env.reqd));
     rt "ai-propose" [ `POST ] (Exact "/api/ai/propose")

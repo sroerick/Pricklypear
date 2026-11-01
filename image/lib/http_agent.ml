@@ -358,6 +358,104 @@ let api_agent (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
                 end)
         end
 
+(* ---- job-backed agent turn (10-31 offload) ----
+
+   /api/agent runs the whole tool loop on the request fiber: one unbounded
+   eval can exhaust the image heap (10-28). This surface submits the SAME
+   turn to the jobs table. The [worker:] fn prefix keeps the in-image runner
+   from claiming it (boot.ml claim_due excludes that prefix), so an external
+   pp-remote --work-loop worker runs it: a crash there costs a job attempt,
+   not the site. Poll GET /api/jobs/<id>. *)
+
+let api_agent_job (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
+  let body = read_body reqd in
+  let prompt, sid_opt, max_steps =
+    match parse_body body with
+    | Body_fields items ->
+        let prompt =
+          match List.assoc_opt "prompt" items with
+          | Some (`String s) -> s
+          | _ -> json_field_str items "q"
+        in
+        let sid =
+          match List.assoc_opt "session_id" items with
+          | Some (`String s) when String.trim s <> "" -> Some (String.trim s)
+          | _ -> None
+        in
+        let steps =
+          match List.assoc_opt "max_steps" items with
+          | Some (`Int n) -> n
+          | Some (`String s) ->
+              (match int_of_string_opt s with Some n -> n | None -> 16)
+          | _ -> 16
+        in
+        (prompt, sid, steps)
+    | _ ->
+        let prompt =
+          match form_field body "prompt" with
+          | Some p -> p
+          | None -> Option.value (form_field body "q") ~default:""
+        in
+        (prompt, form_field body "session_id", 16)
+  in
+  if String.trim prompt = "" then (
+    json_response reqd
+      (`Assoc [ ("ok", `Bool false); ("error", `String "need prompt") ]);
+    ())
+  else
+    let sid_r =
+      match sid_opt with
+      | Some sid -> Ok sid
+      | None ->
+          let title_opt =
+            let p = agent_user_visible_text prompt in
+            if String.trim p = "" then None
+            else
+              Some (if String.length p > 80 then String.sub p 0 80 ^ "…" else p)
+          in
+          Session.agent_session_new_res session ~seed:default_http_agent_seed
+            ~tools:true ?title:title_opt ()
+    in
+    match sid_r with
+    | Error e ->
+        json_response reqd (`Assoc [ ("ok", `Bool false); ("error", `String e) ]);
+        ()
+    | Ok sid ->
+        let store = Session.store session in
+        let branch = Session.branch_name session in
+        let caller = session.Session.manifest.username in
+        let args_json =
+          Yojson.Safe.to_string
+            (`List [ `String sid; `String prompt; `Int max_steps ])
+        in
+        (match
+           Jobs.submit ~store ~fn:(Jobs.worker_prefix ^ "agent-say")
+             ~args_json ~branch ~submitted_by:caller ~run_at_ms:0L ()
+         with
+         | Ok id ->
+             json_response reqd
+               (`Assoc
+                  [ ("ok", `Bool true)
+                  ; ("job_id", `String id)
+                  ; ("session_id", `String sid)
+                  ; ("poll", `String ("/api/jobs/" ^ id)) ])
+         | Error e ->
+             json_response reqd
+               (`Assoc [ ("ok", `Bool false); ("error", `String e) ]))
+
+let api_job_status (session : Session.t) (reqd : Httpun.Reqd.t) ~(id : string) :
+    unit =
+  let store = Session.store session in
+  let caller = session.Session.manifest.username in
+  let is_admin = Session.is_admin session in
+  match Jobs.get ~store ~id ~caller ~is_admin with
+  | Pricklypear_lisp.Ast.VStr s ->
+      text_response reqd ~status:`OK ~content_type:"application/json" s
+  | _ ->
+      json_response reqd
+        ~status:`Not_found
+        (`Assoc [ ("ok", `Bool false); ("error", `String "no such job") ])
+
 let api_agent_task (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
   (* Alias: create tools session + say (same as /api/agent with tools). *)
   let body = read_body reqd in
