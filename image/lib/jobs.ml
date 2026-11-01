@@ -123,14 +123,39 @@ let select_cols =
    (submit-job "f" 1) must eval (f 1), not (f "1"). %S-quoting the already-
    JSON text turned every non-string arg into a string literal and broke
    numerics/json — see the runner agent-note in borge/jobs.borg (4.1). *)
+let worker_prefix = "worker:"
+
+(* Offload jobs carry the [worker:] prefix so the in-image runner leaves them
+   to external workers; the eval itself must call the real name. *)
+let strip_worker_prefix (fn : string) : string =
+  let p = worker_prefix in
+  if String.length fn > String.length p
+     && String.sub fn 0 (String.length p) = p
+  then String.sub fn (String.length p) (String.length fn - String.length p)
+  else fn
+
 let eval_src ~(fn : string) ~(args : string) : string =
-  (* Zero-arg convention: args stored as JSON "[]"/"null"/"" fire as a
-     0-arity call. Anything else is spliced positionally (must therefore
-     be Nopales-readable, e.g. "[1 2]" is NOT — pass "1 2"-style JSON
-     scalars or a JSON string). *)
+  let fn = strip_worker_prefix fn in
   let a = String.trim args in
-  if a = "" || a = "[]" || a = "null" then Printf.sprintf "(%s)" fn
-  else Printf.sprintf "(%s %s)" fn args
+  (* Zero-arg convention: args stored as JSON "[]"/"null"/"" fire as a
+     0-arity call. Multi-arg convention (offload): a JSON ARRAY splices as
+     its elements' JSON text, so ["sid","prompt",4] fires
+     (f "sid" "prompt" 4). Anything else is spliced raw (the original
+     single-argument convention: numbers stay numbers). *)
+  let from_array =
+    if a = "" then None
+    else
+      match Yojson.Safe.from_string a with
+      | `List elems when elems <> [] ->
+          Some (String.concat " " (List.map Yojson.Safe.to_string elems))
+      | _ -> None
+      | exception _ -> None
+  in
+  match from_array with
+  | Some spliced -> Printf.sprintf "(%s %s)" fn spliced
+  | None ->
+      if a = "" || a = "[]" || a = "null" then Printf.sprintf "(%s)" fn
+      else Printf.sprintf "(%s %s)" fn a
 
 let row_to_job row : job option =
   try
@@ -334,7 +359,8 @@ let cancel ~(store : Store.t) ~(id : string) ~(caller : string) ~(is_admin : boo
     would be, which is why that stays admin-only. *)
 let claim_due ~(store : Store.t) ?(owner : string = runner_id)
     ?(eligible_for = (None : string option))
-    ?(branch = (None : string option)) () : job option =
+    ?(branch = (None : string option))
+    ?(exclude_fn_prefix : string = "") () : job option =
   match pg_conn store with
   | None -> None
   | Some _ ->
@@ -362,21 +388,22 @@ let claim_due ~(store : Store.t) ?(owner : string = runner_id)
            determine data type of parameter $4"). Build the fragments and
            their params together, numbering from 4 — the first free slot after
            owner/heartbeat/deadline. *)
-        let numbered =
+        let extras =
           List.filter_map
             (fun v -> v)
-            [ Option.map (fun uname -> ("submitted_by", uname)) eligible_for
-            ; Option.map (fun b -> ("branch", b)) branch ]
+            [ Option.map (fun uname -> ("submitted_by = ", uname)) eligible_for
+            ; Option.map (fun b -> ("branch = ", b)) branch
+            ; (if exclude_fn_prefix = "" then None
+               else Some ("fn NOT LIKE ", exclude_fn_prefix ^ "%")) ]
         in
         let scope_sql =
           String.concat ""
             (List.mapi
-               (fun i (col, _) ->
-                 Printf.sprintf " AND %s = $%d" col (i + 4))
-               numbered)
+               (fun i (op, _) -> Printf.sprintf " AND %s$%d" op (i + 4))
+               extras)
         in
         let scope_params =
-          List.map (fun (_, v) -> Pgx.Value.of_string v) numbered
+          List.map (fun (_, v) -> Pgx.Value.of_string v) extras
         in
         let sql =
           Printf.sprintf
