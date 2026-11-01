@@ -1057,11 +1057,20 @@ let test_cron_tz_local () =
        Alcotest.(check bool) "local fire is 6h after the utc fire"
          true (Int64.compare b (Int64.add u (Int64.of_int (6 * 3600 * 1000))) = 0)
    | _ -> Alcotest.fail "next_cron_ms_with returned None");
-  (* every-ms schedules ignore tz; the matcher routes by the tz string *)
-  Alcotest.(check bool) "tz routing: local vs utc differ" true
+  (* every-ms schedules ignore tz; the matcher routes by the tz string.
+     Assert the routing directly against the calendars it selects, which is
+     zone-independent: "utc" must equal the UTC calendar and "local" must
+     equal the process-zone calendar. (The old assertion hard-coded "local
+     differs from utc", which is false on a UTC box and failed in CI here.) *)
+  Alcotest.(check bool) "tz routing: utc selects the utc calendar" true
+    (Int64.compare
+       (Option.get (J.next_cron_for_tz "utc" "0 9 * * *" now))
+       (Option.get (J.next_cron_ms "0 9 * * *" now)) = 0);
+  Alcotest.(check bool) "tz routing: local selects the process-zone calendar"
+    true
     (Int64.compare
        (Option.get (J.next_cron_for_tz "local" "0 9 * * *" now))
-       (Option.get (J.next_cron_for_tz "utc" "0 9 * * *" now)) <> 0)
+       (Option.get (J.next_cron_ms_local "0 9 * * *" now)) = 0)
 
 let test_cron_across_month () =
   let now = now_ms () in
