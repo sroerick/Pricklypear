@@ -354,7 +354,8 @@ let jobs_runner_loop ~(session : Session.t) : unit =
          Printf.eprintf "[jobs] schedule fire pass failed: %s\n%!"
            (Printexc.to_string exn));
     let claimed =
-      (try Jobs.claim_due ~store:session.store ~owner:Jobs.runner_id ()
+        (try Jobs.claim_due ~store:session.store ~owner:Jobs.runner_id
+               ~exclude_fn_prefix:"worker:" ()
        with _ -> None)
     in
     (match claimed with
