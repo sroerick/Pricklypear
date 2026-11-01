@@ -112,8 +112,9 @@ let register (t : t) (tbl : Primitives.t) : unit =
 
   (* (schedule "name" "cron-or-ms" "fn" args [tz]) -> upsert a schedule,
      caller-scoped identity + branch. spec is a 5-field cron or an
-     every-ms integer. Optional [tz] is "utc" (default) or "local":
-     cron fields match the image process zone (America/Denver in prod).
+     every-ms integer. Optional [tz] is "local" (default: the image
+     process zone, America/Denver in prod, DST included) or "utc" for
+     machine jobs that must not move with human clocks.
      Capability: WriteDb (borge/jobs.borg schedules). *)
   let do_schedule ~tz name spec fn args_val =
     let args_json =

@@ -988,12 +988,13 @@ let row_to_schedule (row : Pgx.row) : schedule option =
   with _ -> None
 
 (** Upsert a schedule row. [spec] is a 5-field cron string or an every-ms
-    integer. [tz] is "utc" (default) or "local": cron fields matched
-    against the image process zone (America/Denver in prod) instead of
-    UTC. Computes the first next_run from now. *)
+    integer. [tz] is "local" (default: cron fields matched against the image
+    process zone, America/Denver in prod, DST included) or "utc" (opt-in for
+    machine jobs whose cadence should not move when a human's clocks move;
+    every-ms schedules ignore tz). Computes the first next_run from now. *)
 let schedule_upsert ~(store : Store.t) ~(name : string) ~(spec : string)
     ~(fn : string) ~(args_json : string) ~(branch : string)
-    ~(submitted_by : string) ?(tz = "utc") () : value =
+    ~(submitted_by : string) ?(tz = "local") () : value =
   match pg_conn store with
   | None -> VStr "schedule: no db connection"
   | Some conn ->
