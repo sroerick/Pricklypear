@@ -296,10 +296,40 @@ let stats_prefix_of (p : string) : string =
        | None -> p)
   | None -> p
 
+(* PERF-10 (2026-11-02): invalidation is scoped to a PATH FAMILY - the first
+   two labels of a path, i.e. b.<branch>, data.u.<user>, data.s.<space>.
+   (debug/stats) on prod showed 3513 of 3577 writes landing on ONE code
+   branch while data reads lost their snapshots with every one of them (48
+   hits / 137 misses, and a miss is a ~1s tree_nodes scan). A code write
+   cannot change a datum subtree's snapshot, so the families are independent:
+   a write bumps only its own family. A write with NO path (move, delete,
+   mirror SQL) still clears the whole table, and the 30s TTL still bounds
+   writes that reach tree_nodes without a prim. *)
+let fam_gen : (string, int64) Hashtbl.t = Hashtbl.create 16
+
+(* The generation a cache entry is stamped with: the write counter of its own
+   path family. Read under cache_mu. *)
+let family_gen_locked (prefix : string) : int64 =
+  Option.value (Hashtbl.find_opt fam_gen (stats_prefix_of prefix)) ~default:0L
+
 let write_bump ?(path : string option = None) () : unit =
   Eio.Mutex.lock cache_mu;
   cache_gen := Int64.succ !cache_gen;
-  Hashtbl.reset cache_tbl;
+  (match path with
+   | None -> Hashtbl.reset cache_tbl (* unknown path: every snapshot dies *)
+   | Some p ->
+       let fam = stats_prefix_of p in
+       let g = Option.value (Hashtbl.find_opt fam_gen fam) ~default:0L in
+       Hashtbl.replace fam_gen fam (Int64.succ g);
+       (* drop just this family's snapshots: no other family can see it *)
+       let dead =
+         Hashtbl.fold
+           (fun (pre, user) _ acc ->
+             if String.equal (stats_prefix_of pre) fam then (pre, user) :: acc
+             else acc)
+           cache_tbl []
+       in
+       List.iter (fun k -> Hashtbl.remove cache_tbl k) dead);
   Atomic.incr stats_total;
   (match path with
    | Some p ->
@@ -829,9 +859,10 @@ let cached_list_subtree (conn : Store_db.conn) ~(prefix : string)
     ?(limit : int = 1000) () : node list =
   let key = (prefix, Store_db.current_pp_user ()) in
   Eio.Mutex.lock cache_mu;
+  let fam_gen_now = family_gen_locked prefix in
   let hit =
     match Hashtbl.find_opt cache_tbl key with
-    | Some (t, gen, nodes) when gen = !cache_gen
+    | Some (t, gen, nodes) when gen = fam_gen_now
         && Unix.gettimeofday () -. t < cache_ttl_s -> Some nodes
     | _ -> None
   in
@@ -852,7 +883,7 @@ let cached_list_subtree (conn : Store_db.conn) ~(prefix : string)
       if List.length nodes < limit then begin
         Eio.Mutex.lock cache_mu;
         Hashtbl.replace cache_tbl key
-          (Unix.gettimeofday (), !cache_gen, nodes);
+            (Unix.gettimeofday (), fam_gen_now, nodes);
         Eio.Mutex.unlock cache_mu
       end;
       nodes
