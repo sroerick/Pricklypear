@@ -321,14 +321,21 @@ let write_bump ?(path : string option = None) () : unit =
        let fam = stats_prefix_of p in
        let g = Option.value (Hashtbl.find_opt fam_gen fam) ~default:0L in
        Hashtbl.replace fam_gen fam (Int64.succ g);
-       (* drop just this family's snapshots: no other family can see it *)
-       let dead =
-         Hashtbl.fold
-           (fun (pre, user) _ acc ->
-             if String.equal (stats_prefix_of pre) fam then (pre, user) :: acc
-             else acc)
-           cache_tbl []
-       in
+        (* drop this family's snapshots, and any entry whose prefix is an
+           ANCESTOR of the written path: that snapshot contains the row *)
+        let is_ancestor a b =
+          String.length a < String.length b
+          && String.starts_with ~prefix:a b
+          && b.[String.length a] = '.'
+        in
+        let dead =
+          Hashtbl.fold
+            (fun (pre, user) _ acc ->
+              if String.equal (stats_prefix_of pre) fam || is_ancestor pre p
+              then (pre, user) :: acc
+              else acc)
+            cache_tbl []
+         in
        List.iter (fun k -> Hashtbl.remove cache_tbl k) dead);
   Atomic.incr stats_total;
   (match path with
