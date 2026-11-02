@@ -2350,11 +2350,11 @@
           ())
         (todo/list/delete-items (cdr items) lid)))))
 
-(define todo/list/ensure-inbox
+(define todo/list/ensure-inbox-in
   (lambda
-    ()
+    (lists)
     (let
-      ((found (todo/list/find-default)))
+      ((found (todo/list/find-default-in lists)))
       (if
         (null? found)
         (todo/tree/create
@@ -2368,7 +2368,15 @@
               "Default list"
               "is_default"
               "true")))
-        (car found)))))
+        (car found))))
+  "ensure-inbox against an ALREADY-FETCHED list pool (2026-11-02): todo/ui/main
+     reads the shared list pool once per /todos render and threads it into
+     todo/ui/nav. Before this the render re-read the pool three times on the
+     board path (main's inbox lookup, nav's own lists binding, nav's inbox
+     lookup) and twice on the card-detail path.")
+
+(define todo/list/ensure-inbox
+  (lambda () (todo/list/ensure-inbox-in (todo/list/all))))
 
 (define todo/list/find-default
   (lambda () (todo/list/find-default-in (todo/list/all))))
@@ -4775,7 +4783,8 @@ empty text kid when unassigned (so a caller always projects a value).")
     (view)
     (let
       ((id-param (request-param "id"))
-        (is-get (string-eq (request-method) "GET")))
+        (is-get (string-eq (request-method) "GET"))
+        (lists (todo/list/all)))
       (if
         (if
           is-get
@@ -4794,7 +4803,7 @@ empty text kid when unassigned (so a caller always projects a value).")
                   (list
                     (html/div
                       (html/attr "class" "todo-side")
-                      (todo/ui/nav view (todo/item/all)))
+                      (todo/ui/nav view (todo/item/all) lists))
                     (html/div
                       (html/attr "class" "todo-body")
                       (todo/ui/detail (as-str id-param) view))))))))
@@ -4802,7 +4811,7 @@ empty text kid when unassigned (so a caller always projects a value).")
           ((list-id
               (if
                 (string-eq view "everything")
-                (todo/list/ensure-inbox)
+                (todo/list/ensure-inbox-in lists)
                 (if
                   (string-eq view "from-notes")
                   ""
@@ -4841,7 +4850,7 @@ empty text kid when unassigned (so a caller always projects a value).")
                     (list
                       (html/div
                         (html/attr "class" "todo-side")
-                        (todo/ui/nav view board-items))
+                        (todo/ui/nav view board-items lists))
                       (html/div
                         (html/attr "class" "todo-body")
                         (html/join
@@ -4859,11 +4868,11 @@ empty text kid when unassigned (so a caller always projects a value).")
 
 (define todo/ui/nav
   (lambda
-      (view items)
+      (view items lists)
     (let
-      ((lists (todo/list/all))
+      ((lists (if (null? lists) (todo/list/all) lists))
           (items (if (null? items) (todo/item/all) items))
-        (inbox (todo/list/ensure-inbox)))
+        (inbox (todo/list/ensure-inbox-in lists)))
       (let
         ((arch-n
           (todo/item/count-all
