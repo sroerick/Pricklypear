@@ -3690,12 +3690,52 @@
       "-"
       (substring h 20 12))))
 
+(define todo/tree/child-of?
+  (lambda
+    (pre p)
+    (let
+      ((rest
+        (substring
+          p
+          (string-length pre)
+          (- (string-length p) (string-length pre)))))
+      (if
+        (< (string-length rest) 2)
+        #f
+        (not
+          (string-contains?
+            (substring rest 1 (- (string-length rest) 1))
+            ".")))))
+  "Is p a DIRECT child of pre - exactly one more ltree label, nothing
+     deeper? Replays Tree_store.list_children's depth-1 rule (a level+1
+     path whose remainder after the prefix carries no further dot) on a
+     cached subtree read, so todo/tree/rows keeps children-only semantics
+     at cache speed.")
+
 (define todo/tree/rows
   (lambda
     (t n)
-    (list/map
-      todo/tree/node->pair
-      (tree/list (todo/tree/prefix t) 1 n))))
+    (let
+      ((pre (todo/tree/prefix t)))
+      (list/map
+        todo/tree/node->pair
+        (list/filter
+          (lambda (nj) (todo/tree/child-of? pre (as-str (dict-get nj "path"))))
+          (tree/list pre 3 n t)))))
+  "Rows of one type under its resolved type node, as (id . fields) pairs -
+     DIRECT children only.
+
+     2026-11-02 PERF (/todos loop): the read asks tree/list for a SUBTREE
+     (any depth but 1) so it rides the engine's cached subtree snapshot
+     (Tree_store.cached_list_subtree: keyed by prefix+pp.user, dropped when
+     the tree generation moves) instead of list_children, which re-queries
+     on every call. On prod a tree read that matches a row costs ~1.0-1.6s
+     whether it returns 4 rows or 198 (a null prefix answers in 3ms, so the
+     cost is the query, not the rows); the cached read answers the SAME
+     rows in 5-19ms warm. todo/tree/child-of? restores depth-1 semantics
+     exactly, and the server-side type filter keeps the scan to this type.
+     Measured on prod 2026-11-02: todo/item 198 rows 1160ms -> 19ms;
+     todo/list 4 rows both ways, same ids.")
 
 (define todo/tree/save
   (lambda
