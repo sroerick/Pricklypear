@@ -1652,7 +1652,6 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
           def_journal_seq = 0;
           thunk_bodies = Hashtbl.create 512 };
       seed_boot = false;
-      current_request = None;
       agent_branch_lock = false;
       public_dispatch = false;
       delegated = false;  (* spec_delegation: set true by attach_identity
@@ -1682,8 +1681,10 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
      then rebind t.eval_state.prims to the populated table. These prims capture
      (!t), so they read/write store+manifest on each invocation. *)
   register_session_control_prims !t prim_table;
-  (* HTTP request-context prims (it33): request-method/path/param(s)/body +
-     redirect. Dynamic scope via current_request while call_handler runs. *)
+    (* HTTP request-context prims (it33): request-method/path/param(s)/body +
+       redirect. FIBER-LOCAL via Request_context.with_request while
+       call_handler runs (2026-11-02; was a session field, which a parallel
+       request on the same identity could unbind). *)
   register_request_prims !t prim_table;
   (* Call graph + impact + change-set + DNU (image.inspector combo pack). *)
   register_graph_prims !t prim_table;
@@ -2558,34 +2559,23 @@ let call_handler (t : t) ?request (handler_name : string)
                 lifetime). *)
                Fun.protect
                  (fun () ->
-                    match request with
-                    | None -> run ()
-                    | Some req ->
-                        (* card c58830ad: RESTORE the previous binding, never
-                           clear to None. A nested dispatch (route/dispatch ->
-                           call_handler) used to clobber the OUTER handler's
-                           request binding; any request-* prim after the nested
-                           call then raised "no active request" (notes panel
-                           click -> filmstrip open/leaf -> in-process pane
-                           dispatch -> outer handler requestless). *)
-                        let prev_req = t.current_request in
-                        t.current_request <- Some req;
-                        Fun.protect
-                          ~finally:(fun () -> t.current_request <- prev_req)
-                          run)
-                 ~finally:(fun () -> t.public_dispatch <- prev))
+                      match request with
+                      | None -> run ()
+                      | Some req ->
+                          (* card c58830ad fixed NESTING by restoring the
+                             previous binding; 2026-11-02 fixes CONCURRENCY by
+                             moving the binding off the session onto an Eio
+                             fiber key. A parallel request on the same identity
+                             can no longer unbind this handler mid-flight
+                             (was "no active request" on the slow /todos). *)
+                          Request_context.with_request req run)
+                   ~finally:(fun () -> t.public_dispatch <- prev))
         end else
-          (match request with
-           | None -> run ()
-           | Some req ->
-               (* card c58830ad: restore, don't clear (see the public arm
-                  above) — a nested route/dispatch must not leave the outer
-                  handler requestless. *)
-               let prev_req = t.current_request in
-               t.current_request <- Some req;
-               Fun.protect
-                 ~finally:(fun () -> t.current_request <- prev_req)
-                 run)
+            (match request with
+             | None -> run ()
+             | Some req ->
+                 (* fiber-local since 2026-11-02 - see the public arm above. *)
+                 Request_context.with_request req run)
 
   | Some v ->
       (* card 1b76bdcf ("[ops] handler: not a function: 12"): a rehydrated
@@ -2683,14 +2673,10 @@ let () =
         let budget = Pricklypear_lisp.Eval.make_budget () in
         let t0 = Unix.gettimeofday () in
           let outcome =
-            (* card c58830ad: restore, don't clear — same discipline as
-               call_handler; the probe may now run nested inside a real
-               request without stealing its binding. *)
-            let prev_req = t.current_request in
-            t.current_request <- Some req;
-            Fun.protect
-              ~finally:(fun () -> t.current_request <- prev_req)
-            (fun () ->
+              (* fiber-local since 2026-11-02: the probe may run nested
+                 inside a real request without stealing its binding, and no
+                 parallel request can unbind it. *)
+              Request_context.with_request req (fun () ->
               try
                 let _v =
                     eval_string_rim_budgeted t ~env ("(" ^ handler ^ ")") budget

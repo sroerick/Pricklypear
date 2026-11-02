@@ -71,3 +71,21 @@ let with_current (ctx : t) (f : unit -> 'a) : 'a =
      identity inside with_transaction (user-scoped data / RLS floor). *)
   Eio.Fiber.with_binding current_key ctx (fun () ->
       Store_db.with_pp_user ctx.manifest.username f)
+
+(** Fiber-local REQUEST binding (2026-11-02, the "no active request" race).
+    The request used to live in [Session.t.current_request] - a mutable field
+    on the per-identity session that every concurrent request of that
+    identity shares. Two overlapping requests overwrote each other there,
+    and whichever handler exited first restored its own previous value
+    (usually [None]), leaving the slower one requestless: /todos (7-13s under
+    load) died at its next [request-param] read whenever a second request on
+    the same identity landed and finished inside its window (roerick
+    2026-11-02; reproduced with two overlapping GET /todos). A fiber key
+    gives each request its own slot, exactly like [current_key] above, and
+    nested dispatch restores the outer binding for free. *)
+let request_key : Session_types.request Eio.Fiber.key = Eio.Fiber.create_key ()
+
+let get_request () : Session_types.request option = Eio.Fiber.get request_key
+
+let with_request (r : Session_types.request) (f : unit -> 'a) : 'a =
+  Eio.Fiber.with_binding request_key r f
