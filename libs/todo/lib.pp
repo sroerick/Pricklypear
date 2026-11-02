@@ -1,5 +1,5 @@
 ;; package todo -- exported from live branch system/main
-;; Sync: scripts/pp_sync.py pull|push
+;; Sync: scripts/pp-sync.sh status|pull|snapshot
 
 (package todo
   (export
@@ -119,6 +119,45 @@
     todo/item/unassign
   ))
 
+(define lookbook/add-elements
+  (lambda
+    (names extra)
+    (list/foldl
+      (lambda
+        (acc n)
+        (if (null? (member n acc)) (append acc (list n)) acc))
+      names
+      extra))
+  "Append the names not already present (idempotent registration).")
+
+(define lookbook/base-elements
+  (lambda
+    ()
+    (chat/lookbook-add
+      (chat/lookbook-add
+        lookbook/seed-elements
+        chat/lb-elements)
+      lookbook/todo-elements))
+  "The lib seed inventory composed with the declared package vocabularies:\nchat's transcript elements + todo's assignment control. The seed is read from\nlookbook/seed-elements (a VALUE, not a call to the seam): defs are lazy\nrecipes, so capturing base-elements here would force the seam from inside the\nseam (cyclic thunk force). libs/todo declares lookbook/todo-elements and must\nNOT redefine this name -- a package-level definition is clobbered by the next\npackage to load.")
+
+;; ---- lookbook registration ----
+;; The package vocabulary is a declared VALUE; the one composer of
+;; lookbook/base-elements lives in libs/chat (base-elements + the todo list). A
+;; package-level redefinition here is clobbered by the next package to load
+;; (todo seeds before chat), which silently dropped these names from the
+;; inventory.
+(define lookbook/todo-elements
+  (list
+    "todo/ui/assignee-field"
+    "todo/ui/assignee-select"
+    "todo/ui/assignee-option"
+    "todo/ui/assignee-badge")
+  "Todo's declared ui vocabulary: the assignment control and its kids.")
+
+(define lookbook/todo-seed
+  (lookbook/base-elements)
+  "The inventory this package extends: base-elements as captured at load (a\nplain name list, never the composite lookbook/elements -- capturing that\nwould bind the seam to itself on a reload).")
+
 (define todo/active-items
   (lambda
     (items)
@@ -221,6 +260,60 @@
                           (html/attr "autocomplete" "off"))))
                     (html/button (html/attr "type" "submit") "Add")))))))))))
 
+(define todo/admitted-types
+  (list "todo-list" "todo-item" "todo-comment" "todo-event" "todo-dep"))
+
+(define todo/adopt-stranded
+  (lambda
+    ()
+    (with-transaction
+      (lambda
+        ()
+        (let
+          ((scan
+            (list/foldl
+              (lambda
+                (acc t)
+                (list/foldl
+                  (lambda
+                    (a n)
+                    (if
+                      (string-eq (as-str (dict-get n "type")) t)
+                      (let
+                        ((old (as-str (dict-get n "path"))))
+                        (let
+                          ((id (as-str (dict-get n "id"))))
+                          (let
+                            ((new (todo/space-path t id)))
+                            (let
+                              ((has-new (tree/get new)))
+                              (if
+                                (null? has-new)
+                                (seq
+                                  (tree/move old new)
+                                  (cons (+ (car a) 1) (cdr a)))
+                                (cons (car a) (+ (cdr a) 1)))))))
+                      a))
+                  acc
+                  (tree/list-kind "data.u" "datum" 4000)))
+              (cons 0 0)
+              todo/admitted-types)))
+          (json-emit
+            (dict-set*
+              "{}"
+              (list
+                "moved"
+                (car scan)
+                "skipped"
+                (cdr scan))))))))
+  "One-time adoption: move every stranded `data.u.*` node of the four
+     todo types (all identities — the reads are not RLS-filtered and the
+     spec deliberately publishes the pre-adoption backlog) into the shared
+     `todo` space, preserving id, body, author and created_at. Idempotent:
+     a row whose target already exists is skipped. The whole scan runs in
+     ONE with-transaction (a tree/move is a write; the multi-write sequence
+     must be atomic). Returns JSON {\"moved\":N,\"skipped\":M}.")
+
 (define todo/alist-get
   (lambda
     (alist k)
@@ -245,6 +338,9 @@
         (cons (car alist) (todo/alist-push k v (cdr alist))))))
   "push v onto alist bucket k (pure, one pass over groups)")
 
+(define todo/all-items
+  (lambda () (todo/tree/rows "todo-item" 200)))
+
 
 
 (define todo/archive
@@ -258,6 +354,9 @@
         (row)
         (todo/state/archived? (todo/item/state (cdr row))))
       (todo/item/all))))
+
+(define todo/archived?
+  (lambda (s) (string-eq (as-str s) "ARCHIVED")))
 
 
 
@@ -315,261 +414,10 @@
         (deftype (quote todo-event) (quote item_id) (quote from_state) (quote to_state))
         "todo-event ok"))))
 
-
-
-;; ------------------------------------------------------------------
-;; dependency DAG (beads-parity): blocked-by edges as todo-dep datum rows
-;; (from_id, to_id) — the from-card is blocked BY the to-card. Same
-;; associated-row pattern as todo-comment / todo-event: edge writes never
-;; touch card bodies (no version churn, no todo-event noise), space routing
-;; rides the TYPE-level admission (todo/admitted-types), and reverse lookups
-;; scan the same prefix. blocks is DERIVABLE (reverse scan), never stored.
-;;
-;; Readiness is a DIRECT-blocker predicate — no graph walk: a card is
-;; blocked while any direct blocker is open. Chains resolve in order as
-;; blockers close (a DONE/PARKED blocker does not block); an open cycle
-;; keeps every member not-ready until one member is closed externally —
-;; cycle-safe by construction, no detection pass. A blocker whose card row
-;; is gone does NOT block (stale edge, ignored).
-;; ------------------------------------------------------------------
-
-(define todo/deps-init!
+(define todo/count-all-in
   (lambda
-    ()
-    "Ensure the todo-dep datum type exists AND is admitted to the shared
-       open todo space (both guarded, idempotent — the same two checks
-       todo/ensure-space runs per entry point). Called lazily by the dep
-       readers/writers; boot seeds it onto system/main as admin. A missing
-       space or a non-owner identity degrades to a no-op (garden routing)."
-    (seq
-      (if
-        (null? (type-fields (quote todo-dep)))
-        (deftype (quote todo-dep) (quote from_id) (quote to_id))
-        "todo-dep ok")
-      (guard
-        (lambda (e) #f)
-        (if
-          (space-exists? todo/open-space)
-          (space-admit "todo-dep" todo/open-space)
-          #f)))))
-
-(define todo/dep/member?
-  (lambda
-    (id ids)
-    "True when string id is in the id list ids (no std member? exists)."
-    (if
-      (null? ids)
-      #f
-      (if
-        (string-eq (as-str id) (as-str (car ids)))
-        #t
-        (todo/dep/member? id (cdr ids))))))
-
-(define todo/dep/rows
-  (lambda
-    ()
-    "All dep edge rows as (edge-id . body) pairs — ONE prefix scan (capped
-       at 1000 edges, same shape as the comment feed's 200-row cap)."
-    (seq
-      (todo/deps-init!)
-      (todo/tree/rows "todo-dep" 1000))))
-
-(define todo/dep/find
-  (lambda
-    (from to rows)
-    "The edge id of the from->to edge in PRECOMPUTED rows, or () when absent."
-    (if
-      (null? rows)
-      (list)
-      (let
-        ((b (cdr (car rows))))
-        (if
-          (and
-            (string-eq (as-str (dict-get b "from_id")) (as-str from))
-            (string-eq (as-str (dict-get b "to_id")) (as-str to)))
-          (as-str (car (car rows)))
-          (todo/dep/find from to (cdr rows)))))))
-
-(define todo/dep
-  (lambda
-    (from to)
-    "Add a blocked-by edge: card FROM is blocked BY card TO. Returns the new
-       edge id. Refusals (string, no write): \"self edge\", \"no such card:
-       <id>\", \"duplicate edge\"."
-    (seq
-      (todo/deps-init!)
-      (let
-        ((f (as-str from))
-         (t (as-str to)))
-        (if
-          (string-eq f t)
-          "self edge"
-          (if
-            (null? (todo/tree/get "todo-item" f))
-            (string-append "no such card: " f)
-            (if
-              (null? (todo/tree/get "todo-item" t))
-              (string-append "no such card: " t)
-              (if
-                (null? (todo/dep/find f t (todo/dep/rows)))
-                (as-str
-                  (todo/tree/create
-                    "todo-dep"
-                    (dict-set* "{}" (list "from_id" f "to_id" t))))
-                  "duplicate edge"))))))))
-
-(define todo/undep
-  (lambda
-    (from to)
-    "Remove the blocked-by edge from->to. \"removed\" or \"no such edge\"."
-    (seq
-      (todo/deps-init!)
-      (let
-        ((e (todo/dep/find (as-str from) (as-str to) (todo/dep/rows))))
-        (if
-          (null? e)
-          "no such edge"
-          (seq
-            (todo/tree/del "todo-dep" e)
-            "removed"))))))
-
-(define todo/dep/blockers
-  (lambda
-    (id)
-    "Direct blocker ids of card id: the to_ids of its from-edges, open or
-       not (its OWN scan — batch renders use todo/dep/blocked-ids)."
-    (let
-      ((f (as-str id)))
-      (list/map
-        (lambda (r) (as-str (dict-get (cdr r) "to_id")))
-        (list/filter
-          (lambda (r) (string-eq (as-str (dict-get (cdr r) "from_id")) f))
-          (todo/dep/rows))))))
-
-(define todo/dep/open-blockers
-  (lambda
-    (id)
-    "Direct blockers of card id that are still OPEN (todo/state/open?). A
-       blocker with no card row does not block (stale edge, ignored)."
-    (list/filter
-      (lambda
-        (bid)
-        (let
-          ((b (todo/tree/get "todo-item" bid)))
-          (and
-            (not (null? b))
-            (todo/state/open? (todo/item/state b)))))
-      (todo/dep/blockers id))))
-
-(define todo/dep/blocked?
-  (lambda
-    (id)
-    "True when card id has at least one OPEN blocked-by edge."
-    (not (null? (todo/dep/open-blockers id)))))
-
-(define todo/dep/blocked-ids
-  (lambda
-    (rows)
-    "Distinct from_ids with at least one OPEN blocker, from a PRECOMPUTED
-       (todo/dep/rows) scan. One blocker-state read per DISTINCT blocker id
-       (memo alist), so a board render pays edges + blockers, not
-       edges x cards (the 8972cdfe one-scan rule)."
-    (cdr
-      (list/foldl
-        (lambda
-          (acc r)
-          (let
-            ((memo (car acc))
-             (out (cdr acc)))
-            (let
-              ((b (cdr r)))
-              (let
-                ((f (as-str (dict-get b "from_id")))
-                 (t (as-str (dict-get b "to_id"))))
-                (if
-                  (todo/dep/member? f out)
-                  acc
-                  (let
-                    ((known (todo/alist-get memo t)))
-                    (if
-                      (null? known)
-                      (let
-                        ((bc (todo/tree/get "todo-item" t)))
-                        (let
-                          ((open
-                            (if
-                              (null? bc)
-                              "shut"
-                              (if
-                                (todo/state/open? (todo/item/state bc))
-                                "open"
-                                "shut"))))
-                          (if
-                            (string-eq open "open")
-                            (cons (cons (cons t open) memo) (cons f out))
-                            (cons (cons (cons t open) memo) out))))
-                      (if
-                        (string-eq known "open")
-                        (cons memo (cons f out))
-                        acc))))))))
-        (cons (list) (list))
-        rows))))
-
-(define todo/dep/first-open-col
-  (lambda
-    (cols)
-    "First non-empty column name of a pipeline (the default list leads with
-       the \"\" pseudo-column, which todo/state/closed? treats as closed)."
-    (if
-      (null? cols)
-      "TODO"
-      (if
-        (string-eq (as-str (car cols)) "")
-        (todo/dep/first-open-col (cdr cols))
-        (as-str (car cols))))))
-
-(define todo/dep/entry-state
-  (lambda
-    (list-id)
-    "The list's ACTIONABLE entry column: the first non-empty column of its
-       pipeline — TODO on the global default, the list's own first column
-       when it carries a columns override. A card counts as READY only in
-       this column: later columns are in-flight, not ready (beads-parity)."
-    (todo/dep/first-open-col
-      (todo/state/columns-for-list (as-str list-id)))))
-
-(define todo/ready?
-  (lambda
-    (id)
-    "True when card id is READY: it exists, sits in its list's actionable
-       entry column (todo/dep/entry-state), and has no open blocked-by edge."
-    (let
-      ((f (todo/tree/get "todo-item" (as-str id))))
-      (if
-        (null? f)
-        #f
-        (and
-          (string-eq
-            (todo/item/state f)
-            (todo/dep/entry-state (todo/item/list-id f)))
-          (not (todo/dep/blocked? id)))))))
-
-(define todo/ready
-  (lambda
-    (list-id)
-    "The list's READY cards as (id . fields) pairs: entry-column, no open
-       blocked-by edge. ONE dep-row scan for the whole list
-       (todo/dep/blocked-ids) — the eligibility view the supervisor drains."
-    (let
-      ((entry (todo/dep/entry-state list-id))
-       (blocked (todo/dep/blocked-ids (todo/dep/rows))))
-      (list/filter
-        (lambda
-          (row)
-          (and
-            (string-eq (todo/item/state (cdr row)) entry)
-            (not (todo/dep/member? (as-str (car row)) blocked))))
-        (todo/items-for-list list-id)))))
+    (items)
+    (list/foldl (lambda (acc _) (+ acc 1)) 0 items)))
 
 (define todo/count-open-in
   (lambda
@@ -583,6 +431,21 @@
           acc))
       0
       items)))
+
+(define todo/create-list
+  (lambda
+    (title)
+    (todo/tree/create
+      "todo-list"
+      (dict-set*
+        "{}"
+        (list
+          "title"
+          (as-str title)
+          "description"
+          ""
+          "is_default"
+          "false")))))
 
 
 
@@ -918,6 +781,107 @@
         (todo/db/path-id r)
         r))))
 
+(define todo/db/delete
+  (lambda
+    (type id)
+    (let
+      ((p (node-path type (as-str id))))
+      (if
+        (null? (tree/get p))
+        ()
+        (seq (tree/delete p) (as-str id))))))
+
+(define todo/db/get
+  (lambda
+    (type id)
+    (let
+      ((n (tree/get (node-path type (as-str id)))))
+      (if (null? n) () (dict-get n "body")))))
+
+(define todo/db/insert-by-created
+  (lambda
+    (n sorted)
+    (if
+      (null? sorted)
+      (list n)
+      (if
+        (string<?
+          (as-str (dict-get n "created_at"))
+          (as-str (dict-get (car sorted) "created_at")))
+        (cons n sorted)
+        (cons
+          (car sorted)
+          (todo/db/insert-by-created n (cdr sorted)))))))
+
+(define todo/db/node-row
+  (lambda
+    (node)
+    (cons
+      (todo/db/path-id (dict-get node "path"))
+      (dict-get node "body"))))
+
+(define todo/db/path-id
+  (lambda
+    (path)
+    (let
+      ((h (substring path (- (string-length path) 32) 32)))
+      (string-append
+        (substring h 0 8)
+        "-"
+        (substring h 8 4)
+        "-"
+        (substring h 12 4)
+        "-"
+        (substring h 16 4)
+        "-"
+        (substring h 20 12)))))
+
+(define todo/db/prefix
+  (lambda
+    (type)
+    (let
+      ((p (node-path type "")))
+      (substring p 0 (- (string-length p) 1)))))
+
+(define todo/db/rows
+  (lambda
+    (type limit)
+    (map
+      todo/db/node-row
+      (tree/list-kind (todo/db/prefix type) "datum" limit))))
+
+(define todo/db/sort-by-created
+  (lambda
+    (ns)
+    (if
+      (null? ns)
+      (list)
+      (todo/db/insert-by-created
+        (car ns)
+        (todo/db/sort-by-created (cdr ns))))))
+
+(define todo/db/update
+  (lambda
+    (type id fields)
+    (let
+      ((p (node-path type (as-str id))))
+      (if
+        (null? (tree/get p))
+        ()
+        (let
+          ((r (tree/upsert p "datum" (as-str type) fields)))
+          (if (string-starts-with? r "data.") (as-str id) r))))))
+
+(define todo/db/update-field
+  (lambda
+    (type id field value)
+    (let
+      ((fields (todo/db/get type (as-str id))))
+      (if
+        (null? fields)
+        ()
+        (todo/db/update type id (dict-set fields field value))))))
+
 
 
 
@@ -961,6 +925,9 @@
                 (whoami)))))
           (seq (update (quote todo-cache) (car row) f) "dbg-done"))))))
 
+(define todo/delete
+  (lambda (id) (todo/tree/del "todo-item" id)))
+
 
 
 (define todo/delete-list
@@ -998,6 +965,331 @@
           ())
         (todo/delete-list-items (cdr items) lid)))))
 
+(define todo/dep
+  (lambda
+    (from to)
+    "Add a blocked-by edge: card FROM is blocked BY card TO. Returns the new
+       edge id. Refusals (string, no write): \"self edge\", \"no such card:
+       <id>\", \"duplicate edge\"."
+    (seq
+      (todo/deps-init!)
+      (let
+        ((f (as-str from))
+         (t (as-str to)))
+        (if
+          (string-eq f t)
+          "self edge"
+          (if
+            (null? (todo/tree/get "todo-item" f))
+            (string-append "no such card: " f)
+            (if
+              (null? (todo/tree/get "todo-item" t))
+              (string-append "no such card: " t)
+              (if
+                (null? (todo/dep/find f t (todo/dep/rows)))
+                (as-str
+                  (todo/tree/create
+                    "todo-dep"
+                    (dict-set* "{}" (list "from_id" f "to_id" t))))
+                  "duplicate edge"))))))))
+
+(define todo/dep/blocked-ids
+  (lambda
+    (rows)
+    "Distinct from_ids with at least one OPEN blocker, from a PRECOMPUTED
+       (todo/dep/rows) scan. One blocker-state read per DISTINCT blocker id
+       (memo alist), so a board render pays edges + blockers, not
+       edges x cards (the 8972cdfe one-scan rule)."
+    (cdr
+      (list/foldl
+        (lambda
+          (acc r)
+          (let
+            ((memo (car acc))
+             (out (cdr acc)))
+            (let
+              ((b (cdr r)))
+              (let
+                ((f (as-str (dict-get b "from_id")))
+                 (t (as-str (dict-get b "to_id"))))
+                (if
+                  (todo/dep/member? f out)
+                  acc
+                  (let
+                    ((known (todo/alist-get memo t)))
+                    (if
+                      (null? known)
+                      (let
+                        ((bc (todo/tree/get "todo-item" t)))
+                        (let
+                          ((open
+                            (if
+                              (null? bc)
+                              "shut"
+                              (if
+                                (todo/state/open? (todo/item/state bc))
+                                "open"
+                                "shut"))))
+                          (if
+                            (string-eq open "open")
+                            (cons (cons (cons t open) memo) (cons f out))
+                            (cons (cons (cons t open) memo) out))))
+                      (if
+                        (string-eq known "open")
+                        (cons memo (cons f out))
+                        acc))))))))
+        (cons (list) (list))
+        rows))))
+
+(define todo/dep/blocked?
+  (lambda
+    (id)
+    "True when card id has at least one OPEN blocked-by edge."
+    (not (null? (todo/dep/open-blockers id)))))
+
+(define todo/dep/blockers
+  (lambda
+    (id)
+    "Direct blocker ids of card id: the to_ids of its from-edges, open or
+       not (its OWN scan — batch renders use todo/dep/blocked-ids)."
+    (let
+      ((f (as-str id)))
+      (list/map
+        (lambda (r) (as-str (dict-get (cdr r) "to_id")))
+        (list/filter
+          (lambda (r) (string-eq (as-str (dict-get (cdr r) "from_id")) f))
+          (todo/dep/rows))))))
+
+(define todo/dep/entry-state
+  (lambda
+    (list-id)
+    "The list's ACTIONABLE entry column: the first non-empty column of its
+       pipeline — TODO on the global default, the list's own first column
+       when it carries a columns override. A card counts as READY only in
+       this column: later columns are in-flight, not ready (beads-parity)."
+    (todo/dep/first-open-col
+      (todo/state/columns-for-list (as-str list-id)))))
+
+(define todo/dep/find
+  (lambda
+    (from to rows)
+    "The edge id of the from->to edge in PRECOMPUTED rows, or () when absent."
+    (if
+      (null? rows)
+      (list)
+      (let
+        ((b (cdr (car rows))))
+        (if
+          (and
+            (string-eq (as-str (dict-get b "from_id")) (as-str from))
+            (string-eq (as-str (dict-get b "to_id")) (as-str to)))
+          (as-str (car (car rows)))
+          (todo/dep/find from to (cdr rows)))))))
+
+(define todo/dep/first-open-col
+  (lambda
+    (cols)
+    "First non-empty column name of a pipeline (the default list leads with
+       the \"\" pseudo-column, which todo/state/closed? treats as closed)."
+    (if
+      (null? cols)
+      "TODO"
+      (if
+        (string-eq (as-str (car cols)) "")
+        (todo/dep/first-open-col (cdr cols))
+        (as-str (car cols))))))
+
+(define todo/dep/member?
+  (lambda
+    (id ids)
+    "True when string id is in the id list ids (no std member? exists)."
+    (if
+      (null? ids)
+      #f
+      (if
+        (string-eq (as-str id) (as-str (car ids)))
+        #t
+        (todo/dep/member? id (cdr ids))))))
+
+(define todo/dep/open-blockers
+  (lambda
+    (id)
+    "Direct blockers of card id that are still OPEN (todo/state/open?). A
+       blocker with no card row does not block (stale edge, ignored)."
+    (list/filter
+      (lambda
+        (bid)
+        (let
+          ((b (todo/tree/get "todo-item" bid)))
+          (and
+            (not (null? b))
+            (todo/state/open? (todo/item/state b)))))
+      (todo/dep/blockers id))))
+
+(define todo/dep/rows
+  (lambda
+    ()
+    "All dep edge rows as (edge-id . body) pairs — ONE prefix scan (capped
+       at 1000 edges, same shape as the comment feed's 200-row cap)."
+    (seq
+      (todo/deps-init!)
+      (todo/tree/rows "todo-dep" 1000))))
+
+
+
+;; ------------------------------------------------------------------
+;; dependency DAG (beads-parity): blocked-by edges as todo-dep datum rows
+;; (from_id, to_id) — the from-card is blocked BY the to-card. Same
+;; associated-row pattern as todo-comment / todo-event: edge writes never
+;; touch card bodies (no version churn, no todo-event noise), space routing
+;; rides the TYPE-level admission (todo/admitted-types), and reverse lookups
+;; scan the same prefix. blocks is DERIVABLE (reverse scan), never stored.
+;;
+;; Readiness is a DIRECT-blocker predicate — no graph walk: a card is
+;; blocked while any direct blocker is open. Chains resolve in order as
+;; blockers close (a DONE/PARKED blocker does not block); an open cycle
+;; keeps every member not-ready until one member is closed externally —
+;; cycle-safe by construction, no detection pass. A blocker whose card row
+;; is gone does NOT block (stale edge, ignored).
+;; ------------------------------------------------------------------
+
+(define todo/deps-init!
+  (lambda
+    ()
+    "Ensure the todo-dep datum type exists AND is admitted to the shared
+       open todo space (both guarded, idempotent — the same two checks
+       todo/ensure-space runs per entry point). Called lazily by the dep
+       readers/writers; boot seeds it onto system/main as admin. A missing
+       space or a non-owner identity degrades to a no-op (garden routing)."
+    (seq
+      (if
+        (null? (type-fields (quote todo-dep)))
+        (deftype (quote todo-dep) (quote from_id) (quote to_id))
+        "todo-dep ok")
+      (guard
+        (lambda (e) #f)
+        (if
+          (space-exists? todo/open-space)
+          (space-admit "todo-dep" todo/open-space)
+          #f)))))
+
+(define todo/detail-html
+  (lambda
+    (id view)
+    (let
+      ((fields (todo/get-item id)))
+      (if
+        (null? fields)
+        (html/div
+          (html/attr "class" "card")
+          (html/join
+            (list
+              (html/p* (html/attr "class" "err") "Item not found.")
+              (html/a (string-append "/todos?view=" view) "← back"))))
+        (let
+          ((title (todo/item-title fields)))
+          (let
+            ((notes (todo/item-notes fields)))
+            (let
+              ((due (todo/item-due fields)))
+              (let
+                ((state (todo/item-state fields)))
+                (let
+                  ((acceptance (todo/item/acceptance fields))
+                    (branch (todo/item/branch fields))
+                    (branch-kind (todo/item/branch-kind fields)))
+                  (let
+                    ((lid (todo/item-list-id fields)))
+                    (html/div
+                      (html/attr "class" "card todo-detail")
+                      (html/join
+                        (list
+                          (html/p*
+                            (html/attr "class" "muted")
+                            (html/a
+                              (string-append "/todos?view=" view)
+                              "← back to list"))
+                          (html/h2 (html/text title))
+                          (html/form
+                            "POST"
+                            "/todos"
+                            (html/attrs
+                              (list (html/attr "class" "todo-detail-form")))
+                            (html/join
+                              (list
+                                (html/hidden "action" "save")
+                                (html/hidden "id" id)
+                                (html/hidden "view" view)
+                                (html/label (html/attr "for" "title") "Title")
+                                (html/text-input
+                                  "title"
+                                  (html/attrs
+                                    (list
+                                      (html/attr "id" "title")
+                                      (html/attr "value" title)
+                                      (html/attr "required" "required"))))
+                                (html/label (html/attr "for" "state") "State")
+                                (html/select
+                                  "state"
+                                  (html/attr "id" "state")
+                                  (todo/state-options-all state))
+                                (html/label (html/attr "for" "due") "Due (YYYY-MM-DD)")
+                                (html/text-input
+                                  "due"
+                                  (html/attrs
+                                    (list
+                                      (html/attr "id" "due")
+                                      (html/attr "value" due)
+                                      (html/attr "placeholder" "2026-07-15"))))
+                                (html/label (html/attr "for" "list_id") "List")
+                                (html/select
+                                  "list_id"
+                                  (html/attr "id" "list_id")
+                                  (todo/list-options lid))
+                                (html/label (html/attr "for" "notes") "Notes")
+                                (html/textarea
+                                  "notes"
+                                  (html/attrs
+                                    (list
+                                      (html/attr "id" "notes")
+                                      (html/attr "rows" "8")
+                                      (html/attr "class" "todo-notes")))
+                                  notes)
+                                (html/p*
+                                  (html/attr "class" "muted")
+                                  (html/join
+                                    (list
+                                      (html/strong "Branch: ")
+                                      (html/code branch)
+                                      (if
+                                        (string-eq branch "")
+                                        ()
+                                        (html/text
+                                          (string-append
+                                            "  ("
+                                            (if
+                                              (string-eq branch-kind "")
+                                              "domain unset"
+                                              branch-kind)
+                                            ")"))))))
+                                (if
+                                  (string-eq acceptance "")
+                                  ()
+                                  (html/div
+                                    (html/attr "class" "todo-acceptance")
+                                    (html/join
+                                      (list
+                                        (html/p* (html/attr "class" "muted") "Acceptance")
+                                        (html/pre (html/text acceptance))))))
+                                (html/div
+                                  ""
+                                  (html/join
+                                    (list
+                                      (html/button (html/attr "type" "submit") "Save")
+                                      " "
+                                      (html/a (string-append "/todos?view=" view) "Cancel")))))))
+                          (todo/ui/feed-html id view))))))))))))))
+
 
 
 (define todo/done?
@@ -1026,6 +1318,37 @@
               "is_default"
               "true")))
         (car found)))))
+
+(define todo/ensure-space
+  (lambda
+    ()
+    (if
+      (string-eq (as-str (whoami)) "anonymous")
+      #f
+      (guard
+        (lambda (e) #f)
+        (seq
+          (if
+            (space-exists? todo/open-space)
+            #t
+            (space-create todo/open-space (quote open)))
+          (list/foldl
+            (lambda (acc t)
+              (seq
+                (guard
+                  (lambda (e) #f)
+                  (space-admit t todo/open-space))
+                acc))
+            #t
+            todo/admitted-types)))))
+  "Create the shared open `todo` space and admit the card types
+     (idempotent, best-effort; the first writer races safely). Ensures
+     the space exists AND the admissions are present even when the space
+     predates an admission — so a repair is `(todo/ensure-space)`.
+     Anonymous is a no-op (guests keep their own garden), and a
+     non-owner (any non-first identity) silently skips the owner-only
+     admit — the space already exists and is open, so membership is
+     implicit.")
 
 (define todo/event/list
   (lambda
@@ -1214,9 +1537,80 @@
      context, and the write-back eval snippet (advance one column + post a
      comment). Returns () for a missing card. For a ralph loop this IS the
      plan file; for a subagent it's the task.")
+(define todo/from-notes-html
+  (lambda
+    (view items)
+    (let
+      ((cards (todo/from-notes-items items))
+        (unpromoted (todo/node/unpromoted items)))
+      (html/join
+        (list
+          (html/h2 "From notes")
+          (if
+            (null? cards)
+            (html/p*
+              (html/attr "class" "muted")
+              "No promoted note todos yet — mark a heading in a note, then promote it.")
+            (html/ul
+              (html/attr "class" "card todo-list")
+              (list/foldl
+                (lambda
+                  (acc row)
+                  (string-append
+                    acc
+                    (todo/item/list-li row view)
+                    (todo/node/back-link (cdr row))))
+                ""
+                (list/take (todo/item/active cards) todo/page/cap))))
+          (html/h2 "Notes (unpromoted)")
+          (if
+            (null? unpromoted)
+            (html/p*
+              (html/attr "class" "muted")
+              "Every marked note node is on the board.")
+            (html/join
+              (list
+                (html/ul
+                  (html/attr "class" "card todo-list")
+                  (list/foldl
+                    (lambda
+                      (acc t)
+                      (string-append acc (todo/node/promote-form t)))
+                    ""
+                    (list/take unpromoted todo/page/cap)))
+                (todo/page/more-note (length unpromoted)))))))))
+  "The 'from notes' view: promoted cards (shared, workable) plus the
+     unpromoted nodes that are NOT on the board yet (note-todos clause 4).
+     Replaces the scrape-cache notes block, which showed every node as if
+     it were a board item. Takes the page's ONE card snapshot (items) so
+     the view never re-scans the board.
+
+     WINDOWED (2026-10-18 budget fix, part 2): rows are capped at
+     todo/page/cap (40) and the remainder is reported as a COUNT via
+     todo/page/more-note (the spec's own 'point, don't list' decision from
+     the package-index budget fix). An uncapped render is ~2.5k steps per
+     row: prod's 106 unpromoted rows cost 107k just to lay out, and the
+     Lists section another 205k, which together blew the 400k request
+     budget even after the scrape itself was made 3x cheaper. The cap
+     keeps the honest total visible without paying per-row cost for rows
+     nobody reads above the fold.")
+(define todo/from-notes-items
+  (lambda
+    (items)
+    (list/filter
+      (lambda
+        (row)
+        (string-eq (todo/item/origin-kind (cdr row)) "note"))
+      (if (null? items) (todo/item/all) items)))
+  "Promoted cards (origin_kind = note) — the board's 'from notes' filter,
+   a filter over CARDS, never a second scrape of the note tree. Takes the
+   page's ONE board snapshot (items); an empty list fetches its own.")
 
 (define todo/get-item
   (lambda (id) (todo/tree/get "todo-item" id)))
+
+(define todo/get-list
+  (lambda (id) (todo/tree/get "todo-list" id)))
 
 
 (define todo/group-by-list
@@ -1234,6 +1628,157 @@
       (list)
       items))
   "group item rows by their list_id (empty -> inbox) in ONE pass; replaces the per-list 200-item refilters that cost ~7k ticks per nav entry")
+
+(define todo/handle-post (lambda
+  ()
+  (let
+    ((action (as-str (request-param "action"))))
+    (if
+      (string-eq action "comment")
+      (let
+        ((c (request-param "comment")))
+        (if
+          (or (null? c) (string-eq (as-str c) ""))
+          ()
+          (todo/comment/add (request-param "id") (as-str c))))
+      (if
+        (string-eq action "cycle")
+        (todo/cycle (request-param "id"))
+        (if
+          (string-eq action "delete")
+          (todo/delete (request-param "id"))
+          (if
+            (string-eq action "archive")
+            (todo/archive (request-param "id"))
+            (if
+              (string-eq action "add")
+              (todo/add
+                (request-param "list_id")
+                (request-param "title"))
+              (if
+                (string-eq action "create-list")
+                (todo/create-list (request-param "title"))
+                (if
+                  (string-eq action "delete-list")
+                  (todo/delete-list (request-param "list_id"))
+                  (if
+                    (string-eq action "cycle-note")
+                    (notes/cycle-node-todo
+                      (request-param "slug")
+                      (request-param "node-id"))
+                    (if
+                      (string-eq action "save")
+                      (todo/save
+                        (request-param "id")
+                        (request-param "title")
+                        (request-param "notes")
+                        (request-param "due")
+                        (request-param "state")
+                        (request-param "list_id"))
+                      (todo/add (todo/ensure-inbox) (request-param "title"))))))))))))))
+
+(define todo/item-due
+  (lambda
+    (fields)
+    (let
+      ((d (dict-get fields "due")))
+      (if (null? d) "" (as-str d)))))
+
+(define todo/item-li
+  (lambda
+    (row)
+    (let
+      ((id (car row)))
+      (let
+        ((fields (cdr row)))
+        (let
+          ((title (dict-get fields "title")))
+          (let
+            ((done (todo/done? fields)))
+            (html/li
+              (html/attrs
+                (list
+                  (html/attr
+                    "class"
+                    (if done "todo-item is-done" "todo-item"))))
+              (html/join
+                (list
+                  (html/form
+                    "POST"
+                    "/todos"
+                    (html/attrs
+                      (list
+                        (html/attr "class" "todo-check")
+                        (html/attr "hx-post" "/todos")
+                        (html/attr "hx-target" "#todo-list")
+                        (html/attr "hx-swap" "innerHTML")))
+                    (html/join
+                      (list
+                        (html/hidden "action" "toggle")
+                        (html/hidden "id" id)
+                        (html/button
+                          (html/attrs
+                            (list
+                              (html/attr "type" "submit")
+                              (html/attr "class" "todo-box")
+                              (html/attr "title" "toggle done")
+                              (html/attr "aria-label" "toggle")))
+                          (if done "[x]" "[ ]")))))
+                  (html/span
+                    (html/attr "class" "todo-title")
+                    (html/text title))
+                  (html/form
+                    "POST"
+                    "/todos"
+                    (html/attrs
+                      (list
+                        (html/attr "class" "todo-del")
+                        (html/attr "hx-post" "/todos")
+                        (html/attr "hx-target" "#todo-list")
+                        (html/attr "hx-swap" "innerHTML")))
+                    (html/join
+                      (list
+                        (html/hidden "action" "delete")
+                        (html/hidden "id" id)
+                        (html/button
+                          (html/attrs
+                            (list
+                              (html/attr "type" "submit")
+                              (html/attr "class" "secondary")
+                              (html/attr "title" "delete")))
+                          "del")))))))))))))
+
+(define todo/item-list-id
+  (lambda
+    (fields)
+    (let
+      ((lid (dict-get fields "list_id")))
+      (if (null? lid) "" (as-str lid)))))
+
+(define todo/item-notes
+  (lambda
+    (fields)
+    (let
+      ((n (dict-get fields "notes")))
+      (if (null? n) "" (as-str n)))))
+
+(define todo/item-state
+  (lambda
+    (fields)
+    (let
+      ((s (dict-get fields "state")))
+      (if
+        (null? s)
+        (let
+          ((d (dict-get fields "done")))
+          (if
+            (null? d)
+            "TODO"
+            (if (string-eq d "true") "DONE" "TODO")))
+        (as-str s)))))
+
+(define todo/item-title
+  (lambda (fields) (as-str (dict-get fields "title"))))
 
 
 
@@ -1364,6 +1909,18 @@
      a missing Board is a loud empty, never a silent private-Inbox
      vanish.")
 
+(define todo/item/all
+  (lambda
+    ()
+    (todo/list/merge (todo/tree/rows "todo-item" 200) (todo/item/all-shared)))
+  "All todo-items the identity can see: GARDEN items (data.u.<user>.*)
+     merged with SHARED items (data.s.*, the Board). Deduped by id, garden
+     rows first. borge/workstreams.borg shared-register: the /issues
+     register, /todos and /kanban read this pool, so a card filed to the
+     shared Board is visible to EVERY identity. The list pool
+     (todo/list/all) got the same merge; without it here the Board's cards
+     were invisible after migration 034 moved them into data.s.board.*.")
+
 (define todo/item/all-shared
   (lambda
     ()
@@ -1377,18 +1934,6 @@
      over the whole shared subtree, which blew the 400k step budget on
      prod (4128 shared nodes). Same rows, same order, same (id . fields)
      shape as todo/item/all.")
-
-(define todo/item/all
-  (lambda
-    ()
-    (todo/list/merge (todo/tree/rows "todo-item" 200) (todo/item/all-shared)))
-  "All todo-items the identity can see: GARDEN items (data.u.<user>.*)
-     merged with SHARED items (data.s.*, the Board). Deduped by id, garden
-     rows first. borge/workstreams.borg shared-register: the /issues
-     register, /todos and /kanban read this pool, so a card filed to the
-     shared Board is visible to EVERY identity. The list pool
-     (todo/list/all) got the same merge; without it here the Board's cards
-     were invisible after migration 034 moved them into data.s.board.*.")
 
 (define todo/item/archive
   (lambda (id) (todo/item/set-state id "ARCHIVED")))
@@ -1773,6 +2318,34 @@
     (let
       ((n (dict-get fields "notes")))
       (if (null? n) "" (as-str n)))))
+(define todo/item/origin-kind
+  (lambda
+    (fields)
+    (let
+      ((v (dict-get fields "origin_kind")))
+      (if (null? v) "" (as-str v))))
+  "The card's origin kind: empty for a hand-made card, `note` when
+     promoted from an outline node. Tolerates a pre-T3 card with no
+     field, so readers never see null. borge/workstreams.borg note-todos.")
+(define todo/item/origin-ref
+  (lambda
+    (fields)
+    (let
+      ((v (dict-get fields "origin_ref")))
+      (if (null? v) "" (as-str v))))
+  "The reconciliation key linking a promoted card to its origin node,
+     `<slug>#<nid>` (empty for a hand-made card). borge/workstreams.borg
+     note-todos clause 2.")
+
+(define todo/item/prio-decorate
+  (lambda
+    (row)
+    "Decorate a row with its precomputed sort keys: (rank pos . row)."
+    (cons
+      (todo/item/prio-rank (cdr row))
+      (cons
+        (todo/item/prio-pos (cdr row))
+        row))))
 
 (define todo/item/prio-insert
   (lambda
@@ -1785,6 +2358,37 @@
         (todo/item/prio-le? row (car sorted))
         (cons row sorted)
         (cons (car sorted) (todo/item/prio-insert (cdr sorted) row))))))
+
+(define todo/item/prio-key-insert
+  (lambda
+    (sorted e)
+    "Insertion step over decorated rows."
+    (if
+      (null? sorted)
+      (list e)
+      (if
+        (todo/item/prio-key-le? e (car sorted))
+        (cons e sorted)
+        (cons (car sorted) (todo/item/prio-key-insert (cdr sorted) e))))))
+
+(define todo/item/prio-key-le?
+  (lambda
+    (a b)
+    "Cheap comparator on decorated rows: rank and position are precomputed
+     numbers, so only the id tiebreak touches strings."
+    (if
+      (< (car a) (car b))
+      #t
+      (if
+        (> (car a) (car b))
+        #f
+        (if
+          (< (car (cdr a)) (car (cdr b)))
+          #t
+          (if
+            (> (car (cdr a)) (car (cdr b)))
+            #f
+            (string<=? (car (cdr (cdr a))) (car (cdr (cdr b))))))))))
 
 (define todo/item/prio-le?
   (lambda
@@ -1846,53 +2450,6 @@
               3
               4)))))))
 
-(define todo/item/prio-decorate
-  (lambda
-    (row)
-    "Decorate a row with its precomputed sort keys: (rank pos . row)."
-    (cons
-      (todo/item/prio-rank (cdr row))
-      (cons
-        (todo/item/prio-pos (cdr row))
-        row))))
-
-(define todo/item/prio-undecorate
-  (lambda
-    (e)
-    "Strip the precomputed keys from a decorated row."
-    (cdr (cdr e))))
-
-(define todo/item/prio-key-le?
-  (lambda
-    (a b)
-    "Cheap comparator on decorated rows: rank and position are precomputed
-     numbers, so only the id tiebreak touches strings."
-    (if
-      (< (car a) (car b))
-      #t
-      (if
-        (> (car a) (car b))
-        #f
-        (if
-          (< (car (cdr a)) (car (cdr b)))
-          #t
-          (if
-            (> (car (cdr a)) (car (cdr b)))
-            #f
-            (string<=? (car (cdr (cdr a))) (car (cdr (cdr b))))))))))
-
-(define todo/item/prio-key-insert
-  (lambda
-    (sorted e)
-    "Insertion step over decorated rows."
-    (if
-      (null? sorted)
-      (list e)
-      (if
-        (todo/item/prio-key-le? e (car sorted))
-        (cons e sorted)
-        (cons (car sorted) (todo/item/prio-key-insert (cdr sorted) e))))))
-
 (define todo/item/prio-sorted
   (lambda
     (rows)
@@ -1910,6 +2467,12 @@
         todo/item/prio-key-insert
         ()
         (list/map todo/item/prio-decorate rows)))))
+
+(define todo/item/prio-undecorate
+  (lambda
+    (e)
+    "Strip the precomputed keys from a decorated row."
+    (cdr (cdr e))))
 
 (define todo/item/priority
   (lambda
@@ -2144,10 +2707,182 @@
               (if (string-eq fl "") (string-eq lid inbox-id) #f))))
         (todo/item/all)))))
 
+(define todo/items-html
+  (lambda
+    (view)
+    (if
+      (string-eq view "from-notes")
+      (html/ul
+        (html/attr "class" "card todo-list")
+        (list/foldl
+          (lambda
+            (acc t)
+            (string-append acc (todo/note-item-li t view)))
+          ""
+          (notes/all-todos)))
+      (if
+        (string-eq view "archived")
+        (html/ul
+          (html/attr "class" "card todo-list")
+          (list/foldl
+            (lambda
+              (acc row)
+              (string-append acc (todo/list-item-li row view)))
+            ""
+            (todo/archived-items)))
+        (if
+          (string-eq view "everything")
+          (html/join
+            (list
+              (html/h2 "Lists")
+              (html/ul
+                (html/attr "class" "card todo-list")
+                (list/foldl
+                  (lambda
+                    (acc row)
+                    (string-append acc (todo/list-item-li row view)))
+                  ""
+                  (todo/active-items (todo/all-items))))
+              (html/h2 "From notes")
+              (html/ul
+                (html/attr "class" "card todo-list")
+                (list/foldl
+                  (lambda
+                    (acc t)
+                    (if
+                      (todo/open? (car (cdr (cdr (cdr t)))))
+                      (string-append acc (todo/note-item-li t view))
+                      acc))
+                  ""
+                  (notes/all-todos)))))
+          (html/ul
+            (html/attr "class" "card todo-list")
+            (list/foldl
+              (lambda
+                (acc row)
+                (string-append acc (todo/list-item-li row view)))
+              ""
+              (todo/active-items (todo/items-for-list view)))))))))
+
 
 
 (define todo/land-ping
   1)
+
+(define todo/list
+  (lambda () (todo/tree/rows "todo-item" 50)))
+
+(define todo/list-default?
+  (lambda
+    (fields)
+    (let
+      ((d (dict-get fields "is_default")))
+      (if (null? d) #f (string-eq d "true")))))
+
+(define todo/list-html
+  (lambda
+    ()
+    (html/ul
+      (html/attr "class" "card todo-list")
+      (list/foldl
+        (lambda
+          (acc row)
+          (string-append acc (todo/item-li row)))
+        ""
+        (todo/list)))))
+
+(define todo/list-item-li
+  (lambda
+    (row view)
+    (let
+      ((id (car row)) (fields (cdr row)))
+      (let
+        ((title (todo/item-title fields))
+          (state (todo/item-state fields))
+          (open (todo/open? (todo/item-state fields))))
+        (html/li
+          (html/attr
+            "class"
+            (if
+              open
+              "todo-item"
+              (if
+                (todo/archived? state)
+                "todo-item is-done is-archived"
+                "todo-item is-done")))
+          (html/join
+            (list
+              (html/form
+                "POST"
+                "/todos"
+                (html/attrs
+                  (list
+                    (html/attr "class" "todo-check")
+                    (html/attr "hx-post" "/todos")
+                    (html/attr "hx-target" "#todo-main")
+                    (html/attr "hx-swap" "innerHTML")))
+                (html/join
+                  (list
+                    (html/hidden "action" "cycle")
+                    (html/hidden "id" id)
+                    (html/hidden "view" view)
+                    (html/button
+                      (html/attrs
+                        (list
+                          (html/attr "type" "submit")
+                          (html/attr "class" (string-append "todo-box st-" state))
+                          (html/attr "title" "cycle state")))
+                      (if (string-eq state "") "·" state)))))
+              (html/a
+                (string-append "/todos?id=" id "&view=" view)
+                (html/span
+                  (html/attr "class" "todo-title")
+                  (html/text title)))
+              (if
+                (string-eq state "DONE")
+                (html/form
+                  "POST"
+                  "/todos"
+                  (html/attrs
+                    (list
+                      (html/attr "class" "todo-archive")
+                      (html/attr "hx-post" "/todos")
+                      (html/attr "hx-target" "#todo-main")
+                      (html/attr "hx-swap" "innerHTML")))
+                  (html/join
+                    (list
+                      (html/hidden "action" "archive")
+                      (html/hidden "id" id)
+                      (html/hidden "view" view)
+                      (html/button
+                        (html/attrs
+                          (list
+                            (html/attr "type" "submit")
+                            (html/attr "class" "secondary")
+                            (html/attr "title" "archive done task")))
+                        "arch"))))
+                "")
+              (html/form
+                "POST"
+                "/todos"
+                (html/attrs
+                  (list
+                    (html/attr "class" "todo-del")
+                    (html/attr "hx-post" "/todos")
+                    (html/attr "hx-target" "#todo-main")
+                    (html/attr "hx-swap" "innerHTML")))
+                (html/join
+                  (list
+                    (html/hidden "action" "delete")
+                    (html/hidden "id" id)
+                    (html/hidden "view" view)
+                    (html/button
+                      (html/attrs
+                        (list
+                          (html/attr "type" "submit")
+                          (html/attr "class" "secondary")
+                          (html/attr "title" "delete")))
+                      "del")))))))))))
 
 
 
@@ -2176,52 +2911,20 @@
       ""
       (todo/list/all))))
 
+(define todo/list-title
+  (lambda (fields) (as-str (dict-get fields "title"))))
 
-
-(define todo/list/find-by-title
+(define todo/list/all
   (lambda
-    (title)
-    (let*
-      ((want (as-str title))
-        (hit
-          (list/filter
-            (lambda
-              (l)
-              (string-eq (as-str (dict-get (cdr l) "title")) want))
-            (todo/list/all))))
-      (if (null? hit) () (car hit))))
-  "The (id . fields) pair of the first todo-list whose title equals title,
-     or () when none. Used by the shared-space naming migration to resolve
-     the board/AUTO lane by TITLE rather than a per-garden uuid.")
-
-(define todo/list/set-columns
-  (lambda
-    (list-id cols)
-    (let
-      ((lid (as-str list-id))
-        (lf (todo/tree/get "todo-list" (as-str list-id))))
-      (if
-        (null? lf)
-        "no such list"
-        (seq
-          (todo/tree/save
-            "todo-list"
-            lid
-            (dict-set* lf (list "columns" (json-emit cols))))
-          lid))))
-  "Set a todo-list's `columns` field (its own pipeline, a JSON array of
-     state strings). Returns the list id, or \"no such list\". Local to the
-     todo family so it does not depend on the kanban package.")
-
-(define todo/list/space-of
-  (lambda
-    (row)
-    (let
-      ((s (dict-get (cdr row) "space")))
-      (if (null? s) "" (as-str s))))
-  "The 034 row-level space of a list row (body \"space\" field); \"\" for
-     an ordinary garden list. Callers route a card to the list's space so
-     a shared Board card does not fall back into the filer's garden.")
+    ()
+    (todo/list/merge (todo/tree/rows "todo-list" 50) (todo/list/all-shared)))
+  "All lists the identity can see: GARDEN lists (data.u.<user>.*) merged
+     with SHARED lists (data.s.*, the Board). Deduped by id, garden rows
+     first. borge/workstreams.borg shared-register: notes/issues/board-list-id
+     runs over this, so the shared Board resolves for EVERY identity.
+     additivity caveat: pre-034 pins of an existing title had no space field
+     and stay in the garden, so both surfaces are merged rather than one
+     replacing the other.")
 
 (define todo/list/all-shared
   (lambda
@@ -2236,62 +2939,6 @@
      single synthesized path. 2026-10-28 budget fix: the type filter runs
      SERVER-SIDE (tree/list's optional 4th arg), same fix as
      todo/item/all-shared. Same (id . fields) shape as todo/list/all.")
-
-(define todo/list/all
-  (lambda
-    ()
-    (todo/list/merge (todo/tree/rows "todo-list" 50) (todo/list/all-shared)))
-  "All lists the identity can see: GARDEN lists (data.u.<user>.*) merged
-     with SHARED lists (data.s.*, the Board). Deduped by id, garden rows
-     first. borge/workstreams.borg shared-register: notes/issues/board-list-id
-     runs over this, so the shared Board resolves for EVERY identity.
-     additivity caveat: pre-034 pins of an existing title had no space field
-     and stay in the garden, so both surfaces are merged rather than one
-     replacing the other.")
-
-(define todo/list/merge
-  (lambda
-    (garden shared)
-    (let
-      ((seen
-        (list/foldl
-          (lambda (acc row) (dict-set acc (as-str (car row)) "1"))
-          (list)
-          garden)))
-      (append
-        garden
-        (list/filter
-          (lambda (row) (null? (dict-get seen (as-str (car row)))))
-          shared))))
-  "PERF-5 correction (2026-10-25, card a4fb7706): restore the id-dedupe this
-     contract always promised, at native cost. OBITUARY: PERF-5 (2026-10-22)
-     made this a bare append on the claim that garden and shared subtrees are
-     disjoint by construction, so ids cannot collide across pools. The live
-     store disproved that: deferred mirrors file the SAME (type,id) under
-     both data.u.<user>.* and data.s.* (workstreams.borg 2026-10-03 note),
-     and the merged pool double-counted. Probe 2026-10-25: todo/item/all
-     516 rows / 343 ids, todo/list/all 18 rows / 10 ids. The seen-set is an
-     ALIST: dict-set/dict-get assoc/cons natively (no JSON re-parse per op),
-     so the cost is native O(|shared| * |garden|) pair steps, not the old
-     interpreted O(n^2) merge-one walk. Garden rows still come first, as
-     every caller expects, and the result stays a PROPER list (append),
-     which strict (count) requires.")
-
-(define todo/list/merge-one
-  (lambda
-    (rows id row)
-    (if
-      (null? rows)
-      (list row)
-      (if
-        (string-eq (as-str (car (car rows))) id)
-        rows
-        (append rows (list row)))))
-  "Cons/normalize helper for todo/list/merge: returns `rows` unchanged when
-     `id` is already present, else `rows` with `row` appended as a PROPER list.
-     Uses append (not cons) so the result is a VList: a cons-chain is accepted
-     by car/cdr/map/filter but rejected by the strict (count), which bit
-     todo/item/all once the shared side became non-empty (2026-10-03).")
 
 (define todo/list/create
   (lambda
@@ -2350,6 +2997,9 @@
           ())
         (todo/list/delete-items (cdr items) lid)))))
 
+(define todo/list/ensure-inbox
+  (lambda () (todo/list/ensure-inbox-in (todo/list/all))))
+
 (define todo/list/ensure-inbox-in
   (lambda
     (lists)
@@ -2375,154 +3025,26 @@
      board path (main's inbox lookup, nav's own lists binding, nav's inbox
      lookup) and twice on the card-detail path.")
 
-(define todo/list/ensure-inbox
-  (lambda () (todo/list/ensure-inbox-in (todo/list/all))))
+
+
+(define todo/list/find-by-title
+  (lambda
+    (title)
+    (let*
+      ((want (as-str title))
+        (hit
+          (list/filter
+            (lambda
+              (l)
+              (string-eq (as-str (dict-get (cdr l) "title")) want))
+            (todo/list/all))))
+      (if (null? hit) () (car hit))))
+  "The (id . fields) pair of the first todo-list whose title equals title,
+     or () when none. Used by the shared-space naming migration to resolve
+     the board/AUTO lane by TITLE rather than a per-garden uuid.")
 
 (define todo/list/find-default
   (lambda () (todo/list/find-default-in (todo/list/all))))
-
-;; ------------------------------------------------------------------
-;; SHARED OPEN SPACE (borge/workstreams.borg shared-store)
-;;
-;; The board, its lists and its cards are collaboration furniture: every
-;; authenticated identity shares ONE board. The mechanism is the existing
-;; open-space substrate (`data.s.<space>.<type>.<id>`, migration 030) —
-;; the chat lobby is the precedent. Admission is TYPE-level and routes
-;; FUTURE writes; the todo types admitted here are todo-list, todo-item,
-;; todo-comment, todo-event, todo-dep.
-;;
-;; ORDERING HAZARD: admission changes (node-path 'todo-item ...), so
-;; ensure-space MUST run before any read that computes a prefix. Every
-;; todo entry point (todo/page, kanban/page, workstreams/page) calls
-;; todo/ensure-space at the top.
-;; ------------------------------------------------------------------
-
-(define todo/open-space
-  "todo")
-
-(define todo/admitted-types
-  (list "todo-list" "todo-item" "todo-comment" "todo-event" "todo-dep"))
-
-(define todo/ensure-space
-  (lambda
-    ()
-    (if
-      (string-eq (as-str (whoami)) "anonymous")
-      #f
-      (guard
-        (lambda (e) #f)
-        (seq
-          (if
-            (space-exists? todo/open-space)
-            #t
-            (space-create todo/open-space (quote open)))
-          (list/foldl
-            (lambda (acc t)
-              (seq
-                (guard
-                  (lambda (e) #f)
-                  (space-admit t todo/open-space))
-                acc))
-            #t
-            todo/admitted-types)))))
-  "Create the shared open `todo` space and admit the card types
-     (idempotent, best-effort; the first writer races safely). Ensures
-     the space exists AND the admissions are present even when the space
-     predates an admission — so a repair is `(todo/ensure-space)`.
-     Anonymous is a no-op (guests keep their own garden), and a
-     non-owner (any non-first identity) silently skips the owner-only
-     admit — the space already exists and is open, so membership is
-     implicit.")
-
-(define todo/space-path
-  (lambda (type-name id)
-    (node-path type-name (as-str id)))
-  "The space-routed node path for a todo datum (assumes the type is
-     admitted). Thin wrapper over node-path for readability.")
-
-(define todo/adopt-stranded
-  (lambda
-    ()
-    (with-transaction
-      (lambda
-        ()
-        (let
-          ((scan
-            (list/foldl
-              (lambda
-                (acc t)
-                (list/foldl
-                  (lambda
-                    (a n)
-                    (if
-                      (string-eq (as-str (dict-get n "type")) t)
-                      (let
-                        ((old (as-str (dict-get n "path"))))
-                        (let
-                          ((id (as-str (dict-get n "id"))))
-                          (let
-                            ((new (todo/space-path t id)))
-                            (let
-                              ((has-new (tree/get new)))
-                              (if
-                                (null? has-new)
-                                (seq
-                                  (tree/move old new)
-                                  (cons (+ (car a) 1) (cdr a)))
-                                (cons (car a) (+ (cdr a) 1)))))))
-                      a))
-                  acc
-                  (tree/list-kind "data.u" "datum" 4000)))
-              (cons 0 0)
-              todo/admitted-types)))
-          (json-emit
-            (dict-set*
-              "{}"
-              (list
-                "moved"
-                (car scan)
-                "skipped"
-                (cdr scan))))))))
-  "One-time adoption: move every stranded `data.u.*` node of the four
-     todo types (all identities — the reads are not RLS-filtered and the
-     spec deliberately publishes the pre-adoption backlog) into the shared
-     `todo` space, preserving id, body, author and created_at. Idempotent:
-     a row whose target already exists is skipped. The whole scan runs in
-     ONE with-transaction (a tree/move is a write; the multi-write sequence
-     must be atomic). Returns JSON {\"moved\":N,\"skipped\":M}.")
-
-(define todo/resolve-board
-  (lambda
-    ()
-    (let
-      ((hit (todo/list/find-by-title "Board")))
-      (if (null? hit) (todo/list/ensure-inbox) (as-str (car hit)))))
-  "The shared Board list id: the todo-list titled \"Board\", falling back
-     to the Inbox. Resolves by TITLE (never a hardcoded per-garden uuid).")
-
-(define todo/resolve-auto-lane
-  (lambda
-    ()
-    (let
-      ((hit (todo/list/find-by-title "AUTO")))
-      (if (null? hit) "" (as-str (car hit)))))
-  "The AUTO-lane list id: the todo-list titled \"AUTO\", or \"\" when absent.")
-
-(define todo/setup-auto-lane
-  (lambda
-    ()
-    (let
-      ((aid (todo/resolve-auto-lane)))
-      (if
-        (string-eq aid "")
-        ""
-        (todo/list/set-columns
-          aid
-          (list "TODO" "CODE" "LOGIC-REVIEW" "DONE" "PARKED")))))
-  "Give the AUTO lane its spec-mandated columns (NO HUMAN-REVIEW):
-     [TODO CODE LOGIC-REVIEW DONE PARKED]. Returns the list id or \"\".
-     borge/workstreams.borg stream-pipelines: an AUTO LOGIC-REVIEW PASS
-     lands on DONE, so the human gate must not be a column.")
 
 (define todo/list/find-default-in
   (lambda
@@ -2540,6 +3062,18 @@
             (car xs)
             (todo/list/find-default-in (cdr xs))))))))
 
+(define todo/list/find-row
+  (lambda
+    (rows id)
+    (if
+      (null? rows)
+      ()
+      (if
+        (string-eq (as-str (car (car rows))) (as-str id))
+        (car rows)
+        (todo/list/find-row (cdr rows) id))))
+  "The (id . fields) row in rows whose id matches, or () when absent. A linear scan over an already-fetched list pool, never a by-id get: a card filed to a list row that does not exist carries a non-uuid id, and a by-id get raises 22P02 on it.")
+
 (define todo/list/get
   (lambda
     (id)
@@ -2552,6 +3086,50 @@
           (if (null? inbox) (list) (cdr inbox)))
         (todo/tree/get "todo-list" lid))))
   "empty list-id resolves the DEFAULT INBOX (fields) instead of asking tree/get for `data.u.<user>.todo-list.` — uuid_label \"\" yields an empty ltree label and PG answers 42601 (reproduced live). find-default is a read (no create side-effect); todo/page already ensure-inbox's, so the default exists on any rendered page. No default list yet -> ().")
+
+(define todo/list/merge
+  (lambda
+    (garden shared)
+    (let
+      ((seen
+        (list/foldl
+          (lambda (acc row) (dict-set acc (as-str (car row)) "1"))
+          (list)
+          garden)))
+      (append
+        garden
+        (list/filter
+          (lambda (row) (null? (dict-get seen (as-str (car row)))))
+          shared))))
+  "PERF-5 correction (2026-10-25, card a4fb7706): restore the id-dedupe this
+     contract always promised, at native cost. OBITUARY: PERF-5 (2026-10-22)
+     made this a bare append on the claim that garden and shared subtrees are
+     disjoint by construction, so ids cannot collide across pools. The live
+     store disproved that: deferred mirrors file the SAME (type,id) under
+     both data.u.<user>.* and data.s.* (workstreams.borg 2026-10-03 note),
+     and the merged pool double-counted. Probe 2026-10-25: todo/item/all
+     516 rows / 343 ids, todo/list/all 18 rows / 10 ids. The seen-set is an
+     ALIST: dict-set/dict-get assoc/cons natively (no JSON re-parse per op),
+     so the cost is native O(|shared| * |garden|) pair steps, not the old
+     interpreted O(n^2) merge-one walk. Garden rows still come first, as
+     every caller expects, and the result stays a PROPER list (append),
+     which strict (count) requires.")
+
+(define todo/list/merge-one
+  (lambda
+    (rows id row)
+    (if
+      (null? rows)
+      (list row)
+      (if
+        (string-eq (as-str (car (car rows))) id)
+        rows
+        (append rows (list row)))))
+  "Cons/normalize helper for todo/list/merge: returns `rows` unchanged when
+     `id` is already present, else `rows` with `row` appended as a PROPER list.
+     Uses append (not cons) so the result is a VList: a cons-chain is accepted
+     by car/cdr/map/filter but rejected by the strict (count), which bit
+     todo/item/all once the shared side became non-empty (2026-10-03).")
 
 (define todo/list/nav-li
   (lambda
@@ -2618,8 +3196,159 @@
       ""
       (todo/list/all))))
 
+(define todo/list/set-columns
+  (lambda
+    (list-id cols)
+    (let
+      ((lid (as-str list-id))
+        (lf (todo/tree/get "todo-list" (as-str list-id))))
+      (if
+        (null? lf)
+        "no such list"
+        (seq
+          (todo/tree/save
+            "todo-list"
+            lid
+            (dict-set* lf (list "columns" (json-emit cols))))
+          lid))))
+  "Set a todo-list's `columns` field (its own pipeline, a JSON array of
+     state strings). Returns the list id, or \"no such list\". Local to the
+     todo family so it does not depend on the kanban package.")
+
+(define todo/list/space-of
+  (lambda
+    (row)
+    (let
+      ((s (dict-get (cdr row) "space")))
+      (if (null? s) "" (as-str s))))
+  "The 034 row-level space of a list row (body \"space\" field); \"\" for
+     an ordinary garden list. Callers route a card to the list's space so
+     a shared Board card does not fall back into the filer's garden.")
+
 (define todo/list/title
   (lambda (fields) (as-str (dict-get fields "title"))))
+
+(define todo/lists
+  (lambda () (todo/tree/rows "todo-list" 50)))
+
+(define todo/main-html
+  (lambda
+    (view)
+    (let
+      ((id-param (request-param "id"))
+        (is-get (string-eq (request-method) "GET")))
+      (if
+        (if
+          is-get
+          (if
+            (null? id-param)
+            #f
+            (not (string-eq (as-str id-param) "")))
+          #f)
+        (html/div
+          (html/attr "id" "todo-main")
+          (html/join
+            (list
+              (html/div
+                (html/attr "class" "todo-layout")
+                (html/join
+                  (list
+                    (html/div
+                      (html/attr "class" "todo-side")
+                      (todo/nav-html view))
+                    (html/div
+                      (html/attr "class" "todo-body")
+                      (todo/detail-html (as-str id-param) view))))))))
+        (let
+          ((list-id
+            (if
+              (string-eq view "everything")
+              (todo/ensure-inbox)
+              (if
+                (string-eq view "from-notes")
+                ""
+                (if (string-eq view "archived") "" view)))))
+          (html/div
+            (html/attr "id" "todo-main")
+            (html/join
+              (list
+                (html/div
+                  (html/attr "class" "todo-layout")
+                  (html/join
+                    (list
+                      (html/div
+                        (html/attr "class" "todo-side")
+                        (todo/nav-html view))
+                      (html/div
+                        (html/attr "class" "todo-body")
+                        (html/join
+                          (list
+                            (todo/add-form view list-id)
+                            (todo/items-html view)))))))))))))))
+
+(define todo/nav-html
+  (lambda
+    (view)
+    (let
+      ((lists (todo/lists))
+        (inbox (todo/ensure-inbox))
+        (arch-n (todo/count-all-in (todo/archived-items))))
+      (html/ul
+        (html/attr "class" "todo-nav")
+        (html/join
+          (list
+            (todo/nav-link view "everything" "Everything" "")
+            (todo/nav-link view "from-notes" "From notes" "")
+            (todo/nav-link
+              view
+              "archived"
+              "Archived"
+              (string-append "(" (as-str arch-n) ")"))
+            (list/foldl
+              (lambda
+                (acc row)
+                (string-append acc (todo/nav-list-li view row)))
+              ""
+              lists)
+            (html/li
+              (html/attr "class" "todo-nav-item")
+              (html/form
+                "POST"
+                "/todos"
+                (html/attrs
+                  (list
+                    (html/attr "class" "todo-new-list")
+                    (html/attr "hx-post" "/todos")
+                    (html/attr "hx-target" "#todo-main")
+                    (html/attr "hx-swap" "innerHTML")))
+                (html/join
+                  (list
+                    (html/hidden "action" "create-list")
+                    (html/hidden "view" view)
+                    (html/text-input
+                      "title"
+                      (html/attrs
+                        (list
+                          (html/attr "placeholder" "New list")
+                          (html/attr "required" "required")
+                          (html/attr "class" "todo-new-list-input"))))
+                    (html/button (html/attr "type" "submit") "+ list")))))))))))
+
+(define todo/nav-link
+  (lambda
+    (view key label extra)
+    (html/li
+      (html/attr
+        "class"
+        (if
+          (string-eq view key)
+          "todo-nav-item is-active"
+          "todo-nav-item"))
+      (html/a
+        (string-append "/todos?view=" key)
+        (string-append
+          label
+          (if (string-eq extra "") "" (string-append " " extra)))))))
 
 
 
@@ -2685,6 +3414,369 @@
   (lambda
     (cur)
     (outline/todo-next-in todo/state/list (as-str cur))))
+(define todo/node/back-link
+  (lambda
+    (fields)
+    (let
+      ((ref (todo/item/origin-ref fields)))
+      (if
+        (string-eq ref "")
+        ""
+        (let
+          ((parts (todo/node/parse-ref ref)))
+          (html/a
+            (string-append
+              "/notes?slug="
+              (car parts)
+              "&node-id="
+              (cdr parts))
+            (html/span
+              (html/attr "class" "muted todo-src")
+              (html/text (string-append "from " ref))))))))
+  "Back-link from a promoted card to its origin note node, or \"\" for a
+     hand-made card. note-todos clause 4.")
+(define todo/node/find-card
+  (lambda
+    (ref)
+    (if
+      (string-eq (as-str ref) "")
+      ()
+      (car
+        (list/filter
+          (lambda
+            (row)
+            (string-eq (todo/item/origin-ref (cdr row)) (as-str ref)))
+          (todo/item/all)))))
+  "The card whose origin_ref equals ref, or () when unpromoted. The
+     idempotency key for promotion and the node->card update path.")
+(define todo/node/get
+  (lambda
+    (slug nid)
+    (let
+      ((p (todo/node/note-path slug)))
+      (if
+        (string-eq p "")
+        ()
+        (notes/node/get p (as-str nid)))))
+  "Read one heading node's body dict from (slug nid), or () when the note
+     path or node is absent.")
+(define todo/node/list-has-state?
+  (lambda
+    (list-id state)
+    (if
+      (null? (list/filter
+               (lambda (c) (string-eq (as-str c) (as-str state)))
+               (todo/state/columns-for-list (as-str list-id))))
+      #f
+      #t))
+  "True when `state` is one of list-id's effective pipeline columns.")
+;; MARKED-HEADING READ PATH (2026-10-18 budget fix). OBITUARY (what/why):
+;; todo/node/unpromoted used to fold notes/outline/all-todos, which decodes
+;; EVERY note's full outline (tree/note-index-full: 3385 notes / 21981
+;; heading nodes on prod) to find the handful of marked headings. That
+;; single call exceeds the 400k-step route budget on its own, so
+;; /todos?view=everything and ?view=from-notes returned
+;; "budget exceeded" (500) while ?view=open/archived stayed up — the
+;; note-todos bridge (commit 1adea6e) wired the scrape into
+;; todo/item/html and blew the page. The replacement inverts the read:
+;; MARKED HEADINGS FIRST via tree/find-by on body.todo (one indexed read
+;; per keyword; 106 hits for ~525 steps), then resolve each hit's note
+;; slug from the LIGHT note index (no outlines) using the subtree path
+;; (a heading path is <note-path>.h.<nid>[, .h.<nid>...], so the note
+;; path is the segment before the FIRST .h.). Same (slug nid title
+;; keyword) rows in the same shape, ~3x under budget. The full-outline
+;; fold stays DELETED here, not kept as a fallback — it can never fit a
+;; request (borge/notes.outline-read-path budget-scale).
+(define todo/node/marked-keywords
+  (list " " "TODO" "DONE" "ARCHIVED" "CANCELLED")
+  "Every todo keyword a note heading can carry. Leading-space used to
+     match the live data's single-space placeholder keyword.")
+(define todo/node/marked-rows
+  (lambda
+    ()
+    (list/foldl
+      (lambda (acc kw)
+        (append acc (tree/find-by (quote heading) "todo" kw 20000)))
+      (list)
+      todo/node/marked-keywords))
+  "Marked note headings as node JSON, one tree/find-by body-field read
+     per keyword. tree/find-by is garden-scoped and viewer-gated by the
+     prim, exactly like the full-index path it replaces.")
+(define todo/node/mirror
+  (lambda
+    (card-id state)
+    (let
+      ((fields (todo/item/get (as-str card-id))))
+      (if
+        (null? fields)
+        ""
+        (if
+          (string-eq (todo/item/origin-kind fields) "note")
+          (let
+            ((ref (todo/node/parse-ref (todo/item/origin-ref fields))))
+            (if
+              (string-eq (car ref) "")
+              ""
+              (let
+                ((ok (todo/node/set-todo (car ref) (cdr ref) state)))
+                (if
+                  ok
+                  #t
+                  (todo/node/mirror-notice
+                    (as-str card-id)
+                    (todo/item/origin-ref fields)
+                    state)))))
+          ""))))
+  "Mirror a card's new state onto its origin note node, when it has one.
+     The write-back half of note-todos clause 3: a card transition updates
+     the linked node in the SAME transaction (todo/item/set-state and
+     todo/item/save call this beside their tree write). Returns #t when the
+     node was written, the notice comment id when the origin note is not
+     visible to this caller (T7 option B — the divergence is VISIBLE, never
+     silent), and '' for hand-made cards or a malformed ref.")
+(define todo/node/mirror-notice
+  (lambda
+    (card-id ref state)
+    (let*
+      ((ref-pair (todo/node/parse-ref ref))
+        (reason
+          (if (todo/node/note-visible? (car ref-pair))
+            "node keyword is gone; only the card moved for"
+            "is not visible to"))
+        (note
+          (string-append
+            "origin note ("
+            (as-str ref)
+            ") "
+            reason
+            " "
+            (whoami)
+            " — keyword not mirrored to "
+            (as-str state)))
+        (seen
+          (list/filter
+            (lambda
+              (n)
+              (and
+                (string-eq (as-str (dict-get n "author")) (as-str (whoami)))
+                (let
+                  ((b (dict-get (dict-get n "body") "body")))
+                  (and
+                    (not (null? b))
+                    (string-contains? (as-str b) "origin note (")))))
+            (todo/comment/list (as-str card-id)))))
+      (if
+        (null? seen)
+        (todo/comment/add (as-str card-id) note)
+        (as-str
+          (dict-get
+            (dict-get (car seen) "body")
+            "body")))))
+  "Record ONE attributed comment on the card when its origin note cannot be
+     mirrored (note-todos clause 5; T7 option B). IDEMPOTENT per (card,
+     author): once this caller has recorded a notice, a later move does NOT
+     append again — the first notice already carries the exact state that
+     failed to mirror, and the card's own todo-event stream is the record of
+     every later transition. Returns the existing notice instead. Never
+     edits a row another author wrote. Callers get a value on every move so
+     the divergence can never masquerade as a silent no-op.")
+(define todo/node/note-path
+  (lambda
+    (slug)
+    (let
+      ((row (notes/doc/row (as-str slug))))
+      (if (null? row) "" (notes/doc/row-path row))))
+  "The tree path of the note with slug (empty when the note is absent).
+     Resolves through the folder ACL note, never a hardcoded data.note path.")
+(define todo/node/note-visible?
+  (lambda
+    (slug)
+    (not
+      (string-eq
+        (todo/node/note-path slug)
+        "")))
+  "True when the CALLER can resolve the note slug through the garden-scoped
+     notes read (notes/tree/find-slug -> tree/find-by, prefix = caller's
+     garden). Visibility, not existence: another identity's private note is
+     invisible here (note-todos clause 5). The distinction that lets
+     todo/node/mirror tell 'origin gone' from 'origin not mine'.")
+(define todo/node/parse-ref
+  (lambda
+    (ref)
+    (let
+      ((parts (string-split (as-str ref) "#")))
+      (if
+        (or
+          (null? parts)
+          (string-eq (as-str (car parts)) ""))
+        (cons "" "")
+        (let
+          ((slug (as-str (car parts)))
+            (rest (cdr parts)))
+          (if
+            (null? rest)
+            (cons slug "")
+            (cons slug (as-str (car rest))))))))
+  "Split a card origin_ref \"<slug>#<nid>\" into (slug . nid); (\"\" . \"\")
+     for an empty/malformed slug. A bare \"slug\" (no #) also parses, with an
+     empty nid, so a note-LEVEL provenance ref round-trips instead of being
+     silently dropped. The reconciliation-key parser.")
+(define todo/node/promote-form
+  (lambda
+    (t)
+    (let
+      ((slug (as-str (car t)))
+        (nid (as-str (car (cdr t))))
+        (title (as-str (car (cdr (cdr t)))))
+        (kw (as-str (car (cdr (cdr (cdr t)))))))
+      (html/li
+        (html/attr "class" "todo-item todo-from-note todo-unpromoted")
+        (html/join
+          (list
+            (html/span
+              (html/attr "class" (string-append "todo-box st-" kw))
+              (if (string-eq kw "") "·" kw))
+            (html/span
+              (html/attr "class" "todo-title")
+              (html/text title))
+            (html/a
+              (string-append "/notes?slug=" slug)
+              (html/span
+                (html/attr "class" "muted todo-src")
+                (html/text slug)))
+            (html/form
+              "POST"
+              "/todos"
+              (html/attrs
+                (list
+                  (html/attr "class" "todo-promote")
+                  (html/attr "hx-post" "/todos")
+                  (html/attr "hx-target" "#todo-main")
+                  (html/attr "hx-swap" "innerHTML")))
+              (html/join
+                (list
+                  (html/hidden "action" "promote-node")
+                  (html/hidden "slug" slug)
+                  (html/hidden "node-id" nid)
+                  (html/hidden "view" "from-notes")
+                  (html/button
+                    (html/attrs
+                      (list
+                        (html/attr "type" "submit")
+                        (html/attr "class" "secondary")
+                        (html/attr "title" "promote to a shared board card")))
+                    "promote")))))))))
+  "One unpromoted node row with a promote button (POST action=promote-node).")
+(define todo/node/promoted-refs
+  (lambda
+    ()
+    (list/filter
+      (lambda (r) (not (string-eq r "")))
+      (list/map
+        (lambda (row) (todo/item/origin-ref (cdr row)))
+        (todo/item/all))))
+  "Every non-empty origin_ref on the board, read ONCE (one card scan) so
+     the unpromoted filter never does a DB read per note node.")
+(define todo/node/row-of
+  (lambda
+    (smap nj)
+    (let*
+      ((p (as-str (dict-get nj "path")))
+       (notep (car (string-split p ".h.")))
+       (slug (dict-get smap notep))
+       (b (dict-get nj "body")))
+      (list (if (null? slug) "" (as-str slug))
+            (as-str (dict-get b "id"))
+            (as-str (dict-get b "title"))
+            (as-str (dict-get b "todo")))))
+  "One marked heading node -> (slug nid title keyword). A heading path is
+     <note-path>.h.<nid>[.h.<nid>...]; splitting on the FIRST .h. yields
+     the owning note path, which is the slug-map key.")
+(define todo/node/seed-state
+  (lambda
+    (keyword list-id)
+    (let
+      ((k (as-str keyword)))
+      (if
+        (string-eq k "")
+        "TODO"
+        (if
+          (todo/node/list-has-state? list-id k)
+          k
+          "SPEC"))))
+  "Map a node's outline keyword onto the card pipeline. The outline set
+     is 3-state (\"\" TODO DONE); the card machine is the engineering
+     taxonomy. A keyword the card's pipeline knows passes through (TODO
+     and DONE included); an unknown keyword maps to SPEC — marked but not
+     yet specified, an honest advance past intake, never a dropped state.")
+(define todo/node/set-todo
+  (lambda
+    (slug nid todo)
+    (let
+      ((p (todo/node/note-path slug)))
+      (if
+        (string-eq p "")
+        #f
+        (notes/node/set-todo p (as-str nid) (as-str todo)))))
+  "Write the `todo` field of ONE heading node (slug nid). One read + one
+     write, never a whole-note rewrite. Returns #t when the node exists.")
+(define todo/node/slug-map
+  (lambda
+    (marked)
+    (list/foldl
+      (lambda (acc nj)
+        (let*
+          ((p (as-str (dict-get nj "path")))
+           (notep (car (string-split p ".h."))))
+          (if
+            (dict-get acc notep)
+            acc
+            (let
+              ((r (tree/get notep)))
+              (if
+                (null? r)
+                acc
+                (let
+                  ((slug (dict-get (dict-get r "body") "slug")))
+                  (if
+                    (null? slug)
+                    acc
+                    (dict-set acc notep (as-str slug)))))))))
+      "{}"
+      marked))
+  "path -> slug for the notes that OWN a marked heading, resolved from the
+     MARKED ROWS themselves. DISTINCT-PATH LAZY (2026-10-18): the first
+     version folded the whole light note index (tree/note-index, 3385 rows
+     on prod) just to look up ~10 paths — 105k steps of pure binding for a
+     10-entry join. Resolving one tree/get per DISTINCT marked note is
+     ~4.5k steps total and scales with MARKED notes, not with garden size.
+     Only headings of notes that actually carry a mark are ever read.")
+(define todo/node/unpromoted
+  (lambda
+    (items)
+    (let*
+      ((promoted
+          (list/filter
+            (lambda (r) (not (string-eq r "")))
+            (list/map
+              (lambda (row) (todo/item/origin-ref (cdr row)))
+              (if (null? items) (todo/item/all) items))))
+          (marked (todo/node/marked-rows))
+        (smap (todo/node/slug-map marked)))
+      (list/filter
+        (lambda
+          (t)
+          (let
+          ((ref
+              (string-append (as-str (car t)) "#" (as-str (car (cdr t))))))
+            (null? (list/filter
+                     (lambda (r) (string-eq r ref))
+                     promoted))))
+        (list/map (lambda (nj) (todo/node/row-of smap nj)) marked))))
+  "Outline todo rows (slug nid title keyword) with NO card on the board —
+     the honest 'notes (unpromoted)' section of /todos (note-todos clause
+     4). The board renders only promoted cards; this is the only place a
+     raw node still shows, and each row offers promotion.")
 
 (define todo/note-item-li
   (lambda
@@ -2879,6 +3971,41 @@
       (if (null? rs) () (car rs))))
   "cache row for the notes-todo scrape (or ())")
 
+;; ------------------------------------------------------------------
+;; SHARED OPEN SPACE (borge/workstreams.borg shared-store)
+;;
+;; The board, its lists and its cards are collaboration furniture: every
+;; authenticated identity shares ONE board. The mechanism is the existing
+;; open-space substrate (`data.s.<space>.<type>.<id>`, migration 030) —
+;; the chat lobby is the precedent. Admission is TYPE-level and routes
+;; FUTURE writes; the todo types admitted here are todo-list, todo-item,
+;; todo-comment, todo-event, todo-dep.
+;;
+;; ORDERING HAZARD: admission changes (node-path 'todo-item ...), so
+;; ensure-space MUST run before any read that computes a prefix. Every
+;; todo entry point (todo/page, kanban/page, workstreams/page) calls
+;; todo/ensure-space at the top.
+;; ------------------------------------------------------------------
+
+(define todo/open-space
+  "todo")
+
+(define todo/open?
+  (lambda
+    (s)
+    (let
+      ((t (as-str s)))
+      (if
+        (string-eq t "")
+        #f
+        (if
+          (string-eq t "DONE")
+          #f
+          (if
+            (string-eq t "CANCELLED")
+            #f
+            (if (string-eq t "ARCHIVED") #f #t)))))))
+
 
 
 (define todo/page
@@ -2907,6 +4034,99 @@
               (html/attr "class" "muted")
               "Lists (Basecamp) + notes scrape (org). Click a title for details.")
             (todo/ui/main (todo/ui/view))))))))
+(define todo/page/cap
+  40
+  "Rows rendered per section of /todos before the 'more' pointer takes
+     over. Chosen from the measured per-row cost (~2.5k steps) against the
+     400k budget: 40 rows/section leaves room for nav, the add form and
+     the other sections (2026-10-18 page-latency budget fix).")
+(define todo/page/more-note
+  (lambda
+    (total)
+    (if
+      (<= total todo/page/cap)
+      ""
+      (html/p*
+        (html/attr "class" "muted")
+        (string-append
+          "…and "
+          (as-str (- total todo/page/cap))
+          " more. "
+          "Marking is free and private; promote what you are working on."))))
+  "Honest truncation pointer: how many rows the cap left unrendered.
+     A capped list must SAY it is capped (never a silent partial view).")
+
+(define todo/partial
+  (lambda
+    ()
+    (seq
+      (todo/list/ensure-inbox)
+      (render-html (todo/ui/main (todo/ui/view))))))
+(define todo/promote-handler
+  (lambda
+    ()
+    (let
+      ((list-id (request-param "list_id")))
+        (todo/promote-node
+          (request-param "slug")
+          (request-param "node-id")
+          (if (null? list-id) "" (as-str list-id)))))
+  "The /todos POST action=promote-node handler: promote the node named by
+     slug/node-id to a shared card (optional list_id). Returns the card id
+     (existing card id when already promoted). borge/workstreams.borg
+     note-todos clause 2.")
+(define todo/promote-node
+  (lambda
+    (slug nid list-id)
+    (let
+      ((ref (string-append (as-str slug) "#" (as-str nid))))
+      (let
+        ((existing (todo/node/find-card ref)))
+        (if
+          (null? existing)
+          (let
+            ((node (todo/node/get slug nid)))
+            (if
+              (null? node)
+              ""
+              (let*
+                ((title (as-str (dict-get node "title")))
+                  (body (as-str (dict-get node "body")))
+                  (kw (as-str (dict-get node "todo")))
+                  (lid
+                    (if
+                      (string-eq (as-str list-id) "")
+                      (todo/resolve-board)
+                      (as-str list-id)))
+                  (cid (todo/item/add lid title))
+                  (fields (todo/item/get cid)))
+                (seq
+                  (if
+                    (null? fields)
+                    ""
+                    (todo/tree/save
+                      "todo-item"
+                      cid
+                      (dict-set*
+                        fields
+                        (list
+                          "notes"
+                          body
+                          "state"
+                          (todo/node/seed-state kw lid)
+                          "origin_kind"
+                          "note"
+                          "origin_ref"
+                          ref))))
+                  (as-str cid)))))
+          (as-str (car existing))))))
+  "Promote a note heading node into ONE shared card and return its id.
+     origin_ref = \"<slug>#<nid>\" is the reconciliation key: re-promoting
+     returns the existing card (idempotent, never a duplicate). The card
+     lands in the `todo` space through todo/item/add, so a SECOND identity
+     can see and move it; the note itself stays in the owner's garden.
+     list-id is optional (empty = the shared Board). Empty string means the
+     node or note is missing. borge/workstreams.borg note-todos clause 2.")
 
 
 
@@ -2917,6 +4137,39 @@
       ((n (todo/item/count-all items))
         (open (todo/count-open-in items)))
       (string-append (as-str (- n open)) "/" (as-str n)))))
+
+(define todo/ready
+  (lambda
+    (list-id)
+    "The list's READY cards as (id . fields) pairs: entry-column, no open
+       blocked-by edge. ONE dep-row scan for the whole list
+       (todo/dep/blocked-ids) — the eligibility view the supervisor drains."
+    (let
+      ((entry (todo/dep/entry-state list-id))
+       (blocked (todo/dep/blocked-ids (todo/dep/rows))))
+      (list/filter
+        (lambda
+          (row)
+          (and
+            (string-eq (todo/item/state (cdr row)) entry)
+            (not (todo/dep/member? (as-str (car row)) blocked))))
+        (todo/items-for-list list-id)))))
+
+(define todo/ready?
+  (lambda
+    (id)
+    "True when card id is READY: it exists, sits in its list's actionable
+       entry column (todo/dep/entry-state), and has no open blocked-by edge."
+    (let
+      ((f (todo/tree/get "todo-item" (as-str id))))
+      (if
+        (null? f)
+        #f
+        (and
+          (string-eq
+            (todo/item/state f)
+            (todo/dep/entry-state (todo/item/list-id f)))
+          (not (todo/dep/blocked? id)))))))
 
 (define todo/recipe
   (lambda
@@ -3063,6 +4316,23 @@
      recipes field. Defaults are NOT mixed in — use todo/recipe for the
      effective (fallback-aware) text of one column.")
 
+(define todo/resolve-auto-lane
+  (lambda
+    ()
+    (let
+      ((hit (todo/list/find-by-title "AUTO")))
+      (if (null? hit) "" (as-str (car hit)))))
+  "The AUTO-lane list id: the todo-list titled \"AUTO\", or \"\" when absent.")
+
+(define todo/resolve-board
+  (lambda
+    ()
+    (let
+      ((hit (todo/list/find-by-title "Board")))
+      (if (null? hit) (todo/list/ensure-inbox) (as-str (car hit)))))
+  "The shared Board list id: the todo-list titled \"Board\", falling back
+     to the Inbox. Resolves by TITLE (never a hardcoded per-garden uuid).")
+
 (define todo/save
   (lambda
     (id title notes due state list-id)
@@ -3128,6 +4398,63 @@
                 (todo/event/transition! id prev next))
               (todo/state/reject id next)))))))
 
+(define todo/setup-auto-lane
+  (lambda
+    ()
+    (let
+      ((aid (todo/resolve-auto-lane)))
+      (if
+        (string-eq aid "")
+        ""
+        (todo/list/set-columns
+          aid
+          (list "TODO" "CODE" "LOGIC-REVIEW" "DONE" "PARKED")))))
+  "Give the AUTO lane its spec-mandated columns (NO HUMAN-REVIEW):
+     [TODO CODE LOGIC-REVIEW DONE PARKED]. Returns the list id or \"\".
+     borge/workstreams.borg stream-pipelines: an AUTO LOGIC-REVIEW PASS
+     lands on DONE, so the human gate must not be a column.")
+
+(define todo/space-path
+  (lambda (type-name id)
+    (node-path type-name (as-str id)))
+  "The space-routed node path for a todo datum (assumes the type is
+     admitted). Thin wrapper over node-path for readability.")
+
+(define todo/state-options
+  (lambda
+    (selected)
+    (list/foldl
+      (lambda
+        (acc st)
+        (let
+          ((lab (if (string-eq st "") "(none)" st)))
+          (string-append
+            acc
+            (html/option st lab (string-eq st (as-str selected))))))
+      ""
+      todo/states)))
+
+(define todo/state-options-all
+  (lambda
+    (selected)
+    (todo/state-options-from
+      selected
+      (append todo/states (list "ARCHIVED")))))
+
+(define todo/state-options-from
+  (lambda
+    (selected states)
+    (list/foldl
+      (lambda
+        (acc st)
+        (let
+          ((lab (if (string-eq st "") "(none)" st)))
+          (string-append
+            acc
+            (html/option st lab (string-eq st (as-str selected))))))
+      ""
+      states)))
+
 
 
 
@@ -3136,6 +4463,20 @@
 
 (define todo/state/archived?
   (lambda (s) (string-eq (as-str s) "ARCHIVED")))
+
+
+;; ---- todo-shared-spaces: T3/T5/T7 chain (note-todos, cross-identity mirror) ----
+(define todo/state/closed?
+  (lambda
+    (s)
+    (let
+      ((t (as-str s)))
+      (or
+        (string-eq t "")
+        (string-eq t "DONE")
+        (string-eq t "PARKED")
+        (string-eq t "CANCELLED")
+        (string-eq t "ARCHIVED")))))
 
 (define todo/state/columns-for-item
   (lambda
@@ -3163,18 +4504,6 @@
               (if (string-eq cs "") todo/state/list (json-parse cs))))))))
   "The state set (list of state strings) for a todo-list: the list's own\n     `columns` field when present and non-empty, else the global default\n     todo/state/list. THE per-list override kanban columns and the /todos\n     state machine both read through, so a list with custom columns cycles\n     only those states everywhere.")
 
-(define todo/list/find-row
-  (lambda
-    (rows id)
-    (if
-      (null? rows)
-      ()
-      (if
-        (string-eq (as-str (car (car rows))) (as-str id))
-        (car rows)
-        (todo/list/find-row (cdr rows) id))))
-  "The (id . fields) row in rows whose id matches, or () when absent. A linear scan over an already-fetched list pool, never a by-id get: a card filed to a list row that does not exist carries a non-uuid id, and a by-id get raises 22P02 on it.")
-
 (define todo/state/columns-in
   (lambda
     (lists list-id)
@@ -3193,41 +4522,6 @@
               (if (string-eq cs "") todo/state/list (json-parse cs))))))))
   "The column vocabulary for list-id inside an already-fetched list pool: its own non-empty `columns`, else the global default todo/state/list. Taking the pool as an argument keeps a card-by-card pass to ONE list read instead of one per card.")
 
-(define todo/state/pipeline-in
-  (lambda
-    (lists fields)
-    (let
-      ((own (as-str (dict-get fields "pipeline"))))
-      (if
-        (string-eq own "")
-        (todo/state/columns-in lists (todo/item/list-id fields))
-        (json-parse own))))
-  "The card's own effective pipeline (own `pipeline` override > its list's columns > the global default) inside an already-fetched list pool.")
-
-(define todo/state/valid-in?
-  (lambda
-    (lists fields state)
-    (let
-      ((s (as-str state)))
-      (if
-          (or
-            (string-eq s "")
-            (string-eq s "ARCHIVED")
-            (string-eq s "APPROVED"))
-        #t
-        (not
-          (null?
-            (list/filter
-              (lambda (c) (string-eq (as-str c) s))
-              (todo/state/pipeline-in lists fields)))))))
-    "True when state is a column of the card's own effective pipeline, or one\n     of the two statuses that live outside every column list: ARCHIVED (the\n     archive column) and APPROVED (the doasq approval gate). Anything else —\n     a prose body, a sentence, a card title — is not a state.")
-
-(define todo/state/valid-for-fields?
-  (lambda
-    (fields state)
-    (todo/state/valid-in? (todo/list/all) fields state))
-  "True when state is a column of the card's own effective pipeline, the empty (none) column, or ARCHIVED. THE predicate every card-state writer checks: bug 7947367 put prose bodies in `state`, which took those cards out of every filter, column and drain.")
-
 (define todo/state/entry-column
   (lambda
     (lists fields)
@@ -3238,78 +4532,6 @@
           (todo/state/pipeline-in lists fields))))
       (if (null? real) "TODO" (as-str (car real)))))
   "The first non-empty column of the card's own pipeline: where a card belongs when its state carries no column at all.")
-
-(define todo/state/reject
-  (lambda
-    (id state)
-    (err/shape
-      (string-append
-        "state \""
-        (substring (as-str state) 0 60)
-        "\" is not a column of card "
-        (as-str id)
-        "; nothing written")
-      "bad-args"))
-  "The refusal a card-state writer returns instead of writing a value that is not a column: an (error msg kind) envelope naming the value, so a bad writer sees its input echoed back instead of getting a silent write.")
-
-(define todo/state/prose?
-  (lambda
-    (lists fields)
-    (not
-      (todo/state/valid-in? lists fields (todo/item/state fields))))
-  "True when the card's `state` is not a column of its own pipeline: the prose-body corruption of bug 7947367.")
-
-(define todo/state/prose-cards
-  (lambda
-    ()
-    (let
-      ((lists (todo/list/all)))
-      (list/filter
-        (lambda (row) (todo/state/prose? lists (cdr row)))
-        (todo/item/all))))
-  "Every visible card whose `state` holds prose instead of a column: the census bug 7947367 asks for. One list read for the whole pass.")
-
-(define todo/state/repair-row
-  (lambda
-    (lists id fields apply?)
-    (if
-      (todo/state/prose? lists fields)
-      (let
-        ((prose (todo/item/state fields))
-          (notes (as-str (dict-get fields "notes")))
-          (entry (todo/state/entry-column lists fields)))
-        (seq
-          (if
-            apply?
-            (seq
-              (todo/tree/set-field
-                "todo-item"
-                (as-str id)
-                "notes"
-                (string-append
-                  (if (string-eq notes "") "" (string-append notes "\n\n"))
-                  "[state repaired "
-                  (date-today)
-                  ": the text below was sitting in the state field]\n"
-                  prose))
-              (todo/tree/set-field "todo-item" (as-str id) "state" entry)
-              (todo/event/transition! id prose entry))
-            ())
-          (as-str id)))
-        ()))
-  "Repair one card whose `state` holds prose: the body moves into `notes` (blank notes take it verbatim; an existing body keeps it and the prose is appended under a dated marker) and the state becomes the card's pipeline entry column, with one todo-event recording prose -> entry. Returns the id when the card needed repair, () otherwise. apply? false is a dry run that writes nothing.")
-
-(define todo/state/repair-prose
-  (lambda
-    (apply?)
-    (let
-      ((lists (todo/list/all)))
-      (list/filter
-        (lambda (x) (not (null? x)))
-        (list/map
-          (lambda (row) (todo/state/repair-row lists (car row) (cdr row) apply?))
-          (todo/item/all)))))
-  "Repair every visible card whose `state` holds prose (bug 7947367). Returns the repaired ids; apply? false is the dry-run census. Run (#f) first, then (#t).")
 
 (define todo/state/item-pipeline (lambda
   (item-id)
@@ -3452,6 +4674,89 @@
   "Which branch supplied item-id's effective pipeline: 'own | 'list | 'default
      (resolution order a/b/c of borge/workstreams.borg pipeline-model).")
 
+(define todo/state/pipeline-in
+  (lambda
+    (lists fields)
+    (let
+      ((own (as-str (dict-get fields "pipeline"))))
+      (if
+        (string-eq own "")
+        (todo/state/columns-in lists (todo/item/list-id fields))
+        (json-parse own))))
+  "The card's own effective pipeline (own `pipeline` override > its list's columns > the global default) inside an already-fetched list pool.")
+
+(define todo/state/prose-cards
+  (lambda
+    ()
+    (let
+      ((lists (todo/list/all)))
+      (list/filter
+        (lambda (row) (todo/state/prose? lists (cdr row)))
+        (todo/item/all))))
+  "Every visible card whose `state` holds prose instead of a column: the census bug 7947367 asks for. One list read for the whole pass.")
+
+(define todo/state/prose?
+  (lambda
+    (lists fields)
+    (not
+      (todo/state/valid-in? lists fields (todo/item/state fields))))
+  "True when the card's `state` is not a column of its own pipeline: the prose-body corruption of bug 7947367.")
+
+(define todo/state/reject
+  (lambda
+    (id state)
+    (err/shape
+      (string-append
+        "state \""
+        (substring (as-str state) 0 60)
+        "\" is not a column of card "
+        (as-str id)
+        "; nothing written")
+      "bad-args"))
+  "The refusal a card-state writer returns instead of writing a value that is not a column: an (error msg kind) envelope naming the value, so a bad writer sees its input echoed back instead of getting a silent write.")
+
+(define todo/state/repair-prose
+  (lambda
+    (apply?)
+    (let
+      ((lists (todo/list/all)))
+      (list/filter
+        (lambda (x) (not (null? x)))
+        (list/map
+          (lambda (row) (todo/state/repair-row lists (car row) (cdr row) apply?))
+          (todo/item/all)))))
+  "Repair every visible card whose `state` holds prose (bug 7947367). Returns the repaired ids; apply? false is the dry-run census. Run (#f) first, then (#t).")
+
+(define todo/state/repair-row
+  (lambda
+    (lists id fields apply?)
+    (if
+      (todo/state/prose? lists fields)
+      (let
+        ((prose (todo/item/state fields))
+          (notes (as-str (dict-get fields "notes")))
+          (entry (todo/state/entry-column lists fields)))
+        (seq
+          (if
+            apply?
+            (seq
+              (todo/tree/set-field
+                "todo-item"
+                (as-str id)
+                "notes"
+                (string-append
+                  (if (string-eq notes "") "" (string-append notes "\n\n"))
+                  "[state repaired "
+                  (date-today)
+                  ": the text below was sitting in the state field]\n"
+                  prose))
+              (todo/tree/set-field "todo-item" (as-str id) "state" entry)
+              (todo/event/transition! id prose entry))
+            ())
+          (as-str id)))
+        ()))
+  "Repair one card whose `state` holds prose: the body moves into `notes` (blank notes take it verbatim; an existing body keeps it and the prose is appended under a dated marker) and the state becomes the card's pipeline entry column, with one todo-event recording prose -> entry. Returns the id when the card needed repair, () otherwise. apply? false is a dry run that writes nothing.")
+
 (define todo/state/todo-next-in
   (lambda
     (xs cur)
@@ -3473,6 +4778,47 @@
         (todo/state/todo-next-in-at (cdr xs) cur head))))
   "Accumulating: find cur in xs, return the next; wrap to head at the end or\n     on absent.")
 
+(define todo/state/valid-for-fields?
+  (lambda
+    (fields state)
+    (todo/state/valid-in? (todo/list/all) fields state))
+  "True when state is a column of the card's own effective pipeline, the empty (none) column, or ARCHIVED. THE predicate every card-state writer checks: bug 7947367 put prose bodies in `state`, which took those cards out of every filter, column and drain.")
+
+(define todo/state/valid-in?
+  (lambda
+    (lists fields state)
+    (let
+      ((s (as-str state)))
+      (if
+          (or
+            (string-eq s "")
+            (string-eq s "ARCHIVED")
+            (string-eq s "APPROVED"))
+        #t
+        (not
+          (null?
+            (list/filter
+              (lambda (c) (string-eq (as-str c) s))
+              (todo/state/pipeline-in lists fields)))))))
+    "True when state is a column of the card's own effective pipeline, or one\n     of the two statuses that live outside every column list: ARCHIVED (the\n     archive column) and APPROVED (the doasq approval gate). Anything else —\n     a prose body, a sentence, a card title — is not a state.")
+
+(define todo/states
+  (list "" "TODO" "DONE" "WAITING" "CANCELLED"))
+
+(define todo/toggle
+  (lambda
+    (id)
+    (let
+      ((row (todo/tree/get "todo-item" id)))
+      (if
+        (null? row)
+        ()
+        (todo/tree/set-field
+          "todo-item"
+          id
+          "done"
+          (if (todo/done? row) "false" "true"))))))
+
 
   ;; alias of todo/state/list; deleted in T4 (lib-hygiene).
 
@@ -3492,29 +4838,6 @@
   (lambda
     (t id)
     (seq (tree/delete (node-path t (as-str id))) id)))
-
-(define todo/tree/row-id?
-  (lambda
-    (nj id)
-    "Does node nj encode datum id? O(1): the stored path must END with the
-     id as its final dot-segment (path tail = \".\" + id), or the legacy
-     redash form of the path tail matches (in-flight ids minted before
-     the 10-18 path-id fix). Replaces the path-id char-loop comparison,
-     whose per-node cost blew the eval budget when the fallback scan ran
-     over the full shared listing (10-18: find-node-scan returned empty
-     on prod while the same listing matched instantly with this check)."
-    (let
-      ((p (as-str (dict-get nj "path"))))
-      (let
-        ((n (string-length (as-str id))))
-        (if
-          (< (string-length p) (+ n 1))
-          #f
-          (or
-            (string-eq
-              (substring p (- (string-length p) (+ n 1)) (string-length p))
-              (string-append "." (as-str id)))
-            (string-eq (todo/tree/redash (todo/tree/tail p)) (as-str id))))))))
 
 (define todo/tree/find-node-scan
   (lambda
@@ -3584,34 +4907,12 @@
           (car sorted)
           (todo/tree/insert-by-created nj (cdr sorted)))))))
 
-(define todo/tree/path-segment
+(define todo/tree/node->pair
   (lambda
-    (p)
-    "The id segment of a stored node path: everything after the last dot
-     (paths are dot-separated labels; the datum id is the final one). PP
-     substring takes (start LENGTH), so the 1-char dot probe is
-     (substring s i 1). The pre-2026-10-26 form read (+ i 1) CHARS, never
-     matched a dot, and returned the WHOLE path; a path where an id
-     belongs (card a4fb7706 probe: a 30-char ghost tail came back as
-     data.s.dG9kbw2.dG9kby1pdGVt0.<id>)."
-    (todo/tree/path-segment* (as-str p) 0 -1)))
-
-(define todo/tree/path-segment*
-  (lambda
-    (s i seen)
-    (if
-      (< i (string-length s))
-      (todo/tree/path-segment*
-        s
-        (+ i 1)
-        (if (string-eq (substring s i 1) ".") i seen))
-      (if
-        (< seen 0)
-        s
-        (substring
-          s
-          (+ seen 1)
-          (- (string-length s) (+ seen 1)))))))
+    (nj)
+      (cons
+        (todo/tree/path-id (dict-get nj "path"))
+        (dict-get nj "body"))))
 
 (define todo/tree/path-id
   (lambda
@@ -3646,13 +4947,6 @@
               (substring s (- n 36) n)
               (todo/tree/path-segment s))))))))
 
-(define todo/tree/node->pair
-  (lambda
-    (nj)
-      (cons
-        (todo/tree/path-id (dict-get nj "path"))
-        (dict-get nj "body"))))
-
 (define todo/tree/path-ok?
   (lambda
     (r)
@@ -3661,20 +4955,41 @@
       #f
       (string-eq (substring (as-str r) 0 5) "data."))))
 
+(define todo/tree/path-segment
+  (lambda
+    (p)
+    "The id segment of a stored node path: everything after the last dot
+     (paths are dot-separated labels; the datum id is the final one). PP
+     substring takes (start LENGTH), so the 1-char dot probe is
+     (substring s i 1). The pre-2026-10-26 form read (+ i 1) CHARS, never
+     matched a dot, and returned the WHOLE path; a path where an id
+     belongs (card a4fb7706 probe: a 30-char ghost tail came back as
+     data.s.dG9kbw2.dG9kby1pdGVt0.<id>)."
+    (todo/tree/path-segment* (as-str p) 0 -1)))
+
+(define todo/tree/path-segment*
+  (lambda
+    (s i seen)
+    (if
+      (< i (string-length s))
+      (todo/tree/path-segment*
+        s
+        (+ i 1)
+        (if (string-eq (substring s i 1) ".") i seen))
+      (if
+        (< seen 0)
+        s
+        (substring
+          s
+          (+ seen 1)
+          (- (string-length s) (+ seen 1)))))))
+
 (define todo/tree/prefix
   (lambda
     (t)
     (let
       ((p (node-path t "")))
       (substring p 0 (- (string-length p) 1)))))
-
-(define todo/tree/shared-prefix
-  (lambda () "data.s")
-  "The shared data-space subtree root (all spaces). A PURE constant, not
-     node-path-derived: resolving the caller's user label costs a DB round
-     trip per call (and lazy-env sessions can't afford it), while the
-     data.s root is identity-independent. Shared REGISTER rows live under
-     data.s.board.*; a garden Inbox never matches this prefix.")
 
 (define todo/tree/redash
   (lambda
@@ -3689,6 +5004,29 @@
       (substring h 16 4)
       "-"
       (substring h 20 12))))
+
+(define todo/tree/row-id?
+  (lambda
+    (nj id)
+    "Does node nj encode datum id? O(1): the stored path must END with the
+     id as its final dot-segment (path tail = \".\" + id), or the legacy
+     redash form of the path tail matches (in-flight ids minted before
+     the 10-18 path-id fix). Replaces the path-id char-loop comparison,
+     whose per-node cost blew the eval budget when the fallback scan ran
+     over the full shared listing (10-18: find-node-scan returned empty
+     on prod while the same listing matched instantly with this check)."
+    (let
+      ((p (as-str (dict-get nj "path"))))
+      (let
+        ((n (string-length (as-str id))))
+        (if
+          (< (string-length p) (+ n 1))
+          #f
+          (or
+            (string-eq
+              (substring p (- (string-length p) (+ n 1)) (string-length p))
+              (string-append "." (as-str id)))
+            (string-eq (todo/tree/redash (todo/tree/tail p)) (as-str id))))))))
 
 (define todo/tree/rows
   (lambda
@@ -3729,6 +5067,14 @@
           t
           id
           (dict-set* cur (list f (as-str v))))))))
+
+(define todo/tree/shared-prefix
+  (lambda () "data.s")
+  "The shared data-space subtree root (all spaces). A PURE constant, not
+     node-path-derived: resolving the caller's user label costs a DB round
+     trip per call (and lazy-env sessions can't afford it), while the
+     data.s root is identity-independent. Shared REGISTER rows live under
+     data.s.board.*; a garden Inbox never matches this prefix.")
 
 (define todo/tree/sort-by-created
   (lambda
@@ -3790,6 +5136,159 @@
                           (html/attr "placeholder" "buy milk")
                           (html/attr "autocomplete" "off"))))
                     (html/button (html/attr "type" "submit") "Add")))))))))))
+
+(define todo/ui/assignee-badge
+  (lambda (who)
+    (if (string-eq (as-str who) "")
+        (ui/text "")
+        (ui/elm
+          "span"
+          (list
+            "class" "todo-assignee-badge"
+            "title" (string-append "assigned to " (as-str who)))
+          (list (ui/text (string-append "@" (as-str who)))))))
+  "The card row's ownership mark: a declared span naming the claimant, or an
+empty text kid when unassigned (so a caller always projects a value).")
+
+(define todo/ui/assignee-badge/examples
+  (lambda ()
+    (lb/obj
+      (list
+        "name" "todo/ui/assignee-badge"
+        "doc" "The card row ownership mark: @user when assigned, an empty text kid when not."
+        "file" "libs/todo/lib.pp"
+        "formals" (json-emit (list "who"))
+        "variants"
+        (json-emit
+          (list
+            (lb/obj (list "who" "alice"))
+            (lb/obj (list "who" ""))))
+        "source"
+        "(todo/ui/assignee-badge who) ->\n  (if (string-eq (as-str who) \"\")\n      (ui/text \"\")\n      (ui/elm \"span\"\n        (list \"class\" \"todo-assignee-badge\"\n              \"title\" (string-append \"assigned to \" (as-str who)))\n        (list (ui/text (string-append \"@\" (as-str who))))))")))
+  "The todo/ui/assignee-badge card.")
+
+(define todo/ui/assignee-field
+  (lambda (cur users)
+    (ui/elm
+      "div"
+      (list "class" "todo-field todo-assignee-field")
+      (list
+        (ui/elm "label" (list "for" "assignee") (list (ui/text "Assignee")))
+        (todo/ui/assignee-select cur users))))
+  "Label + select as one field: the detail form's assignee control. Composes
+todo/ui/assignee-select (reuse is a def call; the composed value nests as
+kids).")
+
+(define todo/ui/assignee-field/examples
+  (lambda ()
+    (lb/obj
+      (list
+        "name" "todo/ui/assignee-field"
+        "doc" "Label + assignee select as one field (composes the select)."
+        "file" "libs/todo/lib.pp"
+        "formals" (json-emit (list "cur" "users"))
+        "variants"
+        (json-emit
+          (list
+            (lb/obj (list "cur" "alice" "users" "alice bob"))))
+        "source"
+        "(todo/ui/assignee-field cur users) ->\n  (ui/elm \"div\" (list \"class\" \"todo-field todo-assignee-field\")\n    (list (ui/elm \"label\" (list \"for\" \"assignee\")\n            (list (ui/text \"Assignee\")))\n          (todo/ui/assignee-select cur users)))")))
+  "The todo/ui/assignee-field card.")
+
+(define todo/ui/assignee-option
+  (lambda (value label selected)
+    (ui/elm
+      "option"
+      (append
+        (list "value" (as-str value))
+        (if (string-eq (as-str selected) "")
+            (list)
+            (list "selected" "selected")))
+      (list (ui/text (as-str label)))))
+  "One assignee <option>: value, label, and `selected` as a PRESENCE flag
+(\"selected\" declares the attribute, empty declares its absence -- never
+selected=\"\").")
+
+;; ---- the examples cards: the declaration ----
+
+(define todo/ui/assignee-option/examples
+  (lambda ()
+    (lb/obj
+      (list
+        "name" "todo/ui/assignee-option"
+        "doc" "One <option> kid of the assignee select: value, label, selected as declared presence."
+        "file" "libs/todo/lib.pp"
+        "formals" (json-emit (list "value" "label" "selected"))
+        "variants"
+        (json-emit
+          (list
+            (lb/obj (list "value" "" "label" "(unassigned)" "selected" ""))
+            (lb/obj (list "value" "alice" "label" "alice" "selected" "selected"))))
+        "source"
+        "(todo/ui/assignee-option value label selected) ->\n  (ui/elm \"option\"\n    (append (list \"value\" (as-str value))\n            (if (string-eq (as-str selected) \"\")\n                (list) (list \"selected\" \"selected\")))\n    (list (ui/text (as-str label))))")))
+  "The todo/ui/assignee-option card.")
+
+(define todo/ui/assignee-options
+  (lambda
+    (cur)
+    (html/join
+      (cons
+        (html/option
+          ""
+          "(unassigned)"
+          (string-eq (as-str cur) ""))
+        (list/map
+          (lambda
+            (u)
+            (todo/ui/assignee-option u (string-eq u (as-str cur))))
+          (list-usernames))))))
+
+(define todo/ui/assignee-select
+  (lambda (cur users)
+    (let* ((cur-s (as-str cur))
+           (us (todo/ui/users-list users))
+           (opts (if (or (string-eq cur-s "") (member cur-s us))
+                     us
+                     (cons cur-s us))))
+      (ui/elm
+        "select"
+        (list "name" "assignee" "id" "assignee" "class" "todo-assignee")
+        (cons
+          (todo/ui/assignee-option
+            ""
+            "(unassigned)"
+            (if (string-eq cur-s "") "selected" ""))
+          (list/map
+            (lambda (u)
+              (todo/ui/assignee-option
+                u
+                u
+                (if (string-eq (as-str u) cur-s) "selected" "")))
+            opts)))))
+  "The assignee <select>: an empty option clears the claim, one option per
+user, the current assignee carrying the selected flag. A current assignee
+absent from the users list -- a claim lease such as `run:<id>` or
+`glochid:<session>@<ts>`, or a renamed user -- is appended as an option so
+the control shows the real owner and an unrelated form save cannot silently
+clear the claim (review 2026-10-27). Composes todo/ui/assignee-option.")
+
+(define todo/ui/assignee-select/examples
+  (lambda ()
+    (lb/obj
+      (list
+        "name" "todo/ui/assignee-select"
+          "doc" "The assignee select: clear option + one option per known user, the current assignee selected (a lease absent from the list is appended first)."
+          "file" "libs/todo/lib.pp"
+          "formals" (json-emit (list "cur" "users"))
+          "variants"
+          (json-emit
+            (list
+              (lb/obj (list "cur" "" "users" "alice bob"))
+              (lb/obj (list "cur" "alice" "users" "alice bob"))
+              (lb/obj (list "cur" "run:0bb6993b-7289-4f10-91e8-fd876c215645" "users" "alice bob"))))
+          "source"
+          "(todo/ui/assignee-select cur users) ->\n  (let* ((cur-s (as-str cur))\n         (us (todo/ui/users-list users))\n         (opts (if (or (string-eq cur-s \"\") (member cur-s us))\n                   us (cons cur-s us))))\n    (ui/elm \"select\"\n      (list \"name\" \"assignee\" \"id\" \"assignee\" \"class\" \"todo-assignee\")\n      (cons (todo/ui/assignee-option \"\" \"(unassigned)\" ...)\n            (list/map (lambda (u) (todo/ui/assignee-option u u ...))\n                      opts))))")))
+  "The todo/ui/assignee-select card.")
 
 (define todo/ui/detail (lambda
   (id view)
@@ -4054,729 +5553,6 @@
         (todo/item/add
           (todo/list/ensure-inbox)
           (request-param "title")))))))
-;; ---- declared assignment vocabulary (lookbook: declare, never render) ----
-;; The assignee control is a DECLARED element value (ui/elm), projected through
-;; lookbook/html at the two markup sites: the item detail form and the card row.
-;; OBITUARY (2026-10-26): the pre-card defs answered markup strings
-;; (html/option + html/join), so the lookbook inspector could not see or stage
-;; the one control that makes a Board card claimable. Examples ARE the
-;; declaration: each def below has a sibling <name>/examples card and is
-;; inventoried through the lookbook seam at the end of this block.
-
-(define todo/ui/users-list
-  (lambda (users)
-    (cond
-      ((null? users) (list))
-      ((pair? users) users)
-      ((string? users)
-        (if (string-eq (as-str users) "")
-            (list)
-            (string-split (as-str users) " ")))
-      (else (list))))
-  "Normalize the users param: a real call passes the name list; the lookbook
-stages string params, so a space-separated string is accepted too (a staged
-variant answers a value, never an error).")
-
-(define todo/ui/assignee-option
-  (lambda (value label selected)
-    (ui/elm
-      "option"
-      (append
-        (list "value" (as-str value))
-        (if (string-eq (as-str selected) "")
-            (list)
-            (list "selected" "selected")))
-      (list (ui/text (as-str label)))))
-  "One assignee <option>: value, label, and `selected` as a PRESENCE flag
-(\"selected\" declares the attribute, empty declares its absence -- never
-selected=\"\").")
-
-(define todo/ui/assignee-select
-  (lambda (cur users)
-    (let* ((cur-s (as-str cur))
-           (us (todo/ui/users-list users))
-           (opts (if (or (string-eq cur-s "") (member cur-s us))
-                     us
-                     (cons cur-s us))))
-      (ui/elm
-        "select"
-        (list "name" "assignee" "id" "assignee" "class" "todo-assignee")
-        (cons
-          (todo/ui/assignee-option
-            ""
-            "(unassigned)"
-            (if (string-eq cur-s "") "selected" ""))
-          (list/map
-            (lambda (u)
-              (todo/ui/assignee-option
-                u
-                u
-                (if (string-eq (as-str u) cur-s) "selected" "")))
-            opts)))))
-  "The assignee <select>: an empty option clears the claim, one option per
-user, the current assignee carrying the selected flag. A current assignee
-absent from the users list -- a claim lease such as `run:<id>` or
-`glochid:<session>@<ts>`, or a renamed user -- is appended as an option so
-the control shows the real owner and an unrelated form save cannot silently
-clear the claim (review 2026-10-27). Composes todo/ui/assignee-option.")
-
-(define todo/ui/assignee-field
-  (lambda (cur users)
-    (ui/elm
-      "div"
-      (list "class" "todo-field todo-assignee-field")
-      (list
-        (ui/elm "label" (list "for" "assignee") (list (ui/text "Assignee")))
-        (todo/ui/assignee-select cur users))))
-  "Label + select as one field: the detail form's assignee control. Composes
-todo/ui/assignee-select (reuse is a def call; the composed value nests as
-kids).")
-
-(define todo/ui/assignee-badge
-  (lambda (who)
-    (if (string-eq (as-str who) "")
-        (ui/text "")
-        (ui/elm
-          "span"
-          (list
-            "class" "todo-assignee-badge"
-            "title" (string-append "assigned to " (as-str who)))
-          (list (ui/text (string-append "@" (as-str who)))))))
-  "The card row's ownership mark: a declared span naming the claimant, or an
-empty text kid when unassigned (so a caller always projects a value).")
-
-;; ---- the examples cards: the declaration ----
-
-(define todo/ui/assignee-option/examples
-  (lambda ()
-    (lb/obj
-      (list
-        "name" "todo/ui/assignee-option"
-        "doc" "One <option> kid of the assignee select: value, label, selected as declared presence."
-        "file" "libs/todo/lib.pp"
-        "formals" (json-emit (list "value" "label" "selected"))
-        "variants"
-        (json-emit
-          (list
-            (lb/obj (list "value" "" "label" "(unassigned)" "selected" ""))
-            (lb/obj (list "value" "alice" "label" "alice" "selected" "selected"))))
-        "source"
-        "(todo/ui/assignee-option value label selected) ->\n  (ui/elm \"option\"\n    (append (list \"value\" (as-str value))\n            (if (string-eq (as-str selected) \"\")\n                (list) (list \"selected\" \"selected\")))\n    (list (ui/text (as-str label))))")))
-  "The todo/ui/assignee-option card.")
-
-(define todo/ui/assignee-select/examples
-  (lambda ()
-    (lb/obj
-      (list
-        "name" "todo/ui/assignee-select"
-          "doc" "The assignee select: clear option + one option per known user, the current assignee selected (a lease absent from the list is appended first)."
-          "file" "libs/todo/lib.pp"
-          "formals" (json-emit (list "cur" "users"))
-          "variants"
-          (json-emit
-            (list
-              (lb/obj (list "cur" "" "users" "alice bob"))
-              (lb/obj (list "cur" "alice" "users" "alice bob"))
-              (lb/obj (list "cur" "run:0bb6993b-7289-4f10-91e8-fd876c215645" "users" "alice bob"))))
-          "source"
-          "(todo/ui/assignee-select cur users) ->\n  (let* ((cur-s (as-str cur))\n         (us (todo/ui/users-list users))\n         (opts (if (or (string-eq cur-s \"\") (member cur-s us))\n                   us (cons cur-s us))))\n    (ui/elm \"select\"\n      (list \"name\" \"assignee\" \"id\" \"assignee\" \"class\" \"todo-assignee\")\n      (cons (todo/ui/assignee-option \"\" \"(unassigned)\" ...)\n            (list/map (lambda (u) (todo/ui/assignee-option u u ...))\n                      opts))))")))
-  "The todo/ui/assignee-select card.")
-
-(define todo/ui/assignee-field/examples
-  (lambda ()
-    (lb/obj
-      (list
-        "name" "todo/ui/assignee-field"
-        "doc" "Label + assignee select as one field (composes the select)."
-        "file" "libs/todo/lib.pp"
-        "formals" (json-emit (list "cur" "users"))
-        "variants"
-        (json-emit
-          (list
-            (lb/obj (list "cur" "alice" "users" "alice bob"))))
-        "source"
-        "(todo/ui/assignee-field cur users) ->\n  (ui/elm \"div\" (list \"class\" \"todo-field todo-assignee-field\")\n    (list (ui/elm \"label\" (list \"for\" \"assignee\")\n            (list (ui/text \"Assignee\")))\n          (todo/ui/assignee-select cur users)))")))
-  "The todo/ui/assignee-field card.")
-
-(define todo/ui/assignee-badge/examples
-  (lambda ()
-    (lb/obj
-      (list
-        "name" "todo/ui/assignee-badge"
-        "doc" "The card row ownership mark: @user when assigned, an empty text kid when not."
-        "file" "libs/todo/lib.pp"
-        "formals" (json-emit (list "who"))
-        "variants"
-        (json-emit
-          (list
-            (lb/obj (list "who" "alice"))
-            (lb/obj (list "who" ""))))
-        "source"
-        "(todo/ui/assignee-badge who) ->\n  (if (string-eq (as-str who) \"\")\n      (ui/text \"\")\n      (ui/elm \"span\"\n        (list \"class\" \"todo-assignee-badge\"\n              \"title\" (string-append \"assigned to \" (as-str who)))\n        (list (ui/text (string-append \"@\" (as-str who))))))")))
-  "The todo/ui/assignee-badge card.")
-
-;; ---- lookbook registration ----
-;; The package vocabulary is a declared VALUE; the one composer of
-;; lookbook/base-elements lives in libs/chat (base-elements + the todo list). A
-;; package-level redefinition here is clobbered by the next package to load
-;; (todo seeds before chat), which silently dropped these names from the
-;; inventory.
-(define lookbook/todo-elements
-  (list
-    "todo/ui/assignee-field"
-    "todo/ui/assignee-select"
-    "todo/ui/assignee-option"
-    "todo/ui/assignee-badge")
-  "Todo's declared ui vocabulary: the assignment control and its kids.")
-
-
-;; ---- todo-shared-spaces: T3/T5/T7 chain (note-todos, cross-identity mirror) ----
-(define todo/state/closed?
-  (lambda
-    (s)
-    (let
-      ((t (as-str s)))
-      (or
-        (string-eq t "")
-        (string-eq t "DONE")
-        (string-eq t "PARKED")
-        (string-eq t "CANCELLED")
-        (string-eq t "ARCHIVED")))))
-(define todo/item/origin-kind
-  (lambda
-    (fields)
-    (let
-      ((v (dict-get fields "origin_kind")))
-      (if (null? v) "" (as-str v))))
-  "The card's origin kind: empty for a hand-made card, `note` when
-     promoted from an outline node. Tolerates a pre-T3 card with no
-     field, so readers never see null. borge/workstreams.borg note-todos.")
-(define todo/node/parse-ref
-  (lambda
-    (ref)
-    (let
-      ((parts (string-split (as-str ref) "#")))
-      (if
-        (or
-          (null? parts)
-          (string-eq (as-str (car parts)) ""))
-        (cons "" "")
-        (let
-          ((slug (as-str (car parts)))
-            (rest (cdr parts)))
-          (if
-            (null? rest)
-            (cons slug "")
-            (cons slug (as-str (car rest))))))))
-  "Split a card origin_ref \"<slug>#<nid>\" into (slug . nid); (\"\" . \"\")
-     for an empty/malformed slug. A bare \"slug\" (no #) also parses, with an
-     empty nid, so a note-LEVEL provenance ref round-trips instead of being
-     silently dropped. The reconciliation-key parser.")
-(define todo/item/origin-ref
-  (lambda
-    (fields)
-    (let
-      ((v (dict-get fields "origin_ref")))
-      (if (null? v) "" (as-str v))))
-  "The reconciliation key linking a promoted card to its origin node,
-     `<slug>#<nid>` (empty for a hand-made card). borge/workstreams.borg
-     note-todos clause 2.")
-(define todo/node/note-path
-  (lambda
-    (slug)
-    (let
-      ((row (notes/doc/row (as-str slug))))
-      (if (null? row) "" (notes/doc/row-path row))))
-  "The tree path of the note with slug (empty when the note is absent).
-     Resolves through the folder ACL note, never a hardcoded data.note path.")
-(define todo/node/set-todo
-  (lambda
-    (slug nid todo)
-    (let
-      ((p (todo/node/note-path slug)))
-      (if
-        (string-eq p "")
-        #f
-        (notes/node/set-todo p (as-str nid) (as-str todo)))))
-  "Write the `todo` field of ONE heading node (slug nid). One read + one
-     write, never a whole-note rewrite. Returns #t when the node exists.")
-(define todo/node/note-visible?
-  (lambda
-    (slug)
-    (not
-      (string-eq
-        (todo/node/note-path slug)
-        "")))
-  "True when the CALLER can resolve the note slug through the garden-scoped
-     notes read (notes/tree/find-slug -> tree/find-by, prefix = caller's
-     garden). Visibility, not existence: another identity's private note is
-     invisible here (note-todos clause 5). The distinction that lets
-     todo/node/mirror tell 'origin gone' from 'origin not mine'.")
-(define todo/node/mirror-notice
-  (lambda
-    (card-id ref state)
-    (let*
-      ((ref-pair (todo/node/parse-ref ref))
-        (reason
-          (if (todo/node/note-visible? (car ref-pair))
-            "node keyword is gone; only the card moved for"
-            "is not visible to"))
-        (note
-          (string-append
-            "origin note ("
-            (as-str ref)
-            ") "
-            reason
-            " "
-            (whoami)
-            " — keyword not mirrored to "
-            (as-str state)))
-        (seen
-          (list/filter
-            (lambda
-              (n)
-              (and
-                (string-eq (as-str (dict-get n "author")) (as-str (whoami)))
-                (let
-                  ((b (dict-get (dict-get n "body") "body")))
-                  (and
-                    (not (null? b))
-                    (string-contains? (as-str b) "origin note (")))))
-            (todo/comment/list (as-str card-id)))))
-      (if
-        (null? seen)
-        (todo/comment/add (as-str card-id) note)
-        (as-str
-          (dict-get
-            (dict-get (car seen) "body")
-            "body")))))
-  "Record ONE attributed comment on the card when its origin note cannot be
-     mirrored (note-todos clause 5; T7 option B). IDEMPOTENT per (card,
-     author): once this caller has recorded a notice, a later move does NOT
-     append again — the first notice already carries the exact state that
-     failed to mirror, and the card's own todo-event stream is the record of
-     every later transition. Returns the existing notice instead. Never
-     edits a row another author wrote. Callers get a value on every move so
-     the divergence can never masquerade as a silent no-op.")
-(define todo/node/mirror
-  (lambda
-    (card-id state)
-    (let
-      ((fields (todo/item/get (as-str card-id))))
-      (if
-        (null? fields)
-        ""
-        (if
-          (string-eq (todo/item/origin-kind fields) "note")
-          (let
-            ((ref (todo/node/parse-ref (todo/item/origin-ref fields))))
-            (if
-              (string-eq (car ref) "")
-              ""
-              (let
-                ((ok (todo/node/set-todo (car ref) (cdr ref) state)))
-                (if
-                  ok
-                  #t
-                  (todo/node/mirror-notice
-                    (as-str card-id)
-                    (todo/item/origin-ref fields)
-                    state)))))
-          ""))))
-  "Mirror a card's new state onto its origin note node, when it has one.
-     The write-back half of note-todos clause 3: a card transition updates
-     the linked node in the SAME transaction (todo/item/set-state and
-     todo/item/save call this beside their tree write). Returns #t when the
-     node was written, the notice comment id when the origin note is not
-     visible to this caller (T7 option B — the divergence is VISIBLE, never
-     silent), and '' for hand-made cards or a malformed ref.")
-(define todo/node/find-card
-  (lambda
-    (ref)
-    (if
-      (string-eq (as-str ref) "")
-      ()
-      (car
-        (list/filter
-          (lambda
-            (row)
-            (string-eq (todo/item/origin-ref (cdr row)) (as-str ref)))
-          (todo/item/all)))))
-  "The card whose origin_ref equals ref, or () when unpromoted. The
-     idempotency key for promotion and the node->card update path.")
-(define todo/node/get
-  (lambda
-    (slug nid)
-    (let
-      ((p (todo/node/note-path slug)))
-      (if
-        (string-eq p "")
-        ()
-        (notes/node/get p (as-str nid)))))
-  "Read one heading node's body dict from (slug nid), or () when the note
-     path or node is absent.")
-(define todo/node/list-has-state?
-  (lambda
-    (list-id state)
-    (if
-      (null? (list/filter
-               (lambda (c) (string-eq (as-str c) (as-str state)))
-               (todo/state/columns-for-list (as-str list-id))))
-      #f
-      #t))
-  "True when `state` is one of list-id's effective pipeline columns.")
-(define todo/node/seed-state
-  (lambda
-    (keyword list-id)
-    (let
-      ((k (as-str keyword)))
-      (if
-        (string-eq k "")
-        "TODO"
-        (if
-          (todo/node/list-has-state? list-id k)
-          k
-          "SPEC"))))
-  "Map a node's outline keyword onto the card pipeline. The outline set
-     is 3-state (\"\" TODO DONE); the card machine is the engineering
-     taxonomy. A keyword the card's pipeline knows passes through (TODO
-     and DONE included); an unknown keyword maps to SPEC — marked but not
-     yet specified, an honest advance past intake, never a dropped state.")
-(define todo/promote-node
-  (lambda
-    (slug nid list-id)
-    (let
-      ((ref (string-append (as-str slug) "#" (as-str nid))))
-      (let
-        ((existing (todo/node/find-card ref)))
-        (if
-          (null? existing)
-          (let
-            ((node (todo/node/get slug nid)))
-            (if
-              (null? node)
-              ""
-              (let*
-                ((title (as-str (dict-get node "title")))
-                  (body (as-str (dict-get node "body")))
-                  (kw (as-str (dict-get node "todo")))
-                  (lid
-                    (if
-                      (string-eq (as-str list-id) "")
-                      (todo/resolve-board)
-                      (as-str list-id)))
-                  (cid (todo/item/add lid title))
-                  (fields (todo/item/get cid)))
-                (seq
-                  (if
-                    (null? fields)
-                    ""
-                    (todo/tree/save
-                      "todo-item"
-                      cid
-                      (dict-set*
-                        fields
-                        (list
-                          "notes"
-                          body
-                          "state"
-                          (todo/node/seed-state kw lid)
-                          "origin_kind"
-                          "note"
-                          "origin_ref"
-                          ref))))
-                  (as-str cid)))))
-          (as-str (car existing))))))
-  "Promote a note heading node into ONE shared card and return its id.
-     origin_ref = \"<slug>#<nid>\" is the reconciliation key: re-promoting
-     returns the existing card (idempotent, never a duplicate). The card
-     lands in the `todo` space through todo/item/add, so a SECOND identity
-     can see and move it; the note itself stays in the owner's garden.
-     list-id is optional (empty = the shared Board). Empty string means the
-     node or note is missing. borge/workstreams.borg note-todos clause 2.")
-(define todo/from-notes-items
-  (lambda
-    (items)
-    (list/filter
-      (lambda
-        (row)
-        (string-eq (todo/item/origin-kind (cdr row)) "note"))
-      (if (null? items) (todo/item/all) items)))
-  "Promoted cards (origin_kind = note) — the board's 'from notes' filter,
-   a filter over CARDS, never a second scrape of the note tree. Takes the
-   page's ONE board snapshot (items); an empty list fetches its own.")
-(define todo/node/promoted-refs
-  (lambda
-    ()
-    (list/filter
-      (lambda (r) (not (string-eq r "")))
-      (list/map
-        (lambda (row) (todo/item/origin-ref (cdr row)))
-        (todo/item/all))))
-  "Every non-empty origin_ref on the board, read ONCE (one card scan) so
-     the unpromoted filter never does a DB read per note node.")
-;; MARKED-HEADING READ PATH (2026-10-18 budget fix). OBITUARY (what/why):
-;; todo/node/unpromoted used to fold notes/outline/all-todos, which decodes
-;; EVERY note's full outline (tree/note-index-full: 3385 notes / 21981
-;; heading nodes on prod) to find the handful of marked headings. That
-;; single call exceeds the 400k-step route budget on its own, so
-;; /todos?view=everything and ?view=from-notes returned
-;; "budget exceeded" (500) while ?view=open/archived stayed up — the
-;; note-todos bridge (commit 1adea6e) wired the scrape into
-;; todo/item/html and blew the page. The replacement inverts the read:
-;; MARKED HEADINGS FIRST via tree/find-by on body.todo (one indexed read
-;; per keyword; 106 hits for ~525 steps), then resolve each hit's note
-;; slug from the LIGHT note index (no outlines) using the subtree path
-;; (a heading path is <note-path>.h.<nid>[, .h.<nid>...], so the note
-;; path is the segment before the FIRST .h.). Same (slug nid title
-;; keyword) rows in the same shape, ~3x under budget. The full-outline
-;; fold stays DELETED here, not kept as a fallback — it can never fit a
-;; request (borge/notes.outline-read-path budget-scale).
-(define todo/node/marked-keywords
-  (list " " "TODO" "DONE" "ARCHIVED" "CANCELLED")
-  "Every todo keyword a note heading can carry. Leading-space used to
-     match the live data's single-space placeholder keyword.")
-(define todo/node/marked-rows
-  (lambda
-    ()
-    (list/foldl
-      (lambda (acc kw)
-        (append acc (tree/find-by (quote heading) "todo" kw 20000)))
-      (list)
-      todo/node/marked-keywords))
-  "Marked note headings as node JSON, one tree/find-by body-field read
-     per keyword. tree/find-by is garden-scoped and viewer-gated by the
-     prim, exactly like the full-index path it replaces.")
-(define todo/node/slug-map
-  (lambda
-    (marked)
-    (list/foldl
-      (lambda (acc nj)
-        (let*
-          ((p (as-str (dict-get nj "path")))
-           (notep (car (string-split p ".h."))))
-          (if
-            (dict-get acc notep)
-            acc
-            (let
-              ((r (tree/get notep)))
-              (if
-                (null? r)
-                acc
-                (let
-                  ((slug (dict-get (dict-get r "body") "slug")))
-                  (if
-                    (null? slug)
-                    acc
-                    (dict-set acc notep (as-str slug)))))))))
-      "{}"
-      marked))
-  "path -> slug for the notes that OWN a marked heading, resolved from the
-     MARKED ROWS themselves. DISTINCT-PATH LAZY (2026-10-18): the first
-     version folded the whole light note index (tree/note-index, 3385 rows
-     on prod) just to look up ~10 paths — 105k steps of pure binding for a
-     10-entry join. Resolving one tree/get per DISTINCT marked note is
-     ~4.5k steps total and scales with MARKED notes, not with garden size.
-     Only headings of notes that actually carry a mark are ever read.")
-(define todo/node/row-of
-  (lambda
-    (smap nj)
-    (let*
-      ((p (as-str (dict-get nj "path")))
-       (notep (car (string-split p ".h.")))
-       (slug (dict-get smap notep))
-       (b (dict-get nj "body")))
-      (list (if (null? slug) "" (as-str slug))
-            (as-str (dict-get b "id"))
-            (as-str (dict-get b "title"))
-            (as-str (dict-get b "todo")))))
-  "One marked heading node -> (slug nid title keyword). A heading path is
-     <note-path>.h.<nid>[.h.<nid>...]; splitting on the FIRST .h. yields
-     the owning note path, which is the slug-map key.")
-(define todo/node/unpromoted
-  (lambda
-    (items)
-    (let*
-      ((promoted
-          (list/filter
-            (lambda (r) (not (string-eq r "")))
-            (list/map
-              (lambda (row) (todo/item/origin-ref (cdr row)))
-              (if (null? items) (todo/item/all) items))))
-          (marked (todo/node/marked-rows))
-        (smap (todo/node/slug-map marked)))
-      (list/filter
-        (lambda
-          (t)
-          (let
-          ((ref
-              (string-append (as-str (car t)) "#" (as-str (car (cdr t))))))
-            (null? (list/filter
-                     (lambda (r) (string-eq r ref))
-                     promoted))))
-        (list/map (lambda (nj) (todo/node/row-of smap nj)) marked))))
-  "Outline todo rows (slug nid title keyword) with NO card on the board —
-     the honest 'notes (unpromoted)' section of /todos (note-todos clause
-     4). The board renders only promoted cards; this is the only place a
-     raw node still shows, and each row offers promotion.")
-(define todo/node/back-link
-  (lambda
-    (fields)
-    (let
-      ((ref (todo/item/origin-ref fields)))
-      (if
-        (string-eq ref "")
-        ""
-        (let
-          ((parts (todo/node/parse-ref ref)))
-          (html/a
-            (string-append
-              "/notes?slug="
-              (car parts)
-              "&node-id="
-              (cdr parts))
-            (html/span
-              (html/attr "class" "muted todo-src")
-              (html/text (string-append "from " ref))))))))
-  "Back-link from a promoted card to its origin note node, or \"\" for a
-     hand-made card. note-todos clause 4.")
-(define todo/node/promote-form
-  (lambda
-    (t)
-    (let
-      ((slug (as-str (car t)))
-        (nid (as-str (car (cdr t))))
-        (title (as-str (car (cdr (cdr t)))))
-        (kw (as-str (car (cdr (cdr (cdr t)))))))
-      (html/li
-        (html/attr "class" "todo-item todo-from-note todo-unpromoted")
-        (html/join
-          (list
-            (html/span
-              (html/attr "class" (string-append "todo-box st-" kw))
-              (if (string-eq kw "") "·" kw))
-            (html/span
-              (html/attr "class" "todo-title")
-              (html/text title))
-            (html/a
-              (string-append "/notes?slug=" slug)
-              (html/span
-                (html/attr "class" "muted todo-src")
-                (html/text slug)))
-            (html/form
-              "POST"
-              "/todos"
-              (html/attrs
-                (list
-                  (html/attr "class" "todo-promote")
-                  (html/attr "hx-post" "/todos")
-                  (html/attr "hx-target" "#todo-main")
-                  (html/attr "hx-swap" "innerHTML")))
-              (html/join
-                (list
-                  (html/hidden "action" "promote-node")
-                  (html/hidden "slug" slug)
-                  (html/hidden "node-id" nid)
-                  (html/hidden "view" "from-notes")
-                  (html/button
-                    (html/attrs
-                      (list
-                        (html/attr "type" "submit")
-                        (html/attr "class" "secondary")
-                        (html/attr "title" "promote to a shared board card")))
-                    "promote")))))))))
-  "One unpromoted node row with a promote button (POST action=promote-node).")
-(define todo/from-notes-html
-  (lambda
-    (view items)
-    (let
-      ((cards (todo/from-notes-items items))
-        (unpromoted (todo/node/unpromoted items)))
-      (html/join
-        (list
-          (html/h2 "From notes")
-          (if
-            (null? cards)
-            (html/p*
-              (html/attr "class" "muted")
-              "No promoted note todos yet — mark a heading in a note, then promote it.")
-            (html/ul
-              (html/attr "class" "card todo-list")
-              (list/foldl
-                (lambda
-                  (acc row)
-                  (string-append
-                    acc
-                    (todo/item/list-li row view)
-                    (todo/node/back-link (cdr row))))
-                ""
-                (list/take (todo/item/active cards) todo/page/cap))))
-          (html/h2 "Notes (unpromoted)")
-          (if
-            (null? unpromoted)
-            (html/p*
-              (html/attr "class" "muted")
-              "Every marked note node is on the board.")
-            (html/join
-              (list
-                (html/ul
-                  (html/attr "class" "card todo-list")
-                  (list/foldl
-                    (lambda
-                      (acc t)
-                      (string-append acc (todo/node/promote-form t)))
-                    ""
-                    (list/take unpromoted todo/page/cap)))
-                (todo/page/more-note (length unpromoted)))))))))
-  "The 'from notes' view: promoted cards (shared, workable) plus the
-     unpromoted nodes that are NOT on the board yet (note-todos clause 4).
-     Replaces the scrape-cache notes block, which showed every node as if
-     it were a board item. Takes the page's ONE card snapshot (items) so
-     the view never re-scans the board.
-
-     WINDOWED (2026-10-18 budget fix, part 2): rows are capped at
-     todo/page/cap (40) and the remainder is reported as a COUNT via
-     todo/page/more-note (the spec's own 'point, don't list' decision from
-     the package-index budget fix). An uncapped render is ~2.5k steps per
-     row: prod's 106 unpromoted rows cost 107k just to lay out, and the
-     Lists section another 205k, which together blew the 400k request
-     budget even after the scrape itself was made 3x cheaper. The cap
-     keeps the honest total visible without paying per-row cost for rows
-     nobody reads above the fold.")
-(define todo/page/cap
-  40
-  "Rows rendered per section of /todos before the 'more' pointer takes
-     over. Chosen from the measured per-row cost (~2.5k steps) against the
-     400k budget: 40 rows/section leaves room for nav, the add form and
-     the other sections (2026-10-18 page-latency budget fix).")
-(define todo/page/more-note
-  (lambda
-    (total)
-    (if
-      (<= total todo/page/cap)
-      ""
-      (html/p*
-        (html/attr "class" "muted")
-        (string-append
-          "…and "
-          (as-str (- total todo/page/cap))
-          " more. "
-          "Marking is free and private; promote what you are working on."))))
-  "Honest truncation pointer: how many rows the cap left unrendered.
-     A capped list must SAY it is capped (never a silent partial view).")
-(define todo/promote-handler
-  (lambda
-    ()
-    (let
-      ((list-id (request-param "list_id")))
-        (todo/promote-node
-          (request-param "slug")
-          (request-param "node-id")
-          (if (null? list-id) "" (as-str list-id)))))
-  "The /todos POST action=promote-node handler: promote the node named by
-     slug/node-id to a shared card (optional list_id). Returns the card id
-     (existing card id when already promoted). borge/workstreams.borg
-     note-todos clause 2.")
 
 (define todo/ui/main
   (lambda
@@ -4946,6 +5722,28 @@ empty text kid when unassigned (so a caller always projects a value).")
       ((n (todo/item/count-all items))
         (open (todo/item/count-open items)))
       (string-append (as-str (- n open)) "/" (as-str n)))))
+;; ---- declared assignment vocabulary (lookbook: declare, never render) ----
+;; The assignee control is a DECLARED element value (ui/elm), projected through
+;; lookbook/html at the two markup sites: the item detail form and the card row.
+;; OBITUARY (2026-10-26): the pre-card defs answered markup strings
+;; (html/option + html/join), so the lookbook inspector could not see or stage
+;; the one control that makes a Board card claimable. Examples ARE the
+;; declaration: each def below has a sibling <name>/examples card and is
+;; inventoried through the lookbook seam at the end of this block.
+
+(define todo/ui/users-list
+  (lambda (users)
+    (cond
+      ((null? users) (list))
+      ((pair? users) users)
+      ((string? users)
+        (if (string-eq (as-str users) "")
+            (list)
+            (string-split (as-str users) " ")))
+      (else (list))))
+  "Normalize the users param: a real call passes the name list; the lookbook
+stages string params, so a space-separated string is accepted too (a staged
+variant answers a value, never an error).")
 
 (define todo/ui/view
   (lambda
@@ -4954,57 +5752,24 @@ empty text kid when unassigned (so a caller always projects a value).")
       ((v (request-param "view")))
       (if (null? v) "everything" (as-str v)))))
 
+(define todo/undep
+  (lambda
+    (from to)
+    "Remove the blocked-by edge from->to. \"removed\" or \"no such edge\"."
+    (seq
+      (todo/deps-init!)
+      (let
+        ((e (todo/dep/find (as-str from) (as-str to) (todo/dep/rows))))
+        (if
+          (null? e)
+          "no such edge"
+          (seq
+            (todo/tree/del "todo-dep" e)
+            "removed"))))))
+
 (define todo/view
   (lambda
     ()
     (let
       ((v (request-param "view")))
       (if (null? v) "everything" (as-str v)))))
-
-(define todo/handle-post (lambda
-  ()
-  (let
-    ((action (as-str (request-param "action"))))
-    (if
-      (string-eq action "comment")
-      (let
-        ((c (request-param "comment")))
-        (if
-          (or (null? c) (string-eq (as-str c) ""))
-          ()
-          (todo/comment/add (request-param "id") (as-str c))))
-      (if
-        (string-eq action "cycle")
-        (todo/cycle (request-param "id"))
-        (if
-          (string-eq action "delete")
-          (todo/delete (request-param "id"))
-          (if
-            (string-eq action "archive")
-            (todo/archive (request-param "id"))
-            (if
-              (string-eq action "add")
-              (todo/add
-                (request-param "list_id")
-                (request-param "title"))
-              (if
-                (string-eq action "create-list")
-                (todo/create-list (request-param "title"))
-                (if
-                  (string-eq action "delete-list")
-                  (todo/delete-list (request-param "list_id"))
-                  (if
-                    (string-eq action "cycle-note")
-                    (notes/cycle-node-todo
-                      (request-param "slug")
-                      (request-param "node-id"))
-                    (if
-                      (string-eq action "save")
-                      (todo/save
-                        (request-param "id")
-                        (request-param "title")
-                        (request-param "notes")
-                        (request-param "due")
-                        (request-param "state")
-                        (request-param "list_id"))
-                      (todo/add (todo/ensure-inbox) (request-param "title"))))))))))))))
