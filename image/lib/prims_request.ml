@@ -4,8 +4,12 @@ open Session_types
 let method_to_string (m : http_method) : string =
   match m with `GET -> "GET" | `POST -> "POST"
 
-let require_request (t : t) : request =
-  match t.current_request with
+let require_request (_t : t) : request =
+  (* 2026-11-02: the binding is FIBER-LOCAL (Request_context.with_request),
+     not a field on the per-identity session - see request_context.ml. A
+     parallel request on the same identity can no longer unbind a running
+     handler ("/todos" died with "no active request"). *)
+  match Request_context.get_request () with
   | Some r -> r
   | None ->
       raise

@@ -137,8 +137,11 @@ type t = {
         the public-handler gate skip, the non-main pin warning, and the
         once-per-boot mirror-skip map (load_skip_names). *)
     mutable seed_boot : bool;
-  (** Active HTTP request for user-route dispatch; None in REPL. *)
-  mutable current_request : request option;
+  (** NOTE: the active request is NOT stored here. It is fiber-local
+      (Request_context.with_request / get_request) because a per-identity
+      session is shared by every concurrent request of that identity; a
+      field here let one request's exit unbind another's ("no active
+      request", 2026-11-02). *)
   (** When true, (checkout)/(fork)/(merge) are blocked so the agent
       cannot leave the current branch mid-task. *)
   mutable agent_branch_lock : bool;

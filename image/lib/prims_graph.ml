@@ -10,8 +10,10 @@ let split_branch_ref (s : string) : string * string =
 let method_to_string (m : http_method) : string =
   match m with `GET -> "GET" | `POST -> "POST"
 
-let require_request (t : t) : request =
-  match t.current_request with
+let require_request (_t : t) : request =
+  (* fiber-local since 2026-11-02 (Request_context.get_request); duplicate of
+     prims_request.require_request kept for this module's own prim family. *)
+  match Request_context.get_request () with
   | Some r -> r
   | None ->
       raise

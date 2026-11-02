@@ -1057,9 +1057,8 @@ let run_smoke_route
                   | `GET -> [])
              }
            in
-           t.current_request <- Some req;
            let v_res =
-             (Fun.protect ~finally:(fun () -> t.current_request <- None) (fun () -> (try
+             (Request_context.with_request req (fun () -> (try
       let v =
                          Control_rim.run ~prims:t.eval_state.prims (fun () ->
                              Pricklypear_lisp.Eval.eval_string_direct

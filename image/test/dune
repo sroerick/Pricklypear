@@ -410,3 +410,8 @@
  (name authz_test)
  (modules authz_test)
  (libraries pricklypear-image pricklypear-lisp alcotest unix))
+
+(test
+ (name request_context_test)
+ (modules request_context_test)
+ (libraries pricklypear-image alcotest eio_main))
