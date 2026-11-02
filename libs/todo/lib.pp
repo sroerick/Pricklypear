@@ -5005,7 +5005,7 @@
       "-"
       (substring h 20 12))))
 
-<<<<<<< HEAD
+
 (define todo/tree/row-id?
   (lambda
     (nj id)
@@ -5028,7 +5028,6 @@
               (substring p (- (string-length p) (+ n 1)) (string-length p))
               (string-append "." (as-str id)))
             (string-eq (todo/tree/redash (todo/tree/tail p)) (as-str id))))))))
-=======
 (define todo/tree/child-of?
   (lambda
     (pre p)
@@ -5050,7 +5049,7 @@
      path whose remainder after the prefix carries no further dot) on a
      cached subtree read, so todo/tree/rows keeps children-only semantics
      at cache speed.")
->>>>>>> pp-orig/factory/todos-pool-once-1102
+
 
 (define todo/tree/rows
   (lambda
