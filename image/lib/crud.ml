@@ -1607,12 +1607,22 @@ let tree_get_many (store : Store.t) ~(paths : string list)
       VList envs)
 
 let tree_list (store : Store.t) ~(prefix : string) ?(depth : int option)
-    ?(limit : int = 50000) ?(type_filter : string option = None) () : value =
+    ?(limit : int = 50000) ?(type_filter : string option = None)
+    ?(item_filter : string option = None) () : value =
   with_tree_tx store ~none:(fun () -> VList []) (fun conn ->
+      (* An item filter tests the node BODY, so its fetch window has to cover
+         the whole subtree; `limit` then caps the MATCHES, not the scan.
+         2026-11-03: todo/comment/list passed its own 200-row cap as the
+         window and filtered in interpreted Lisp, so any card whose comments
+         sorted past row 200 of the type subtree read as having none (prod:
+         657 todo-comment rows, every new proof comment invisible). *)
+      let fetch_limit =
+        match item_filter with None -> limit | Some _ -> 50000
+      in
       let nodes =
         match depth with
-        | Some 1 -> Tree_store.list_children conn ~prefix ~limit ()
-          | _ -> Tree_store.cached_list_subtree conn ~prefix ~limit ()
+        | Some 1 -> Tree_store.list_children conn ~prefix ~limit:fetch_limit ()
+          | _ -> Tree_store.cached_list_subtree conn ~prefix ~limit:fetch_limit ()
       in
       (* Optional server-side type filter (prod /todos budget fix,
          2026-10-28): moves the per-row type test out of interpreted PP
@@ -1629,6 +1639,25 @@ let tree_list (store : Store.t) ~(prefix : string) ?(depth : int option)
             List.filter
               (fun n -> String.equal (Tree_store.node_type_name n) tf)
               nodes
+      in
+      (* Optional server-side item filter (2026-11-03, comment visibility):
+         same shape as the type filter, keyed on body.item_id. *)
+      let nodes =
+        match item_filter with
+        | None -> nodes
+        | Some iid ->
+            let rec take k = function
+              | [] -> []
+              | _ when k <= 0 -> []
+              | x :: tl -> x :: take (k - 1) tl
+            in
+            take limit
+              (List.filter
+                 (fun n ->
+                   match Tree_store.node_item_id n with
+                   | Some v -> String.equal v iid
+                   | None -> false)
+                 nodes)
       in
       (VList (List.map (fun n -> VStr (Tree_store.node_to_json n)) nodes)))
 
