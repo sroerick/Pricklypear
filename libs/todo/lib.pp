@@ -610,6 +610,13 @@
             "margin"
             "0"))
         (css/rule ".todo-nav-item" (list "margin" ".25rem 0"))
+          (css/rule
+            ".todo-nav-select"
+            (list
+              "max-width"
+              "11rem"
+              "font"
+              "inherit"))
         (css/rule
           ".todo-nav-item.is-active a"
           (list
@@ -4925,19 +4932,33 @@ empty text kid when unassigned (so a caller always projects a value).")
           (html/attr "class" "todo-nav")
           (html/join
             (list
-              (todo/ui/nav-link view "everything" "Everything" "")
-              (todo/ui/nav-link view "from-notes" "From notes" "")
-              (todo/ui/nav-link
-                view
-                "archived"
-                "Archived"
-                (string-append "(" (as-str arch-n) ")"))
-              (list/foldl
-                (lambda
-                  (acc row)
-                  (string-append acc (todo/list/nav-li view row)))
-                ""
-                lists)
+                (html/li
+                  (html/attr "class" "todo-nav-item")
+                  (html/form
+                    "GET"
+                    "/todos"
+                    (html/attrs
+                      (list
+                        (html/attr "class" "todo-nav-pick")
+                        (html/attr "hx-get" "/todos")
+                        (html/attr "hx-target" "#todo-main")
+                        (html/attr "hx-swap" "outerHTML")))
+                    (html/join
+                      (list
+                        (html/label (html/attr "for" "todo-view") "View")
+                        (html/select
+                          "view"
+                          (html/attrs
+                            (list
+                              (html/attr "id" "todo-view")
+                              (html/attr "class" "todo-nav-select")
+                              (html/attr "hx-get" "/todos")
+                              (html/attr "hx-target" "#todo-main")
+                              (html/attr "hx-swap" "outerHTML")
+                              (html/attr "hx-trigger" "change")))
+                          (todo/ui/nav-options view lists arch-n))
+                        (html/button (html/attr "type" "submit") "Go")))))
+                (todo/ui/nav-delete view lists)
               (html/li
                 (html/attr "class" "todo-nav-item")
                 (html/form
@@ -4962,6 +4983,75 @@ empty text kid when unassigned (so a caller always projects a value).")
                             (html/attr "class" "todo-new-list-input"))))
                       (html/button (html/attr "type" "submit") "+ list")))))))))))
     "nav: items snapshot comes from the caller (empty list fetches once here); archived count only; lists render without per-list ratios - dict-get JSON parses per item blew the route budget")
+
+(define todo/ui/nav-options
+  (lambda
+    (view lists arch-n)
+    "Option list for the view selector: the three synthetic views, then one
+       entry per todo list. Card 42e2a9d4: the old nav rendered a link plus a
+       delete form per list, which ate two thirds of a phone screen."
+    (string-append
+      (html/option "everything" "Everything" (string-eq view "everything"))
+      (html/option "from-notes" "From notes" (string-eq view "from-notes"))
+      (html/option
+        "archived"
+        (string-append "Archived (" (as-str arch-n) ")")
+        (string-eq view "archived"))
+      (list/foldl
+        (lambda
+          (acc row)
+          (string-append
+            acc
+            (html/option
+              (as-str (car row))
+              (todo/list/title (cdr row))
+              (string-eq view (as-str (car row))))))
+        ""
+        lists))))
+
+(define todo/ui/nav-delete
+  (lambda
+    (view lists)
+    "Delete control for the ACTIVE list only; empty for the synthetic views
+       and the default inbox."
+    (list/foldl
+      (lambda
+        (acc row)
+        (if
+          (and
+            (string-eq view (as-str (car row)))
+            (not (todo/list/default? (cdr row))))
+          (string-append
+            acc
+            (html/li
+              (html/attr "class" "todo-nav-item")
+              (html/form
+                "POST"
+                "/todos"
+                (html/attrs
+                  (list
+                    (html/attr "class" "todo-list-del")
+                    (html/attr "hx-post" "/todos")
+                    (html/attr "hx-target" "#todo-main")
+                    (html/attr "hx-swap" "outerHTML")
+                    (html/attr
+                      "hx-confirm"
+                      "Delete this entire list and its items?")))
+                (html/join
+                  (list
+                    (html/hidden "action" "delete-list")
+                    (html/hidden "list_id" (as-str (car row)))
+                    (html/hidden "view" "everything")
+                    (html/button
+                      (html/attrs
+                        (list
+                          (html/attr "type" "submit")
+                          (html/attr "class" "secondary")
+                          (html/attr "title" "delete current list")))
+                      "delete list"))))))
+          acc))
+      ""
+      lists)))
 
 (define todo/ui/nav-link
   (lambda
