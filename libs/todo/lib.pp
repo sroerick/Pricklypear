@@ -192,9 +192,9 @@
               (html/attr "class" "card todo-add")
               (html/attr "hx-post" "/todos")
               (html/attr "hx-target" "#todo-main")
-              (html/attr "hx-swap" "innerHTML")
+              (html/attr "hx-swap" "outerHTML")
               (html/attr
-                "hx-on::after-request"
+                "hx-on::after:request"
                 "if(event.detail.successful){this.reset()}")))
           (html/join
             (list
@@ -1651,7 +1651,7 @@
                     (html/attr "class" "todo-check")
                     (html/attr "hx-post" "/todos")
                     (html/attr "hx-target" "#todo-main")
-                    (html/attr "hx-swap" "innerHTML")))
+                    (html/attr "hx-swap" "outerHTML")))
                 (html/join
                   (list
                     (html/hidden "action" "cycle")
@@ -1681,7 +1681,7 @@
                       (html/attr "class" "todo-archive")
                       (html/attr "hx-post" "/todos")
                       (html/attr "hx-target" "#todo-main")
-                      (html/attr "hx-swap" "innerHTML")))
+                      (html/attr "hx-swap" "outerHTML")))
                   (html/join
                     (list
                       (html/hidden "action" "archive")
@@ -1703,7 +1703,7 @@
                     (html/attr "class" "todo-del")
                     (html/attr "hx-post" "/todos")
                     (html/attr "hx-target" "#todo-main")
-                    (html/attr "hx-swap" "innerHTML")))
+                    (html/attr "hx-swap" "outerHTML")))
                 (html/join
                   (list
                     (html/hidden "action" "delete")
@@ -1744,7 +1744,7 @@
                     (html/attr "class" "todo-check")
                     (html/attr "hx-post" "/todos")
                     (html/attr "hx-target" "#todo-main")
-                    (html/attr "hx-swap" "innerHTML")))
+                    (html/attr "hx-swap" "outerHTML")))
                 (html/join
                   (list
                     (html/hidden "action" "cycle-note")
@@ -2567,7 +2567,7 @@
                     (html/attr "class" "todo-list-del")
                     (html/attr "hx-post" "/todos")
                     (html/attr "hx-target" "#todo-main")
-                    (html/attr "hx-swap" "innerHTML")
+                    (html/attr "hx-swap" "outerHTML")
                     (html/attr
                       "hx-confirm"
                       "Delete this entire list and its items?")))
@@ -2650,7 +2650,7 @@
                     (html/attr "class" "todo-list-del")
                     (html/attr "hx-post" "/todos")
                     (html/attr "hx-target" "#todo-main")
-                    (html/attr "hx-swap" "innerHTML")
+                    (html/attr "hx-swap" "outerHTML")
                     (html/attr
                       "hx-confirm"
                       "Delete this entire list and its items?")))
@@ -2699,7 +2699,7 @@
                     (html/attr "class" "todo-check")
                     (html/attr "hx-post" "/todos")
                     (html/attr "hx-target" "#todo-main")
-                    (html/attr "hx-swap" "innerHTML")))
+                    (html/attr "hx-swap" "outerHTML")))
                 (html/join
                   (list
                     (html/hidden "action" "cycle-note")
@@ -3592,9 +3592,9 @@
               (html/attr "class" "card todo-add")
               (html/attr "hx-post" "/todos")
               (html/attr "hx-target" "#todo-main")
-              (html/attr "hx-swap" "innerHTML")
+              (html/attr "hx-swap" "outerHTML")
               (html/attr
-                "hx-on::after-request"
+                "hx-on::after:request"
                 "if(event.detail.successful){this.reset()}")))
           (html/join
             (list
@@ -3772,7 +3772,12 @@
                 "/todos"
                 (html/attrs
                   (list
-                    (html/attr "class" "todo-comment-form")))
+                    (html/attr "class" "todo-comment-form")
+                      (html/attr "hx-post" "/todos")
+                      (html/attr "hx-target" "#todo-main")
+                      (html/attr "hx-swap" "outerHTML")
+                      (html/attr "hx-on::after:request"
+                        "if(event.detail.successful){this.reset()}")))
                 (html/join
                   (list
                     (html/hidden "action" "comment")
@@ -4501,7 +4506,7 @@ empty text kid when unassigned (so a caller always projects a value).")
                   (html/attr "class" "todo-promote")
                   (html/attr "hx-post" "/todos")
                   (html/attr "hx-target" "#todo-main")
-                  (html/attr "hx-swap" "innerHTML")))
+                  (html/attr "hx-swap" "outerHTML")))
               (html/join
                 (list
                   (html/hidden "action" "promote-node")
@@ -4616,12 +4621,18 @@ empty text kid when unassigned (so a caller always projects a value).")
         (is-get (string-eq (request-method) "GET")))
       (if
         (if
-          is-get
+          (null? id-param)
+          #f
           (if
-            (null? id-param)
+            (string-eq (as-str id-param) "")
             #f
-            (not (string-eq (as-str id-param) "")))
-          #f)
+            (if
+              is-get
+              #t
+              (if
+                (string-eq (as-str (request-param "action")) "comment")
+                #t
+                (string-eq (as-str (request-param "action")) "save")))))
         (html/div
           (html/attr "id" "todo-main")
           (html/join
@@ -4737,7 +4748,7 @@ empty text kid when unassigned (so a caller always projects a value).")
                       (html/attr "class" "todo-new-list")
                       (html/attr "hx-post" "/todos")
                       (html/attr "hx-target" "#todo-main")
-                      (html/attr "hx-swap" "innerHTML")))
+                      (html/attr "hx-swap" "outerHTML")))
                   (html/join
                     (list
                       (html/hidden "action" "create-list")
