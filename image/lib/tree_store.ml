@@ -1267,6 +1267,18 @@ let node_to_json (n : node) : string =
 let node_type_name (n : node) : string =
   match n.type_name with Some t -> t | None -> n.kind
 
+(* body.item_id as a string, when the datum carries one. Exposed for
+   Crud-level filtering (tree/list's optional 5th arg, 2026-11-03): a
+   per-item datum read must not depend on how many rows of the whole type
+   subtree happen to fit in the caller's window. *)
+let node_item_id (n : node) : string option =
+  match n.body with
+  | `Assoc fields -> (
+      match List.assoc_opt "item_id" fields with
+      | Some (`String s) -> Some s
+      | _ -> None)
+  | _ -> None
+
 (** Render a [version] row as the JSON the reads-as-of-gen prims return.
     Mirrors node_to_json's field vocabulary (id/path/kind/type/body/author/
     hash/created_at) so a gen-as-of read has the SAME surface as a head

@@ -892,16 +892,16 @@
     (type item limit)
     "Raw node-JSONs (id/path/kind/type/body/author/created_at/updated_at/rank)
      of all `type` datums whose body.item_id === item, in store order (callers
-     that need chronology sort by created_at — see todo/datum/insert-by-ts)."
-    (list/filter
-      (lambda
-        (n)
-        (let
-          ((b (dict-get n "body")))
-          (let
-            ((i (if (null? b) () (dict-get b "item_id"))))
-            (and (not (null? i)) (string-eq (as-str i) (as-str item))))))
-      (tree/list (todo/tree/prefix type) 1 limit))))
+     that need chronology sort by created_at — see todo/datum/insert-by-ts).
+
+     The item test runs SERVER-SIDE (tree/list 5th arg, 2026-11-03). The old
+     body handed `limit` to tree/list as the SCAN window and then filtered its
+     rows in interpreted Lisp, so the item filter only ever saw the first
+     `limit` rows of the whole type subtree; once prod passed 200 todo-comment
+     rows, every card whose comments sorted past that window read as having
+     none (proof comments on the todos-UI cards were invisible while the
+     datums sat in the tree)."
+    (tree/list (todo/tree/prefix type) 1 limit type item)))
 
 (define todo/db/create
   (lambda

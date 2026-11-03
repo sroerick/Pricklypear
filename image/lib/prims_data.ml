@@ -342,8 +342,23 @@ let register (t : t) (tbl : Primitives.t) : unit =
         ] ->
           Crud.tree_list t.store ~prefix ~depth:(Int64.to_int depth)
             ~limit:(Int64.to_int lim) ~type_filter:(Some tf) ()
+      (* 5th optional arg: server-side body filter on item_id (2026-11-03,
+         comment visibility). Same shape as the type filter: additive, so
+         1-4 arg calls are unchanged. todo/comment/list used to hand its own
+         200-row cap to tree/list as the SCAN window and filter in
+         interpreted Lisp, so once the type subtree passed 200 rows a card
+         whose comments sorted past the window read as having none. *)
+      | [ Pricklypear_lisp.Ast.VStr prefix
+        ; Pricklypear_lisp.Ast.VInt depth
+        ; Pricklypear_lisp.Ast.VInt lim
+        ; Pricklypear_lisp.Ast.VStr tf
+        ; Pricklypear_lisp.Ast.VStr iid
+        ] ->
+          Crud.tree_list t.store ~prefix ~depth:(Int64.to_int depth)
+            ~limit:(Int64.to_int lim) ~type_filter:(Some tf)
+            ~item_filter:(Some iid) ()
       | _ ->
-          ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("tree/list", "need prefix [, depth [, limit [, type]]]", "bad-args"))))));
+          ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("tree/list", "need prefix [, depth [, limit [, type [, item]]]]", "bad-args"))))));
 
   (* (tree/children-of path [limit]) -> VList of direct-child node JSON.
      one-tree.tree-read-prims: level-predicate children read over
