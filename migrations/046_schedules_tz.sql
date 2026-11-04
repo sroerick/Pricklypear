@@ -20,6 +20,10 @@
 -- hand-flip the work-digest needs before DST ends 2026-11-01.
 --
 -- STRICTLY ADDITIVE + idempotent + psql-applied (schema_migrations gate).
+-- RERUN-SAFE: prickylypear-promote.ksh re-applies this file even when version
+-- 46 is already recorded in schema_migrations, so a missed ALTER (prod: no
+-- schedules.tz while the gate read "applied", card f6f81432) heals on the
+-- next promote instead of stalling the scheduler forever.
 
 ALTER TABLE schedules ADD COLUMN IF NOT EXISTS tz TEXT NOT NULL DEFAULT 'utc';
 

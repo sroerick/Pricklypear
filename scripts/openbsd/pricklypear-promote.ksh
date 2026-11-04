@@ -166,7 +166,18 @@ apply_migrations() {
   for f in $(ls "${mig_dir}"/*.sql 2>/dev/null | sort); do
     base="$(basename "$f" .sql)"
     ver=$(( 10#${base%%_*} ))   # 013 -> 13 (strip leading zeros, no octal)
-    case ",${applied}," in *",${ver},"*) continue ;; esac
+    case ",${applied}," in
+      *",${ver},"*)
+        # Version recorded -> normally skip (expensive backfill DO blocks must
+        # not re-run on every promote). But a file marked RERUN-SAFE is
+        # strictly additive + idempotent, so re-apply it anyway: gating on the
+        # version integer ALONE let a duplicate version number mark 046
+        # applied while its DDL never ran (card f6f81432: prod had no
+        # schedules.tz, 42703 on every scheduler tick, 7 overdue schedules for
+        # 13 days). Re-running these makes the schema self-healing.
+        grep -q '^-- RERUN-SAFE' "$f" || continue ;;
+      *) ;;
+    esac
     log "applying migration ${ver} (${base})"
     if ! ppsql -v ON_ERROR_STOP=1 -f "$f"; then
       log "migration ${ver} FAILED; old release still live (current -> $(readlink "${current_link}" 2>/dev/null || echo '?'))"
