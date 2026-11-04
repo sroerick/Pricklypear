@@ -42,13 +42,14 @@ the same predicates are ordinary index quals again.
 Store call sites go through them behind `PP_RLS_WRAPPERS=0`, which restores
 the pre-1104 SQL on the same build:
 
-* `Tree_store.get_by_path` (tree/get) — routed.
+* `Tree_store.get_by_path` (tree/get) - routed.
 * `Tree_store.list_subtree` / `cached_list_subtree` (tree/list, tree/subtree)
-  — routed.
-* `tree/find-by` — wrapper shipped; the `find_by_body_field` call site is NOT
-  routed yet (see "Not done" below).
-* `Tree_store.list_children` (tree/list depth 1, tree/children-of) — not
-  routed yet; it stays on the RLS path.
+  - routed.
+* `Tree_store.find_by_body_field` (tree/find-by) - routed through
+  `pp_node_find_by`, carrying the caller's viewer/garden vis floor.
+* `Tree_store.list_children` (tree/list depth 1, tree/children-of) - routed
+  through `pp_node_list(..., p_depth = 1)`: same level predicate (including
+  the +2 'h' outline roots), sibling order and cap as the pre-1104 SQL.
 
 ## Expected EXPLAIN before / after
 
@@ -86,10 +87,6 @@ Index Scan using tree_nodes_body_*_idx on tree_nodes n
 * Anything outside the wrappers: ad-hoc SQL, `tree_data_rows`, the lens
   prims, `list_data_lenses`, `tree_versions` reads, the mirror triggers.
   They keep the floor and keep the seq scan.
-* `list_children` (depth-1 `tree/list`, `tree/children-of`, `tree/get-many`'s
-  per-path calls are `pp_node_get` so they are covered).
-* `tree/find-by` until its call site is routed: the wrapper exists, the OCaml
-  does not call it yet.
 * Unranked sorts: the wrapper sorts the index rows (`rank COLLATE "C" NULLS
   LAST, path`), so a wide prefix still pays a sort over the matched set.
 
@@ -162,8 +159,20 @@ Flip it, restart the image, hit /todos, compare X-Timing-Ms db vs total.
 
 ## Not done in this branch
 
-* `tree/find-by`'s OCaml call site (`Tree_store.find_by_body_field`) and
-  `Tree_store.list_children` are not routed through the wrappers yet; both
-  wrappers exist and are covered by the equivalence test.
+* Nothing routing-side: every store shape that reads tree_nodes for a page is
+  on a wrapper (get, subtree list, children depth 1, find-by).
 * No EXPLAIN was captured: this box has no Postgres. The plans above are the
   expected shapes, to be confirmed by the first run on mainframe.
+
+## Prim shape rule (roerick, 11-04)
+
+* A new tree_nodes query shape gets a wrapper, or it stays on the RLS path and
+  stays slow. That is a performance cliff, not a correctness one: it fails safe.
+* Nopales libs never see SQL and never see visibility. A new data need arrives
+  as a new prim, not as a query escape hatch.
+* Make the plural the primitive and the singular the sugar: `(rows-for-items ids)`
+  is the real prim and `(rows-for-item id)` is it with one id; same for counts,
+  comments and deps. The one-statement shape should be the one a lib author
+  reaches for by default, so performance does not depend on the author knowing
+  a rule.
+* Batch siblings for the per-item prims are follow-on work, not part of 1104.

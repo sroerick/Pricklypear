@@ -739,14 +739,18 @@ let select_cols =
   "id::text, path::text, kind, type_name, payload::text, hash, author, "
   ^ "created_at::text, updated_at::text, rank"
 
+(** The PP_RLS_WRAPPERS knob (perf 1104) with a test override: an explicit
+    [wrappers] argument wins, otherwise the env var is read per call so the
+    A/B can flip on one build (Store_db.rls_wrappers_on). *)
+let wrappers_enabled ?wrappers () : bool =
+  match wrappers with Some b -> b | None -> Store_db.rls_wrappers_on ()
+
 (** SQL for [get_by_path]: the index-seek wrapper when PP_RLS_WRAPPERS is on,
     the pre-1104 direct tree_nodes read when it is off (A/B measuring).
     The [wrappers] argument overrides the env knob so the choice is testable. *)
 let get_by_path_sql ?wrappers () : string =
-  let wrapped =
-    match wrappers with Some b -> b | None -> Store_db.rls_wrappers_on ()
-  in
-  if wrapped then "SELECT " ^ select_cols ^ " FROM pp_node_get($1::ltree)"
+  if wrappers_enabled ?wrappers () then
+    "SELECT " ^ select_cols ^ " FROM pp_node_get($1::ltree)"
   else "SELECT " ^ select_cols ^ " FROM tree_nodes WHERE path = $1::ltree"
 
 (** Fetch one node by exact path. *)
@@ -852,10 +856,7 @@ let versioned_history (conn : Store_db.conn) ~(path : string) () : version list 
     on, the pre-1104 direct read when it is off. Both order and cap the same
     way, so a caller cannot tell them apart. *)
 let list_subtree_sql ?wrappers () : string =
-  let wrapped =
-    match wrappers with Some b -> b | None -> Store_db.rls_wrappers_on ()
-  in
-  if wrapped then
+  if wrappers_enabled ?wrappers () then
     "SELECT " ^ select_cols ^ " FROM pp_node_list($1::ltree, NULL, $2::int)"
   else
     "SELECT " ^ select_cols ^ " FROM tree_nodes "
@@ -1428,7 +1429,12 @@ let get_by_uuid (conn : Store_db.conn) ~(uuid : string) : node option =
     every call (card 872d8066, i-1788348654). Only identifier-shaped
     fields [A-Za-z0-9_]+ are supported; anything else returns [] —
     in-tree callers (slug, uuid) and the find-by prim's documented use
-    are identifier-shaped. The VALUE stays a bound parameter. *)
+    are identifier-shaped. The VALUE stays a bound parameter.
+
+    Perf 1104: with PP_RLS_WRAPPERS on (the default) the read goes through
+    pp_node_find_by with the same field/kind/prefix/viewer/garden/cap
+    arguments; PP_RLS_WRAPPERS=0 restores the statement built below on the
+    same build. *)
 let valid_body_field (field : string) : bool =
   let ok c =
     (c >= 'a' && c <= 'z')
@@ -1437,12 +1443,39 @@ let valid_body_field (field : string) : bool =
     || c = '_'
   in
   String.length field > 0 && String.for_all ok field
+
+(** Wrapped statement for [find_by_body_field] (migrations/049). The body
+    FIELD is a bound parameter here: pp_node_find_by validates it and splices
+    it into the payload path literal itself, so the migration-010 partial
+    expression indexes still apply. Prefix NULL = whole store; kind NULL =
+    any kind; viewer NULL = no note-vis floor (internal callers). *)
+let find_by_body_field_wrapped_sql : string =
+  "SELECT " ^ select_cols
+  ^ " FROM pp_node_find_by($1::ltree, $2::text, $3::text, $4::text, $5::text, $6::ltree, $7::int)"
 let find_by_body_field (conn : Store_db.conn) ~(kind : string option)
     ~(field : string) ~(value : string) ?(prefix : string = "")
     ?(viewer : string option = None)
-    ?(limit : int = 50) () : node list =
+    ?(limit : int = 50) ?wrappers () : node list =
   if prefix <> "" && not (valid_path prefix) then []
   else if not (valid_body_field field) then []
+  else if wrappers_enabled ?wrappers () then
+    (* pp_node_find_by carries the same predicate the pre-1104 statement
+       built: body field = value, kind, prefix scope, and the note-vis floor
+       from the caller's (viewer, garden) pair; then it applies
+       pp_node_visible per row and caps in SQL. *)
+    let params =
+      [ (if prefix = "" then Pgx.Value.null else Pgx.Value.of_string prefix)
+      ; Pgx.Value.of_string field
+      ; Pgx.Value.of_string value
+      ; (match kind with Some k -> Pgx.Value.of_string k | None -> Pgx.Value.null)
+      ; (match viewer with Some v -> Pgx.Value.of_string v | None -> Pgx.Value.null)
+      ; (match viewer with
+         | Some v -> Pgx.Value.of_string (garden_root ~user:v)
+         | None -> Pgx.Value.null)
+      ; Pgx.Value.of_int limit ]
+    in
+    List.filter_map node_of_row
+      (Store_db.exec conn ~params find_by_body_field_wrapped_sql)
   else
     let scoped = prefix <> "" in
     let vis_on = match viewer with Some _ -> true | None -> false in
@@ -2055,6 +2088,24 @@ let list_by_kind (conn : Store_db.conn) ~(prefix : string) ~(kind : string)
     in
     (List.filter_map node_of_row rows)
 
+(** SQL for [list_children]: the depth-1 [pp_node_list] wrapper (perf 1104)
+    when PP_RLS_WRAPPERS is on, the pre-1104 direct read when it is off. Same
+    level predicate, same sibling order, same cap, so a caller cannot tell
+    them apart. *)
+let list_children_sql ?wrappers () : string =
+  if wrappers_enabled ?wrappers () then
+    "SELECT " ^ select_cols ^ " FROM pp_node_list($1::ltree, NULL, $2::int, 1)"
+  else
+    "SELECT " ^ select_cols ^ " FROM tree_nodes n "
+    ^ "WHERE n.path <@ $1::ltree AND n.path <> $1::ltree "
+    ^ "AND ( "
+    ^ "  nlevel(n.path) = nlevel($1::ltree) + 1 "
+    ^ "  OR ( "
+    ^ "    nlevel(n.path) = nlevel($1::ltree) + 2 "
+    ^ "    AND subpath(n.path, nlevel($1::ltree), 1)::text = 'h' "
+    ^ "  ) "
+    ^ ") "
+    ^ "ORDER BY n.rank COLLATE \"C\" NULLS LAST, n.path::text ASC LIMIT $2"
 (** Direct children under [prefix], index-friendly (one-tree.projections
     CHILDREN-BY-LEVEL). Expressed as an nlevel predicate the ltree GiST
     path index can drive — never a correlated NOT EXISTS anti-join over
@@ -2070,20 +2121,7 @@ let list_children (conn : Store_db.conn) ~(prefix : string) ?(limit : int = 5000
     () : node list =
   if not (valid_path prefix) then []
   else
-    let sql =
-      "SELECT " ^ select_cols ^ " FROM tree_nodes n "
-      ^ "WHERE n.path <@ $1::ltree AND n.path <> $1::ltree "
-      ^ "AND ( "
-      ^ "  nlevel(n.path) = nlevel($1::ltree) + 1 "
-      ^ "  OR ( "
-      ^ "    nlevel(n.path) = nlevel($1::ltree) + 2 "
-      ^ "    AND subpath(n.path, nlevel($1::ltree), 1)::text = 'h' "
-      ^ "  ) "
-      ^ ") "
-      (* sibling-order: ranked siblings first (byte-order rank — locale-
-         independent), then unranked, path-ordered among themselves. *)
-      ^ "ORDER BY n.rank COLLATE \"C\" NULLS LAST, n.path::text ASC LIMIT $2"
-    in
+      let sql = list_children_sql () in
     let rows =
       Store_db.exec conn
         ~params:[ Pgx.Value.of_string prefix; Pgx.Value.of_int limit ]

@@ -112,6 +112,35 @@ let test_path_label () =
     (T.is_hier_kind "folder" && T.is_hier_kind "note" && T.is_hier_kind "heading");
   check bool "datum not hier" false (T.is_hier_kind "datum")
 
+(* Routing evidence without a DB: each selector must flip on the explicit
+   [wrappers] override, so the PP_RLS_WRAPPERS A/B is a SQL choice, not a
+   code path. The strings are the shipped statements. *)
+let contains hay needle =
+  let n = String.length needle and h = String.length hay in
+  let rec go i = i + n <= h && (String.sub hay i n = needle || go (i + 1)) in
+  n = 0 || go 0
+
+let test_rls_routing () =
+  check bool "get: wrapper on" true
+    (contains (T.get_by_path_sql ~wrappers:true ()) "FROM pp_node_get($1::ltree)");
+  check bool "get: wrapper off" false
+    (contains (T.get_by_path_sql ~wrappers:false ()) "pp_node_");
+  check bool "subtree: wrapper on" true
+    (contains (T.list_subtree_sql ~wrappers:true ()) "FROM pp_node_list($1::ltree, NULL, $2::int)");
+  check bool "subtree: wrapper off" false
+    (contains (T.list_subtree_sql ~wrappers:false ()) "pp_node_");
+  check bool "children: wrapper on, depth 1" true
+    (contains (T.list_children_sql ~wrappers:true ())
+       "FROM pp_node_list($1::ltree, NULL, $2::int, 1)");
+  check bool "children: wrapper off keeps the level predicate" true
+    (contains (T.list_children_sql ~wrappers:false ())
+       "nlevel(n.path) = nlevel($1::ltree) + 1");
+  check bool "children: wrapper off is not the wrapper" false
+    (contains (T.list_children_sql ~wrappers:false ()) "pp_node_");
+  check bool "find-by: wrapper signature" true
+    (contains T.find_by_body_field_wrapped_sql
+       "FROM pp_node_find_by($1::ltree, $2::text, $3::text, $4::text, $5::text, $6::ltree, $7::int)")
+
 let () =
   run "tree_store"
     [ "codec", [ test_case "roundtrip" `Quick test_label_roundtrip
@@ -120,4 +149,5 @@ let () =
     ; "paths", [ test_case "constructors" `Quick test_paths
                ; test_case "path_label" `Quick test_path_label ]
     ; "typed", [ test_case "validate_fields" `Quick test_validate ]
+    ; "rls", [ test_case "wrapper routing" `Quick test_rls_routing ]
     ]
