@@ -4029,18 +4029,26 @@
             ((view
               (let
                 ((v (request-param "view")))
-                (if (null? v) "everything" (as-str v)))))
+                (if (null? v) "everything" (as-str v))))
+             (lists (todo/list/all)))
             (if
               (hx-request?)
-              (render-html (todo/ui/main view))
+              (render-html (todo/ui/main* view lists))
               (redirect (string-append "/todos?view=" view)))))
-        (html/page
-          (list
-            (html/h1 "To-dos")
-            (html/p*
-              (html/attr "class" "muted")
-              "Lists (Basecamp) + notes scrape (org). Click a title for details.")
-            (todo/ui/main (todo/ui/view))))))))
+        (let
+          ((lists (todo/list/all)))
+          (html/page
+            (list
+              (html/h1 "To-dos")
+              (html/p*
+                (html/attr "class" "muted")
+                "Lists (Basecamp) + notes scrape (org). Click a title for details.")
+              (todo/ui/main* (todo/ui/view) lists)))))))
+  "The /todos entry. perf 1104: the list pool is read ONCE here and threaded
+     into todo/ui/main*; a GET render used to read it twice (todo/list/ensure-inbox
+     and again inside todo/ui/main) and each read is two tree/list statements.
+     On POST the pool is read AFTER todo/ui/handle-post so a list created by
+     the post shows up in the re-render.")
 (define todo/page/cap
   40
   "Rows rendered per section of /todos before the 'more' pointer takes
@@ -5605,10 +5613,16 @@ clear the claim (review 2026-10-27). Composes todo/ui/assignee-option.")
 (define todo/ui/main
   (lambda
     (view)
+    (todo/ui/main* view (todo/list/all)))
+  "1-arg /todos entry: reads the list pool itself and delegates to
+     todo/ui/main*. Arity stays 1 because other identities pin this name.")
+
+(define todo/ui/main*
+  (lambda
+    (view lists)
     (let
       ((id-param (request-param "id"))
-        (is-get (string-eq (request-method) "GET"))
-        (lists (todo/list/all)))
+        (is-get (string-eq (request-method) "GET")))
       (if
         (if
           is-get

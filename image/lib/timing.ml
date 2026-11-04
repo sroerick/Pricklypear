@@ -106,12 +106,25 @@ let record ~route ~total_ms ~db_ms ~db_hits ~steps ~prim_db ~fn_steps : unit =
       | _ -> ()
   end
 
-(* Request-scoped last measured total_ms, consumed by the HTTP response
-   writers to attach the X-Timing-Ms header on handled-route responses. *)
-let last_total_ms : float option ref = ref None
+(* Request-scoped last measured sample, consumed by the HTTP response
+   writers to attach the X-Timing-Ms header on handled-route responses.
+   Carries the WHOLE budget split, not just the total: a page that costs
+   3s and reports `db=2900.0` indicts the DB without any env knob, so
+   every prod hit is self-diagnosing (perf 1104 item 1). One global ref:
+   measure sets it and the response writer consumes it in the SAME fiber,
+   so two concurrent requests can only swap samples if another fiber runs
+   between those two points. Pre-existing shape, unchanged here. *)
+type last_sample = {
+  l_route : string;
+  l_total_ms : float;
+  l_db_ms : float;
+  l_db_hits : int;
+  l_steps : int;
+}
 
-let set_last_total_ms (ms : float) : unit = last_total_ms := Some ms
+let last : last_sample option ref = ref None
 
+let set_last_sample (s : last_sample) : unit = last := Some s
 (** Measure [f] (a handler invocation) for [route]: time it, record a
     sample (even on failure), and return the result + total_ms. The
     fiber-keyed slot is bound for [f]'s extent; the session eval paths
@@ -151,9 +164,11 @@ let measure ~route (f : unit -> 'a) : 'a * float =
           (b.db_ms, b.db_hits, b.steps, l, fs)
         | None -> (0., 0, 0, [], [])
       in
-      record ~route ~total_ms ~db_ms ~db_hits ~steps ~prim_db ~fn_steps;
-      set_last_total_ms total_ms;
-      (result, total_ms))
+        record ~route ~total_ms ~db_ms ~db_hits ~steps ~prim_db ~fn_steps;
+        set_last_sample
+          { l_route = route; l_total_ms = total_ms; l_db_ms = db_ms;
+            l_db_hits = db_hits; l_steps = steps };
+        (result, total_ms))
 
 type agg = {
   route : string;
@@ -224,13 +239,21 @@ let aggregates () : agg list =
 
 (** Return the X-Timing-Ms header (as a [name,value] pair) if a route
     was measured for this request, consuming it so a later response in
-    the same request does not double-report. Empty when none. *)
+    the same request does not double-report. Empty when none.
+
+    Value shape: [total_ms db=db_ms hits=db_hits steps=eval_steps] — the
+    existing budget accumulators rendered inline, always, with no env
+    var. db_ms ~ total_ms means the seconds are DB wall time; high steps
+    with low db_ms means interpreted Lisp; hits counts the db-touching
+    prim calls (each of which may itself be several SQL statements). *)
 let timing_header () : (string * string) list =
-  match !last_total_ms with
+  match !last with
   | None -> []
-  | Some ms ->
-      last_total_ms := None;
-      [("x-timing-ms", Printf.sprintf "%.1f" ms)]
+  | Some s ->
+      last := None;
+      [ ( "x-timing-ms"
+        , Printf.sprintf "%.1f db=%.1f hits=%d steps=%d" s.l_total_ms
+            s.l_db_ms s.l_db_hits s.l_steps ) ]
 
 (** PERF-5 (roerick 10-22): current per-route render aggregates as JSON,
     for /debug/stats (the /timing page is admin-session-only). *)
