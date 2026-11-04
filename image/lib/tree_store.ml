@@ -739,6 +739,16 @@ let select_cols =
   "id::text, path::text, kind, type_name, payload::text, hash, author, "
   ^ "created_at::text, updated_at::text, rank"
 
+(** SQL for [get_by_path]: the index-seek wrapper when PP_RLS_WRAPPERS is on,
+    the pre-1104 direct tree_nodes read when it is off (A/B measuring).
+    The [wrappers] argument overrides the env knob so the choice is testable. *)
+let get_by_path_sql ?wrappers () : string =
+  let wrapped =
+    match wrappers with Some b -> b | None -> Store_db.rls_wrappers_on ()
+  in
+  if wrapped then "SELECT " ^ select_cols ^ " FROM pp_node_get($1::ltree)"
+  else "SELECT " ^ select_cols ^ " FROM tree_nodes WHERE path = $1::ltree"
+
 (** Fetch one node by exact path. *)
 let get_by_path (conn : Store_db.conn) ~(path : string) : node option =
   (* conn: Store_db.conn (tx-aware) *)
@@ -746,9 +756,7 @@ let get_by_path (conn : Store_db.conn) ~(path : string) : node option =
   (* ''::ltree is a PG 42601 syntax error ("Unexpected end of input"), never
      a node — an unresolvable path resolves to None, not a crash. *)
   else
-    let sql =
-      "SELECT " ^ select_cols ^ " FROM tree_nodes WHERE path = $1::ltree"
-    in
+    let sql = get_by_path_sql () in
     let rows =
       Store_db.exec conn ~params:[ Pgx.Value.of_string path ] sql
     in
@@ -840,21 +848,32 @@ let versioned_history (conn : Store_db.conn) ~(path : string) () : version list 
   (List.filter_map version_of_row rows)
 
 
+(** SQL for [list_subtree]: the containment wrapper when PP_RLS_WRAPPERS is
+    on, the pre-1104 direct read when it is off. Both order and cap the same
+    way, so a caller cannot tell them apart. *)
+let list_subtree_sql ?wrappers () : string =
+  let wrapped =
+    match wrappers with Some b -> b | None -> Store_db.rls_wrappers_on ()
+  in
+  if wrapped then
+    "SELECT " ^ select_cols ^ " FROM pp_node_list($1::ltree, NULL, $2::int)"
+  else
+    "SELECT " ^ select_cols ^ " FROM tree_nodes "
+    ^ "WHERE path <@ $1::ltree "
+    (* sibling-order: ranked siblings first (byte-order rank), then
+       unranked, path-ordered among themselves. NULL rank = unordered. *)
+    ^ "ORDER BY rank COLLATE \"C\" NULLS LAST, path::text ASC LIMIT $2"
+
 (** Subtree listing: all nodes under a path prefix (ltree descendant). *)
 let list_subtree (conn : Store_db.conn) ~(prefix : string)
     ?(limit : int = 1000) () : node list =
   (* conn: Store_db.conn (tx-aware) *)
-        let sql =
-        "SELECT " ^ select_cols ^ " FROM tree_nodes "
-        ^ "WHERE path <@ $1::ltree "
-        (* sibling-order: ranked siblings first (byte-order rank), then
-           unranked, path-ordered among themselves. NULL rank = unordered. *)
-        ^ "ORDER BY rank COLLATE \"C\" NULLS LAST, path::text ASC LIMIT $2" in
-      let rows =
-        Store_db.exec conn
-          ~params:[ Pgx.Value.of_string prefix; Pgx.Value.of_int limit ] sql
-      in
-      (List.filter_map node_of_row rows)
+  let sql = list_subtree_sql () in
+  let rows =
+    Store_db.exec conn
+      ~params:[ Pgx.Value.of_string prefix; Pgx.Value.of_int limit ] sql
+  in
+  (List.filter_map node_of_row rows)
 
 (** PERF-9 cached variant of [list_subtree]: one PG scan per
     (prefix, user, generation) instead of one per call — the /kanban
