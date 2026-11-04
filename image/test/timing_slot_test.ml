@@ -46,4 +46,38 @@ let () =
   (match Pricklypear_image_lib.Timing.note_eval_budget b with
    | () -> ()
    | exception _ -> failwith "note_eval_budget must not raise outside Eio");
+  (* perf 1104 item 1: X-Timing-Ms carries the WHOLE budget split, always,
+     with no env var. Format: "<total> db=<db_ms> hits=<db_hits>
+     steps=<steps>". The total is wall time so only the three accumulator
+     fields are asserted exactly. *)
+  let b2 = Pricklypear_lisp.Eval.make_budget () in
+  b2.db_ms <- 12.3;
+  b2.db_hits <- 4;
+  b2.steps <- 91000;
+  ignore
+    (Pricklypear_image_lib.Timing.measure ~route:"test/hdr"
+       (fun () ->
+          Pricklypear_image_lib.Timing.note_eval_budget b2;
+          "ok"));
+  let hdr = Pricklypear_image_lib.Timing.timing_header () in
+  (match hdr with
+   | [ (name, v) ] ->
+       if not (String.equal name "x-timing-ms") then
+         failwith (Printf.sprintf "header name %s" name);
+       let has sub =
+         let n = String.length sub and m = String.length v in
+         let rec go i = i + n <= m && (String.equal (String.sub v i n) sub || go (i + 1)) in
+         n = 0 || go 0
+       in
+       List.iter
+         (fun sub ->
+            if not (has sub) then
+              failwith (Printf.sprintf "header %S missing %S" v sub))
+         [ "db=12.3"; "hits=4"; "steps=91000"; " " ]
+   | _ -> failwith "expected exactly one x-timing-ms header");
+  (* Consumed once: a second response in the same request must not
+     re-report the previous route's sample. *)
+  (match Pricklypear_image_lib.Timing.timing_header () with
+   | [] -> ()
+   | _ -> failwith "timing_header must be consumed by the first read");
   print_endline "timing_slot_test: OK"
