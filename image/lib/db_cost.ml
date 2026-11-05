@@ -14,18 +14,50 @@ let badge = function
   | Seq_scan -> "seq scan"
   | Unknown -> "?"
 
+(** The tier table: one row per DB prim the store exposes. [static_cost]
+    is this table, and [known_prims] is its name column, so static lints
+    (perflint's R1 guard) consume the same set instead of re-listing it. *)
+let tiers : (string * cost_tier) list =
+  [
+    ("get", Index_seek);
+    ("find-row", Index_seek);
+    ("select-for-update", Index_seek);
+    ("node-path", Index_seek);
+    ("type-fields", Index_seek);
+    ("tree/get", Index_seek);
+    ("tree/get-uuid", Index_seek);
+    ("space-exists?", Index_seek);
+    ("create", Constant);
+    ("update", Constant);
+    ("update-field", Constant);
+    ("delete", Constant);
+    ("tree/upsert", Constant);
+    ("tree/delete", Constant);
+    ("tree/move", Constant);
+    ("space-create", Constant);
+    ("space-add-member", Constant);
+    ("space-remove-member", Constant);
+    ("space-admit", Constant);
+    ("rows", Seq_scan);
+    ("find-random", Seq_scan);
+    ("tree/list", Seq_scan);
+    ("find-rows", Linear);
+    ("find-text", Linear);
+    ("backlinks", Linear);
+    ("tree/find-by", Linear);
+    ("space-list", Linear);
+    ("space-members", Linear);
+    ("data-history", Linear);
+    ("data-scope", Linear);
+  ]
+
+(** Every prim name [static_cost] knows, i.e. the DB prim set. *)
+let known_prims : string list = List.map fst tiers
+
 let static_cost (prim_name : string) : cost_tier =
-  match prim_name with
-  | "get" | "find-row" | "select-for-update" | "node-path" | "type-fields"
-  | "tree/get" | "tree/get-uuid" | "space-exists?" -> Index_seek
-  | "create" | "update" | "update-field" | "delete" | "tree/upsert"
-  | "tree/delete" | "tree/move"
-  | "space-create" | "space-add-member" | "space-remove-member"
-  | "space-admit" -> Constant
-  | "rows" | "find-random" | "tree/list" -> Seq_scan
-  | "find-rows" | "find-text" | "backlinks" | "tree/find-by"
-  | "space-list" | "space-members" | "data-history" | "data-scope" -> Linear
-  | _ -> Unknown
+  match List.assoc_opt prim_name tiers with
+  | Some t -> t
+  | None -> Unknown
 
 let sql_hint = function
   | "get" -> Some "SELECT fields FROM data_rows WHERE type_name=$1 AND id=$2"
