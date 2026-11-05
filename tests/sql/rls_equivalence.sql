@@ -30,8 +30,8 @@ DECLARE
   sp    text := tree_enc_label('closed-space');
   lens  text := tree_enc_label('lens-one');
 BEGIN
-  INSERT INTO data_spaces (name, open, created_by)
-    VALUES ('closed-space', false, 'alice')
+  INSERT INTO data_spaces (name, owner, open)
+    VALUES ('closed-space', 'alice', false)
     ON CONFLICT (name) DO NOTHING;
   INSERT INTO data_space_members (space, username)
     VALUES ('closed-space', 'alice')
