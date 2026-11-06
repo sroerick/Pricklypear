@@ -30,7 +30,7 @@ DECLARE
   sp    text := tree_enc_label('closed-space');
   lens  text := tree_enc_label('lens-one');
   alice_enc text := alice;
-  fnlbl text := tree_enc_label('demo');  -- fn slot 4 is tree_dec_label'd on insert  -- the data.l 4th label must be an ENCODED name (dec runs on it)
+  fnlbl text := tree_enc_label('demo');  -- fn slot 4 gets tree_dec_label'd on insert
 BEGIN
   INSERT INTO data_spaces (name, owner, open)
     VALUES ('closed-space', 'alice', false)
