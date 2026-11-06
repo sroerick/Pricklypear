@@ -44,26 +44,6 @@ BEGIN
 END $$;
 
 -- ---------------------------------------------------------------------------
--- ---------------------------------------------------------------------------
--- 0b. The admin check has to work for callers that cannot read users. 033's
---     tree_user_is_admin is invoker-rights, and a policy runs as the querying
---     role, so a role without SELECT on users would turn every read into
---     permission denied the moment the clause sits in the policy. Re-issued
---     SECURITY DEFINER with a pinned search_path: one boolean about one
---     username, nothing else.
--- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION tree_user_is_admin(p_username text)
-RETURNS boolean
-LANGUAGE sql
-STABLE
-SECURITY DEFINER
-SET search_path = pg_catalog, public
-AS $$
-  SELECT COALESCE(
-    (SELECT is_admin FROM users u WHERE u.username = p_username),
-    false)
-$$;
-
 -- 1. The predicate.
 --
 --    Exact union of the two permissive policies as they stand after 029+041:
@@ -79,15 +59,20 @@ $$;
 --    p_kind defaults to 'datum' (strictest case), so pp_node_visible(path)
 --    answers "may the caller see a datum row at this path".
 --
---    What this predicate reads, and the grants that follow from it: it
---    calls tree_user_is_admin (users) and tree_path_in_member_space (the two
---    space tables). tree_user_is_admin is SECURITY DEFINER above, because a
---    policy runs as the querying role and a role without SELECT on users
---    would otherwise make every read fail. tree_path_in_member_space stays
---    invoker-rights on purpose: as definer, any caller could ask about
---    another user's membership by name. The consequence is stated rather
---    than discovered: a role that reads tree_nodes needs SELECT on
---    data_space_members and data_spaces.
+--    THE ADMIN CLAUSE IS DELIBERATELY ABSENT. 033 gave datum_user_isolation
+--    tree_user_is_admin(...), which is a sovereign cross-garden read on one
+--    boolean. 049 drops it: roerick's decision, seconded by the reviewing
+--    seat, is that admins hold narrow grants rather than a bypass sitting
+--    inside the floor and inside every definer wrapper. If an admin ever
+--    needs cross-garden reads, the shape is a named and logged path (a
+--    SECURITY DEFINER pp_admin_read(path) writing an activity_ledger row per
+--    call), never a silent boolean here.
+--
+--    What the predicate does read: the two space tables, through
+--    tree_path_in_member_space, which stays invoker-rights on purpose (as
+--    definer, any caller could ask about another user's membership by
+--    name). The consequence is stated rather than discovered: a role that
+--    reads tree_nodes needs SELECT on data_space_members and data_spaces.
 
 --    No SET search_path here on purpose: a SQL function with a SET clause is
 --    not inlined into the calling query, and this one is also called from the
@@ -106,7 +91,6 @@ AS $fn$
       OR (p_path <@ 'data.l'::ltree
           AND subltree(p_path, 3, 4) = tree_enc_label(current_setting('pp.user', true))::ltree)
       OR tree_path_in_member_space(p_path, current_setting('pp.user', true))
-      OR tree_user_is_admin(current_setting('pp.user', true))
 $fn$;
 
 COMMENT ON FUNCTION pp_node_visible(ltree, text) IS
