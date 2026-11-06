@@ -29,6 +29,7 @@ DECLARE
   bob   text := tree_enc_label('bob');
   sp    text := tree_enc_label('closed-space');
   lens  text := tree_enc_label('lens-one');
+  alice_enc text := alice;  -- the data.l 4th label must be an ENCODED name (dec runs on it)
 BEGIN
   INSERT INTO data_spaces (name, owner, open)
     VALUES ('closed-space', 'alice', false)
@@ -48,7 +49,7 @@ BEGIN
        jsonb_build_object('body', jsonb_build_object('title','member space','vis','users')), 'h4', 'alice'),
     (('data.note.u.' || alice || '.note.n1')::ltree, 'note', 'note',
      jsonb_build_object('body', jsonb_build_object('slug','enc-note')), 'h5', 'alice'),
-    (('data.l.' || lens || '.' || alice || '.todo-item.l1')::ltree, 'datum', 'todo-item',
+    (('data.l.' || lens || '.' || alice_enc || '.todo-item.l1')::ltree, 'datum', 'todo-item',
      jsonb_build_object('body', jsonb_build_object('title','lens')), 'h6', 'alice'),
     ('b.0123456789abcdef.fn.demo'::ltree, 'fn', 'fn',
      jsonb_build_object('body', jsonb_build_object('name','demo')), 'h7', 'alice')
