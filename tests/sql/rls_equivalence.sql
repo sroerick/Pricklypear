@@ -50,7 +50,7 @@ BEGIN
      jsonb_build_object('body', jsonb_build_object('slug','enc-note')), 'h5', 'alice'),
     (('data.l.' || lens || '.' || alice || '.todo-item.' || tree_enc_label('l1'))::ltree, 'datum', 'todo-item',
      jsonb_build_object('body', jsonb_build_object('title','lens')), 'h6', 'alice'),
-    (('b.0123456789abcdef0123456789abcdef.fn.' || tree_enc_label('demo'))::ltree, 'fn', 'fn',
+    (('b.00000000000000000000000000000001.fn.' || tree_enc_label('demo'))::ltree, 'fn', 'fn',
      jsonb_build_object('body', jsonb_build_object('name','demo')), 'h7', 'alice')
   ON CONFLICT (path) DO NOTHING;
 END $$;
@@ -89,7 +89,7 @@ BEGIN
         'data.s.' || tree_enc_label('closed-space') || '.todo-item.' || tree_enc_label('p1'),
         'data.note.u.' || enc || '.note.' || tree_enc_label('n1'),
         'data.l.' || tree_enc_label('lens-one') || '.' || enc || '.todo-item.' || tree_enc_label('l1'),
-        'b.0123456789abcdef0123456789abcdef.fn.' || tree_enc_label('demo'),
+        'b.00000000000000000000000000000001.fn.' || tree_enc_label('demo'),
         'data.u.' || tree_enc_label('carol') || '.todo-item.' || tree_enc_label('none') ];
     FOREACH p IN ARRAY paths LOOP
       exp := ARRAY(SELECT path::text FROM tree_nodes
