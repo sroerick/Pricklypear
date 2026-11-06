@@ -40,6 +40,14 @@ GRANT EXECUTE ON FUNCTION tree_enc_label(text),
                         tree_path_in_member_space(ltree, text)
   TO pp_rls_definer, pp_rls_probe;
 
+-- The wrappers are SECURITY DEFINER with EXECUTE revoked from PUBLIC (049
+-- section 3b), so every role that calls them needs an explicit grant. The
+-- probe leg calls them to prove it returns exactly the policy's rows.
+GRANT EXECUTE ON FUNCTION pp_node_get(ltree),
+                        pp_node_list(ltree, text, int, int),
+                        pp_node_find_by(ltree, text, text, text, text, ltree, int)
+  TO pp_rls_probe;
+
 -- Hand the wrappers over (the migration does this itself, this is the
 -- re-run path for a database that applied 049 before the role existed).
 DO $$
