@@ -1,0 +1,4 @@
+(executable
+ (name perf_lint_main)
+ (modules perf_lint_main)
+ (libraries pp_perf_lint))
