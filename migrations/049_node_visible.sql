@@ -59,6 +59,21 @@ END $$;
 --    p_kind defaults to 'datum' (strictest case), so pp_node_visible(path)
 --    answers "may the caller see a datum row at this path".
 --
+--    THE ADMIN CLAUSE IS DELIBERATELY ABSENT. 033 gave datum_user_isolation
+--    tree_user_is_admin(...), which is a sovereign cross-garden read on one
+--    boolean. 049 drops it: roerick's decision, seconded by the reviewing
+--    seat, is that admins hold narrow grants rather than a bypass sitting
+--    inside the floor and inside every definer wrapper. If an admin ever
+--    needs cross-garden reads, the shape is a named and logged path (a
+--    SECURITY DEFINER pp_admin_read(path) writing an activity_ledger row per
+--    call), never a silent boolean here.
+--
+--    What the predicate does read: the two space tables, through
+--    tree_path_in_member_space, which stays invoker-rights on purpose (as
+--    definer, any caller could ask about another user's membership by
+--    name). The consequence is stated rather than discovered: a role that
+--    reads tree_nodes needs SELECT on data_space_members and data_spaces.
+
 --    No SET search_path here on purpose: a SQL function with a SET clause is
 --    not inlined into the calling query, and this one is also called from the
 --    policy on every row of the queries that still take the RLS path.
@@ -246,13 +261,17 @@ LANGUAGE sql
 STABLE
 AS $fn$
   SELECT format(
-           'force_rls=%s wrapper_owner=%s bypassrls=%s can_read=%s index_seek=%s',
+           'force_rls=%s wrapper_owner=%s bypassrls=%s can_read=%s index_seek=%s exec_public=%s',
            c.relforcerowsecurity,
            r.rolname,
            r.rolbypassrls OR r.rolsuper,
            has_table_privilege(r.rolname, 'tree_nodes', 'SELECT'),
            (r.rolbypassrls OR r.rolsuper)
-             AND has_table_privilege(r.rolname, 'tree_nodes', 'SELECT'))
+             AND has_table_privilege(r.rolname, 'tree_nodes', 'SELECT'),
+           EXISTS (SELECT 1 FROM pg_proc p,
+                          aclexplode(COALESCE(p.proacl, acldefault('f', p.proowner))) a
+                    WHERE p.oid = 'pp_node_get(ltree)'::regprocedure
+                      AND a.grantee = 0 AND a.privilege_type = 'EXECUTE'))
     FROM pg_class c
     JOIN pg_roles r
       ON r.rolname = (SELECT pg_get_userbyid(p.proowner)
