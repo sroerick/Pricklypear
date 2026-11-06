@@ -44,6 +44,26 @@ BEGIN
 END $$;
 
 -- ---------------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 0b. The admin check has to work for callers that cannot read users. 033's
+--     tree_user_is_admin is invoker-rights, and a policy runs as the querying
+--     role, so a role without SELECT on users would turn every read into
+--     permission denied the moment the clause sits in the policy. Re-issued
+--     SECURITY DEFINER with a pinned search_path: one boolean about one
+--     username, nothing else.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION tree_user_is_admin(p_username text)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $$
+  SELECT COALESCE(
+    (SELECT is_admin FROM users u WHERE u.username = p_username),
+    false)
+$$;
+
 -- 1. The predicate.
 --
 --    Exact union of the two permissive policies as they stand after 029+041:
@@ -59,6 +79,16 @@ END $$;
 --    p_kind defaults to 'datum' (strictest case), so pp_node_visible(path)
 --    answers "may the caller see a datum row at this path".
 --
+--    What this predicate reads, and the grants that follow from it: it
+--    calls tree_user_is_admin (users) and tree_path_in_member_space (the two
+--    space tables). tree_user_is_admin is SECURITY DEFINER above, because a
+--    policy runs as the querying role and a role without SELECT on users
+--    would otherwise make every read fail. tree_path_in_member_space stays
+--    invoker-rights on purpose: as definer, any caller could ask about
+--    another user's membership by name. The consequence is stated rather
+--    than discovered: a role that reads tree_nodes needs SELECT on
+--    data_space_members and data_spaces.
+
 --    No SET search_path here on purpose: a SQL function with a SET clause is
 --    not inlined into the calling query, and this one is also called from the
 --    policy on every row of the queries that still take the RLS path.
@@ -76,6 +106,7 @@ AS $fn$
       OR (p_path <@ 'data.l'::ltree
           AND subltree(p_path, 3, 4) = tree_enc_label(current_setting('pp.user', true))::ltree)
       OR tree_path_in_member_space(p_path, current_setting('pp.user', true))
+      OR tree_user_is_admin(current_setting('pp.user', true))
 $fn$;
 
 COMMENT ON FUNCTION pp_node_visible(ltree, text) IS
@@ -246,13 +277,17 @@ LANGUAGE sql
 STABLE
 AS $fn$
   SELECT format(
-           'force_rls=%s wrapper_owner=%s bypassrls=%s can_read=%s index_seek=%s',
+           'force_rls=%s wrapper_owner=%s bypassrls=%s can_read=%s index_seek=%s exec_public=%s',
            c.relforcerowsecurity,
            r.rolname,
            r.rolbypassrls OR r.rolsuper,
            has_table_privilege(r.rolname, 'tree_nodes', 'SELECT'),
            (r.rolbypassrls OR r.rolsuper)
-             AND has_table_privilege(r.rolname, 'tree_nodes', 'SELECT'))
+             AND has_table_privilege(r.rolname, 'tree_nodes', 'SELECT'),
+           EXISTS (SELECT 1 FROM pg_proc p,
+                          aclexplode(COALESCE(p.proacl, acldefault('f', p.proowner))) a
+                    WHERE p.oid = 'pp_node_get(ltree)'::regprocedure
+                      AND a.grantee = 0 AND a.privilege_type = 'EXECUTE'))
     FROM pg_class c
     JOIN pg_roles r
       ON r.rolname = (SELECT pg_get_userbyid(p.proowner)
