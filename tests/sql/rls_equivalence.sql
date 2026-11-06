@@ -66,6 +66,7 @@ DECLARE
   users  text[] := ARRAY['alice', 'bob', 'carol'];
   u      text;
   enc    text;
+  sp     text := tree_enc_label('closed-space');
   exp    text[];
   act    text[];
   cases  int := 0;
