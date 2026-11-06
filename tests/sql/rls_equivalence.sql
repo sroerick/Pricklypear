@@ -52,7 +52,7 @@ BEGIN
      jsonb_build_object('body', jsonb_build_object('slug','enc-note')), 'h5', 'alice'),
     (('data.l.' || lens || '.' || alice_enc || '.todo-item.l1')::ltree, 'datum', 'todo-item',
      jsonb_build_object('body', jsonb_build_object('title','lens')), 'h6', 'alice'),
-    (fnpath), 'fn', 'fn',
+    fnpath, 'fn', 'fn',
      jsonb_build_object('body', jsonb_build_object('name','demo')), 'h7', 'alice')
   ON CONFLICT (path) DO NOTHING;
 END $$;
