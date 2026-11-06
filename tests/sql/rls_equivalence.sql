@@ -29,8 +29,6 @@ DECLARE
   bob   text := tree_enc_label('bob');
   sp    text := tree_enc_label('closed-space');
   lens  text := tree_enc_label('lens-one');
-  alice_enc text := alice;
-  fnpath ltree := ('b.0123456789abcdef.fn.' || tree_enc_label('demo'))::ltree;  -- fn slot 4 gets tree_dec_label'd on insert
 BEGIN
   INSERT INTO data_spaces (name, owner, open)
     VALUES ('closed-space', 'alice', false)
@@ -40,19 +38,19 @@ BEGIN
     ON CONFLICT DO NOTHING;
 
   INSERT INTO tree_nodes (path, kind, type_name, payload, hash, author) VALUES
-    (('data.u.' || alice || '.todo-item.a1')::ltree, 'datum', 'todo-item',
+    (('data.u.' || alice || '.todo-item.' || tree_enc_label('a1'))::ltree, 'datum', 'todo-item',
      jsonb_build_object('body', jsonb_build_object('title','alice own')), 'h1', 'alice'),
-      (('data.u.' || bob || '.todo-item.b1')::ltree, 'datum', 'todo-item',
-       jsonb_build_object('body', jsonb_build_object('title','bob own','vis','users')), 'h2', 'bob'),
-      ('data.shared.todo-item.s1'::ltree, 'datum', 'todo-item',
-       jsonb_build_object('body', jsonb_build_object('title','shared','vis','users')), 'h3', 'alice'),
-      (('data.s.' || sp || '.todo-item.p1')::ltree, 'datum', 'todo-item',
-       jsonb_build_object('body', jsonb_build_object('title','member space','vis','users')), 'h4', 'alice'),
-    (('data.note.u.' || alice || '.note.n1')::ltree, 'note', 'note',
+    (('data.u.' || bob || '.todo-item.' || tree_enc_label('b1'))::ltree, 'datum', 'todo-item',
+     jsonb_build_object('body', jsonb_build_object('title','bob own','vis','users')), 'h2', 'bob'),
+    (('data.shared.todo-item.' || tree_enc_label('s1'))::ltree, 'datum', 'todo-item',
+     jsonb_build_object('body', jsonb_build_object('title','shared','vis','users')), 'h3', 'alice'),
+    (('data.s.' || sp || '.todo-item.' || tree_enc_label('p1'))::ltree, 'datum', 'todo-item',
+     jsonb_build_object('body', jsonb_build_object('title','member space','vis','users')), 'h4', 'alice'),
+    (('data.note.u.' || alice || '.note.' || tree_enc_label('n1'))::ltree, 'note', 'note',
      jsonb_build_object('body', jsonb_build_object('slug','enc-note')), 'h5', 'alice'),
-    (('data.l.' || lens || '.' || alice_enc || '.todo-item.l1')::ltree, 'datum', 'todo-item',
+    (('data.l.' || lens || '.' || alice || '.todo-item.' || tree_enc_label('l1'))::ltree, 'datum', 'todo-item',
      jsonb_build_object('body', jsonb_build_object('title','lens')), 'h6', 'alice'),
-    fnpath, 'fn', 'fn',
+    (('b.0123456789abcdef0123456789abcdef.fn.' || tree_enc_label('demo'))::ltree, 'fn', 'fn',
      jsonb_build_object('body', jsonb_build_object('name','demo')), 'h7', 'alice')
   ON CONFLICT (path) DO NOTHING;
 END $$;
@@ -84,15 +82,15 @@ BEGIN
 
     -- 1. path equality: own garden, other garden, shared, member space,
     --    note, lens, code path.
-    paths := ARRAY[
-      'data.u.' || enc || '.todo-item.a1',
-      'data.u.' || enc || '.todo-item.b1',
-      'data.shared.todo-item.s1',
-      'data.s.' || tree_enc_label('closed-space') || '.todo-item.p1',
-      'data.note.u.' || enc || '.note.n1',
-      'data.l.' || tree_enc_label('lens-one') || '.' || enc || '.todo-item.l1',
-      'b.0123456789abcdef.fn.demo',
-      'data.u.' || tree_enc_label('carol') || '.todo-item.none' ];
+      paths := ARRAY[
+        'data.u.' || enc || '.todo-item.' || tree_enc_label('a1'),
+        'data.u.' || enc || '.todo-item.' || tree_enc_label('b1'),
+        'data.shared.todo-item.' || tree_enc_label('s1'),
+        'data.s.' || tree_enc_label('closed-space') || '.todo-item.' || tree_enc_label('p1'),
+        'data.note.u.' || enc || '.note.' || tree_enc_label('n1'),
+        'data.l.' || tree_enc_label('lens-one') || '.' || enc || '.todo-item.' || tree_enc_label('l1'),
+        'b.0123456789abcdef0123456789abcdef.fn.' || tree_enc_label('demo'),
+        'data.u.' || tree_enc_label('carol') || '.todo-item.' || tree_enc_label('none') ];
     FOREACH p IN ARRAY paths LOOP
       exp := ARRAY(SELECT path::text FROM tree_nodes
                     WHERE path = p::ltree AND pp_node_visible(path, kind)
