@@ -69,6 +69,26 @@ let current_conn (t : t) : conn option =
 
 let in_transaction (t : t) : bool = t.current_tx <> None
 
+(* RLS read wrappers (perf 1104, migrations/049_node_visible.sql).
+   tree_nodes reads reach the btree/GiST indexes through the SECURITY DEFINER
+   wrappers pp_node_get / pp_node_list / pp_node_find_by. They have to: the
+   policy quals are security-barrier quals and the ltree operators are not
+   LEAKPROOF, so an RLS-filtered read has no index candidate and seq-scans the
+   whole table.
+
+   PP_RLS_WRAPPERS=0 runs the pre-1104 SQL instead, so before/after can be
+   measured on the SAME build. Read per call so a test can flip it. *)
+let rls_wrappers_of_env (v : string option) : bool =
+  match v with
+  | None -> true
+  | Some s ->
+      (match String.lowercase_ascii (String.trim s) with
+       | "0" | "false" | "no" | "off" -> false
+       | _ -> true)
+
+let rls_wrappers_on () : bool =
+  rls_wrappers_of_env (Sys.getenv_opt "PP_RLS_WRAPPERS")
+
 (* PP_EVAL_TRACE profiling (tmp/eval-fast-path): per-request DB statement
    counters, bumped by exec when the env knob is set. Read by http.ml
    phase tracing to attribute DB time/hits to request phases. *)
