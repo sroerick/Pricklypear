@@ -2547,7 +2547,7 @@
                         lid)))
                   (todo/node/mirror id next)
                   (todo/event/transition! id prev next))
-                (todo/state/reject id next)))))))
+                (todo/state/refuse id cur next)))))))
 
 (define todo/item/set-acceptance
   (lambda
@@ -2639,7 +2639,7 @@
               (seq
                 (todo/tree/set-field "todo-item" (as-str id) "state" next)
                 (todo/event/transition! id prev next))
-              (todo/state/reject id next)))))))
+              (todo/state/refuse id cur next)))))))
 
 (define todo/item/set-target
   (lambda
@@ -4271,12 +4271,18 @@
     (cons "SPEC"
       "You are the SPEC author for Pricklypear (Nopales/OCaml Lisp OS; the borge book is the spec and the source of truth — code drift means code is wrong). The card above is your work item; its acceptance criteria + target branch ride on the datum. Write/update the borge .borg chapter for it. Finish with `borge drift` clean and the spec committed on the target branch. Then move the card to CODE and post a comment: what you specified + how the reader verifies it.")
     (cons "CODE"
-      "You are the IMPLEMENTER for Pricklypear (OCaml 5.4 / Nopales, dune build, borge spec). Implement the card above against its acceptance criteria, on its target branch, in the repo you are already in (confirm with `git rev-parse --show-toplevel`; never assume a path). Build/test: eval $(opam env --switch=poohstack --set-switch); dune build; dune runtest (lisp/common at least). After .borg edits run `borge drift` (skip .borg edits entirely if borge is not installed here, and say so in your evidence). Live-smoke on the target host before write-back. COMMIT YOUR WORK on the target branch — an uncommitted worktree is not shipped work, and a reviewer cannot verify a diff that was never committed. When done, move the card to LOGIC-REVIEW and post a comment: what shipped (commit sha) + how you verified it.")
+      "You are the IMPLEMENTER for Pricklypear (OCaml 5.4 / Nopales, dune build, borge spec). Implement the card above against its acceptance criteria, on its target branch, in the repo you are already in (confirm with `git rev-parse --show-toplevel`; never assume a path). Build/test: eval $(opam env --switch=poohstack --set-switch); dune build; dune runtest (lisp/common at least). After .borg edits run `borge drift` (skip .borg edits entirely if borge is not installed here, and say so in your evidence). Live-smoke on the target host before write-back. COMMIT YOUR WORK on the target branch — an uncommitted worktree is not shipped work, and a reviewer cannot verify a diff that was never committed. When done, write the four gate fields the readiness bar reads: question (the decision a human is being asked, one sentence), options (enumerated, one marked recommended), evidence (the exact command a reviewer re-runs), default (what happens if nobody answers). Use update-field where the field is declared and todo/tree/set-field where it is not. Then move the card to REVIEW and post a comment: what shipped (commit sha), how you verified it, and the evidence command.")
     (cons "LOGIC-REVIEW"
-      "You are the LOGIC REVIEWER for Pricklypear. Review the card's work on its target branch against its acceptance criteria: read the change, check borge drift + build + the stated verification, judge logic. PASS -> move the card to HUMAN-REVIEW and comment your verdict + evidence. FAIL -> move it BACK to CODE with a comment listing exactly what to fix.")
+      "You are the LOGIC REVIEWER for Pricklypear. Review the card's work on its target branch against its acceptance criteria: read the change, check borge drift + build + the stated verification, judge logic. PASS -> first apply the readiness bar: all four gate fields present and true (question, options, evidence, default), the evidence command re-run by you and matching what the card quotes, and the diff confined to what the card claims. Any missing field is a FAIL, named in the comment, and back to CODE. With all four, move the card to REVIEW and comment your verdict + evidence. FAIL -> move it BACK to CODE with a comment listing exactly what to fix.")
     (cons "UI-REVIEW"
-      "You are the UI REVIEWER for Pricklypear. Exercise the card's work on its target branch for interaction + rendering against its acceptance criteria (load the routes, click through). PASS -> move the card to HUMAN-REVIEW and comment. FAIL -> move it BACK to CODE with a comment of what to fix.")
+      "You are the UI REVIEWER for Pricklypear. Exercise the card's work on its target branch for interaction + rendering against its acceptance criteria (load the routes, click through). PASS -> apply the readiness bar first (the four gate fields, evidence re-run, diff confined to the card); a missing field is a FAIL. With all four, move the card to REVIEW and comment. FAIL -> move it BACK to CODE with a comment of what to fix.")
     (cons "HUMAN-REVIEW"
+    (cons "DOING"
+      "You have claimed this card. Work it on its target branch against its acceptance criteria, commit there, and leave the four gate fields behind (question, options, evidence, default). Finish by moving it to REVIEW with a comment: what shipped (commit sha), how you verified it, and the evidence command a reviewer re-runs. If you cannot finish, put it back to TODO with a comment naming the blocker - a card that sits in DOING is work nobody is doing.")
+    (cons "REVIEW"
+      "You are the READINESS REVIEWER, and you did not implement this card. Check it mechanically first: build + the local tests green on the named commit, the evidence command re-run and matching what the card quotes, the diff confined to what the card claims, no TODO/FIXME left in the touched files, and every acceptance criterion carrying a verdict. Then the four gate fields: question (can a human decide from it without reading the code?), options (enumerated, one marked recommended), evidence (a command and its output), default (what happens if nobody answers). PASS -> move the card to HUMAN and comment the verdict + the evidence you re-ran. FAIL -> back to TODO with a comment naming exactly what is missing; never forward an unready card, and never park it here.")
+    (cons "HUMAN"
+      "ROERICK GATE - do NOT move this card yourself. Everything a human needs is on the datum: question, options, evidence, default. Post notes as comments only; leave the state in HUMAN. Only the human passes this gate.")
       "ROERICK GATE — do NOT move this card yourself. It is ready for the human gate on its target branch; acceptance criteria are on the datum. Post any notes as comments; leave the state in HUMAN-REVIEW. Only the human passes this gate.")
     (cons "DONE"
       "This card is done. Nothing to execute. If it landed here by accident, move it back to the correct column and comment why.")
@@ -4386,7 +4392,7 @@
                       "list_id"
                       lid)))
                 (todo/event/transition! id prev next))
-              (todo/state/reject id next)))))))
+              (todo/state/refuse id cur next)))))))
 
 (define todo/seqtest
   (lambda () 7))
@@ -4411,7 +4417,7 @@
               (seq
                 (todo/tree/set-field "todo-item" (as-str id) "state" next)
                 (todo/event/transition! id prev next))
-              (todo/state/reject id next)))))))
+              (todo/state/refuse id cur next)))))))
 
 (define todo/setup-auto-lane
   (lambda
@@ -4730,6 +4736,22 @@
       "bad-args"))
   "The refusal a card-state writer returns instead of writing a value that is not a column: an (error msg kind) envelope naming the value, so a bad writer sees its input echoed back instead of getting a silent write.")
 
+(define todo/state/refuse
+  (lambda (id fields state)
+    (let ((lists (todo/list/all)))
+      (if
+        (todo/gate/blocks? lists fields state)
+        (err/shape
+          (string-append
+            "readiness gate: card " (as-str id) " cannot enter \""
+            (as-str state) "\" without "
+            (todo/gate/join (todo/gate/missing fields))
+            "; nothing written")
+          "bad-args")
+        (todo/state/reject id state))))
+  "The refusal a state writer returns: the readiness gate names the missing
+   fields, any other refusal names the offending state.")
+
 (define todo/state/repair-prose
   (lambda
     (apply?)
@@ -4796,8 +4818,78 @@
 (define todo/state/valid-for-fields?
   (lambda
     (fields state)
-    (todo/state/valid-in? (todo/list/all) fields state))
+    (let
+      ((lists (todo/list/all)))
+      (if
+        (todo/gate/blocks? lists fields state)
+        #f
+        (todo/state/valid-in? lists fields state))))
   "True when state is a column of the card's own effective pipeline, the empty (none) column, or ARCHIVED. THE predicate every card-state writer checks: bug 7947367 put prose bodies in `state`, which took those cards out of every filter, column and drain.")
+
+;; ---------------------------------------------------------------------------
+;; The readiness gate (roerick 11-06): a card reaches the human column only
+;; when it carries the four fields a human decision actually needs. Agents
+;; were parking unfinished work on HUMAN-REVIEW because that column is the
+;; cheapest place to put a question they could not answer; this makes the
+;; refusal explicit at the choke point every state writer already goes
+;; through.
+;;
+;; Per-list opt-in on purpose: a list joins by carrying gate=readiness (and
+;; optionally human=<column>, default HUMAN-REVIEW). Lists that do not opt
+;; in are unchanged, so the gate can be switched on lane by lane instead of
+;; stalling every loop at once.
+;; ---------------------------------------------------------------------------
+(define todo/gate/required
+  (list "question" "options" "evidence" "default"))
+
+(define todo/gate/missing
+  (lambda (fields)
+    (list/filter
+      (lambda (k)
+        (let ((v (dict-get fields k)))
+          (if (null? v) #t (string-eq (as-str v) ""))))
+      todo/gate/required))
+  "The readiness fields a card does not carry, in required order. An empty
+   list means the card can face a human decision.")
+
+(define todo/gate/join
+  (lambda (xs)
+    (list/foldl
+      (lambda (acc x)
+        (if (string-eq acc "") (as-str x) (string-append acc ", " (as-str x))))
+      "" xs))
+  "Comma-join for error messages; PP has no list/join prim.")
+
+(define todo/gate/list-field
+  (lambda (lists list-id key)
+    (let ((row (todo/list/find-row lists (as-str list-id))))
+      (if (null? row)
+        ""
+        (let ((v (dict-get (cdr row) key)))
+          (if (null? v) "" (as-str v))))))
+  "A todo-list field by name from an already-fetched pool, or \"\" when the
+   list row or the field is absent.")
+
+(define todo/gate/required?
+  (lambda (lists list-id)
+    (string-eq (todo/gate/list-field lists list-id "gate") "readiness"))
+  "True when this list has opted into the readiness gate.")
+
+(define todo/gate/human-column
+  (lambda (lists list-id)
+    (let ((h (todo/gate/list-field lists list-id "human")))
+      (if (string-eq h "") "HUMAN-REVIEW" h)))
+  "The column that means waiting on a human for this list.")
+
+(define todo/gate/blocks?
+  (lambda (lists fields state)
+    (if (todo/gate/required? lists (todo/item/list-id fields))
+      (if (string-eq (as-str state) (todo/gate/human-column lists (todo/item/list-id fields)))
+        (not (null? (todo/gate/missing fields)))
+        #f)
+      #f))
+  "True when this transition is a card entering the human gate without the
+   four readiness fields.")
 
 (define todo/state/valid-in?
   (lambda
