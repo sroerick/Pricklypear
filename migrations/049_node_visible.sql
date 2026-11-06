@@ -187,6 +187,32 @@ COMMENT ON FUNCTION pp_node_find_by(ltree, text, text, text, text, ltree, int) I
   'tree/find-by read: body field = value under a prefix, RLS floor + optional note vis floor applied to returned rows, LIMIT in SQL.';
 
 -- ---------------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 3b. Execution rights. SECURITY DEFINER plus the CREATE FUNCTION default of
+--     EXECUTE to PUBLIC is a full-tree read for ANY login: the wrappers bypass
+--     RLS inside, and pp.user is a GUC any caller may set, so the caller picks
+--     whose floor applies. Verified on 11-06: a role with no privilege on
+--     tree_nodes read every garden through pp_node_list with pp.user unset, and
+--     another user's rows after set_config('pp.user', ...). Revoke the default
+--     and grant the app role (the owner of tree_nodes) explicitly.
+--     pp_node_visible and the helpers stay PUBLIC-executable on purpose: the
+--     policies evaluate them as the querying role, so revoking there would
+--     break every RLS query on the database.
+-- ---------------------------------------------------------------------------
+DO $$
+DECLARE
+  v_app text := (SELECT pg_get_userbyid(c.relowner)
+                   FROM pg_class c WHERE c.oid = 'tree_nodes'::regclass);
+BEGIN
+  EXECUTE 'REVOKE ALL ON FUNCTION pp_node_get(ltree) FROM PUBLIC';
+  EXECUTE 'REVOKE ALL ON FUNCTION pp_node_list(ltree,text,int,int) FROM PUBLIC';
+  EXECUTE 'REVOKE ALL ON FUNCTION pp_node_find_by(ltree,text,text,text,text,ltree,int) FROM PUBLIC';
+  EXECUTE format('GRANT EXECUTE ON FUNCTION pp_node_get(ltree) TO %I', v_app);
+  EXECUTE format('GRANT EXECUTE ON FUNCTION pp_node_list(ltree,text,int,int) TO %I', v_app);
+  EXECUTE format('GRANT EXECUTE ON FUNCTION pp_node_find_by(ltree,text,text,text,text,ltree,int) TO %I', v_app);
+  RAISE NOTICE '1104: wrapper EXECUTE revoked from PUBLIC, granted to % (tree_nodes owner). Any other calling role needs an explicit GRANT.', v_app;
+END $$;
+
 -- 4. Ownership. FORCE RLS (013) makes the table owner subject too, so the
 --    wrappers are only faster when owned by a role that bypasses RLS.
 --    Provisioned by tests/sql/rls_definer_role.sql (superuser).
