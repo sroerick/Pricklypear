@@ -29,7 +29,13 @@ GRANT USAGE ON SCHEMA public TO pp_rls_definer, pp_rls_probe;
 
 -- The wrappers read tree_nodes and call these two helpers.
 GRANT SELECT ON tree_nodes TO pp_rls_definer, pp_rls_probe;
-GRANT SELECT ON data_spaces, data_space_members TO pp_rls_definer;
+-- The probe leg of the equivalence test evaluates the POLICY, not just reads
+-- tree_nodes: pp_node_visible calls tree_path_in_member_space, which reads
+-- data_space_members. Granting the probe membership metadata does not touch the
+-- floor (that is tree_nodes, and the probe has no BYPASSRLS); without it the
+-- reference query cannot compute its own expectations and the test proves
+-- nothing.
+GRANT SELECT ON data_spaces, data_space_members TO pp_rls_definer, pp_rls_probe;
 GRANT EXECUTE ON FUNCTION tree_enc_label(text),
                         tree_path_in_member_space(ltree, text)
   TO pp_rls_definer, pp_rls_probe;
