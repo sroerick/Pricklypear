@@ -2547,7 +2547,7 @@
                         lid)))
                   (todo/node/mirror id next)
                   (todo/event/transition! id prev next))
-                (todo/state/reject id next)))))))
+                (todo/state/refuse id cur next)))))))
 
 (define todo/item/set-acceptance
   (lambda
@@ -2639,7 +2639,7 @@
               (seq
                 (todo/tree/set-field "todo-item" (as-str id) "state" next)
                 (todo/event/transition! id prev next))
-              (todo/state/reject id next)))))))
+              (todo/state/refuse id cur next)))))))
 
 (define todo/item/set-target
   (lambda
@@ -4378,7 +4378,7 @@
                       "list_id"
                       lid)))
                 (todo/event/transition! id prev next))
-              (todo/state/reject id next)))))))
+              (todo/state/refuse id cur next)))))))
 
 (define todo/seqtest
   (lambda () 7))
@@ -4403,7 +4403,7 @@
               (seq
                 (todo/tree/set-field "todo-item" (as-str id) "state" next)
                 (todo/event/transition! id prev next))
-              (todo/state/reject id next)))))))
+              (todo/state/refuse id cur next)))))))
 
 (define todo/setup-auto-lane
   (lambda
@@ -4722,6 +4722,22 @@
       "bad-args"))
   "The refusal a card-state writer returns instead of writing a value that is not a column: an (error msg kind) envelope naming the value, so a bad writer sees its input echoed back instead of getting a silent write.")
 
+(define todo/state/refuse
+  (lambda (id fields state)
+    (let ((lists (todo/list/all)))
+      (if
+        (todo/gate/blocks? lists fields state)
+        (err/shape
+          (string-append
+            "readiness gate: card " (as-str id) " cannot enter \""
+            (as-str state) "\" without "
+            (todo/gate/join (todo/gate/missing fields))
+            "; nothing written")
+          "bad-args")
+        (todo/state/reject id state))))
+  "The refusal a state writer returns: the readiness gate names the missing
+   fields, any other refusal names the offending state.")
+
 (define todo/state/repair-prose
   (lambda
     (apply?)
@@ -4788,8 +4804,78 @@
 (define todo/state/valid-for-fields?
   (lambda
     (fields state)
-    (todo/state/valid-in? (todo/list/all) fields state))
+    (let
+      ((lists (todo/list/all)))
+      (if
+        (todo/gate/blocks? lists fields state)
+        #f
+        (todo/state/valid-in? lists fields state))))
   "True when state is a column of the card's own effective pipeline, the empty (none) column, or ARCHIVED. THE predicate every card-state writer checks: bug 7947367 put prose bodies in `state`, which took those cards out of every filter, column and drain.")
+
+;; ---------------------------------------------------------------------------
+;; The readiness gate (roerick 11-06): a card reaches the human column only
+;; when it carries the four fields a human decision actually needs. Agents
+;; were parking unfinished work on HUMAN-REVIEW because that column is the
+;; cheapest place to put a question they could not answer; this makes the
+;; refusal explicit at the choke point every state writer already goes
+;; through.
+;;
+;; Per-list opt-in on purpose: a list joins by carrying gate=readiness (and
+;; optionally human=<column>, default HUMAN-REVIEW). Lists that do not opt
+;; in are unchanged, so the gate can be switched on lane by lane instead of
+;; stalling every loop at once.
+;; ---------------------------------------------------------------------------
+(define todo/gate/required
+  (list "question" "options" "evidence" "default"))
+
+(define todo/gate/missing
+  (lambda (fields)
+    (list/filter
+      (lambda (k)
+        (let ((v (dict-get fields k)))
+          (if (null? v) #t (string-eq (as-str v) ""))))
+      todo/gate/required))
+  "The readiness fields a card does not carry, in required order. An empty
+   list means the card can face a human decision.")
+
+(define todo/gate/join
+  (lambda (xs)
+    (list/foldl
+      (lambda (acc x)
+        (if (string-eq acc "") (as-str x) (string-append acc ", " (as-str x))))
+      "" xs))
+  "Comma-join for error messages; PP has no list/join prim.")
+
+(define todo/gate/list-field
+  (lambda (lists list-id key)
+    (let ((row (todo/list/find-row lists (as-str list-id))))
+      (if (null? row)
+        ""
+        (let ((v (dict-get (cdr row) key)))
+          (if (null? v) "" (as-str v))))))
+  "A todo-list field by name from an already-fetched pool, or \"\" when the
+   list row or the field is absent.")
+
+(define todo/gate/required?
+  (lambda (lists list-id)
+    (string-eq (todo/gate/list-field lists list-id "gate") "readiness"))
+  "True when this list has opted into the readiness gate.")
+
+(define todo/gate/human-column
+  (lambda (lists list-id)
+    (let ((h (todo/gate/list-field lists list-id "human")))
+      (if (string-eq h "") "HUMAN-REVIEW" h)))
+  "The column that means waiting on a human for this list.")
+
+(define todo/gate/blocks?
+  (lambda (lists fields state)
+    (if (todo/gate/required? lists (todo/item/list-id fields))
+      (if (string-eq (as-str state) (todo/gate/human-column lists (todo/item/list-id fields)))
+        (not (null? (todo/gate/missing fields)))
+        #f)
+      #f))
+  "True when this transition is a card entering the human gate without the
+   four readiness fields.")
 
 (define todo/state/valid-in?
   (lambda
