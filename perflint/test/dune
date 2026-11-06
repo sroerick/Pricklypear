@@ -1,0 +1,5 @@
+(test
+ (name perf_lint_test)
+ (modules perf_lint_test)
+ (libraries pp_perf_lint alcotest)
+ (deps (glob_files fixtures/*.pp)))
