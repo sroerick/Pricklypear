@@ -30,7 +30,7 @@ DECLARE
   sp    text := tree_enc_label('closed-space');
   lens  text := tree_enc_label('lens-one');
   alice_enc text := alice;
-  fnlbl text := tree_enc_label('demo');  -- fn slot 4 gets tree_dec_label'd on insert
+  fnpath ltree := ('b.0123456789abcdef.fn.' || tree_enc_label('demo'))::ltree;  -- fn slot 4 gets tree_dec_label'd on insert
 BEGIN
   INSERT INTO data_spaces (name, owner, open)
     VALUES ('closed-space', 'alice', false)
@@ -52,7 +52,7 @@ BEGIN
      jsonb_build_object('body', jsonb_build_object('slug','enc-note')), 'h5', 'alice'),
     (('data.l.' || lens || '.' || alice_enc || '.todo-item.l1')::ltree, 'datum', 'todo-item',
      jsonb_build_object('body', jsonb_build_object('title','lens')), 'h6', 'alice'),
-    ('b.0123456789abcdef.fn.' || fnlbl)::ltree, 'fn', 'fn',
+    (fnpath), 'fn', 'fn',
      jsonb_build_object('body', jsonb_build_object('name','demo')), 'h7', 'alice')
   ON CONFLICT (path) DO NOTHING;
 END $$;
