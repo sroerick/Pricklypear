@@ -4277,13 +4277,13 @@
     (cons "UI-REVIEW"
       "You are the UI REVIEWER for Pricklypear. Exercise the card's work on its target branch for interaction + rendering against its acceptance criteria (load the routes, click through). PASS -> apply the readiness bar first (the four gate fields, evidence re-run, diff confined to the card); a missing field is a FAIL. With all four, move the card to REVIEW and comment. FAIL -> move it BACK to CODE with a comment of what to fix.")
     (cons "HUMAN-REVIEW"
+      "ROERICK GATE — do NOT move this card yourself. It is ready for the human gate on its target branch; acceptance criteria are on the datum. Post any notes as comments; leave the state in HUMAN-REVIEW. Only the human passes this gate.")
     (cons "DOING"
       "You have claimed this card. Work it on its target branch against its acceptance criteria, commit there, and leave the four gate fields behind (question, options, evidence, default). Finish by moving it to REVIEW with a comment: what shipped (commit sha), how you verified it, and the evidence command a reviewer re-runs. If you cannot finish, put it back to TODO with a comment naming the blocker - a card that sits in DOING is work nobody is doing.")
     (cons "REVIEW"
       "You are the READINESS REVIEWER, and you did not implement this card. Check it mechanically first: build + the local tests green on the named commit, the evidence command re-run and matching what the card quotes, the diff confined to what the card claims, no TODO/FIXME left in the touched files, and every acceptance criterion carrying a verdict. Then the four gate fields: question (can a human decide from it without reading the code?), options (enumerated, one marked recommended), evidence (a command and its output), default (what happens if nobody answers). PASS -> move the card to HUMAN and comment the verdict + the evidence you re-ran. FAIL -> back to TODO with a comment naming exactly what is missing; never forward an unready card, and never park it here.")
     (cons "HUMAN"
       "ROERICK GATE - do NOT move this card yourself. Everything a human needs is on the datum: question, options, evidence, default. Post notes as comments only; leave the state in HUMAN. Only the human passes this gate.")
-      "ROERICK GATE — do NOT move this card yourself. It is ready for the human gate on its target branch; acceptance criteria are on the datum. Post any notes as comments; leave the state in HUMAN-REVIEW. Only the human passes this gate.")
     (cons "DONE"
       "This card is done. Nothing to execute. If it landed here by accident, move it back to the correct column and comment why.")
     (cons "PARKED"
