@@ -60,13 +60,14 @@
 
 (define stretch/badge-words
   (list
-    (cons "attested" "straight")
-    (cons "codified" "straight")
-    (cons "invented" "faggy"))
-  "Display word per trace kind. roerick's pair, 11-07; this table is the only
-   place the words live. The honest kind is printed next to the badge, so a
-   reader can tell a 15th-century attestation from a 19th-century codification
-   without opening the row.")
+      (cons "attested" "faggy")
+      (cons "codified" "faggy")
+      (cons "invented" "straight"))
+    "Display word per trace kind. roerick's direction, 11-07: the authentic
+     hatha lineage is the faggy one, the gym and physio inventions read
+     straight. This table is the only place the words live, and the honest kind
+     is printed next to the badge, so a 15th-century attestation stays
+     distinguishable from a 19th-century codification without opening the row.")
 
 (define stretch/badge
   (lambda (kind)
