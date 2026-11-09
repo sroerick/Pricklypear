@@ -13,7 +13,7 @@
 ;;   invented  - no yoga lineage: gym, physio or calisthenics, usually with a
 ;;               Sanskrit name bolted on afterwards
 ;;
-;; The row type is declared at load (stretch/init!), the todo-comment pattern:
+;; The row type is declared at load (stretch/declared), the todo-comment pattern:
 ;; a type declared by hand in a live image vanishes on the next reseed (the
 ;; food deftypes, 11-06).
 ;;
@@ -22,35 +22,33 @@
 ;; /stretches/detail.
 ;; Sync: scripts/pp_sync.py pull|push
 
-(define stretch/init!
-  (lambda ()
-    "Declare the stretch row type (guarded, idempotent; the filmstrip-ws and
-     todo-comment pattern). The toplevel call below seeds the declaration at
-     boot/reseed as admin; a delegated session no-ops with the denial as the
-     value."
-    (if
-      (null? (type-fields (quote stretch)))
-      (deftype
-        (quote stretch)
-        (quote name)
-        (quote slug)
-        (quote alt)
-        (quote family)
-        (quote region)
-        (quote muscles)
-        (quote setup)
-        (quote cues)
-        (quote dosage)
-        (quote caution)
-        (quote equipment)
-        (quote traced_pose)
-        (quote trace_source)
-        (quote trace_year)
-        (quote trace_kind)
-        (quote trace_note))
-      "stretch ok")))
-
-(stretch/init!)
+;; The row type is declared at load, guarded and idempotent (the todo-comment /
+;; filmstrip-ws pattern): a type declared by hand in a live image vanishes on the
+;; next reseed (the food deftypes, 11-06). A value define carries the declaration
+;; because the seed lint allows only define/defmacro/route/deftype/package/export/
+;; public-route at top level, never a bare call.
+(define stretch/declared
+  (if
+    (null? (type-fields (quote stretch)))
+    (deftype
+      (quote stretch)
+      (quote name)
+      (quote slug)
+      (quote alt)
+      (quote family)
+      (quote region)
+      (quote muscles)
+      (quote setup)
+      (quote cues)
+      (quote dosage)
+      (quote caution)
+      (quote equipment)
+      (quote traced_pose)
+      (quote trace_source)
+      (quote trace_year)
+      (quote trace_kind)
+      (quote trace_note))
+    "stretch ok"))
 
 ;; ---------------------------------------------------------------------------
 ;; The judgement, derived
