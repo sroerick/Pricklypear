@@ -5288,17 +5288,15 @@
 ;; Declared at load, the todo-comment / filmstrip-ws pattern: deftype is a gated
 ;; schema write, and a type created by hand in a live image is lost on the next
 ;; reseed (the food deftypes, 11-06).
-(define workout/weight-init!
-  (lambda ()
-    (if
-      (null? (type-fields (quote workout-weight)))
-      (deftype (quote workout-weight) (quote date) (quote kg) (quote note))
-      "workout-weight ok"))
-  "Declare the workout-weight row type (guarded, idempotent). kg stays a string
-   so a reading is recorded as spoken; date is the local day the reading belongs
-   to, so a late answer files against the morning that asked.")
-
-(workout/weight-init!)
+;; The seed lint allows only define/deftype/route at top level, so the guarded
+;; declaration rides a value define rather than a bare call. kg stays a string
+;; so a reading is recorded as spoken; date is the local day the reading belongs
+;; to, so a late answer files against the morning that asked.
+(define workout/weight-declared
+  (if
+    (null? (type-fields (quote workout-weight)))
+    (deftype (quote workout-weight) (quote date) (quote kg) (quote note))
+    "workout-weight ok"))
 
 ;; vault-declared routes — route rows ride ships ONLY from this file.
 ;; (MIRROR boot seed upserts lib.pp defines+routes onto system/main at boot;
