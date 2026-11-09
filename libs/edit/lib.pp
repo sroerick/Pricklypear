@@ -687,28 +687,6 @@
           shots))))
   "Rebuild cut EDL from chosen takes on each shot.")
 
-(define edit/escape-xml
-  (lambda
-    (s)
-    (list/foldl
-      (lambda
-        (acc ch)
-        (string-append
-          acc
-          (if
-            (string-eq ch "&")
-            "&amp;"
-            (if
-              (string-eq ch "<")
-              "&lt;"
-              (if
-                (string-eq ch ">")
-                "&gt;"
-                (if (string-eq ch "\"") "&quot;" ch))))))
-      ""
-      (edit/chars (as-str s))))
-  "Minimal XML escape.")
-
 (define edit/expand
   (lambda
     (shot-id)
@@ -848,7 +826,7 @@
                 ","
                 (edit/f ln "character")
                 ","
-                (edit/escape-xml (edit/f ln "text"))
+                (html-escape (edit/f ln "text"))
                 ","
                 (edit/f ln "take")
                 ","
@@ -924,18 +902,18 @@
         (string-append
           "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
           "<!-- pricklypear edit/export-mlt project="
-          (edit/escape-xml project)
+          (html-escape project)
           " cut="
-          (edit/escape-xml cut)
+          (html-escape cut)
           " edl_hash="
           (edit/edl-hash project cut)
           " -->\n"
           "<mlt LC_NUMERIC=\"C\" version=\"7.0.0\" "
           "title=\""
-          (edit/escape-xml title)
+          (html-escape title)
           "\" producer=\"main_bin\">\n"
           "  <profile frame_rate_num=\""
-          (edit/escape-xml fps)
+          (html-escape fps)
           "\" frame_rate_den=\"1\" width=\"1920\" height=\"1080\" "
           "display_aspect_num=\"16\" display_aspect_den=\"9\" "
           "sample_aspect_num=\"1\" sample_aspect_den=\"1\" "
@@ -945,7 +923,7 @@
             (list/map (lambda (e) (edit/mlt-entry-xml e)) entries))
           "\n  </playlist>\n"
           "  <tractor id=\"tractor0\" title=\""
-          (edit/escape-xml title)
+          (html-escape title)
           "\">\n"
           "    <track producer=\"main_bin\"/>\n"
           "  </tractor>\n"
@@ -1433,11 +1411,11 @@
           (dur (edit/f e "dur")))
         (string-append
           "    <entry producer=\""
-          (edit/escape-xml path)
+          (html-escape path)
           "\" in=\""
-          (edit/escape-xml in)
+          (html-escape in)
           "\" out=\""
-          (edit/escape-xml
+          (html-escape
             (as-str (+ (edit/as-int in) (edit/as-int dur) -1)))
           "\"/>"))))
   "One MLT playlist entry.")

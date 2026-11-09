@@ -88,21 +88,6 @@
       (else (cons (car kids) (pads/flatten-kids (cdr kids))))))
   "Splice one level: a kid whose car is a pair is a list of kids and\ncontributes its elements; strings, pad nodes, and nil (dropped) pass\nthrough the recursion.")
 
-(define pads/json-escape
-  (lambda
-    (s)
-    (string-replace
-      (string-replace
-        (string-replace
-          (string-replace (as-str s) "\\" "\\\\")
-          "\""
-          "\\\"")
-        "\n"
-        "\\n")
-      "\r"
-      "\\r"))
-  "Escape s as a JSON string body: backslash, quote, CR, LF, TAB.")
-
 (define pads/node-attrs
   (lambda
     (node)
@@ -249,9 +234,9 @@
     (a)
     (string-append
       "\""
-      (pads/json-escape (as-str (car a)))
+      (json-escape (as-str (car a)))
       "\":\""
-      (pads/json-escape (pads/attr-string (cdr a)))
+      (json-escape (pads/attr-string (cdr a)))
       "\""))
   "One attr pair -> \"key\":\"value\" (values via pads/attr-string,\nso sizes normalize to the size grammar).")
 
@@ -324,7 +309,7 @@
           "{\"kind\":\"text\",\"id\":\""
           path
           "\",\"text\":\""
-          (pads/json-escape node)
+          (json-escape node)
           "\",\"attrs\":{},\"kids\":[]}"))
       ((or (null? node) (not (pair? node)))
         (string-append
@@ -346,7 +331,7 @@
                 "{\"kind\":\"text\",\"id\":\""
                 path
                 "\",\"text\":\""
-                (pads/json-escape (pads/text-content node))
+                (json-escape (pads/text-content node))
                 "\",\"attrs\":"
                 (pads/scene-attrs attrs)
                 ",\"kids\":[]}")))))))

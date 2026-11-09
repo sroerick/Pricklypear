@@ -146,11 +146,11 @@
             ((f (workout/row-fields row)) (id (workout/row-id row)))
             (string-append
               "{id:\""
-              (workout/js-escape (as-str id))
+              (json-escape (as-str id))
             "\",date:\""
-            (workout/js-escape (as-str (dict-get f "date")))
+            (json-escape (as-str (dict-get f "date")))
             "\",program:\""
-            (workout/js-escape (as-str (dict-get f "program")))
+            (json-escape (as-str (dict-get f "program")))
             "\"}")))
       (rows (quote workout-session) 500)))
   "One JS object per session (id/date/program).")
@@ -165,15 +165,15 @@
           ((f (workout/row-fields row)))
           (string-append
             "{sid:\""
-            (workout/js-escape (as-str (dict-get f "session_id")))
+            (json-escape (as-str (dict-get f "session_id")))
             "\",ex:\""
-            (workout/js-escape (as-str (dict-get f "exercise")))
+            (json-escape (as-str (dict-get f "exercise")))
             "\",w:"
             (as-str (workout/as-int (dict-get f "weight")))
             ",r:"
             (as-str (workout/as-int (dict-get f "reps")))
             ",u:\""
-            (workout/js-escape (as-str (dict-get f "unit")))
+            (json-escape (as-str (dict-get f "unit")))
             "\"}")))
       (rows (quote workout-exercise) 2000)))
   "One JS object per logged exercise row (sid/exercise/weight/reps/unit).")
@@ -331,8 +331,8 @@
           (as-str (workout/as-int (dict-get params "phase"))))
         (day (as-str (workout/as-int (dict-get params "day"))))
         (pattern
-          (workout/js-escape (dict-get params "pattern")))
-        (notes (workout/js-escape (dict-get f "notes"))))
+          (json-escape (dict-get params "pattern")))
+        (notes (json-escape (dict-get f "notes"))))
       (string-append
         "{date:\""
         date
@@ -990,14 +990,6 @@
       ""
       xs))
   "Join a list of numbers into a space-separated string.")
-
-(define workout/js-escape
-  (lambda
-    (s)
-    (string-replace
-      (string-replace (as-str s) "\\" "\\\\")
-      "\""
-      "\\\"")))
 
 (define workout/ksf-bell-for
   (lambda
