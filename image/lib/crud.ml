@@ -1537,19 +1537,26 @@ let node_path (store : Store.t) ~(type_name : string) ~(id : string) : value =
         | Some sp -> Some (Tree_store.datum_path ~space:(Some sp) ~type_name ~id ())
         | None -> None
       in
-      let existing =
-        match routing with
-        | Some p when datum_node_at conn ~path:p -> Some p
-        | _ -> (
-            match (if uuid_label_id id then space_of_datum conn ~id else None) with
-            | Some sp ->
-                Some (Tree_store.datum_path ~space:(Some sp) ~type_name ~id ())
-            | None ->
-                if uuid_label_id id then
-                  match path_by_datum_id conn ~id with
-                  | Some p -> Some p
-                  | None -> path_by_node_pk conn ~id
-                else None)
+        let existing =
+          (* An empty id asks for the type's PREFIX, not a row: every constructed
+             path ends in a label separator and cannot be cast to ltree, so the
+             probe below raised 42601 ("Unexpected end of input") and took every
+             prefix caller down with it: todo/tree/prefix -> todo/tree/rows ->
+             the whole todos pool. Router answers, no existence probe. *)
+          if String.length id = 0 then None
+          else (
+            match routing with
+            | Some p when datum_node_at conn ~path:p -> Some p
+            | _ -> (
+                match (if uuid_label_id id then space_of_datum conn ~id else None) with
+                | Some sp ->
+                    Some (Tree_store.datum_path ~space:(Some sp) ~type_name ~id ())
+                | None ->
+                    if uuid_label_id id then
+                      match path_by_datum_id conn ~id with
+                      | Some p -> Some p
+                      | None -> path_by_node_pk conn ~id
+                    else None))
       in
       match existing with
       | Some p -> VStr p

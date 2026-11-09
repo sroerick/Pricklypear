@@ -4951,12 +4951,14 @@
       (if
         (null? r)
         id
-        (if (= (dict-get r "deleted") 0) () id))))
+          (if (string-eq (as-str (dict-get r "deleted")) "0") () id))))
   "Delete the node at (node-path t id). Returns the id when a row was actually
    removed, () when the resolved path held nothing. The kernel's deleted count
-   is the only honest signal: echoing the id unconditionally is why
-   todo/delete, todo/item/delete and the delete-list cascade all reported
-   success while removing nothing on space-routed rows (11-09).")
+   is the only honest signal: echoing the id unconditionally is why todo/delete,
+   todo/item/delete and the delete-list cascade all reported success while
+   removing nothing on space-routed rows (11-09). The count arrives as a STRING
+   ({deleted:1} -> \"1\"), so compare it as one: (= ... 0) blew up with
+   bad-args AFTER the delete had already landed (11-09 fix).")
 
 (define todo/tree/find-node-scan
   (lambda
