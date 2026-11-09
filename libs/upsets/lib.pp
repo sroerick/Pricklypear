@@ -129,11 +129,11 @@
       last-ts)
     (string-append
       "{\"market-id\":\""
-      (upsets/json-esc mid)
+      (json-escape mid)
       "\",\"wallet\":\""
-      (upsets/json-esc wallet)
+      (json-escape wallet)
       "\",\"side\":\""
-      (upsets/json-esc side)
+      (json-escape side)
       "\",\"usd\":"
       (as-str usd)
       ",\"n\":"
@@ -236,28 +236,6 @@
       (schedules)))
   "Register the three ingest schedules (chapter: shipped off; the operator turns them on). Run ONCE on the branch that owns these fns.")
 
-(define upsets/json-esc
-  (lambda (s) (upsets/json-esc-loop (as-str s) 0 ""))
-  "Escape a string for embedding in a JSON document.")
-
-(define upsets/json-esc-loop
-  (lambda
-    (s i acc)
-    (if
-      (>= i (string-length s))
-      acc
-      (let
-        ((c (substring s i 1)))
-        (upsets/json-esc-loop
-          s
-          (+ i 1)
-          (string-append
-            acc
-            (cond
-              ((string-eq c "\\") "\\\\")
-              ((string-eq c "\"") "\\\"")
-              (else c))))))))
-
 (define upsets/key-side
   (lambda (key) (nth (string-split key "|") 1)))
 
@@ -281,21 +259,21 @@
       flos)
     (string-append
       "{\"question\":\""
-      (upsets/json-esc question)
+      (json-escape question)
       "\",\"slug\":\""
-      (upsets/json-esc slug)
+      (json-escape slug)
       "\",\"condition-id\":\""
-      (upsets/json-esc cid)
+      (json-escape cid)
       "\",\"token-yes\":\""
-      (upsets/json-esc tok-yes)
+      (json-escape tok-yes)
       "\",\"token-no\":\""
-      (upsets/json-esc tok-no)
+      (json-escape tok-no)
       "\",\"vol\":"
       (as-str vol)
       ",\"end\":\""
-      (upsets/json-esc end)
+      (json-escape end)
       "\",\"status\":\""
-      (upsets/json-esc status)
+      (json-escape status)
       "\",\"last-odds\":"
       (as-str last-odds)
       ",\"observed-at\":"
@@ -369,7 +347,7 @@
     (mid ts p)
     (string-append
       "{\"market-id\":\""
-      (upsets/json-esc mid)
+      (json-escape mid)
       "\",\"ts\":"
       (as-str ts)
       ",\"p\":"
