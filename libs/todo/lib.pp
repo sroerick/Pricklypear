@@ -2056,7 +2056,9 @@
               (todo/state/next-for-item cur id))))))))
 
 (define todo/item/delete
-  (lambda (id) (todo/tree/del "todo-item" id)))
+  (lambda (id) (todo/delete id))
+  "Kept as the item-vocabulary name; the body lives in todo/delete so there is
+   one delete path, not three copies of one line.")
 
 (define todo/item/due
   (lambda
@@ -4944,7 +4946,17 @@
 (define todo/tree/del
   (lambda
     (t id)
-    (seq (tree/delete (node-path t (as-str id))) id)))
+    (let
+      ((r (tree/delete (node-path t (as-str id)))))
+      (if
+        (null? r)
+        id
+        (if (= (dict-get r "deleted") 0) () id))))
+  "Delete the node at (node-path t id). Returns the id when a row was actually
+   removed, () when the resolved path held nothing. The kernel's deleted count
+   is the only honest signal: echoing the id unconditionally is why
+   todo/delete, todo/item/delete and the delete-list cascade all reported
+   success while removing nothing on space-routed rows (11-09).")
 
 (define todo/tree/find-node-scan
   (lambda

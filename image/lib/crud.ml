@@ -1480,12 +1480,43 @@ let get_row
        | _ -> None)
 
 
-(** (node-path 'type id) -> VStr path. Space-aware path constructor:
-    an admitted type reports its true data.s.<space>.* home (looked up in
-    data_space_types — the pure Tree_store.datum_path mirror cannot see
-    dynamic admission), a ROW-LEVEL space row (034, body "space") reports
-    its actual data.s.<space>.* home too, and everything else routes exactly
-    as the SQL tree_datum_path does (seed -> shared; else user). *)
+(** (node-path 'type id) -> VStr path.
+
+    Resolves where THIS row lives, then falls back to where a new row of the
+    type would be written. The distinction matters: the routing rules below
+    describe a WRITE target (an admitted type's data.s.<space> home, a
+    row-level space row, seed -> shared, else the caller's garden), and for a
+    row that already exists at some other path they answer a question nobody
+    asked. Trusting them first made update-by-id and delete-by-id silently
+    no-op against a path that holds nothing (a1ce59db for updates, 11-09 for
+    deletes and the whole delete-list cascade).
+
+    Order: the routing candidate if a datum node is actually there; else the
+    row's own space (leaf decode); else a datum-id lookup across every
+    namespace; else the node-PK lookup; else, for a create, the routing
+    candidate; else the caller's garden. *)
+let datum_node_at (conn : Store_db.conn) ~(path : string) : bool =
+  match
+    Store_db.exec conn ~params:[ Pgx.Value.of_string path ]
+      "SELECT 1 FROM tree_nodes WHERE kind = 'datum' AND path = $1::ltree LIMIT 1"
+  with
+  | [ _ ] -> true
+  | _ -> false
+
+(** Resolve a datum's tree path by its DATUM id, in whichever namespace it
+    lives (data.shared / data.l / data.s / data.u). Complements
+    [path_by_node_pk], which keys on the tree_nodes PRIMARY KEY and therefore
+    never fires for the business ids Lisp callers actually pass. Same
+    predicate [space_of_datum] uses, minus the data.s restriction. *)
+let path_by_datum_id (conn : Store_db.conn) ~(id : string) : string option =
+  match
+    Store_db.exec conn ~params:[ Pgx.Value.of_string id ]
+      "SELECT path::text FROM tree_nodes \
+       WHERE kind = 'datum' AND tree_datum_id(path) = $1::uuid LIMIT 1"
+  with
+  | [ [ p ] ] -> Pgx.Value.to_string p
+  | _ -> None
+
 let uuid_label_id (id : string) : bool =
   (* 32 hex (tree_uuid_label) or 36 dashed uuid. Guards the space_of_datum
      ::uuid cast against placeholder ids like "new" / "". *)
@@ -1497,22 +1528,33 @@ let uuid_label_id (id : string) : bool =
 
 let node_path (store : Store.t) ~(type_name : string) ~(id : string) : value =
   let user = session_user () in
-  (match Io_db.Db.current_conn store with
-   | Some conn ->
-       (match space_of_type conn ~type_name with
-        | Some sp ->
-            VStr (Tree_store.datum_path ~space:(Some sp) ~type_name ~id ())
-        | None ->
-            (match
-               (if uuid_label_id id then space_of_datum conn ~id else None)
-             with
-             | Some sp ->
-                 VStr (Tree_store.datum_path ~space:(Some sp) ~type_name ~id ())
-             | None ->
-                 (match (if uuid_label_id id then path_by_node_pk conn ~id else None) with
-                  | Some p -> VStr p
-                  | None -> VStr (Tree_store.datum_path ~user ~type_name ~id ()))))
-   | None -> VStr (Tree_store.datum_path ~user ~type_name ~id ()))
+  let construct () = VStr (Tree_store.datum_path ~user ~type_name ~id ()) in
+  match Io_db.Db.current_conn store with
+  | None -> construct ()
+  | Some conn ->
+      let routing =
+        match space_of_type conn ~type_name with
+        | Some sp -> Some (Tree_store.datum_path ~space:(Some sp) ~type_name ~id ())
+        | None -> None
+      in
+      let existing =
+        match routing with
+        | Some p when datum_node_at conn ~path:p -> Some p
+        | _ -> (
+            match (if uuid_label_id id then space_of_datum conn ~id else None) with
+            | Some sp ->
+                Some (Tree_store.datum_path ~space:(Some sp) ~type_name ~id ())
+            | None ->
+                if uuid_label_id id then
+                  match path_by_datum_id conn ~id with
+                  | Some p -> Some p
+                  | None -> path_by_node_pk conn ~id
+                else None)
+      in
+      match existing with
+      | Some p -> VStr p
+      | None -> (
+          match routing with Some p -> VStr p | None -> construct ())
 
 (** (type-fields 'type) -> VList of VStr field names | VNil if undeclared. *)
 let type_fields (store : Store.t) ~(type_name : string) : value =
