@@ -4,6 +4,84 @@
 (define food/a
   (lambda () 1))
 
+;; ---- row types (agora 11-06/11-07): declared at load, the todo-comment /
+;; filmstrip-ws / stretch pattern. A type declared by hand in a live image is
+;; lost on the next reseed, and a write to an undeclared type comes back as
+;; the rejection STRING "create/update X: undeclared type ..."
+;; (image/lib/crud.ml:160) which callers read as a successful-looking value
+;; with no row. So food-log / food-item / food-day / food-target /
+;; food-template ride guarded, idempotent value defines here: the seed lint
+;; allows only define/defmacro/route/deftype/package/export/public-route at
+;; top level, so the deftype rides a value define and only kernel prims
+;; (null?, type-fields, deftype) run at define time. A delegated session
+;; no-ops by design (the deftype denial lands as the value, not an error).
+(define food/log-declared
+  (if
+    (null? (type-fields (quote food-log)))
+    (deftype
+      (quote food-log)
+      (quote date)
+      (quote meal)
+      (quote food)
+      (quote calories)
+      (quote protein)
+      (quote carbs)
+      (quote fat)
+      (quote sugar)
+      (quote notes)
+      (quote author))
+    "food-log ok"))
+
+(define food/item-declared
+  (if
+    (null? (type-fields (quote food-item)))
+    (deftype
+      (quote food-item)
+      (quote name)
+      (quote serving)
+      (quote calories)
+      (quote protein)
+      (quote carbs)
+      (quote fat)
+      (quote sugar)
+      (quote author))
+    "food-item ok"))
+
+(define food/day-declared
+  (if
+    (null? (type-fields (quote food-day)))
+    (deftype (quote food-day) (quote date) (quote day-type) (quote author))
+    "food-day ok"))
+
+(define food/target-declared
+  (if
+    (null? (type-fields (quote food-target)))
+    (deftype
+      (quote food-target)
+      (quote day-type)
+      (quote calories)
+      (quote protein)
+      (quote carbs)
+      (quote fat)
+      (quote sugar)
+      (quote author))
+    "food-target ok"))
+
+(define food/template-declared
+  (if
+    (null? (type-fields (quote food-template)))
+    (deftype
+      (quote food-template)
+      (quote day-type)
+      (quote meal)
+      (quote food)
+      (quote calories)
+      (quote protein)
+      (quote carbs)
+      (quote fat)
+      (quote author))
+    "food-template ok"))
+
 (define food/add-template
   (lambda
     (day-type
