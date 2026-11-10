@@ -218,6 +218,8 @@
             "Write a message…"
             "maxlength"
             "4000"
+            "hx-on:keydown"
+            "if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();this.form.requestSubmit()}"
             "style"
             (string-append
               (pads/size-css (quote (grow 1)))
