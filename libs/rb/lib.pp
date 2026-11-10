@@ -882,7 +882,8 @@
     (cons "monthly_cost" monthly)))
 
 (define rb/fixed
-  (list (fixed-cost "Booth rent" 60.0)))
+  (lambda () (list (fixed-cost "Booth rent" 60.0)))
+  "Fixed-cost rows of the seed business. A zero-arg function, not a value\ndefine: value defines may not call a file-local sibling at define time (S8\nboot-seed skip leaves it unbound on warm DBs).")
 
 (define rb/fixed-cost-row
   (lambda (f)
@@ -1379,7 +1380,7 @@
 (define rb/label-card-html
   (lambda (name batch date)
     (let
-      ((spec (rb/get name rb/label-specs))
+      ((spec (rb/get name (rb/label-specs)))
         (b (if (null? batch) "" batch))
         (dt (if (null? date) "" date)))
       (cond
@@ -1693,6 +1694,7 @@
   "One or more letter sheets of 4-up labels, print-ready at 100% scale.")
 
 (define rb/label-specs
+  (lambda ()
   (list
     (cons
       "Experimental Root Beer 004: 1896 edition"
@@ -1721,11 +1723,12 @@
         "Squeeze the Day"
         "Real lemonade is a lost art. Two centuries ago the punch houses made oleo saccharum — sugar massaged into lemon peels until the fruit surrenders its oils. That fragrant gold was the soul of any respectable punch, and it is the soul of ours. We build it the old way, then let the ginger bug liven it with fine Wyoming fizz. Sunshine, saved for a cloudy day. Shake gently; share generously."
         rb/label-art-logo))))
+  "Per-recipe label specs; zero-arg so the art constants are read at call\ntime, not at define time (S8 boot-seed skip).")
 
 (define rb/label-style-for
   (lambda (name)
     (let
-      ((spec (rb/get name rb/label-specs)))
+      ((spec (rb/get name (rb/label-specs))))
       (if
         (null? spec)
         (if
