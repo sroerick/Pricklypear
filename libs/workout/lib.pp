@@ -178,6 +178,48 @@
       (rows (quote workout-exercise) 2000)))
   "One JS object per logged exercise row (sid/exercise/weight/reps/unit).")
 
+;; Adopted from live 11-10 (hollis): this define existed only on system/main
+;; while master CALLED it (workout/ksk1-chart-point-js -> chart-point-js) - a
+;; workout reseed would have broken the chart pane with an unbound define.
+;; Ported from the live body with workout/js-escape -> json-escape (the
+;; collapsed escaper, merge 6d7eb9cc).
+(define workout/chart-point-js
+  (lambda
+    (row)
+    (let*
+      ((f (workout/row-fields row))
+        (doc (dict-get f "doc"))
+        (prog (dict-get doc "progress"))
+        (params (dict-get doc "params"))
+        (date (as-str (dict-get f "date")))
+        (reps
+          (as-str (workout/as-int (dict-get prog "reps_l"))))
+        (phase
+          (as-str (workout/as-int (dict-get params "phase"))))
+        (day (as-str (workout/as-int (dict-get params "day"))))
+        (pattern
+          (json-escape (as-str (dict-get params "pattern"))))
+        (notes (json-escape (as-str (dict-get f "notes")))))
+      (string-append
+        "{date:\""
+        date
+        "\"," 
+        "reps:"
+        reps
+        ","
+        "phase:"
+        phase
+        ","
+        "day:"
+        day
+        ","
+        "pattern:\""
+        pattern
+        "\","
+        "notes:\""
+        notes
+        "\"}"))))
+
 (define workout/chart-since
   (lambda
     ()
