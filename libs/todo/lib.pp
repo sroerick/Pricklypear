@@ -155,7 +155,7 @@
   "Todo's declared ui vocabulary: the assignment control and its kids.")
 
 (define lookbook/todo-seed
-  (lookbook/base-elements)
+  (lambda () (lookbook/base-elements))
   "The inventory this package extends: base-elements as captured at load (a\nplain name list, never the composite lookbook/elements -- capturing that\nwould bind the seam to itself on a reload).")
 
 (define todo/active-items

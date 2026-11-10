@@ -19,8 +19,8 @@
   "Standard tuning in physical string order G C E A (MIDI, reentrant).")
 
 (define uke/tunings
-  (list (list "gCEA" uke/gcea))
-  "Tuning name -> four MIDI open strings. Data, not a code branch.")
+  (list (list "gCEA" (list 67 60 64 69)))
+  "Tuning name -> four MIDI open strings. Data, not a code branch. The gCEA\nrow repeats uke/gcea's MIDI values instead of calling it: a value define\nmay not read a file-local sibling at define time (S8 boot-seed skip), and\nthis table must stay a data value for its consumers.")
 
 (define uke/window
   12

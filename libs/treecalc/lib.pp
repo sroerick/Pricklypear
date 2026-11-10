@@ -417,9 +417,12 @@
 
 (define tc/true (list '()))              ; stem(tri) = "10"
 (define tc/false '())                    ; leaf = "0"
-(define tc/k (tc/from-ternary "10"))     ; K  = triangle triangle
-(define tc/i (tc/from-ternary "21100"))  ; identity (oracle-verified)
-(define tc/s (tc/from-ternary "212000")) ; S x y z = x z (y z) (oracle-verified)
+;; K/I/S are written as literal values (not define-time calls to
+;; tc/from-ternary) so they seed under the additive boot-seed skip; each
+;; literal is exactly the tree its ternary source decodes to.
+(define tc/k (list '()))                         ; "10"     K = triangle triangle
+(define tc/i (list (list (list '())) '()))       ; "21100"  identity (oracle-verified)
+(define tc/s (list (list (list '() '())) '()))   ; "212000" S x y z = x z (y z) (oracle-verified)
 
 ;; triage{l,s,f} = t (t l s) f: applied to n it case-analyzes n
 ;; (leaf -> l, stem(u) -> s u, fork(u v) -> f u v)
@@ -427,11 +430,11 @@
   (lambda (l s f)
     (tc/app (tc/app '() (tc/app (tc/app '() l) s)) f)))
 
-(define tc-church-false (tc/app tc/k tc/i))       ; K I
-(define tc-kfalse (tc/app tc/k tc-church-false))  ; K (K I)
-(define tc-k2false (tc/app tc/k tc-kfalse))       ; K (K (K I))
+(define tc-church-false (lambda () (tc/app tc/k tc/i)))          ; K I
+(define tc-kfalse (lambda () (tc/app tc/k (tc-church-false))))   ; K (K I)
+(define tc-k2false (lambda () (tc/app tc/k (tc-kfalse))))        ; K (K (K I))
 
 ;; is-zero via triage{true, K false, K2 false} (plan S2)
 (define tc/is-zero
   (lambda (n)
-    (tc/app (tc/triage tc/true tc-kfalse tc-k2false) n)))
+    (tc/app (tc/triage tc/true (tc-kfalse) (tc-k2false)) n)))
