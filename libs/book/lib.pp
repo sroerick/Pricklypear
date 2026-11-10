@@ -582,28 +582,9 @@
           acc
           (if first? "" ",")
           "\""
-          (book/json-esc (as-str (car xs)) 0 "")
+          (json-escape (as-str (car xs)))
           "\"")
         #f))))
-
-(define book/json-esc
-  (lambda
-    (s i acc)
-    (if
-      (>= i (string-length s))
-      acc
-      (let
-        ((c (substring s i 1)))
-        (book/json-esc
-          s
-          (+ i 1)
-          (string-append
-            acc
-            (if
-              (string-eq c "\\")
-              "\\\\"
-              (if (string-eq c "\"") "\\\"" c)))))))
-  "Escape one string for embedding in a JSON array literal.")
 
 (define book/label-chars?
   (lambda
