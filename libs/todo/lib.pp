@@ -1279,15 +1279,15 @@
                                               "domain unset"
                                               branch-kind)
                                             ")"))))))
-                                (if
-                                  (string-eq acceptance "")
-                                  ()
-                                  (html/div
-                                    (html/attr "class" "todo-acceptance")
-                                    (html/join
+                                  (html/label (html/attr "for" "acceptance") "Acceptance")
+                                  (html/textarea
+                                    "acceptance"
+                                    (html/attrs
                                       (list
-                                        (html/p* (html/attr "class" "muted") "Acceptance")
-                                        (html/pre (html/text acceptance))))))
+                                        (html/attr "id" "acceptance")
+                                        (html/attr "rows" "6")
+                                        (html/attr "class" "todo-acceptance")))
+                                    acceptance)
                                 (html/div
                                   ""
                                   (html/join
@@ -1674,14 +1674,23 @@
                       (request-param "slug")
                       (request-param "node-id"))
                     (if
-                      (string-eq action "save")
-                      (todo/save
-                        (request-param "id")
-                        (request-param "title")
-                        (request-param "notes")
-                        (request-param "due")
-                        (request-param "state")
-                        (request-param "list_id"))
+                        (string-eq action "save")
+                        (let
+                          ((acc (request-param "acceptance")))
+                          (seq
+                            (todo/save
+                              (request-param "id")
+                              (request-param "title")
+                              (request-param "notes")
+                              (request-param "due")
+                              (request-param "state")
+                              (request-param "list_id"))
+                            (if
+                              (null? acc)
+                              ()
+                              (todo/item/set-acceptance
+                                (request-param "id")
+                                (as-str acc)))))
                       (todo/add (todo/ensure-inbox) (request-param "title"))))))))))))))
 
 (define todo/item-due
