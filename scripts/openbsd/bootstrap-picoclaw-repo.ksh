@@ -5,7 +5,7 @@
 #   ksh ~/bootstrap-picoclaw-repo.ksh          # repo part succeeds; key part via doas
 #   doas ksh ~/bootstrap-picoclaw-repo.ksh     # everything, incl. authorized_keys
 #
-# Non-interactive (e.g. over ssh without a TTY): repo + cgit metadata still
+# Non-interactive (e.g. over ssh without a TTY): repo + stagit metadata still
 # complete; the authorized_keys step prints instructions instead.
 #
 # Idempotent: safe to re-run.
@@ -68,14 +68,33 @@ printf 'ref: refs/heads/main\n' > "$REPO/HEAD"
 
 echo "[ok] repo ready: group git, g+w, sharedRepository=group, HEAD -> main"
 
-# ------------------------------------------------------- 3) cgit metadata
-# Fixes cgit "Bad file descriptor" / blank description for new repos.
+# ------------------------------------------------------- 3) stagit metadata
+# stagit reads <repo>/description for the index and per-repo pages; owner is
+# carried over from the cgit era and kept for the same reason.
 printf '%s\n' "picoclaw workspace: docs, memory, scripts" > "$REPO/description"
 printf '%s\n' "picoclaw" > "$REPO/owner"
 chmod 644 "$REPO/description" "$REPO/owner"
 chgrp git "$REPO/description" "$REPO/owner"
 chmod g+w "$REPO/description" "$REPO/owner"
-echo "[ok] description + owner set for cgit"
+echo "[ok] description + owner set for stagit"
+
+# A brand-new repo has no hook, so its stagit page would never be generated.
+# Cosmetic: a failing regeneration must never fail a push.
+if [ -x /home/git/srv/git/stagit-regen.ksh ]; then
+    hk=$(mktemp /tmp/stagit-hook.XXXXXX)
+    cat > "$hk" <<'HK_EOF'
+#!/bin/sh
+dir=$(cd "${GIT_DIR:-.}" && pwd)
+/home/git/srv/git/stagit-regen.ksh "$dir" >/dev/null 2>&1 || true
+exit 0
+HK_EOF
+    doas install -o git -g git -m 755 "$hk" "$REPO/hooks/post-receive" 2>/dev/null \
+        || install -m 755 "$hk" "$REPO/hooks/post-receive"
+    rm -f "$hk"
+    echo "[ok] stagit post-receive hook installed"
+else
+    echo "[i] stagit not installed yet — run: ksh scripts/openbsd/git-wyo-stagit.ksh"
+fi
 
 # ---------------------------------------------------------------- summary
 # (file-based reads — safe under doas/root where git would hit the
