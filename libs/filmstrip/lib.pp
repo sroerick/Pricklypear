@@ -2252,7 +2252,8 @@ desktop 0).")
                 (list
                   (html/attr "class" "fs-body")
                   (html/attr "id" (string-append "fs-body-" id))
-                  (html/attr "hx-preserve" "true")))
+                  (html/attr "hx-preserve" "true")
+                  (html/attr "hx-disinherit" "*")))
               content))))))
   "One pane section. content is the dispatched fragment (full page) or an\nempty hx-preserve placeholder (OOB class/width swaps keep the live DOM).")
 
@@ -2269,7 +2270,8 @@ desktop 0).")
             (list
               (html/attr "class" "fs-body")
               (html/attr "id" (string-append "fs-body-" id))
-              (html/attr "hx-preserve" "true"))
+              (html/attr "hx-preserve" "true")
+              (html/attr "hx-disinherit" "*"))
             (if live?
               (list
                 (html/attr "hx-get" route)
