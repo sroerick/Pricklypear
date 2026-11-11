@@ -80,7 +80,7 @@ history only.)
 | `nopales/` | Standalone Nopales script runner + REPL: pure interpreter, pure prims, file/argv/exit/load, optional offline lens reads — no image/DB/network ([`nopales/README.md`](nopales/README.md)) |
 | `glochid/` | **glochid** — local-first agent harness: Nopales-native coding agent; Nopales htmx fragments + multipart/mixed streamed turns ([`borge/glochid.borg`](borge/glochid.borg)) |
 | `scripts/` | `dev.sh`, `pp-eval.sh` wrappers, `verify_habitat.sh` (on-image `libs/verify`), seed ETL |
-| `docs/` | **Living docs only**: [`one-tree.md`](docs/one-tree.md) (storage overview), [`notes-ui-contract.md`](docs/notes-ui-contract.md), [`agent-ui-harness.md`](docs/agent-ui-harness.md) (agent FE verify research) |
+| `docs/` | **Living docs only**: [`one-tree.md`](docs/one-tree.md) (storage overview), [`one-substrate-tree.md`](docs/one-substrate-tree.md) (sequence: shared LLM lib -> turn contract -> monorepo), [`notes-ui-contract.md`](docs/notes-ui-contract.md), [`agent-ui-harness.md`](docs/agent-ui-harness.md) (agent FE verify research) |
 | `archive/` | Executed handoffs / superseded plans / UI reviews / retired probes — receipts, not spec ([`archive/README.md`](archive/README.md)) |
 | `borge/` | Design chapters |
 
