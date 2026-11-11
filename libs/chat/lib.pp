@@ -1550,7 +1550,7 @@ pane. Declared, never string-built.")
                    (peer (chat/dm-peer-from-title title me)))
               (list
                 peer
-                (string-append "/chat/dm?peer=" peer)
+                (string-append "/chat/dm?peer=" (filmstrip/url-enc peer))
                 "dm")))
           (chat/dms)))))
   "The surfaces the user can talk in, one (label route kind) entry each:
