@@ -237,6 +237,14 @@
                 "if(event.detail.successful){this.reset()}")))
           (html/join
             (list
+              (html/div
+                (html/attrs
+                  (list
+                    (html/attr
+                      "class" "htmx-indicator todo-add-pending")
+                    (html/attr "role" "status")
+                    (html/attr "aria-live" "polite")))
+                "Adding…")
               (html/hidden "action" "add")
               (html/hidden "view" view)
               (html/hidden "list_id" list-id)
@@ -5285,6 +5293,14 @@
                 "if(event.detail.successful){this.reset()}")))
           (html/join
             (list
+              (html/div
+                (html/attrs
+                  (list
+                    (html/attr
+                      "class" "htmx-indicator todo-add-pending")
+                    (html/attr "role" "status")
+                    (html/attr "aria-live" "polite")))
+                "Adding…")
               (html/hidden "action" "add")
               (html/hidden "view" view)
               (html/hidden "list_id" list-id)
