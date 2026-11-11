@@ -4670,6 +4670,40 @@
       selected
       (append todo/state/list (list "ARCHIVED")))))
 
+(define todo/state/approval-list-id
+  "19eba8e4-87c8-48a8-b04f-4da6f499a180"
+  "The pinned uuid of the doasq-requests list (the shared-space approval
+     queue; same id as doasq/list-id and the runner's /var/lib/doasq/list-id
+     fallback).")
+
+(define todo/state/approval-card?
+  (lambda (fields)
+    (let
+      ((lid (as-str (todo/item/list-id fields))))
+      (if
+        (string-eq lid todo/state/approval-list-id)
+        #t
+        (let
+          ((lf (get (quote todo-list) lid)))
+          (if
+            (null? lf)
+            #f
+            (string-eq (as-str (dict-get lf "title")) "doasq-requests"))))))
+  "True when the card sits on the doasq-requests list: by the pinned uuid or
+     by the list's own title (the runner resolves the queue the same two
+     ways), so a re-created shared list still offers the approval gate.")
+
+(define todo/state/options-extra
+  (lambda (fields)
+    (if
+      (todo/state/approval-card? fields)
+      (list "ARCHIVED" "APPROVED")
+      (list "ARCHIVED")))
+  "The statuses that live outside every column list and are still writable
+     from the card picker: ARCHIVED everywhere (the archive column), APPROVED
+     only on the doasq-requests list (the doasq approval gate — the state
+     doasq-exec drains). Ordinary lists keep offering exactly ARCHIVED.")
+
 (define todo/state/options-for-item
   (lambda
     (selected item-id)
@@ -4677,11 +4711,12 @@
       selected
       (append
         (todo/state/columns-for-item item-id)
-        (list "ARCHIVED"))))
-  "HTML options over item-id's OWN effective pipeline PLUS ARCHIVED, with
+        (todo/state/options-extra (todo/tree/get "todo-item" item-id)))))
+  "HTML options over item-id's OWN effective pipeline PLUS the extra-column
+     statuses (ARCHIVED always; APPROVED on the doasq-requests list), with
      selected marked — the card-detail <select>. Own `pipeline` override >
      list columns > global default, so a card on its own pipeline offers only
-     its own states (plus ARCHIVED).")
+     its own states (plus the extra-column statuses).")
 
 (define todo/state/options-for-list
   (lambda
