@@ -356,6 +356,11 @@
         (inter-on (dabar/inter-on?)))
       (html/join
         (list
+          ;; The study fragment replaces #dabar-panel, so it has to carry
+          ;; the book/chapter/verse picker itself (card f43426bc): without
+          ;; the form here, picking a verse swapped the picker out of the
+          ;; DOM and the popup closed with nothing recorded as selected.
+          (bible/go-form book ch verse)
           (html/h1
             (string-append
               (as-str book)
