@@ -9,7 +9,7 @@ polished product suite. Design lives in a multi-file borge book
 ([`pricklypear.borg`](pricklypear.borg) + `borge/*.borg`). If code and
 spec disagree, the code is wrong.
 
-License: [ISC](LICENSE).
+Copyright (c) 2026 Roerick Sweeney. All rights reserved.
 
 ## What you get
 
