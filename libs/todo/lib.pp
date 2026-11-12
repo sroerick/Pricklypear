@@ -4059,8 +4059,15 @@
           (let
             ((view
               (let
-                ((v (request-param "view")))
-                (if (null? v) "everything" (as-str v))))
+                ((v (request-param "view"))
+                  (lid (request-param "list_id")))
+                (if
+                  (if
+                    (string-eq (as-str (request-param "action")) "save")
+                    (if (null? lid) #f (if (string-eq (as-str lid) "") #f #t))
+                    #f)
+                  (as-str lid)
+                  (if (null? v) "everything" (as-str v)))))
              (lists (todo/list/all)))
             (if
               (hx-request?)
