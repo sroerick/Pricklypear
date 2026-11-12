@@ -2236,7 +2236,11 @@
                           (html/attr "title" "cycle state")))
                       (if (string-eq state "") "·" state)))))
               (html/a
-                (string-append "/todos?id=" id "&view=" view)
+                (string-append
+                  "/todos?id="
+                  (todo/slug title fields)
+                  "&view="
+                  view)
                 (html/span
                   (html/attr "class" "todo-title")
                   (html/text title)))
@@ -2860,7 +2864,11 @@
                           (html/attr "title" "cycle state")))
                       (if (string-eq state "") "·" state)))))
               (html/a
-                (string-append "/todos?id=" id "&view=" view)
+                (string-append
+                  "/todos?id="
+                  (todo/slug title fields)
+                  "&view="
+                  view)
                 (html/span
                   (html/attr "class" "todo-title")
                   (html/text title)))
@@ -3172,7 +3180,9 @@
         (html/join
           (list
             (html/a
-              (string-append "/todos?view=" id)
+              (string-append
+                "/todos?view="
+                (todo/slug (todo/list/title f) f))
               (todo/list/title f))
             (if
               (todo/list/default? f)
@@ -3402,7 +3412,9 @@
         (html/join
           (list
             (html/a
-              (string-append "/todos?view=" id)
+              (string-append
+                "/todos?view="
+                (todo/slug (todo/list/title f) f))
               (string-append
                 (todo/list/title f)
                 " ("
@@ -6507,6 +6519,92 @@ empty text kid when unassigned (so a caller always projects a value).")
      note-todos clause 2.")
 
 
+;; ---- slug URLs (card b5484312) ----
+;; Todo lists and items live under hash ids in the tree, which is unreadable in
+;; the URL bar. Every link now carries a SLUG derived from the row's title and
+;; the resolvers map a slug back to the id the tree prims need; an id passes
+;; through untouched, so the hidden POST fields (which carry ids) keep working.
+
+(define todo/slugify-acc
+  (lambda (s i acc last-hyphen?)
+    (if (>= i (string-length s))
+      acc
+      (let ((c (substring s i 1)))
+        (cond
+          ((string-contains? "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-" c)
+            (todo/slugify-acc s (+ i 1) (string-append acc c) #f))
+          (last-hyphen? (todo/slugify-acc s (+ i 1) acc #t))
+          (#t (todo/slugify-acc s (+ i 1) (string-append acc "-") #t))))))
+  "Accumulate a slug from a title, collapsing invalid runs to single hyphens.")
+
+(define todo/slugify-trim
+  (lambda (raw)
+    (let ((n (string-length raw)))
+      (if (if (> n 0) (string-eq (substring raw (- n 1) 1) "-") #f)
+        (todo/slugify-trim (substring raw 0 (- n 1)))
+        (if (string-eq raw "") "todo" (if (> n 48) (substring raw 0 48) raw)))))
+  "Trim trailing hyphens from a slug candidate; empty -> \"todo\", cap 48.")
+
+(define todo/slugify
+  (lambda (title)
+    (todo/slugify-trim
+      (todo/slugify-acc (as-str title) 0 "" #t)))
+  "Title -> URL slug: [A-Za-z0-9-] kept verbatim, every other run becomes one
+     '-', so a list or item title is addressable in the URL bar.")
+
+(define todo/slug-or
+  (lambda (fallback s)
+    (if (null? s)
+      fallback
+      (if (string-eq (as-str s) "") fallback (as-str s))))
+  "`s` when it holds a non-empty string, else `fallback`.")
+
+(define todo/slug
+  (lambda (title fields)
+    (todo/slug-or
+      (todo/slugify title)
+      (dict-get fields "slug")))
+  "The URL slug of one list/item row: a stored non-empty `slug` field wins,
+     else one derived from the title.")
+
+(define todo/list/synthetic?
+  (lambda (v)
+    (or (string-eq v "") (string-eq v "everything") (string-eq v "from-notes") (string-eq v "archived")))
+  "Whether a /todos view key is a built-in view rather than a list id/slug.")
+
+(define todo/list/find-slug
+  (lambda (lists v)
+    (let ((hit (list/filter (lambda (row) (string-eq (todo/slug (todo/list/title (cdr row)) (cdr row)) v)) lists)))
+      (if (null? hit) v (as-str (car (car hit))))))
+  "The list id whose slug is v, or v unchanged when no list claims that slug.")
+
+(define todo/list/resolve
+  (lambda (lists view)
+    (let ((v (as-str view)))
+      (if (todo/list/synthetic? v)
+        v
+        (if (null? (todo/list/find-row lists v)) (todo/list/find-slug lists v) v))))
+  "A /todos view param -> the list id it names: a built-in view, a real id and
+     an unknown slug come back unchanged; a known slug resolves to its id.")
+
+(define todo/item/find-slug
+  (lambda (rows v)
+    (if (null? (list/filter (lambda (row) (string-eq (as-str (car row)) v)) rows))
+      (let ((hit (list/filter (lambda (row) (string-eq (todo/slug (todo/item/title (cdr row)) (cdr row)) v)) rows)))
+        (if (null? hit) v (as-str (car (car hit)))))
+      v))
+  "The card id named by v among rows: an exact id wins, else a slug match,
+     else v unchanged.")
+
+(define todo/item/resolve
+  (lambda (id)
+    (let ((v (as-str id)))
+      (if (string-eq v "")
+        ""
+        (todo/item/find-slug (todo/item/all) v))))
+  "A /todos id param -> the card id it names; the empty param stays empty so
+     the page still renders the list view.")
+
 (define todo/ui/main
   (lambda
     (view)
@@ -6518,7 +6616,8 @@ empty text kid when unassigned (so a caller always projects a value).")
   (lambda
     (view lists)
     (let
-      ((id-param (request-param "id"))
+      ((view-id (todo/list/resolve lists view))
+        (id-param (todo/item/resolve (request-param "id")))
         (is-get (string-eq (request-method) "GET")))
       (if
         (if
@@ -6544,7 +6643,7 @@ empty text kid when unassigned (so a caller always projects a value).")
                   (list
                     (html/div
                       (html/attr "class" "todo-side")
-                      (todo/ui/nav view (todo/item/all) lists))
+                      (todo/ui/nav view-id (todo/item/all) lists))
                     (html/div
                       (html/attr "class" "todo-body")
                       (todo/ui/detail (as-str id-param) view))))))))
@@ -6556,7 +6655,7 @@ empty text kid when unassigned (so a caller always projects a value).")
                 (if
                   (string-eq view "from-notes")
                   ""
-                  (if (string-eq view "archived") "" view))))
+                  (if (string-eq view "archived") "" view-id))))
             (board-items (todo/item/all))
             (body
               (cond
@@ -6580,7 +6679,7 @@ empty text kid when unassigned (so a caller always projects a value).")
                           (todo/from-notes-html view board-items))))))
                 ((string-eq view "from-notes")
                   (todo/from-notes-html view board-items))
-                (#t (todo/item/html view)))))
+                (#t (todo/item/html view-id)))))
           (html/div
             (html/attr "id" "todo-main")
             (html/join
@@ -6591,7 +6690,7 @@ empty text kid when unassigned (so a caller always projects a value).")
                     (list
                       (html/div
                         (html/attr "class" "todo-side")
-                        (todo/ui/nav view board-items lists))
+                        (todo/ui/nav view-id board-items lists))
                       (html/div
                         (html/attr "class" "todo-body")
                         (html/join
@@ -6649,6 +6748,7 @@ empty text kid when unassigned (so a caller always projects a value).")
                               (html/attr "hx-get" "/todos")
                               (html/attr "hx-target" "#todo-main")
                               (html/attr "hx-swap" "outerHTML")
+                              (html/attr "hx-push-url" "true")
                               (html/attr "hx-trigger" "change")))
                           (todo/ui/nav-options view lists arch-n))
                         (html/button (html/attr "type" "submit") "Go")))))
@@ -6697,7 +6797,7 @@ empty text kid when unassigned (so a caller always projects a value).")
           (string-append
             acc
             (html/option
-              (as-str (car row))
+              (todo/slug (todo/list/title (cdr row)) (cdr row))
               (todo/list/title (cdr row))
               (string-eq view (as-str (car row))))))
         ""
