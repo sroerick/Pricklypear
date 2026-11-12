@@ -15,7 +15,7 @@ Per card: verify the sha recorded at submission still matches the
 The audit = the card's event/comment trail + the activity ledger —
 the house's native audit, not a bespoke log.
 """
-import base64, hashlib, json, subprocess, sys, urllib.request
+import base64, datetime, hashlib, json, os, subprocess, sys, urllib.request
 
 BASE = "https://pricklypear.rocks"
 TOKEN = open("/home/hollis/secrets/ppdesignate").read().strip()
@@ -25,13 +25,44 @@ LIST_ID = open("/var/lib/doasq/list-id").read().strip() if __import__("os").path
 # APPROVED transitions the runner will honor). Default: roerick.
 APPROVER = open("/var/lib/doasq/approver").read().strip() if __import__("os").path.exists("/var/lib/doasq/approver") else "roerick"
 
+# The request log: one JSON line per doasq request the runner sends —
+# timestamp, endpoint, payload, and doasq's reply (failed requests too,
+# as the error). Card 606e4a17: no more silent requests. ./status.sh reads it.
+LOG_PATH = os.environ.get(
+    "DOASQ_LOG",
+    os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__)))), "logs", "loop.log"))
+
+def log_request(endpoint, payload, response):
+    rec = {"ts": datetime.datetime.now(datetime.timezone.utc)
+                   .isoformat(timespec="seconds"),
+           "endpoint": endpoint,
+           "payload": payload,
+           "response": response}
+    line = "doasq request " + json.dumps(rec, sort_keys=True)
+    try:
+        d = os.path.dirname(LOG_PATH)
+        if d:
+            os.makedirs(d, exist_ok=True)
+        with open(LOG_PATH, "a") as f:
+            f.write(line + "\n")
+    except OSError as e:
+        print("doasq-exec: cannot log to %s: %s" % (LOG_PATH, e), file=sys.stderr)
+
 def api(expr, timeout=120):
-    req = urllib.request.Request(BASE + "/api/eval",
-        data=json.dumps({"expr": expr}).encode(),
+    endpoint = BASE + "/api/eval"
+    body = json.dumps({"expr": expr})
+    req = urllib.request.Request(endpoint, data=body.encode(),
         headers={"Content-Type": "application/json",
                  "Authorization": "Bearer " + TOKEN})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.loads(r.read().decode())
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            raw = r.read().decode()
+    except Exception as e:
+        log_request(endpoint, body, {"error": str(e)})
+        raise
+    log_request(endpoint, body, raw[:2000])
+    return json.loads(raw)
 
 def die(msg):
     print("doasq-exec: " + msg, file=sys.stderr)
