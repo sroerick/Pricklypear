@@ -809,9 +809,11 @@
 (define todo/db/get
   (lambda
     (type id)
-    (let
-      ((n (tree/get (node-path type (as-str id)))))
-      (if (null? n) () (dict-get n "body")))))
+    ;; todo/tree/get scans when the computed path misses, so the read writer
+    ;; pair (todo/db/get + todo/db/update-field) sees hand-made / non-uuid ids
+    ;; that live at a diverged stored path. Card 8b0cf6b0: update-field bailed
+    ;; on a null read before ever reaching todo/db/update's scan.
+    (todo/tree/get type (as-str id))))
 
 (define todo/db/insert-by-created
   (lambda
@@ -879,13 +881,29 @@
   (lambda
     (type id fields)
     (let
-      ((p (node-path type (as-str id))))
-      (if
-        (null? (tree/get p))
-        ()
+      ((nid (as-str id)))
+      (let
+        ((p (node-path type nid)))
         (let
-          ((r (tree/upsert p "datum" (as-str type) fields)))
-          (if (string-starts-with? r "data.") (as-str id) r))))))
+          ((p
+            (if
+              (null? (tree/get p))
+              (let
+                ((hit (todo/tree/find-node-scan type nid)))
+                (if (null? hit) p (as-str (dict-get hit "path"))))
+              p)))
+          (if
+            (null? (tree/get p))
+            ()
+            (let
+              ((r (tree/upsert p "datum" (as-str type) fields)))
+              (if (string-starts-with? r "data.") nid r)))))))
+  "Update datum row (type,id). The stored path can DIVERGE from node-path's
+   computed form (hand-made / non-uuid ids, spaces moved after the row was
+   written): on a computed-path miss fall back to todo/tree/find-node-scan
+   and write the row where it actually lives, instead of no-op'ing. That is
+   why card 7e60c6a9 (hand-made id) stayed APPROVED after doasq-exec ran it
+   while 39f0da67 (uuid) moved — todo/db/update-field returned () silently.")
 
 (define todo/db/update-field
   (lambda

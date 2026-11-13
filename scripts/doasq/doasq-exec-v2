@@ -71,6 +71,73 @@ def die(msg):
 def sha_of(text):
     return hashlib.sha256(text.encode()).hexdigest()
 
+# The root-side output file — v1's $DOASQ_DIR/runs/<id>.out, where a human and
+# `doasq show` already look. It is the FALLBACK audit whenever the API will
+# not take the comment: on card 8b0cf6b0 the todo/comment/add post failed and
+# the runner never looked at the reply, so a whole run's output vanished with
+# no .out file behind it.
+RUNS_DIR = os.path.join(os.environ.get("DOASQ_DIR", "/var/lib/doasq"), "runs")
+
+def lisp_str(s):
+    """Escape s for a Lisp string literal (backslash first)."""
+    return ('"' + str(s).replace("\\", "\\\\").replace('"', '\\"')
+            .replace("\r", "\\r").replace("\t", "\\t")
+            .replace("\n", "\\n") + '"')
+
+def write_out_fallback(iid, rc, stdout, stderr):
+    """Write stdout/stderr+rc to $DOASQ_DIR/runs/<id>.out (root-written) and
+    say so on stderr. Returns the path, or None when even that fails — the
+    loss is loud either way, never silent."""
+    path = os.path.join(RUNS_DIR, "%s.out" % iid)
+    try:
+        os.makedirs(RUNS_DIR, exist_ok=True)
+        with open(path, "w") as f:
+            f.write("rc=%s\n== stdout ==\n%s\n== stderr ==\n%s\n"
+                    % (rc, stdout, stderr))
+        print("doasq-exec: comment lost for %s — output saved to %s"
+              % (iid, path), file=sys.stderr)
+        return path
+    except OSError as e:
+        print("doasq-exec: comment lost for %s and %s unwritable: %s"
+              % (iid, path, e), file=sys.stderr)
+        return None
+
+def read_state(iid):
+    """The card's state as the DB holds it (\"\" when unreadable)."""
+    try:
+        v = api('(as-str (todo/item/state (todo/item/get %s)))' % lisp_str(iid))
+        val = v.get("value", "")
+        return "" if val is None else str(val)
+    except Exception:
+        return ""
+
+def move_state(iid, new_state):
+    """Move the card, check the read-back, and return the move rc.
+
+    todo/tree/set-field (not todo/db/update-field) is the writer that resolves
+    a row whose STORED path diverges from node-path's computed form: it falls
+    back to a path scan. That is exactly the hand-made-id case (card 8b0cf6b0:
+    39f0da67 uuid moved, 7e60c6a9 hand-made id no-op'd and stayed APPROVED
+    after a successful run, so a recycled runner re-executed it). rc=0 means
+    the state provably changed; anything else is reported, never assumed."""
+    rc = 0
+    try:
+        api('(todo/tree/set-field "todo-item" %s "state" %s)'
+            % (lisp_str(iid), lisp_str(new_state)))
+    except Exception as e:
+        print("doasq-exec: state move %s -> %s request failed: %s"
+              % (iid, new_state, e), file=sys.stderr)
+        rc = 1
+    if read_state(iid) == new_state:
+        return rc
+    try:
+        api('(todo/db/update-field "todo-item" %s "state" %s)'
+            % (lisp_str(iid), lisp_str(new_state)))
+    except Exception as e:
+        print("doasq-exec: state move %s -> %s fallback failed: %s"
+              % (iid, new_state, e), file=sys.stderr)
+    return 0 if read_state(iid) == new_state else (rc or 3)
+
 
 def approved_by(events, approver):
     """The attribution check: author rides the event ROW METADATA
@@ -122,7 +189,9 @@ for it in approved:
     # 1. tamper check: the recorded sha must match the current command bytes
     if not rec_sha or sha_of(notes) != rec_sha:
         print(f"doasq-exec: SKIP {iid} — sha mismatch (the card was edited after approval)")
-        api(f'(todo/db/update-field "todo-item" "{iid}" "state" "REJECTED")')
+        rej_rc = move_state(iid, "REJECTED")
+        print("doasq-exec: state move %s -> REJECTED rc=%s" % (iid, rej_rc),
+              file=sys.stderr)
         rc_all = max(rc_all, 1)
         continue
 
@@ -134,7 +203,9 @@ for it in approved:
         continue
 
     # 3. claim: state -> RUNNING (one-shot; a re-run sees RUNNING and skips)
-    api(f'(todo/db/update-field "todo-item" "{iid}" "state" "RUNNING")')
+    run_move_rc = move_state(iid, "RUNNING")
+    print(f"doasq-exec: state move {iid} -> RUNNING rc={run_move_rc}",
+          file=sys.stderr)
 
     print(f"doasq-exec: running {iid} — {title}")
     print(f"  command: {notes[:200]}{'...' if len(notes) > 200 else ''}")
@@ -142,11 +213,32 @@ for it in approved:
                           capture_output=True, text=True, timeout=1800)
     out = (proc.stdout + proc.stderr)[-8000:]
 
-    # 4. the output = a card comment; the card -> DONE
-    esc = out.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
-    api(f'(todo/comment/add "{iid}" "EXECUTION rc={proc.returncode}\\n{esc}")')
-    api(f'(todo/db/update-field "todo-item" "{iid}" "state" "DONE")')
+    # 4. the output = a card comment; the card -> DONE. The comment post is
+    #    CHECKED: a failed or empty reply falls back to the root-written .out
+    #    file (card 8b0cf6b0 — the old code discarded the reply, so an rc=1
+    #    run's output vanished and comment/all answered null).
+    body_ = "EXECUTION rc=%s\n== stdout ==\n%s\n== stderr ==\n%s" % (
+        proc.returncode, proc.stdout[-8000:], proc.stderr[-8000:])
+    comment_ok = False
+    try:
+        reply = api("(todo/comment/add %s %s)" % (lisp_str(iid), lisp_str(body_)))
+        val = reply.get("value")
+        comment_ok = val not in (None, "", "()")
+        if not comment_ok:
+            print("doasq-exec: comment post for %s answered %r"
+                  % (iid, reply), file=sys.stderr)
+    except Exception as e:
+        print("doasq-exec: comment post for %s failed: %s" % (iid, e),
+              file=sys.stderr)
+    if not comment_ok:
+        write_out_fallback(iid, proc.returncode, proc.stdout, proc.stderr)
+
+    move_rc = move_state(iid, "DONE")
+    print("doasq-exec: state move %s -> DONE rc=%s" % (iid, move_rc),
+          file=sys.stderr)
     print(f"doasq-exec: {iid} rc={proc.returncode} (output posted as a card comment)")
+    if move_rc != 0:
+        rc_all = max(rc_all, 1)
     rc_all = max(rc_all, proc.returncode)
 
 sys.exit(rc_all)
