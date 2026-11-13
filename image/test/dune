@@ -391,6 +391,11 @@
  (libraries pricklypear-image pricklypear-common pricklypear-lisp alcotest eio_main yojson pgx unix))
 
 (test
+ (name arena_shadow_test)
+ (modules arena_shadow_test)
+ (libraries pricklypear-image alcotest unix))
+
+(test
  (name activity_ledger_test)
  (modules activity_ledger_test)
  (libraries pricklypear-image pricklypear-lisp alcotest eio_main yojson pgx unix))
