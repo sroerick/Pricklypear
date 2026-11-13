@@ -1935,6 +1935,18 @@ let status_of_handler_code (code : int) : Httpun.Status.t =
 (* Exposed for unit tests *)
 let status_of_handler_code_for_test = status_of_handler_code
 
+(* standalone-public-routes: a path published with the 'standalone
+   annotation (route / public-route, bumpers M3) serves the handler's
+   document VERBATIM — no habitat chrome, no <header>/<main> wrapper, no
+   injected CSS/htmx. This is the decision the HTML arm below makes; it is
+   pure so the contract "verbatim document, no chrome" is testable without
+   a live server. [None] = the ordinary chrome path. *)
+let standalone_body ~(session : Session.t) ~(path : string)
+    (value : Pricklypear_lisp.Ast.value) : string option =
+  if Session.is_standalone_route session path then
+    Some (value_to_html_string value)
+  else None
+
 let respond_handler_value
     ~(session : Session.t)
     ~(reqd : Httpun.Reqd.t)
@@ -1973,6 +1985,13 @@ let respond_handler_value
       (match Primitives.is_multipart value with
        | Some mp -> multipart_response reqd mp
        | None ->
+           (match standalone_body ~session ~path value with
+            | Some html ->
+                (* Declared-standalone route: the handler owns the whole
+                   document, so it goes out as-is. *)
+                text_response reqd ~content_type:"text/html; charset=utf-8"
+                  html
+            | None ->
            if fragment then
              let html =
                match Primitives.is_raw_html value with
@@ -2002,7 +2021,7 @@ let respond_handler_value
                           HTML.pre [] [txt "%s" rendered];
                         ])
              in
-             html_response reqd ~session body))
+             html_response reqd ~session body)))
 
 (** i-1788670767: the four per-user settings handlers shared a copy-pasted
     signed-in preamble (anonymous -> /login; user lookup -> continue or

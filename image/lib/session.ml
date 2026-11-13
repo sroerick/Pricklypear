@@ -2308,6 +2308,17 @@ let route_visibility (t : t) (route : string) : string option =
   | Some (_, vis) -> Some vis
   | None -> None
 
+(* bumpers M3 'standalone declarations: the route annotation records the
+   path in [t.standalone_routes]; http_core reads it back here to serve the
+   handler's own document verbatim (no habitat chrome). Monotone within the
+   session — a plain re-publish does not un-declare. *)
+let is_standalone_route (t : t) (route : string) : bool =
+  List.mem route t.standalone_routes
+
+let declare_standalone_route (t : t) ~(route : string) : unit =
+  if not (List.mem route t.standalone_routes) then
+    t.standalone_routes <- route :: t.standalone_routes
+
 let is_anonymous (t : t) : bool = t.manifest.username = "anonymous"
 
 let kernel_catalog (t : t) : (string * string) list = t.kernel_catalog

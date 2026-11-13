@@ -326,6 +326,11 @@
  (libraries pricklypear-image pricklypear-lisp alcotest eio_main))
 
 (test
+ (name standalone_route_test)
+ (modules standalone_route_test)
+ (libraries pricklypear-image pricklypear-lisp pricklypear-common alcotest eio_main))
+
+(test
  (name session_split_test)
  (modules session_split_test)
  (libraries pricklypear-image pricklypear-lisp alcotest eio_main))
