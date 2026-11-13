@@ -4,3 +4,11 @@
  (package pricklypear-image)
  (modules main)
  (libraries pricklypear-image))
+
+; arena_report — the shadow-benchmark report, one command:
+;   dune exec bin/arena_report.exe <card>
+;   dune exec bin/arena_report.exe --matched-pairs <card>
+(executable
+ (name arena_report)
+ (modules arena_report)
+ (libraries pricklypear-image yojson unix))
