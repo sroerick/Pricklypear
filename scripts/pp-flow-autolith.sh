@@ -237,6 +237,21 @@ attempt() {
     fmsg="$(tr -d '\n' < "$WORK.out" | sed -n 's/.*:MESSAGE[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
   fi
   failure="${fcat}${fmsg:+ $fmsg}"
+  # EMPTY-EVIDENCE CONTRACT (11-13): run-job validates the object shape but
+  # accepts "evidence" as an empty string. This used to exit 0 with no EVIDENCE
+  # line on stdout, so the factory's spec pass threw the verdict away and re-ran
+  # the same card every tick (f7739fa8 PASSed five times that way, 11-13). An
+  # answer with no evidence is not an answer: mark the attempt incomplete so the
+  # retry loop asks again, and fail loudly if it never arrives.
+  if [ "$CRASHED" -eq 0 ] && [ "$status" = ":SUCCEEDED" ] && [ -s "$WORK.out" ] \
+     && tr -d '\n' < "$WORK.out" | grep -q ':RESULT[[:space:]]*(:OBJECT'; then
+    ev="$(tr -d '\n' < "$WORK.out" | sed -n 's/.*("evidence"[[:space:]]*"\([^"]*\)").*/\1/p')"
+    if [ -z "$ev" ]; then
+      status=":INCOMPLETE"
+      failure=":INCOMPLETE empty evidence in the structured result"
+      echo "pp-flow-autolith: attempt $attempt SUCCEEDED with an empty evidence field; that is not an answer" >&2
+    fi
+  fi
 
   trace="$(tr -d '\n' < "$WORK.out" 2>/dev/null | sed -n 's/.*:TRACE-ID[[:space:]]*"\([^"]*\)".*/\1/p')"
   intok="$(tr -d '\n' < "$WORK.out" 2>/dev/null | sed -n 's/.*:INPUT-TOKENS[[:space:]]*\([0-9]*\).*/\1/p')"
@@ -269,6 +284,7 @@ transient_failure() {
         *"HTTP 5"[0-9][0-9]*)                                                    printf 'yes\n' ;;
         *)                                                                        printf 'no\n' ;;
       esac ;;
+    :INCOMPLETE) printf 'yes\n' ;;
     *) printf 'no\n' ;;
   esac
 }
@@ -307,9 +323,9 @@ if [ "$status" != ":SUCCEEDED" ]; then
   archive_failure "${status:-crashed}"
   # bounded excerpt, not a full dump: enough to see WHY, never megabytes
   if [ "$CRASHED" -eq 1 ]; then
-    head -c 2000 "$WORK.err" >&2
+    cut -c1-2000 "$WORK.err" >&2
   else
-    tr -d '\n' < "$WORK.out" | head -c 2000 >&2
+    tr -d '\n' < "$WORK.out" | cut -c1-2000 >&2
   fi
   echo >&2
   exit 1
