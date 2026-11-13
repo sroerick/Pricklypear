@@ -63,7 +63,13 @@ let caller_username ~(t : t) () =
 let require_admin ~(t : t) (op : string) (k : unit -> Pricklypear_lisp.Ast.value)
   : Pricklypear_lisp.Ast.value =
   let uname = caller_username ~t () in
-  if uname = "anonymous" then
+  (* Delegated tokens carry the data-only tier: FIRST, before the admin
+     re-check below, because the delegated session's manifest.username is
+     the OWNER it acts for — an owner who happens to be admin must not
+     launder the carrying agent into an admin op. *)
+  if t.delegated then
+    (Pricklypear_lisp.Ast.VStr (op ^ ": denied for delegated sessions"))
+  else if uname = "anonymous" then
     (Pricklypear_lisp.Ast.VStr (op ^ ": denied for anonymous"))
   else
     let u = Auth_store.get_user_by_username t.store uname in

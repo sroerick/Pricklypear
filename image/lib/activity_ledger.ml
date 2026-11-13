@@ -41,7 +41,7 @@ let valid_classes : string list =
     "api.eval"; "route.hit"; "tree.write"; "data.write"; "rls.violation";
     "admin.content-read"; "admin.hold"; "admin.knock"; "admin.revoke";
     "admin.create"; "admin.delete"; "promote.attempt"; "token.mint";
-    "agent.spawn"; "egress.http"; "quota.exceeded";
+    "agent.spawn"; "egress.http"; "quota.exceeded"; "arena.dispatch";
   ]
 
 let valid_outcomes : string list = [ "ok"; "denied"; "error"; "timed-out" ]
@@ -138,6 +138,247 @@ let budget_cost_json ~(steps : int) ~(prim_calls : int) ~(db_hits : int)
     (`Assoc
        [ ("steps", `Int steps); ("prim_calls", `Int prim_calls);
          ("db_hits", `Int db_hits); ("db_ms", `Int (int_of_float db_ms)) ])
+
+(* —— arena: shadow benchmark mode ——————————————————————————————————
+   product-experience §arena (operator direction 11-12). Labs compete in
+   SHADOW MODE: a sealed card dispatches to N engines, each on its OWN
+   clone/worktree cut from an IDENTICAL base commit. Nothing merges to
+   production — production keeps its engine and the arena runs beside it.
+   The ledger already records a class + actor + cost per run, so scoring
+   is a group-by (engine × card), never a model judgement: model-judged
+   quality would let one competitor rank another. *)
+
+let arena_class = "arena.dispatch"
+
+(* The gate vocabulary the factory already speaks: a build/test/evidence
+   gate either passed, failed, or was not run. *)
+let valid_gates : string list = [ "ok"; "fail"; "skipped" ]
+
+let valid_gate (s : string) : bool = List.mem s valid_gates
+
+(* One engine's run of one sealed card. [ga_branch]/[ga_worktree] are that
+   engine's PRIVATE clone; they are never production paths. *)
+type arena_run = {
+  ga_card : string;                 (* sealed card id, single use *)
+  ga_engine : string;               (* scoped engine identity *)
+  ga_base_commit : string;          (* identical for every engine *)
+  ga_branch : string;
+  ga_worktree : string;
+  ga_gate : string;                 (* build/tests/evidence: ok|fail|skipped *)
+  ga_outcome : string;              (* ok | denied | error | timed-out *)
+  ga_tokens : int;
+}
+
+(** CARDS ARE SEALED: an engine worktree holds exactly one brief — its
+    own. A sibling card id in the tree means the item leaked (and the
+    benchmark is contaminated), so it is refused. *)
+let arena_brief_sealed ~(card : string) ~(brief_cards : string list) : bool =
+  brief_cards = [ card ]
+
+(** IDENTITY LAW: an external engine authenticates with a scoped identity
+    — zero production capability, no inherited agent trust. A production
+    write is allowed only for an internal engine holding a
+    production-scoped credential. *)
+let arena_write_allowed ~(scoped : bool) ~(production : bool) : bool =
+  (not scoped) && production
+
+(** Rank is mechanical, v1: PASS iff the gate said ok AND the outcome is
+    ok. A green-looking outcome logged over a broken gate is NOT a pass —
+    the gate is the metric; [outcome] alone can be asserted by an engine
+    that never ran the gate. *)
+let arena_pass (r : arena_run) : bool = r.ga_gate = "ok" && r.ga_outcome = "ok"
+
+let arena_run_of ~(card : string) ~(base_commit : string) ~(engine : string)
+    ~(tokens : int) ~(branch_prefix : string) : arena_run =
+  { ga_card = card; ga_engine = engine; ga_base_commit = base_commit;
+    ga_branch = Printf.sprintf "%s/%s" branch_prefix engine;
+    ga_worktree = Printf.sprintf "arena/%s/%s" card engine;
+    ga_gate = "skipped"; ga_outcome = "error"; ga_tokens = tokens }
+
+(** Dispatch a sealed card to N engines from ONE base commit. Every engine
+    gets its own branch + worktree; the plan is a list of independent
+    clones with no merge edge anywhere. [Error] for an empty fleet, a
+    missing card, or an engine listed twice (a card is single-use per
+    engine). *)
+let arena_dispatch ~(card : string) ~(base_commit : string)
+    ~(engines : string list) ?(tokens : int = 0)
+    ?(branch_prefix : string = "arena") () : (arena_run list, string) result =
+  let rec dup = function
+    | [] -> false
+    | x :: xs -> List.mem x xs || dup xs
+  in
+  if card = "" then Error "arena: a sealed card is required"
+  else if base_commit = "" then Error "arena: a base commit is required"
+  else if engines = [] then Error "arena: no engines to dispatch"
+  else if dup engines then Error "arena: an engine runs a card at most once"
+  else
+    Ok
+      (List.map
+         (fun engine ->
+           arena_run_of ~card ~base_commit ~engine ~tokens ~branch_prefix)
+         engines)
+
+(** Record one run in the ledger (engine + tokens; the ledger is the
+    scoreboard). Structure only — the card id is the target. *)
+let arena_record (r : arena_run) : (unit, string) result =
+  if not (valid_gate r.ga_gate) then
+    Error (Printf.sprintf "unknown arena gate %S" r.ga_gate)
+  else
+    push ~actor:r.ga_engine ~cls:arena_class
+      ~target:(path_target r.ga_card) ~outcome:r.ga_outcome
+      ~cost_json:
+        (Printf.sprintf "{\"tokens\":%d,\"gate\":\"%s\"}" r.ga_tokens
+           r.ga_gate)
+      ()
+
+(* The leaderboard row: engine × card. *)
+type arena_score = {
+  asc_card : string;
+  asc_engine : string;
+  asc_runs : int;
+  asc_passes : int;
+  asc_tokens : int;
+}
+
+let arena_score_json (s : arena_score) : string =
+  Yojson.Safe.to_string
+    (`Assoc
+       [ ("card", `String s.asc_card); ("engine", `String s.asc_engine);
+         ("runs", `Int s.asc_runs); ("passes", `Int s.asc_passes);
+         ("tokens", `Int s.asc_tokens) ])
+
+(** THE LEADERBOARD IS A GROUP-BY: matched pairs (same card, N engines)
+    are the unit of comparison. Rows are ordered by card, then by passes
+    descending, then engine, so a report is one command's worth of text. *)
+let arena_leaderboard (runs : arena_run list) : arena_score list =
+  let tbl : (string * string, int * int * int) Hashtbl.t = Hashtbl.create 16 in
+  List.iter
+    (fun r ->
+      let key = (r.ga_card, r.ga_engine) in
+      let n, p, t =
+        match Hashtbl.find_opt tbl key with Some v -> v | None -> (0, 0, 0)
+      in
+      Hashtbl.replace tbl key
+        (n + 1, p + (if arena_pass r then 1 else 0), t + r.ga_tokens))
+    runs;
+  Hashtbl.fold
+    (fun (card, engine) (n, p, t) acc ->
+      { asc_card = card; asc_engine = engine; asc_runs = n; asc_passes = p;
+        asc_tokens = t }
+      :: acc)
+    tbl []
+  |> List.sort (fun a b ->
+         match compare a.asc_card b.asc_card with
+         | 0 -> (
+             match compare b.asc_passes a.asc_passes with
+             | 0 -> compare a.asc_engine b.asc_engine
+             | c -> c)
+         | c -> c)
+
+(** The rank for one card: gate-and-outcome passes first, cheaper (fewer
+    tokens) first on a tie. *)
+let arena_rank ~(card : string) (scores : arena_score list) : arena_score list =
+  List.filter (fun s -> s.asc_card = card) scores
+  |> List.sort (fun a b ->
+         match compare b.asc_passes a.asc_passes with
+         | 0 -> compare a.asc_tokens b.asc_tokens
+         | c -> c)
+
+(** Matched pairs: (card, incumbent row, challenger row) for every engine
+    that ran the same card as [incumbent]. *)
+let arena_pairs ~(incumbent : string) (scores : arena_score list) :
+    (string * arena_score * arena_score) list =
+  List.concat_map
+    (fun a ->
+      if a.asc_engine <> incumbent then []
+      else
+        List.filter_map
+          (fun b ->
+            if b.asc_card = a.asc_card && b.asc_engine <> incumbent then
+              Some (a.asc_card, a, b)
+            else None)
+          scores)
+    scores
+
+let arena_score_line (s : arena_score) : string =
+  Printf.sprintf "%s\t%s\tpasses=%d/%d\ttokens=%d" s.asc_card s.asc_engine
+    s.asc_passes s.asc_runs s.asc_tokens
+
+(** One report, two shapes: the group-by, or the matched pairs against the
+    incumbent engine. *)
+let arena_report_lines ?(matched_pairs : bool = false)
+    ~(incumbent : string) (scores : arena_score list) : string list =
+  if matched_pairs then
+    List.map
+      (fun (card, inc, eng) ->
+        Printf.sprintf "%s\tincumbent %s passes=%d/%d vs %s passes=%d/%d"
+          card inc.asc_engine inc.asc_passes inc.asc_runs eng.asc_engine
+          eng.asc_passes eng.asc_runs)
+      (arena_pairs ~incumbent scores)
+  else List.map arena_score_line scores
+
+(** Mechanical self-check of the shadow-mode contract; the test suite and
+    the report command both read this so the rank rule has one home. *)
+let arena_selftest () : (string * bool) list =
+  let base = "e5a3e56412f2" in
+  let runs =
+    match
+      arena_dispatch ~card:"card-1" ~base_commit:base
+        ~engines:[ "native"; "engine-2" ] ~tokens:10 ()
+    with
+    | Ok rs -> rs
+    | Error _ -> []
+  in
+  let dispatch_ok =
+    List.length runs = 2
+    && List.for_all (fun r -> r.ga_base_commit = base) runs
+    && List.sort_uniq compare
+         (List.map (fun r -> r.ga_branch) runs)
+       |> List.length
+       = 2
+  in
+  let scores = arena_leaderboard runs in
+  let grouped =
+    List.length scores = 2
+    && List.for_all
+         (fun s -> s.asc_passes = 0 && s.asc_runs = 1 && s.asc_tokens = 10)
+         scores
+  in
+  let two = [ "card-1"; "card-2" ] in
+  let sealed =
+    arena_brief_sealed ~card:"card-1" ~brief_cards:[ "card-1" ]
+    && not (arena_brief_sealed ~card:"card-1" ~brief_cards:two)
+  in
+  let one = match runs with r :: _ -> Some r | [] -> None in
+  let gate_fail, gate_pass =
+    match one with
+    | None -> (false, false)
+    | Some r ->
+        ( (not (arena_pass { r with ga_gate = "fail"; ga_outcome = "ok" })),
+          arena_pass { r with ga_gate = "ok"; ga_outcome = "ok" } )
+  in
+  let scored =
+    { asc_card = "card-1"; asc_engine = "native"; asc_runs = 1;
+      asc_passes = 1; asc_tokens = 10 }
+  in
+  let challenger =
+    { asc_card = "card-1"; asc_engine = "engine-2"; asc_runs = 1;
+      asc_passes = 0; asc_tokens = 10 }
+  in
+  let pairs_ok =
+    match arena_pairs ~incumbent:"native" [ scored; challenger ] with
+    | [ ("card-1", a, b) ] -> a.asc_engine = "native" && b.asc_engine = "engine-2"
+    | _ -> false
+  in
+  [ ("arena-dispatch", dispatch_ok);
+    ("arena-leaderboard", grouped);
+    ("arena-rank-gate", gate_fail && gate_pass);
+    ("arena-sealed-brief", sealed);
+    ("arena-scoped-identity",
+     (not (arena_write_allowed ~scoped:true ~production:true))
+     && not (arena_write_allowed ~scoped:true ~production:false)
+     && arena_write_allowed ~scoped:false ~production:true);
+    ("arena-matched-pairs", pairs_ok) ]
 
 (* —— day rollups ————————————————————————————————————————————————
    Accumulated from the flushed batch exactly once, grouped by
