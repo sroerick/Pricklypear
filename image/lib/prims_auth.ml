@@ -325,45 +325,69 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
         | Pricklypear_lisp.Ast.VStr s when s <> "" -> Some s
         | _ -> None
       in
+      let deny code msg =
+        raise (Pricklypear_lisp.Ast.Interp_error
+                 (Pricklypear_lisp.Ast.Prim_error
+                    ("mint-delegated-token", msg, code)))
+      in
+      (* KERNEL TIER GATE: minting a delegation token is a CREDENTIAL
+         surface, never data — only an admin or an agent identity may hold
+         it. Runs BEFORE the owner lookup (and before the arg-shape
+         branch), so a guest (user_type human, the default) and a caller
+         with NO users row at all get the deny, never the old
+         pipe-Some/not-found fall-through. *)
+      let me_opt = Auth_store.get_user_by_username t.store caller in
+      let privileged =
+        match me_opt with
+        | Some u -> u.is_admin || u.user_type = "agent"
+        | None -> false
+      in
+      if not privileged then
+        (deny "denied"
+           "denied: token minting requires an admin or agent identity");
+      let mint_as_self ~actor ~label =
+        match me_opt with
+        | Some owner ->
+            (* The self-mint forms mint under the caller's own actor name:
+               outside admin, a foreign actor is a forgery of provenance. *)
+            if (not owner.is_admin) && String.trim actor <> caller then
+              (deny "denied"
+                 "denied: non-admin may only mint with actor = own username")
+            else
+              (match
+                 Auth_store.mint_delegated_token t.store
+                   ~owner_user_id:owner.id ~actor ~label:(parse_label label) ()
+               with
+               | Error e -> (deny "failed" e)
+               | Ok (raw, _cid) -> Pricklypear_lisp.Ast.VStr raw)
+        | None ->
+            (deny "denied"
+               "denied: token minting requires an admin or agent identity")
+      in
       (match args with
        | [ Pricklypear_lisp.Ast.VStr actor; label ]
        | [ Pricklypear_lisp.Ast.VStr actor; Pricklypear_lisp.Ast.VNil; label ] ->
            (* mint for self *)
-           let u = Auth_store.get_user_by_username t.store caller in
-           (match u with
-            | None ->
-                raise (Pricklypear_lisp.Ast.Interp_error
-                         (Pricklypear_lisp.Ast.Prim_error
-                            ("mint-delegated-token", "no such user", "not-found")))
-            | Some owner ->
-                (match
-                   Auth_store.mint_delegated_token t.store
-                     ~owner_user_id:owner.id ~actor ~label:(parse_label label) ()
-                 with
-                 | Error e ->
-                     raise (Pricklypear_lisp.Ast.Interp_error
-                              (Pricklypear_lisp.Ast.Prim_error
-                                 ("mint-delegated-token", e, "failed")))
-                 | Ok (raw, _cid) -> Pricklypear_lisp.Ast.VStr raw))
+           mint_as_self ~actor ~label
        | [ Pricklypear_lisp.Ast.VStr actor; label;
            Pricklypear_lisp.Ast.VStr owner_name ] ->
-           (* admin mints on another owner's behalf *)
-           require_admin "mint-delegated-token" (fun () ->
-             match Auth_store.get_user_by_username t.store owner_name with
-             | None ->
-                 raise (Pricklypear_lisp.Ast.Interp_error
-                          (Pricklypear_lisp.Ast.Prim_error
-                             ("mint-delegated-token", "no such owner", "not-found")))
-             | Some owner ->
-                 (match
-                    Auth_store.mint_delegated_token t.store
-                      ~owner_user_id:owner.id ~actor ~label:(parse_label label) ()
-                  with
-                  | Error e ->
-                      raise (Pricklypear_lisp.Ast.Interp_error
-                               (Pricklypear_lisp.Ast.Prim_error
-                                  ("mint-delegated-token", e, "failed")))
-                  | Ok (raw, _cid) -> Pricklypear_lisp.Ast.VStr raw))
+           if owner_name = caller then
+             (* an agent's ATTRIBUTED self-mint (actor label owner) is the
+                3-arg form of the self-mint above, not an admin
+                on-behalf-of mint — no admin needed. *)
+             mint_as_self ~actor ~label
+           else
+             (* admin mints on another owner's behalf *)
+             require_admin "mint-delegated-token" (fun () ->
+               match Auth_store.get_user_by_username t.store owner_name with
+               | None -> deny "not-found" "no such owner"
+               | Some owner ->
+                   (match
+                      Auth_store.mint_delegated_token t.store
+                        ~owner_user_id:owner.id ~actor ~label:(parse_label label) ()
+                    with
+                    | Error e -> deny "failed" e
+                    | Ok (raw, _cid) -> Pricklypear_lisp.Ast.VStr raw))
        | _ ->
            raise (Pricklypear_lisp.Ast.Interp_error
                     (Pricklypear_lisp.Ast.Prim_error
