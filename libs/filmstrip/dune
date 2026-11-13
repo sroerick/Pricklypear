@@ -1,0 +1,8 @@
+;; Pricklypear's filmstrip adapter: the app registry (Filmstrip) plus the
+;; page entry point (Page), which delegates strip rendering to
+;; filmstrip-shared in libs/filmstrip/shared.
+(library
+ (name filmstrip)
+ (wrapped false)
+ (modules filmstrip page)
+ (libraries filmstrip_shared))
