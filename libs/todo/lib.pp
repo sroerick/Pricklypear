@@ -1977,6 +1977,158 @@
      prod (4128 shared nodes). Same rows, same order, same (id . fields)
      shape as todo/item/all.")
 
+;; ------------------------------------------------------------------
+;; SUBTASKS (card c257735e): a card may be filed UNDER another card.
+;; The raw tree layer already has the machinery, but the todo layer
+;; never wired it: the parent/child relation is carried as a `parent`
+;; field (parent card UUID) on the CHILD row, so it survives the flat
+;; todo/item/all pool and the shared Board (data.s.*) alike. Read the
+;; relation back with todo/item/parent (one row) and
+;; todo/item/children (a parent's direct children, sibling order
+;; preserved). Subtasks MUST stay visible to the factory — the loop's
+;; cardinal sin is invisible work: todo/item/all keeps returning them
+;; because children are ordinary todo-items, and the loop treats a card
+;; with unlanded children as blocked-by-children instead of
+;; implementing the parent directly (see todo/loop/rows).
+;; ------------------------------------------------------------------
+
+(define todo/item/parent
+  (lambda
+    (fields)
+    "The parent card id of item fields, or the empty string when this
+     card is top-level. Filed with todo/item/set-parent."
+    (let
+      ((p (dict-get fields "parent")))
+      (if (null? p) "" (as-str p)))))
+
+(define todo/item/children
+  (lambda
+    (id)
+    "Direct child cards of card id, as (id . fields) rows in sibling
+     order (the input order of todo/item/all, i.e. creation/tree order).
+     A card with children is a PARENT: the loop rolls it up and never
+     implements it directly."
+    (let
+      ((pid (as-str id)))
+      (if
+        (string-eq pid "")
+        (list)
+        (list/filter
+          (lambda
+            (row)
+            (string-eq (todo/item/parent (cdr row)) pid))
+          (todo/item/all))))))
+
+(define todo/item/children-of
+  (lambda
+    (id)
+    (todo/item/children id))
+  "Alias kept for tree-vocabulary callers (tree/children-of); same
+   contract as todo/item/children — one implementation, not two.")
+
+(define todo/item/set-parent
+  (lambda
+    (id parent)
+    "File card id under parent (an empty parent DETACHES it back to
+     top-level). Content edit via tree/set-field, no state transition.
+     Returns id, or () when the card is missing."
+    (let
+      ((cur (todo/tree/get "todo-item" (as-str id))))
+      (if
+        (null? cur)
+        ()
+        (seq
+          (todo/tree/set-field
+            "todo-item"
+            (as-str id)
+            "parent"
+            (as-str parent))
+          (as-str id))))))
+
+(define todo/item/leaf?
+  (lambda
+    (item)
+    "True when this card is a LEAF — it has no children — so the loop
+     may implement it. A parent (children present) is never implemented
+     directly; it only rolls up."
+    (null? (todo/item/children (car item)))))
+
+(define todo/item/children-done
+  (lambda
+    (id)
+    "How many of card id's children are DONE, as a NUMBER (0 when it has
+     no children)."
+    (list/foldl
+      (lambda
+        (acc row)
+        (if
+          (string-eq (todo/item/state (cdr row)) "DONE")
+          (+ acc 1)
+          acc))
+      0
+      (todo/item/children id))))
+
+(define todo/item/progress
+  (lambda
+    (id)
+    "The rollup string for a parent card, e.g. \\\"1/3 done\\\" (DONE
+     children over total children). Top-level leaves get the empty
+     string. This is the rollup the board renders instead of a
+     hand-closed parent (crit7: GET /board contains \\\"1/3 done\\\")."
+    (let
+      ((kids (todo/item/children id)))
+      (if
+        (null? kids)
+        ""
+        (string-append
+          (as-str (todo/item/children-done id))
+          "/"
+          (as-str (length kids))
+          " done")))))
+
+(define todo/item/rollup
+  (lambda
+    (id)
+    "Close the loop on a parent: when EVERY child of card id is DONE the
+     parent flips DONE itself — no hand-closing (card c257735e). Returns
+     the parent's state, or () for a missing card. A LEAF is returned
+     untouched, and a parent with any unlanded child stays OPEN."
+    (let
+      ((row (todo/tree/get "todo-item" (as-str id))))
+      (if
+        (null? row)
+        ()
+        (let
+          ((kids (todo/item/children (as-str id))))
+          (if
+            (null? kids)
+            (todo/item/state row)
+            (if
+              (string-eq
+                (todo/item/children-done (as-str id))
+                (as-str (length kids)))
+              (todo/item/set-state (as-str id) "DONE")
+              (todo/item/state row))))))))
+
+(define todo/loop/blocked-by-children
+  (lambda
+    (item)
+    "The loop's parent gate: the literal \\\"blocked-by-children\\\" when
+     this card has at least one unlanded child, else the empty string.
+     Called from todo/loop/rows so a parent is SKIPPED (zero implement
+     calls) and the skip is LOGGED, never silent."
+    (let
+      ((kids (todo/item/children (car item))))
+      (if
+        (null? kids)
+        ""
+        (if
+          (string-eq
+            (todo/item/children-done (car item))
+            (as-str (length kids)))
+          ""
+          "blocked-by-children")))))
+
 (define todo/item/archive
   (lambda (id) (todo/item/set-state id "ARCHIVED")))
 

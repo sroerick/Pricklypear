@@ -1,0 +1,7 @@
+;; filmstrip-shared: the ONE strip renderer, consumed by pricklypear (here,
+;; vendored under libs/filmstrip/shared) and by tuna. PP's libs/filmstrip is
+;; the adapter: its app registry is a tile provider feeding render_strip.
+(library
+ (name filmstrip_shared)
+ (wrapped false)
+ (modules filmstrip_shared))
