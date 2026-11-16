@@ -60,6 +60,11 @@ let test_loop_processes_leaves () =
 let test_parent_rolls_up () =
   check_def "todo/loop/rollup-line";
   check_def "todo/loop/rollup-lines";
+  check_def "todo/loop/report";
+  check_def "todo/loop/blocked-by-children";
+  Alcotest.(check bool) "rows and rollup are produced together, so the skip is logged"
+    true
+    (has_sub (Lazy.force src) "(todo/loop/rollup-lines items)");
   Alcotest.(check bool) "a rollup line is emitted" true
     (has_sub (Lazy.force src) "rollup ");
   Alcotest.(check bool) "an unlanded parent is reported, not silent" true
