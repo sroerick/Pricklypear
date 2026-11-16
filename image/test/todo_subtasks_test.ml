@@ -10,7 +10,9 @@
          implemented directly;
       3. a parent with children reports a rollup line (progress plus
          blocked-by-children while any child is unlanded), so a parent is
-         never invisible work.
+         never invisible work: todo/loop/report emits rows AND rollups,
+         and both the master list (todo/item/list-li) and the board
+         (kanban/card-html-marked) RENDER the rollup instead of hiding it.
 
     This test asserts that contract against the product source, so it runs
     without Postgres. The DB-backed behaviour leg lives in
@@ -41,6 +43,11 @@ let has_sub hay needle =
 
 let src = lazy (slurp (point_pp_libs_file ()))
 
+(** Another lib in the same checkout (board = libs/kanban/lib.pp). *)
+let lib_src lib =
+  let dirs = Filename.dirname (Filename.dirname (point_pp_libs_file ())) in
+  slurp (Filename.concat (Filename.concat dirs lib) "lib.pp")
+
 let check_def name =
   Alcotest.(check bool)
     (Printf.sprintf "(define %s ...) is bound" name)
@@ -50,7 +57,9 @@ let check_def name =
 let test_parent_child_prims () =
   List.iter check_def
     [ "todo/item/parent"; "todo/item/children"; "todo/item/set-parent";
-      "todo/item/leaf?"; "todo/item/rollup"; "todo/item/progress" ]
+      "todo/item/leaf?"; "todo/item/rollup"; "todo/item/progress" ];
+  Alcotest.(check bool) "the parent field is written by set-parent" true
+    (has_sub (Lazy.force src) "\"parent\"")
 
 let test_loop_processes_leaves () =
   check_def "todo/loop/rows";
@@ -70,6 +79,17 @@ let test_parent_rolls_up () =
   Alcotest.(check bool) "an unlanded parent is reported, not silent" true
     (has_sub (Lazy.force src) "blocked-by-children")
 
+(** crit5: the master card list RENDERS the rollup for a parent, so a
+    parent with children is never invisible work on /todos. *)
+let test_master_list_renders_rollup () =
+  Alcotest.(check bool) "todo/item/list-li renders the rollup pill" true
+    (has_sub (Lazy.force src) "todo-rollup")
+
+(** crit7: GET /board renders the same rollup on the card. *)
+let test_board_renders_rollup () =
+  Alcotest.(check bool) "the kanban card renders the rollup" true
+    (has_sub (lib_src "kanban") "kb-card-rollup")
+
 let () =
   Alcotest.run "todo_subtasks"
     [ ( "todo-subtasks",
@@ -78,4 +98,8 @@ let () =
           Alcotest.test_case "the loop processes leaves only" `Quick
             test_loop_processes_leaves;
           Alcotest.test_case "a parent with children rolls up" `Quick
-            test_parent_rolls_up ] ) ]
+            test_parent_rolls_up;
+          Alcotest.test_case "the master list renders the rollup" `Quick
+            test_master_list_renders_rollup;
+          Alcotest.test_case "the board renders the rollup" `Quick
+            test_board_renders_rollup ] ) ]

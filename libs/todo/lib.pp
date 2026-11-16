@@ -2172,7 +2172,9 @@
     (list/filter
       (lambda
         (item)
-        (todo/item/leaf? item))
+        (and
+          (todo/item/leaf? item)
+          (string-eq (todo/loop/blocked-by-children item) "")))
       items)))
 
 (define todo/loop/report
@@ -2472,7 +2474,15 @@
                   view)
                 (html/span
                   (html/attr "class" "todo-title")
-                  (html/text title)))
+                  (html/text title))
+                (let
+                  ((roll (todo/item/progress id)))
+                  (if
+                    (string-eq roll "")
+                    ""
+                    (html/span
+                      (html/attr "class" "todo-rollup")
+                      (html/text (string-append "rollup " roll))))))
                 (lookbook/html
                   (todo/ui/assignee-badge (todo/item/assignee fields)))
               (if
