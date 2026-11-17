@@ -582,4 +582,20 @@
         Full text inlined from borge/habitat-book.borg.")
   (inline borge/habitat-book.borg)
  )
+ (section authz-matrix
+  (doc "Book chapter — one permission model for the OCaml layer: identity classes, the per-surface enforcement matrix, the authz.ml capability-table proposal and its behavior-preserving migration order. Full text inlined from borge/authz-matrix.borg.")
+  (inline borge/authz-matrix.borg)
+ )
+ (section row-type-public-visibility
+  (doc "Book chapter — row-type public visibility as a declared, admin-written declaration table extending tree_is_seed_type, keeping the 016 single-source floor intact. Full text inlined from borge/row-type-public-visibility.borg.")
+  (inline borge/row-type-public-visibility.borg)
+ )
+ (section session-freshness
+  (doc "Book chapter — session freshness: durable route binds that fall back to the branch's view_bindings rows, unconditional seed env re-bind, and session-create rehydration. Full text inlined from borge/session-freshness.borg.")
+  (inline borge/session-freshness.borg)
+ )
+ (section workout-ksf-cjc
+  (doc "Book chapter — the first program-as-sub-module: the workout-ksf-cjc agenda page composed over the core workout lib, its render-assert tests and the seed-crystal loop. Full text inlined from borge/workout-ksf-cjc.borg.")
+  (inline borge/workout-ksf-cjc.borg)
+ )
 )

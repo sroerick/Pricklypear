@@ -1,4 +1,4 @@
-(** authz.ml tests (specs/authz-matrix.md): identity classes and the
+(** authz.ml tests (borge/authz-matrix.borg): identity classes and the
     capability table over no-DB sessions (prim_gates_test harness
     shape). Step 2 live: the branch-op family routes its class gate
     through [authorize] (session_control_prims.ml); factory identities
