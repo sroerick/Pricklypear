@@ -98,10 +98,11 @@ let auth_types_tests = [
 
 let protocol_tests = [
   ("protocol: health_response round-trip ok", `Quick, fun () ->
-    let h = { Protocol.ok = true; branch = "alice/main";
-              uptime_seconds = 42; boot_epoch = 1756900000;
-              open_fds = 37; fd_limit = 1024;
-              blocked_backends = 0; idle_in_tx = 0; error = None } in
+      let h = { Protocol.ok = true; branch = "alice/main";
+                uptime_seconds = 42; boot_epoch = 1756900000;
+                rev = "655d34f0c605bc";
+                open_fds = 37; fd_limit = 1024;
+                blocked_backends = 0; idle_in_tx = 0; error = None } in
     let j = Protocol.health_response_to_json h in
     (match Protocol.health_response_of_json j with
      | Ok h' ->
@@ -115,11 +116,12 @@ let protocol_tests = [
         Alcotest.(check int) "idle_in_tx" 0 h'.idle_in_tx
      | Error e -> Alcotest.failf "parse failed: %s" e));
   ("protocol: health_response contention fields round-trip", `Quick, fun () ->
-    let h = { Protocol.ok = false; branch = "system/main";
-              uptime_seconds = 42; boot_epoch = 1756900000;
-              open_fds = 37; fd_limit = 1024;
-              blocked_backends = 3; idle_in_tx = 1;
-              error = Some "lock pileup: 3 backend(s) blocked" } in
+      let h = { Protocol.ok = false; branch = "system/main";
+                uptime_seconds = 42; boot_epoch = 1756900000;
+                rev = "";
+                open_fds = 37; fd_limit = 1024;
+                blocked_backends = 3; idle_in_tx = 1;
+                error = Some "lock pileup: 3 backend(s) blocked" } in
     let j = Protocol.health_response_to_json h in
     (match Protocol.health_response_of_json j with
      | Ok h' ->

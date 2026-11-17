@@ -34,6 +34,13 @@ type health_response = {
       release — the 2026-09-03 prod incident) can no longer false-OK the
       health gate. 0 = unknown (old image without the field). *)
   boot_epoch : int;
+  (** The git commit this image was built from (2026-11-17). The factory
+      refuses to close a merged card until it can prove the merge is what is
+      running; for tuna that proof is a rev from /health, and pricklypear had
+      none, so two merged cards could never leave LOGIC-REVIEW. "unknown" on
+      an image built outside git, and "" from an image that predates the
+      field. *)
+  rev : string;
   (** Open file descriptors at probe time + the process soft limit
       (fd-gauge, 2026-10-02 fd-exhaustion incident). Additive: old
       consumers ignore them; an old image omits them and parsers
@@ -58,6 +65,7 @@ let health_response_to_json (h : health_response) : Yojson.Safe.t =
     ("branch", `String h.branch);
     ("uptime_seconds", `Int h.uptime_seconds);
     ("boot_epoch", `Int h.boot_epoch);
+    ("rev", `String h.rev);
     ("open_fds", `Int h.open_fds);
     ("fd_limit", `Int h.fd_limit);
     ("blocked_backends", `Int h.blocked_backends);
@@ -77,6 +85,10 @@ let health_response_of_json (j : Yojson.Safe.t) : (health_response, string) resu
     let boot_epoch = match List.assoc_opt "boot_epoch" assoc with
       | Some (`Int n) -> n
       | _ -> 0 in
+    (* Additive (2026-11-17): old images omit rev; "" = unknown build. *)
+    let rev = match List.assoc_opt "rev" assoc with
+      | Some (`String s) -> s
+      | _ -> "" in
     (* Additive (fd-gauge, 2026-10-02): old images omit these; 0 = unknown. *)
     let open_fds = match List.assoc_opt "open_fds" assoc with
       | Some (`Int n) -> n
@@ -93,6 +105,6 @@ let health_response_of_json (j : Yojson.Safe.t) : (health_response, string) resu
       | _ -> 0 in
     let error = match List.assoc "error" assoc with
                 | `String s -> Some s | `Null -> None | _ -> failwith "error" in
-    Ok { ok; branch; uptime_seconds = uptime; boot_epoch; open_fds; fd_limit;
+    Ok { ok; branch; uptime_seconds = uptime; boot_epoch; rev; open_fds; fd_limit;
          blocked_backends; idle_in_tx; error }
   with Failure msg -> Error msg
