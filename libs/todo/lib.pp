@@ -4245,9 +4245,10 @@
               (redirect (string-append "/todos?view=" view)))))
         (let
           ((lists (todo/list/all)))
-          ;; Card f237239f: the page header is the h1 alone. The muted
-          ;; "Lists (Basecamp) ..." line was a second copy of the board's
-          ;; own description and rendered the same text twice on a list page.
+          ;; Card f237239f: the page header is the h1 alone. The old muted
+          ;; paragraph here was a second copy of the description the board
+          ;; body already carries, so a list page printed the same text
+          ;; twice. One description line per render, and it lives in the body.
           (html/page
             (list
               (html/h1 "To-dos")
