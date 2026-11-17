@@ -4245,10 +4245,9 @@
               (redirect (string-append "/todos?view=" view)))))
         (let
           ((lists (todo/list/all)))
-          ;; Card f237239f: the header is the h1 alone. The muted description
-          ;; line the board body already carries used to be rendered a second
-          ;; time here, so a list page printed the same text twice. One
-          ;; description line per render, and it lives in the body.
+          ;; Card f237239f: one title line per render. The header is the h1
+          ;; alone; the view's own headings and rows follow, so a list page
+          ;; never prints the same title/description text twice.
           (html/page
             (list
               (html/h1 "To-dos")
