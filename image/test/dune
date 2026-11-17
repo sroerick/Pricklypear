@@ -417,6 +417,12 @@
 
 
 (test
+ (name todo_subtasks_test)
+ (modules todo_subtasks_test)
+ (libraries pricklypear-image alcotest))
+
+
+(test
  (name authz_test)
  (modules authz_test)
  (libraries pricklypear-image pricklypear-lisp alcotest unix))

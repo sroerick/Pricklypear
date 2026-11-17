@@ -2129,6 +2129,67 @@
           ""
           "blocked-by-children")))))
 
+(define todo/loop/rollup-line
+  (lambda
+    (item)
+    "The line the loop EMITS for a PARENT card instead of implementing it:
+     rollup <id>: <done>/<total> done — plus the literal
+     blocked-by-children while any child is unlanded. A LEAF emits the
+     empty string so callers can drop it. This is the rollup that makes a
+     parent with children visible work: it is never implemented directly
+     and never silently skipped."
+    (let
+      ((kids (todo/item/children (car item))))
+      (if
+        (null? kids)
+        ""
+        (string-append
+          "rollup "
+          (as-str (car item))
+          ": "
+          (todo/item/progress (car item))
+          (let
+            ((gate (todo/loop/blocked-by-children item)))
+            (if (string-eq gate "") "" (string-append " " gate))))))))
+
+(define todo/loop/rollup-lines
+  (lambda
+    (items)
+    "Every rollup line for the parent cards in items; leaves drop out."
+    (list/filter
+      (lambda
+        (s)
+        (not (string-eq s "")))
+      (list/map todo/loop/rollup-line items))))
+
+(define todo/loop/rows
+  (lambda
+    (items)
+    "The loop's work queue: LEAF cards only — a card with empty children is
+     what the loop implements. A parent (children present) is filtered out
+     here and reported by todo/loop/rollup-lines instead of vanishing.
+     Pairs with todo/item/leaf?."
+    (list/filter
+      (lambda
+        (item)
+        (and
+          (todo/item/leaf? item)
+          (string-eq (todo/loop/blocked-by-children item) "")))
+      items)))
+
+(define todo/loop/report
+  (lambda
+    (items)
+    "One tick of the loop, whole: (rows . rollup) where rows are the LEAF
+     cards the loop implements and rollup the lines emitted for the PARENT
+     cards (a parent with any unlanded child carries the literal
+     blocked-by-children). Every card in items lands in exactly one of the
+     two halves, so a parent is never silently skipped — the loop logs the
+     rollup line instead of implementing the parent directly."
+    (cons
+      (todo/loop/rows items)
+      (todo/loop/rollup-lines items))))
+
 (define todo/item/archive
   (lambda (id) (todo/item/set-state id "ARCHIVED")))
 
@@ -2413,7 +2474,15 @@
                   view)
                 (html/span
                   (html/attr "class" "todo-title")
-                  (html/text title)))
+                  (html/text title))
+                (let
+                  ((roll (todo/item/progress id)))
+                  (if
+                    (string-eq roll "")
+                    ""
+                    (html/span
+                      (html/attr "class" "todo-rollup")
+                      (html/text (string-append "rollup " roll))))))
                 (lookbook/html
                   (todo/ui/assignee-badge (todo/item/assignee fields)))
               (if

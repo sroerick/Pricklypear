@@ -112,6 +112,7 @@
     (let ((id (as-str (car row))) (fields (cdr row)))
         (let ((title (as-str (dict-get fields "title")))
               (state (as-str (dict-get fields "state")))
+              (roll (todo/item/progress (as-str (car row))))
               (who (as-str (dict-get fields "assignee"))))
         (html/tag "article"
           (html/attrs
@@ -137,6 +138,10 @@
                         ""
                         (html/span (html/attr "class" "kb-assignee")
                           (html/text (string-append " @" who)))))))
+                (if (string-eq roll "")
+                  ""
+                  (html/div (html/attr "class" "kb-card-rollup")
+                    (html/text (string-append "rollup " roll))))
                 (html/div (html/attr "class" "kb-card-controls")
                   (html/join
                     (list
