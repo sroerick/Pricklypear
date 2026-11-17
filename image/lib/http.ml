@@ -1329,6 +1329,42 @@ let routes : route list =
         let branch = Session.branch_name env.session in
         let uptime = Session.uptime_seconds env.session in
         let boot_epoch = Session.boot_epoch env.session in
+        (* Which commit is this image? (2026-11-17) The factory will not close a
+           merged card until it can prove the merge is what is running, and for
+           pricklypear the only proof was boot_epoch against a [deploy] fire
+           that had not run in days. PP_GIT_REV wins for a dev run; otherwise
+           read git_sha from the MANIFEST the release script writes beside the
+           image. Read once per request: it cannot change under a live image. *)
+        let rev =
+          match Sys.getenv_opt "PP_GIT_REV" with
+          | Some s when String.trim s <> "" -> String.trim s
+          | _ ->
+            let read path =
+              try
+                let ic = open_in path in
+                let out = ref "" in
+                (try
+                   while true do
+                     let line = input_line ic in
+                     match String.index_opt line '=' with
+                     | Some i when String.sub line 0 i = "git_sha" ->
+                       out := String.trim
+                                (String.sub line (i + 1)
+                                   (String.length line - i - 1))
+                     | _ -> ()
+                   done
+                 with End_of_file -> ());
+                close_in ic;
+                !out
+              with _ -> ""
+            in
+            let dir = Filename.dirname Sys.executable_name in
+            (match read (Filename.concat dir "MANIFEST") with
+             | "" -> (match read (Filename.concat (Filename.dirname dir) "MANIFEST") with
+                      | "" -> "unknown"
+                      | v -> v)
+             | v -> v)
+        in
         let store = Session.store env.session in
         let check = Store.health_check store in
         let probe = Store.health_check_deep store in
@@ -1343,6 +1379,7 @@ let routes : route list =
               branch;
               uptime_seconds = uptime;
               boot_epoch;
+              rev;
               open_fds;
               fd_limit;
               blocked_backends;
