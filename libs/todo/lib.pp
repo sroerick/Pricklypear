@@ -4245,12 +4245,12 @@
               (redirect (string-append "/todos?view=" view)))))
         (let
           ((lists (todo/list/all)))
+          ;; Card f237239f: the page header is the h1 alone. The muted
+          ;; "Lists (Basecamp) ..." line was a second copy of the board's
+          ;; own description and rendered the same text twice on a list page.
           (html/page
             (list
               (html/h1 "To-dos")
-              (html/p*
-                (html/attr "class" "muted")
-                "Lists (Basecamp) + notes scrape (org). Click a title for details.")
               (todo/ui/main* (todo/ui/view) lists)))))))
   "The /todos entry. perf 1104: the list pool is read ONCE here and threaded
      into todo/ui/main*; a GET render used to read it twice (todo/list/ensure-inbox
