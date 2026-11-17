@@ -12,3 +12,21 @@
  (name arena_report)
  (modules arena_report)
  (libraries pricklypear-image yojson unix))
+
+; erde — export training trajectories from the turn journal:
+;   erde export --journal journal.jsonl --out trajectories/
+(library
+ (name erde_export_lib)
+ (wrapped false)
+ (modules erde_export)
+ (libraries yojson unix))
+
+(executable
+ (name erde)
+ (modules erde)
+ (libraries erde_export_lib yojson unix))
+
+(test
+ (name erde_export_test)
+ (modules erde_export_test)
+ (libraries erde_export_lib yojson unix alcotest))
