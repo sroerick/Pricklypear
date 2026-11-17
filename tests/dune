@@ -1,0 +1,8 @@
+(library
+ (name pp_smoke_fixtures)
+ (modules pp_smoke_fixtures))
+
+(test
+ (name pp_smoke_tier_matrix)
+ (modules pp_smoke_tier_matrix)
+ (libraries pp_smoke_fixtures))
