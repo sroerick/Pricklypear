@@ -431,3 +431,8 @@
  (name request_context_test)
  (modules request_context_test)
  (libraries pricklypear-image alcotest eio_main))
+
+(test
+ (name spec_tree_test)
+ (modules spec_tree_test)
+ (libraries alcotest unix))

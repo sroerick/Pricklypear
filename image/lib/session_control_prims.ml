@@ -14,7 +14,7 @@
     table, arg shapes, error strings, and owner-authorization rules are
     unchanged.
 
-    AUTHZ STEP 2 (2026-10-23, specs/authz-matrix.md): every branch prim's
+    AUTHZ STEP 2 (2026-10-23, borge/authz-matrix.borg): every branch prim's
     class gate routes through Authz.authorize at the old anonymous check:
     anonymous keeps its byte-identical "denied for anonymous" raise, and
     factory identities (<project>-build / -review) are kernel-denied
