@@ -4,4 +4,8 @@
 
 let strip () = Filmstrip_shared.render_strip (Filmstrip.tiles ())
 
-let page () = strip ()
+let commits () =
+  Filmstrip_shared.render_commits (Filmstrip.recent_commits ())
+
+(* The page: the launcher strip, then the read-only commit filmstrip. *)
+let page () = strip () ^ commits ()

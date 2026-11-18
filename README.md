@@ -102,6 +102,31 @@ scripts/dev.sh status
 scripts/dev.sh stop
 ```
 
+### From a clean Linux box
+
+Four blockers, in the order a fresh switch hits them:
+
+1. **httpun drifts to 0.2.0.** `image/lib/http_agent.ml` matches the body
+   writer's unit literals (`Closed` / `Written`), which 0.2.0 renamed, so the
+   image stops compiling. Pin the pair first — see `scripts/opam-pins.txt`:
+   `opam pin add httpun 0.1.0 -y` and `opam pin add httpun-eio 0.1.0 -y`.
+2. **argon2 is dlsym'd out of the main program.** The binding resolves
+   `argon2_type2string` at runtime; with only the shared library installed,
+   boot dies `DL_error /pp/image undefined symbol argon2_type2string`. Run the
+   image under `LD_PRELOAD=libargon2.so.1` (or link the main program with
+   `-largon2`).
+3. **pgx has no SCRAM.** The image's PG role authenticates over SASL and the
+   connect fails. Set `password_encryption = 'md5'` in `postgresql.conf`,
+   re-set the role password so it is stored as `md5`, and use `md5` (not
+   `scram-sha-256`) for that role in `pg_hba.conf`.
+4. **todo seeds before chat.** On a fresh DB every boot logs
+   `BOOT SEED FAILURES (1): todo form 5 failed: unbound chat/lookbook-add`.
+   `libs/todo` registers its ui vocabulary through the chat lookbook seam, so
+   the seed must reach it by name (`chat/lookbook-add`) instead of forcing it
+   while loading.
+
+`dune runtest` pins all four (`tests/pp_clean_build_pins.ml`).
+
 Useful checks against a running image:
 
 ```bash

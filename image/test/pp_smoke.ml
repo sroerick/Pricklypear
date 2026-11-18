@@ -149,6 +149,25 @@ let test_t7 () =
             ("T7: require_admin did not deny a delegated session: "
             ^ Pricklypear_lisp.Reader.pp_value v))
 
+(* T8: the GUEST regression (card 419bb7 / code-review FAIL C3). The
+   3-arg ATTRIBUTED self-mint (actor label owner) with owner = caller
+   used to fall through to the owner lookup and mint for a plain human
+   (broland), because the tier was never consulted on that branch. A
+   guest must be denied on the attributed form exactly as on the 2-arg
+   one — no owner-string match may substitute for a tier. *)
+let test_t8 () =
+  with_eio (fun () ->
+      let t = make_session ~username:"broland" in
+      assert_actor ~tier:"T8" ~t ~actor:"broland" ();
+      (match mint_for t ~actor:"broland" ~label:"self" ~owner:"broland" () with
+       | Error m -> Printf.printf "T8 attributed-self denial=%s\n%!" m
+       | Ok _ -> failwith "T8: guest minted via the attributed self-mint form");
+      (* and the delegated tier may not mint at all (scope laundering) *)
+      t.S.delegated <- true;
+      (match mint t ~actor:"broland" () with
+       | Error m -> Printf.printf "T8 delegated denial=%s\n%!" m
+       | Ok _ -> failwith "T8: delegated session minted a fresh credential"))
+
 let () =
   test_t1 ();
   test_t2 ();
@@ -157,4 +176,5 @@ let () =
   test_t5 ();
   test_t6 ();
   test_t7 ();
+  test_t8 ();
   print_endline "tier matrix PASS"

@@ -5,4 +5,4 @@
  (name filmstrip)
  (wrapped false)
  (modules filmstrip page)
- (libraries filmstrip_shared))
+ (libraries filmstrip_shared unix))

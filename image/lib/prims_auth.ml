@@ -374,20 +374,35 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
          with NO users row at all get the deny, never the old
          pipe-Some/not-found fall-through. *)
       let me_opt = Auth_store.get_user_by_username t.store caller in
-      let privileged =
-        match me_opt with
-        | Some u -> u.is_admin || u.user_type = "agent"
-        | None -> false
+      (* Three TRUST TIERS, decided from the caller's users row:
+           admin  -> may mint for ANY actor and holds every prim;
+           agent  -> may mint for its OWN actor only (self-service
+                     identities, attribution preserved);
+           guest  -> no credential surface at all (broland, and the era
+                     after: a plain human row or NO row whatsoever).
+         A DELEGATED session is data-tier by construction — it carries an
+         owner's actor for per-scope DATA grants — so it is a guest here:
+         letting it mint would launder its scopes through a fresh
+         credential. *)
+      let tier =
+        if t.delegated then `Guest
+        else
+          match me_opt with
+          | Some u when u.is_admin -> `Admin
+          | Some u when u.user_type = "agent" -> `Agent
+          | _ -> `Guest
       in
-      if not privileged then
-        (deny "denied"
-           "denied: token minting requires an admin or agent identity");
+      (match tier with
+       | `Guest ->
+           deny "denied"
+             "denied: token minting requires an admin or agent identity"
+       | `Admin | `Agent -> ());
       let mint_as_self ~actor ~label =
         match me_opt with
         | Some owner ->
             (* The self-mint forms mint under the caller's own actor name:
                outside admin, a foreign actor is a forgery of provenance. *)
-            if (not owner.is_admin) && String.trim actor <> caller then
+            if tier <> `Admin && String.trim actor <> caller then
               (deny "denied"
                  "denied: non-admin may only mint with actor = own username")
             else

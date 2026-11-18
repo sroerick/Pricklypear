@@ -6,3 +6,15 @@
  (name pp_smoke_tier_matrix)
  (modules pp_smoke_tier_matrix)
  (libraries pp_smoke_fixtures))
+
+(test
+ (name pp_filmstrip_commits)
+ (modules pp_filmstrip_commits)
+ (libraries filmstrip filmstrip_shared)
+ (deps ../libs/filmstrip/filmstrip.ml))
+
+(test
+ (name pp_clean_build_pins)
+ (modules pp_clean_build_pins)
+ (deps ../scripts/opam-pins.txt ../README.md ../libs/todo/lib.pp
+   ../libs/chat/lib.pp))
