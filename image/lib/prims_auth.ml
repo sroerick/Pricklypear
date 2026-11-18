@@ -54,6 +54,43 @@ let promote_to_personal (t : t) ~(names : string list)
                          in
                          (Ok n))))
 
+(* ---- TIER-B tier smoke seam (card f7c56b20) --------------------------
+   Drive the REGISTERED "mint-delegated-token" closure — the very fn the
+   session rim services — from the tier smoke matrix (image/test/
+   pp_smoke.ml). The prim table is passed in, so the credential tier gate
+   (admin or agent identity), the provenance rule (a non-admin may only
+   mint as itself) and the admin on-behalf-of path run for real: there is
+   no test-local mirror table of who-may-mint.
+   [Ok raw_token] | [Error denial_message] — a gate denial raises a
+   Prim_error exactly as it does for an in-process eval. *)
+let mint ~(tbl : Primitives.t) ~(actor : string) ?(label : string option)
+    ?(owner : string option) () : (string, string) result =
+  match Primitives.lookup tbl "mint-delegated-token" with
+  | None -> Error "mint-delegated-token: not registered"
+  | Some fn ->
+      let str s = Pricklypear_lisp.Ast.VStr s in
+      let label_v =
+        match label with
+        | Some l -> str l
+        | None -> Pricklypear_lisp.Ast.VNil
+      in
+      let args =
+        match owner with
+        | Some o -> [ str actor; label_v; str o ]
+        | None -> [ str actor; label_v ]
+      in
+      (try
+         match fn args with
+         | Pricklypear_lisp.Ast.VStr raw -> Ok raw
+         | other ->
+             Error
+               ("mint-delegated-token: unexpected value "
+               ^ Pricklypear_lisp.Reader.pp_value other)
+       with
+       | Pricklypear_lisp.Ast.Interp_error
+           (Pricklypear_lisp.Ast.Prim_error (_, msg, _)) -> Error msg
+       | exn -> Error (Printexc.to_string exn))
+
 let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives.t) : unit =
   let caller_username () = Prims_db_common.caller_username ~t () in
   let require_admin op k = Prims_db_common.require_admin ~t op k in

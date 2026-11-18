@@ -436,3 +436,12 @@
  (name spec_tree_test)
  (modules spec_tree_test)
  (libraries alcotest unix))
+
+; TIER-B tier smoke matrix (card f7c56b20): executable entry point, run
+; with `dune exec image/test/pp_smoke.exe`. Drives the REAL registered
+; auth prims from the booted session; no alcotest (it is a smoke matrix
+; that prints its nine ok lines and exits non-zero on a failed tier).
+(executable
+ (name pp_smoke)
+ (modules pp_smoke)
+ (libraries pricklypear-image pricklypear-common pricklypear-lisp eio_main))
