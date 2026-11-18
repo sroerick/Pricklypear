@@ -42,8 +42,11 @@ id_rsa.pub
 /tmp/
 *.log
 # .ci/cutover.log is the MR4 cutover record of record (scripts/monorepo-cutover.log
-# promoted by dune); the *.log rule above must not swallow it.
+# promoted by dune); the *.log rule above must not swallow it -- nor the scripts/
+# copy of record it is promoted from, or a fresh clone could not build the record.
 !.ci/cutover.log
+# the scripts/ copy of record the promoted log is built from, likewise.
+!scripts/monorepo-cutover.log
 *.pid
 .pi-subagents/
 .pi/

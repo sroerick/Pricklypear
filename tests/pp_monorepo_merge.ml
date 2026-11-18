@@ -87,13 +87,34 @@ let () =
   check "tuna job builds tuna" (contains d "make -C tuna");
   check "filmstrip job runs dune build" (contains d "dune build")
 
+(* Criterion 2 (continued): the filmstrip job runs BOTH consumers before the
+   shared package's dune build, so one gate covers per-product targets. *)
+let () =
+  let d = read "scripts/monorepo-deploy.yml" in
+  check "filmstrip job runs both product builds"
+    (contains d "make -C pp && make -C tuna && dune build")
+
 (* Criterion 3: the factory rewires to one repo; cards resolve to it. *)
 let () =
   let r = read "scripts/monorepo-repos.yml" in
   check "repos.yml names the monorepo" (contains r "monorepo");
   check "repos.yml card_repo" (contains r "card_repo: monorepo");
   check "repos.yml merge gates"
-    (contains r "make -C pp" && contains r "make -C tuna" && contains r "dune build")
+    (contains r "make -C pp" && contains r "make -C tuna"
+     && contains r "dune build")
+
+(* Criterion 3 (continued): a card's repo field resolves to the monorepo, so
+   repos.yml must carry a checkout path, and the published copy must be the
+   promote of the scripts/ copy of record -- a stale or missing promote would
+   silently send cards at an old per-product repo. *)
+let () =
+  let rec_ = read "scripts/monorepo-repos.yml" in
+  check "repos.yml names a monorepo checkout" (contains rec_ "path:");
+  check "repos.yml is the promoted copy" (read "repos.yml" = rec_);
+  check "deploy manifest is the promoted copy"
+    (read "deploy.yml" = read "scripts/monorepo-deploy.yml");
+  check "cutover log is the promoted copy"
+    (read "cutover.log" = read "scripts/monorepo-cutover.log")
 
 (* Criterion 4: the cutover log is bracketed CUTOVER-START .. CUTOVER-END, and
    the old repos stay armed for rollback (executable pre-receive hooks). *)
