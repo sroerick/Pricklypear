@@ -105,6 +105,13 @@ let () =
     (contains m "rev-list --no-merges --count \"refs/monorepo/$prefix\"");
   check "merge aborts on lost history" (contains m "history lost");
   check "merge is resumable without re-merging" (contains m "already merged");
+  (* a tree can land its lineage and still be short of the source's paths: the
+     prefix is then refreshed from the incoming tip instead of being frozen as
+     "already merged", because criterion 1 is stated in FILES. *)
+  check "merge refreshes a short prefix from the incoming tip"
+    (contains m "git -C \"$MR\" checkout \"$incoming\" -- \"$prefix\"");
+  check "merge decides refresh on path counts, not only commit counts"
+    (contains m "have_files_now");
   (* the promoted anchors sit exactly where the incoming trees write, so the
      merge has to clear them or git stops on "untracked working tree files
      would be overwritten" and the lineage never lands. *)
