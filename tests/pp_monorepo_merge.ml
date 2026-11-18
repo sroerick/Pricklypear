@@ -84,6 +84,30 @@ let () =
      would be overwritten" and the lineage never lands. *)
   check "merge clears the promoted anchors before merging"
     (contains m "would be overwritten" && contains m "rm -f \"$MR/$prefix/$anchor\"");
+  (* the merge rewrites HEAD in the worktree, so it must run against the
+     checkout's git dir and not against a _build sandbox -- a sandbox pass would
+     leave the anchors in place and the lineage nowhere.  The script refuses
+     that case, and `dune build @monorepo-merge` hands it the workspace root. *)
+  check "merge runs against a git checkout"
+    (contains m "[ -e \"$MR/.git\" ]");
+  (* a factory worktree carries .git as a file (gitdir: ...), not a directory,
+     and %{workspace_root} expands to "." inside the _build sandbox: the script
+     walks back to the toplevel that owns HEAD instead of merging a copy. *)
+  check "merge walks back to the worktree root"
+    (contains m "rev-parse --show-toplevel");
+  check "merge refuses a non-checkout instead of silently doing nothing"
+    (contains m "is not a git checkout");
+  let d = read "dune" in
+  check "the monorepo-merge alias passes the workspace root"
+    (contains d "%{dep:scripts/monorepo-merge.sh} %{workspace_root}");
+  (* the alias runs the merge from inside _build, so the script has to walk back
+     to the checkout that owns HEAD instead of merging the sandbox copy. *)
+  check "merge finds the worktree that owns HEAD"
+    (contains m "rev-parse --show-toplevel");
+  (* sources are resolved through SRC_ROOTS: bare repos on the production host,
+     local checkouts on a factory host, so the cutover is not /srv/git-only. *)
+  check "merge resolves sources through SRC_ROOTS"
+    (contains m "SRC_ROOTS" && contains m "find_src");
   let v = read "scripts/verify_monorepo_merge.sh" in
   check "merge writes a lineage marker per tree"
     (contains m "MR4: merge $prefix history from $name");
@@ -109,6 +133,13 @@ let () =
     (contains v "'libs/filmstrip:filmstrip.git'");
   check "verify checks libs/filmstrip is a directory"
     (contains v "libs/filmstrip is a directory");
+  (* a missing source repo would make ls-files and ls-tree both 0, so a bare
+     count equality passes on an anchors-only checkout: the checker must refuse
+     that state instead of printing ok for a merge that never happened. *)
+  check "verify refuses a missing source repo"
+    (contains v "source repo $src is present");
+  check "verify demands files under each product prefix"
+    (contains v "carries files (not anchors only)");
   (* criterion 1 counts FILES per prefix (ls-tree -r --name-only), not only
      commits: filter-repo can keep the whole lineage and still drop paths. *)
   check "verify counts files per prefix"
