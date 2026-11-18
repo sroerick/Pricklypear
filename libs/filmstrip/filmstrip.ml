@@ -56,3 +56,51 @@ let tile_of_app ?(stamp = "baked") (a : app) : Filmstrip_shared.tile =
   }
 
 let tiles () = List.map tile_of_app apps
+
+(* ---- recent commits: the monorepo commit-history pane ----
+   The pane lists rev/author/date/subject for the last N commits, read
+   from the bare repo on disk -- the same repo git.wyo.town's stagit
+   output is regenerated from, so `git log` there tracks pushes with no
+   second generator to run. Both the path and N are CONSTANTS (the pane
+   must survive MR4: nothing here depends on a cwd or a session), and
+   both a missing repo and a git failure degrade to an EMPTY strip --
+   the shell renders either way. *)
+
+(* Pinned data source: the bare wyo-preview repo. *)
+let commit_repo = "/home/git/srv/git/wyo-preview.git"
+
+(* Pinned N: the pane lists the last 20 commits, never the history. *)
+let commit_count = 20
+
+let commit_of_line line =
+  match String.split_on_char '\t' line with
+  | rev :: author :: date :: (_ :: _ as rest) ->
+      Some
+        {
+          Filmstrip_shared.rev;
+          author;
+          date;
+          subject = String.concat "\t" rest;
+        }
+  | _ -> None
+
+(* Last [n] commits of the pinned repo, newest first. Read-only: git log
+   in the bare dir, one tab-separated record per line. *)
+let recent_commits ?(n = commit_count) () =
+  let cmd =
+    Printf.sprintf
+      "git --git-dir=%s log -n %d --date=short \
+       --pretty=format:%%h%%x09%%an%%x09%%ad%%x09%%s 2>/dev/null"
+      (Filename.quote commit_repo) n
+  in
+  match Unix.open_process_in cmd with
+  | exception _ -> []
+  | ic ->
+      let rec loop acc =
+        match input_line ic with
+        | line -> loop (line :: acc)
+        | exception End_of_file -> List.rev acc
+      in
+      let lines = loop [] in
+      (try ignore (Unix.close_process_in ic) with _ -> ());
+      List.filter_map commit_of_line lines
