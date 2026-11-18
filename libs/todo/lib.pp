@@ -1951,6 +1951,95 @@
      a missing Board is a loud empty, never a silent private-Inbox
      vanish.")
 
+;; ------------------------------------------------------------------
+;; intake rule split (card 7305f0, sibling of 6e84e59f)
+;;
+;; A filing that carries BOTH code work and test work is split AT BIRTH:
+;; two cards are filed — one code-only, one test-only — each recorded as
+;; the other's SIBLING, and the unsplit mixed original is never filed.
+;; The split is a pure decision over the filing's acceptance lines, so the
+;; index path (triage, /issues, kanban make-card) can ask before it mints
+;; anything and the decision is testable without a DB.
+;; ------------------------------------------------------------------
+
+(define todo/intake/line-test?
+  (lambda
+    (line)
+    "True when ONE acceptance line names TEST work: a test file, a test run,
+     coverage, or a regression check. Everything else is code work."
+    (let
+      ((t (as-str line)))
+      (or
+        (string-contains? t "test")
+        (string-contains? t "Test")
+        (string-contains? t "TEST")
+        (string-contains? t "coverage")
+        (string-contains? t "regression")))))
+
+(define todo/intake/only
+  (lambda
+    (kind lines)
+    "The acceptance lines of one KIND (\"code\" or \"test\"), input order
+     preserved: a line naming test work is test work, the rest is code work."
+    (list/filter
+      (lambda
+        (l)
+        (if
+          (string-eq (as-str kind) "test")
+          (todo/intake/line-test? l)
+          (not (todo/intake/line-test? l))))
+      lines)))
+
+(define todo/intake/mixed?
+  (lambda
+    (lines)
+    "True when ONE filing carries both code work and test work — the trigger
+     for the intake rule split. A single-kind filing (all code or all test)
+     is not mixed: it is filed whole."
+    (if
+      (null? lines)
+      #f
+      (if
+        (null? (todo/intake/only "code" lines))
+        #f
+        (if (null? (todo/intake/only "test" lines)) #f #t)))))
+
+(define todo/intake/split
+  (lambda
+    (title lines)
+    "The split of one mixed filing: (code-title code-lines test-title
+     test-lines). () when the filing is not mixed — the caller files that
+     card as it stands."
+    (if
+      (todo/intake/mixed? lines)
+      (list
+        (as-str title)
+        (todo/intake/only "code" lines)
+        (string-append (as-str title) " (test)")
+        (todo/intake/only "test" lines))
+      ())))
+
+(define todo/intake/split-cards
+  (lambda
+    (title lines)
+    "The SIBLING PLAN for one filing: ((code title lines) (test title lines)
+     (sibling code test)) when the filing mixes code and test work — two
+     cards, each recorded as the other's sibling, and NO unsplit mixed
+     original (the two children replace it at birth). () for a single-kind
+     filing: it is filed whole, with no sibling."
+    (let
+      ((parts (todo/intake/split title lines)))
+      (if
+        (null? parts)
+        ()
+        (list
+          (list "code" (car parts) (car (cdr parts)))
+          (list
+            "test"
+            (car (cdr (cdr parts)))
+            (car (cdr (cdr (cdr parts)))))
+          (list "sibling" "code" "test"))))))
+
 (define todo/item/all
   (lambda
     ()

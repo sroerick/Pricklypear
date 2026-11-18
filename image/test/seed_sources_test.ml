@@ -467,6 +467,107 @@ let read_package_forms root pkg =
           (%d:%d)"
          pkg m l c)
 
+(* --- S9: the intake rule split (card 7305f0) ---
+
+   Eval the SHIPPED todo/intake/* defines against the prim table (no DB)
+   and prove the acceptance: a filing that mixes code work and test work
+   is split AT BIRTH into two cards — one code-only, one test-only —
+   recorded as each other's siblings, with NO unsplit mixed original.
+   A single-kind filing is filed whole (no sibling). *)
+
+let todo_intake_env () =
+  let root = find_libs_dir () in
+  let src = load_package_src root "todo" in
+  let prims = Pricklypear_image_lib.Primitives.make_with_defaults () in
+  let env = Pricklypear_lisp.Env.create () in
+  Hashtbl.iter
+    (fun name _ ->
+      Pricklypear_lisp.Env.define env name (Pricklypear_lisp.Ast.VPrim name))
+    prims;
+  let budget = Pricklypear_lisp.Eval.make_budget () in
+  let run_expr expr =
+    Pricklypear_lisp.Control.run_sync ~prims (fun () ->
+        Pricklypear_lisp.Eval.eval ~budget ~prims env expr)
+  in
+  List.iter
+    (fun n -> run_expr (find_define src n) |> ignore)
+    [ "todo/intake/line-test?";
+      "todo/intake/only";
+      "todo/intake/mixed?";
+      "todo/intake/split";
+      "todo/intake/split-cards" ];
+  run_expr
+
+let str_list_of_value v =
+  let rec go acc = function
+    | Pricklypear_lisp.Ast.VList xs ->
+        List.rev
+          (List.fold_left
+             (fun acc x ->
+               match x with
+               | Pricklypear_lisp.Ast.VStr s -> s :: acc
+               | other ->
+                   failwith
+                     ("intake split: non-string line "
+                     ^ Pricklypear_lisp.Reader.pp_value other))
+             acc xs)
+    | Pricklypear_lisp.Ast.VNil -> acc
+    | other ->
+        failwith ("intake split: expected a list, got "
+                  ^ Pricklypear_lisp.Reader.pp_value other)
+  in
+  go [] v
+
+let test_intake_split_at_birth () =
+  let run_expr = todo_intake_env () in
+  let open Pricklypear_lisp.Ast in
+  let code_line = "add the split decision to libs/todo/lib.pp" in
+  let test_line = "prove the split in the test suite" in
+  let plan =
+    run_expr
+      (App
+         ( Var "todo/intake/split-cards",
+           [ Lit (VStr "Mixed card"); Lit (VList [ VStr code_line; VStr test_line ]) ] ))
+  in
+  match plan with
+  | VList [ VList [ VStr "code"; code_title; code_lines ];
+            VList [ VStr "test"; test_title; test_lines ];
+            VList [ VStr "sibling"; VStr "code"; VStr "test" ] ] ->
+      let code = str_list_of_value code_lines in
+      let tests = str_list_of_value test_lines in
+      Alcotest.(check (list string)) "code card is code-only" [ code_line ] code;
+      Alcotest.(check (list string)) "test card is test-only" [ test_line ] tests;
+      Alcotest.(check string) "code title is the filing title" "Mixed card"
+        (match code_title with VStr s -> s | _ -> "?");
+      Alcotest.(check bool) "test title names the test half" true
+        (match test_title with
+         | VStr s -> s <> "Mixed card"
+         | _ -> false);
+      Printf.printf
+        "intake rule split: filing \"Mixed card\" -> code card [%s] + test card [%s], siblings, no mixed original\n"
+        (String.concat " " code) (String.concat " " tests)
+  | VList [] ->
+      Alcotest.fail "a mixed filing must split at birth, not be filed whole"
+  | v ->
+      Alcotest.fail
+        ("intake split plan shape: " ^ Pricklypear_lisp.Reader.pp_value v)
+
+let test_intake_single_kind_filed_whole () =
+  let run_expr = todo_intake_env () in
+  let open Pricklypear_lisp.Ast in
+  match
+    run_expr
+      (App
+         ( Var "todo/intake/split-cards",
+           [ Lit (VStr "Code only");
+             Lit (VList [ VStr "add the split decision" ]) ] ))
+  with
+  | VList [] | VNil -> () (* the empty plan: () reads back as nil *)
+  | v ->
+      Alcotest.fail
+        ("a single-kind filing must be filed whole, got "
+        ^ Pricklypear_lisp.Reader.pp_value v)
+
 let () =
   Alcotest.run "pricklypear-seed-sources"
     [ ( "seed-sources"
@@ -479,4 +580,6 @@ let () =
         ; ("book-json-array-roundtrip", `Quick, test_book_json_array_roundtrip)
         ; ("no-bare-top-level-forms", `Quick, test_no_bare_top_level_forms)
         ; ("no-define-time-sibling-calls", `Quick, test_no_define_time_sibling_calls)
+        ; ("intake-split-at-birth", `Quick, test_intake_split_at_birth)
+        ; ("intake-single-kind-filed-whole", `Quick, test_intake_single_kind_filed_whole)
         ] ) ]
