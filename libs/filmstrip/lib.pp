@@ -1718,7 +1718,7 @@ pane owns the fixed lift). A focused rail pane is a ring, not a window
               ;; (close-heal's rule; never a hidden/shelved pane, I1).
               (focus2
                 (if leaves?
-                    (filmstrip/close-heal panes2 i)
+                    (filmstrip/close-heal panes2)
                     focus)))
           (seq
             (filmstrip/save-all cascade panes2 focus2)
@@ -3448,8 +3448,9 @@ arrive open with their eager kids.")
             (string-append "filmstrip: no tree root " id)))
         (render-html
           (html/join
-            (list (filmstrip/oob-msg "") (filmstrip/tree-oob root)))))))
-  "POST /filmstrip/tree/collapse: the DOM pressure valve -- one POST\nOOB-swaps the box back to head + level 0 (the ONLY sanctioned way the\nserver touches expansion state).")
+            (list (filmstrip/oob-msg "")
+              (filmstrip/tree-oob root #t)))))))
+  "POST /filmstrip/tree/collapse: the DOM pressure valve -- one POST\nOOB-swaps the box back to head + level 0 (the ONLY sanctioned way the\nserver touches expansion state). The re-render projects tree-closed, so\nthe default-open expand seeds are cleared too.")
 
 (define filmstrip/tree-find-root
   (lambda (roots id)
@@ -3649,10 +3650,17 @@ arrive open with their eager kids.")
   "One node row: li[data-node] > details > summary(fold arrow + label\n+ verb GLYPHS) [+ kids ul for dirs: EAGER (pre-walked level rendered\ninline, no pull attrs) when the node carries a non-empty kids JSON\nstring, else the lazy toggle-once level GET] [+ a narrow-only actions\nul when the node carries verbs -- the SAME glyphs as children, never\na second summary or a duplicate list]. Leaf details are fold-only.\nZero JS beyond the htmx attrs.")
 
 (define filmstrip/tree-oob
-  (lambda (root)
+  (lambda (root ?closed)
     (let*
       ((id (as-str (car root)))
-        (levelfn (car (cdr (cdr root)))))
+        (levelfn (car (cdr (cdr root))))
+        ;; collapse-all (the pressure valve) answers the FULLY-CLOSED
+        ;; projection (kids emptied AND the default-open expand seeds
+        ;; cleared); every other mutation keeps tree-lazy semantics.
+        (nodes
+          (if ?closed
+              (filmstrip/tree-closed (levelfn ""))
+              (filmstrip/tree-lazy (levelfn "")))))
       (html/tag
         "ul"
         (html/attrs
@@ -3660,7 +3668,7 @@ arrive open with their eager kids.")
             (html/attr "id" (string-append "fs-tree-" id "-root"))
             (html/attr "class" "fs-tr-kids fs-tr-root")
             (html/attr "hx-swap-oob" "innerHTML")))
-        (filmstrip/tree-level id (filmstrip/tree-lazy (levelfn ""))))))
+        (filmstrip/tree-level id nodes))))
   "OOB (hx-swap-oob innerHTML on the level-0 UL) re-render of one
 tree's ROWS -- the mutation refresh seam. The box head never changes,
 so the div itself is never swapped (swapping it made htmx drop
