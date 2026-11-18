@@ -31,5 +31,5 @@
    ../deploy.yml ../cutover.log ../repos.yml
    ../scripts/monorepo-deploy.yml ../scripts/monorepo-cutover.log
    ../scripts/monorepo-repos.yml ../scripts/monorepo-merge.sh
-   ../scripts/verify_monorepo_merge.sh
+   ../scripts/verify_monorepo_merge.sh ../scripts/check_monorepo_trees.sh
    ../libs/filmstrip/lib.pp ../libs/filmstrip/dune))

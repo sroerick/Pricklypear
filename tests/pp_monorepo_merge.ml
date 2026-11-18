@@ -201,9 +201,25 @@ let () =
     List.iter
       (fun f -> check (f ^ " is present") (exists f))
       [ "pp/README.md"; "tuna/README.md"; "sundial/sundial/dune" ];
+    (* Count files recursively, not direct children: a merged tree keeps the
+       source's own layout, so sundial/ legitimately has a single child
+       (sundial/sundial/...) on the way down to its 14 paths.  Anchors only is
+       exactly the two promoted files (Makefile, README.md), so a recursive
+       count still separates "merged" from the reviewed FAIL state. *)
+    let rec count_files dir =
+      try
+        Array.fold_left
+          (fun acc e ->
+            let p = Filename.concat dir e in
+            if (try Sys.is_directory p with Sys_error _ -> false) then
+              acc + count_files p
+            else acc + 1)
+          0 (Sys.readdir dir)
+      with Sys_error _ -> 0
+    in
     List.iter
       (fun d ->
-        let n = try Array.length (Sys.readdir (path d)) with Sys_error _ -> 0 in
+        let n = count_files (path d) in
         check (d ^ "/ carries files (not anchors only)") (n > 2))
       [ "pp"; "tuna"; "sundial" ]
   end
@@ -287,3 +303,20 @@ let () =
   check "cutover ordered" (i < j);
   let v = read "scripts/verify_monorepo_merge.sh" in
   check "verify checks pre-receive hooks" (contains v "hooks/pre-receive")
+
+(* The reviewed FAIL on this card was a green build over a checkout with no
+   merged trees in it, so the @ci-dirs gate has to run a real check of HEAD and
+   not only publish the records.  scripts/check_monorepo_trees.sh is that gate:
+   it counts the paths under each prefix with the card's own command and
+   demands the parked filtered tips are ancestors of HEAD. *)
+let () =
+  check "the ci-dirs gate script is present"
+    (exists "scripts/check_monorepo_trees.sh");
+  let g = read "scripts/check_monorepo_trees.sh" in
+  check "the gate counts paths in HEAD (criterion 1)"
+    (contains g "ls-tree -r --name-only HEAD --");
+  check "the gate fails an anchors-only prefix" (contains g "anchors only");
+  check "the gate checks ancestry of the filtered tips (criterion 2)"
+    (contains g "merge-base --is-ancestor");
+  check "the gate is wired into @ci-dirs"
+    (contains (read "dune") "scripts/check_monorepo_trees.sh")
