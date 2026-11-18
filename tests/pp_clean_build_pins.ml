@@ -47,6 +47,8 @@ let () =
   (* (c) md5 password_encryption for pgx. *)
   check "README" readme "password_encryption";
   check "README" readme "md5";
-  (* (d) todo seeds through the chat lookbook seam. *)
+  (* (d) todo seeds through the chat lookbook seam, which only resolves if
+     chat still defines it (a rename there re-breaks fresh-DB boot). *)
   check "libs/todo/lib.pp" (read "../libs/todo/lib.pp") "lookbook-add";
+  check "libs/chat/lib.pp" (read "../libs/chat/lib.pp") "define chat/lookbook-add";
   if !failures > 0 then exit 1
