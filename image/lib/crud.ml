@@ -1582,13 +1582,44 @@ let wrap_path_exn name (f : unit -> value) : value =
 (* ---- hierarchical tree prims (notes.tree-cutover K0) ---- *)
 
 (* note-vis-p1: a direct-path read that lands in ANOTHER user's note
-   garden (data.note.u.<owner>...) must clear the note's body vis floor:
-   private = inside the owner's garden only, users = any signed-in
-   caller, public = anyone. Paths outside data.note.u (fn/route/data.book
-   paths) are untouched. Kernel-internal callers pass viewer=None
-   and stay ungated. Raises so probes get an explicit denial instead of
-   a silent miss. *)
-let gate_note_vis ~(node : Tree_store.node option) ~(path : string)
+   garden (data.note.u.<owner>...) must clear the note's body vis floor.
+   The floor consults the WRITE-side visibility flag (claims-visibility,
+   operator policy 11-12: "everything should be public by default"):
+     public  = anyone, and the DEFAULT for an unflagged write — the town
+               namespaces (u.hollis, u.gregor, u.broland, …) read
+               world-readable without any flag;
+     users   = any signed-in caller;
+     private = owner only, plus a GRANT lookup (a member of the space
+               that contains the path reads it) — never a blanket deny,
+               so a guest's client-scope opt-in stays shareable by grant.
+   Paths outside data.note.u (fn/route/data.book paths) are untouched.
+   Kernel-internal callers pass viewer=None and stay ungated. Raises so
+   probes get an explicit denial instead of a silent miss. *)
+let path_granted (conn : Store_db.conn) ~(path : string) ~(viewer : string)
+    : bool =
+  (* The grant side of a private scope: membership in the space that
+     contains [path] (a data.s.<space> subtree), the one membership predicate the
+     storage floor already trusts (tree_path_in_member_space, 029/043). *)
+  match
+    Store_db.exec conn
+      ~params:[ Pgx.Value.of_string path; Pgx.Value.of_string viewer ]
+      "SELECT tree_path_in_member_space($1::ltree, $2::text)"
+  with
+  | [ [ c ] ] -> Pgx.Value.to_bool c |> Option.value ~default:false
+  | _ -> false
+
+(** The read-floor decision, pure so the visibility contract is testable
+    without a DB (claims-visibility): the write-side flag decides, the
+    default is public, and [granted] is the grant lookup a private scope
+    consults (space membership) — never a blanket deny. *)
+let note_vis_allows ~(vis : string) ~(viewer : string) ~(granted : bool) : bool =
+  match vis with
+  | "private" -> granted
+  | "users" -> viewer <> "anonymous"
+  | _ -> true (* "public" and every unflagged/unrecognized write *)
+
+let gate_note_vis ~(conn : Store_db.conn)
+    ~(node : Tree_store.node option) ~(path : string)
     ~(viewer : string option) : unit =
   match (node, viewer) with
   | Some n, Some v ->
@@ -1596,14 +1627,12 @@ let gate_note_vis ~(node : Tree_store.node option) ~(path : string)
      | Some owner when owner <> Tree_store.path_label v ->
          let vis =
            match Tree_store.body_string_field n.body "vis" with
-           | Some s -> s
-           | None -> "private"
+           | Some s -> String.trim s
+           | None -> "public"
          in
          let allowed =
-           match vis with
-           | "public" -> true
-           | "users" -> v <> "anonymous"
-           | _ -> false
+           note_vis_allows ~vis ~viewer:v
+             ~granted:(path_granted conn ~path ~viewer:v)
          in
          if not allowed then
            raise
@@ -1630,7 +1659,7 @@ let tree_get (store : Store.t) ~(path : string) ?(at_gen : int64 option)
              | None -> None
              | Some v -> Tree_store.version_of_leaf v)
       in
-      gate_note_vis ~node:n ~path ~viewer;
+      gate_note_vis ~conn ~node:n ~path ~viewer;
       (match n with
        | None -> VNil
        | Some node -> (VStr (Tree_store.node_to_json node))))
@@ -1647,7 +1676,7 @@ let tree_get_many (store : Store.t) ~(paths : string list)
         List.filter_map
           (fun p ->
             let n = Tree_store.get_by_path conn ~path:p in
-            gate_note_vis ~node:n ~path:p ~viewer;
+            gate_note_vis ~conn ~node:n ~path:p ~viewer;
             match n with
             | None -> None
             | Some node -> Some (VStr (Tree_store.node_to_json node)))
@@ -2744,7 +2773,7 @@ let tree_get_uuid (store : Store.t) ~(uuid : string)
       (match n with
        | None -> VNil
        | Some node ->
-           gate_note_vis ~node:n ~path:node.path ~viewer;
+           gate_note_vis ~conn ~node:n ~path:node.path ~viewer;
            (VStr (Tree_store.node_to_json node))))
 
 let tree_find_by (store : Store.t) ~(kind : string option) ~(field : string)

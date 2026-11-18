@@ -351,6 +351,29 @@ let agent_json ?(base_url : string option = None) () : Yojson.Safe.t =
                 ^ "PP_URL + PP_TOKEN (or AGENT_HABITAT_URL / AGENT_HABITAT_TOKEN; \
                    token wins over user/pass) — the laptop then holds a revocable "
                   ^ "token, never a password." ) )
+            ; ( "visibility"
+              , `Assoc
+                  [ ( "default"
+                    , `String
+                        "public — an unflagged write reads world-readable; \
+                         claims are the town's public record." )
+                  ; ( "flag"
+                    , `String
+                        "Every write may carry a body \"vis\" field: \"public\" \
+                         (anyone, and the default when absent), \"users\" (any \
+                         signed-in identity), \"private\" (owner plus granted \
+                         space members)." )
+                  ; ( "public"
+                    , `String
+                        "Town namespaces (u.hollis, u.gregor, u.broland, …) \
+                         carry no flag and read public; no second step." )
+                  ; ( "private"
+                    , `String
+                        "Client work opts a scope private BEFORE the first \
+                         write: 'client data: mark the scope private FIRST'. \
+                         Public by default plus journaled immutable claims \
+                         means an accidental public write is permanent." )
+                  ] )
             ] )
       ; ( "related"
         , `Assoc

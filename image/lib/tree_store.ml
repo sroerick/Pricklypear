@@ -1069,12 +1069,19 @@ let valid_path (path : string) : bool =
 let garden_root ~user =
   Printf.sprintf "data.note.u.%s" (path_label user)
 
-(* note-vis-p1: which user's note garden does [path] live under, if any?
-   Paths outside the per-user note namespace (fn/route/data.book paths)
-   have no owner and stay outside the vis gate. *)
+(* note-vis-p1: which user's namespace does [path] live under, if any?
+   Both per-user namespaces count: the note garden (data.note.u.<owner>,
+   labels stored RAW via path_label) and the claims namespace
+   (data.u.<owner>, labels stored ENCODED via enc_label) — claims-visibility
+   makes the read floor honor the write-side flag in both, so an unflagged
+   town namespace (u.hollis, u.gregor, …) reads world-readable. Paths
+   outside those (fn/route/data.book paths) have no owner and stay outside
+   the vis gate. *)
 let note_garden_owner (path : string) : string option =
   match String.split_on_char '.' path with
   | "data" :: "note" :: "u" :: owner :: _ when owner <> "" -> Some owner
+  | "data" :: "u" :: owner :: _ when owner <> "" -> (
+      match dec_label owner with Some d when d <> "" -> Some d | _ -> None)
   | _ -> None
 (* ---- path algebra (one-tree.tree-path-prims; pure, no DB) ----
 
@@ -1418,9 +1425,11 @@ let get_by_uuid (conn : Store_db.conn) ~(uuid : string) : node option =
 
     [viewer] turns on the per-note vis floor (note-vis-p1): rows OUTSIDE
     the caller's own note garden must carry body vis users (any
-    signed-in caller) or public (anyone). Rows inside the caller's
-    garden pass unconditionally — vis only ever widens. Internal
-    callers pass None and see the store unfiltered.
+    signed-in caller) or be public — the DEFAULT for an unflagged write
+    (claims-visibility, operator policy 11-12) — or be private with the
+    viewer granted a membership in the containing space. Rows inside the
+    caller's garden pass unconditionally — vis only ever widens.
+    Internal callers pass None and see the store unfiltered.
 
     The body FIELD is inlined into the path literal ('{body,<field>}')
     after validation, never passed as a parameter: a parameterized
@@ -1500,8 +1509,15 @@ let find_by_body_field (conn : Store_db.conn) ~(kind : string option)
       if not vis_on then ""
       else
         Printf.sprintf
-          "AND (path <@ $%d::ltree OR COALESCE(payload #>> '{body,vis}','private') = 'public' OR (COALESCE(payload #>> '{body,vis}','private') = 'users' AND $%d <> 'anonymous')) "
-          floor_i viewer_i
+          (* claims-visibility: the DEFAULT is public (operator policy 11-12,
+             "everything should be public by default") — an unflagged write in
+             another identity's namespace (the town namespaces) reads, and
+             private is an opt-in that still honors a grant lookup through the
+             space membership predicate. Before this, the floor hardcoded
+             'private' as the default and so 403/404'd writes the write side
+             had every right to call public. *)
+          "AND (path <@ $%d::ltree OR COALESCE(payload #>> '{body,vis}','public') = 'public' OR (COALESCE(payload #>> '{body,vis}','public') = 'users' AND $%d <> 'anonymous') OR (COALESCE(payload #>> '{body,vis}','public') = 'private' AND tree_path_in_member_space(path, $%d))) "
+          floor_i viewer_i viewer_i
     in
     let body_path = Printf.sprintf "{body,%s}" field in
     let sql =

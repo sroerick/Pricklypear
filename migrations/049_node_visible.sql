@@ -186,11 +186,17 @@ BEGIN
     || quote_literal('{body,' || p_field || '}') || ' = $1 '
     || 'AND ($2::ltree IS NULL OR n.path <@ $2::ltree) '
     || 'AND ($3::text IS NULL OR n.kind = $3::text) '
+    -- claims-visibility (operator policy 11-12): the DEFAULT is public — an
+    -- unflagged write in another identity's namespace reads world-readable —
+    -- and a private opt-in consults the grant lookup (space membership)
+    -- instead of denying unconditionally.
     || 'AND ($4::text IS NULL '
     || '     OR COALESCE(n.path <@ $5::ltree, false) '
-    || '     OR COALESCE(n.payload #>> ''{body,vis}'', ''private'') = ''public'' '
-    || '     OR (COALESCE(n.payload #>> ''{body,vis}'', ''private'') = ''users'' '
-    || '         AND $4::text <> ''anonymous'')) '
+    || '     OR COALESCE(n.payload #>> ''{body,vis}'', ''public'') = ''public'' '
+    || '     OR (COALESCE(n.payload #>> ''{body,vis}'', ''public'') = ''users'' '
+    || '         AND $4::text <> ''anonymous'') '
+    || '     OR (COALESCE(n.payload #>> ''{body,vis}'', ''public'') = ''private'' '
+    || '         AND tree_path_in_member_space(n.path, $4::text))) '
     || 'AND pp_node_visible(n.path, n.kind) '
     || 'ORDER BY n.path::text ASC LIMIT COALESCE($6::int, 50)';
   RETURN QUERY EXECUTE v_sql
