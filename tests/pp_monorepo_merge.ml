@@ -23,6 +23,15 @@ let root = find_root (Sys.getcwd ())
 let path rel = Filename.concat root rel
 let exists rel = Sys.file_exists (path rel)
 
+(* The product trees are excluded from the root dune project, so they may be
+   absent from a dune sandbox copy even though they are whole checkouts in the
+   repository: a directory test must not raise when the sandbox lacks them. *)
+let is_dir rel = try Sys.is_directory (path rel) with Sys_error _ -> false
+
+(* Same for the checkout itself: a sandbox copy has no .git entry, so the
+   product-tree assertions only run against a real checkout. *)
+let in_checkout = Sys.file_exists (path ".git")
+
 let read rel =
   let ic = open_in_bin (path rel) in
   let n = in_channel_length ic in
@@ -64,19 +73,36 @@ let () =
   check "merge uses git filter-repo" (contains m "filter-repo");
   check "merge rewrites under a prefix" (contains m "--to-subdirectory-filter");
   check "merge keeps lineage (no squash flag)" (contains m "--squash" = false);
+  (* filter-repo is a pip package, not a git builtin: a host without it must
+     still complete the cutover, or the trees never land and criteria 1 and 2
+     stay unmet.  The fallback is a rewrite too, never a copy. *)
+  check "merge chooses a rewrite backend" (contains m "REWRITE=filter-repo");
+  check "merge falls back without filter-repo"
+    (contains m "REWRITE=fast-import");
+  check "fallback rewrites the export stream (no copy)"
+    (contains m "fast-export" && contains m "fast-import");
   List.iter
     (fun p -> check ("merge places " ^ p) (contains m p))
     [ "pp:"; "tuna:"; "sundial:"; "libs/filmstrip:" ];
   check "filmstrip tree is present" (Sys.is_directory (path "libs/filmstrip"));
   check "filmstrip lib.pp is present" (exists "libs/filmstrip/lib.pp");
-  (* the other three trees are real directories under the one root too. *)
-  List.iter
-    (fun d -> check (d ^ "/ is a directory") (Sys.is_directory (path d)))
-    [ "pp"; "tuna"; "sundial" ];
+  (* The other three trees are real directories under the one root too.  They
+     are excluded from this dune project (root `dirs`), so they are absent from
+     a _build sandbox: assert them against the checkout itself, and let the
+     sandbox run assert the same thing through
+     scripts/verify_monorepo_merge.sh ("$prefix/ carries files").
+     Sys.is_directory raises on a missing path, so probe defensively. *)
+  if in_checkout then
+    List.iter
+      (fun d -> check (d ^ "/ is a directory") (is_dir d))
+      [ "pp"; "tuna"; "sundial" ];
   (* the merge itself must refuse to finish when a tree loses commits, not only
      the checker afterwards: history is the memory at cutover time too. *)
+  (* the count is taken on the parked rewritten tip, not on the prefix's
+     footprints: an empty source commit leaves nothing under <prefix>/ and would
+     undercount a merge that carried every commit. *)
   check "merge enforces the per-prefix count"
-    (contains m "rev-list --no-merges --count HEAD -- \"$prefix/\"");
+    (contains m "rev-list --no-merges --count \"refs/monorepo/$prefix\"");
   check "merge aborts on lost history" (contains m "history lost");
   check "merge is resumable without re-merging" (contains m "already merged");
   (* the promoted anchors sit exactly where the incoming trees write, so the
@@ -149,11 +175,14 @@ let () =
   check "verify checks pp file count"
     (contains v "pp/ files == pricklypear.git");
   (* the path-filtered deploy jobs run `make -C <tree>`, so each merged tree is
-     addressable from the root; libs/filmstrip is a real package. *)
-  List.iter
-    (fun f -> check (f ^ " is present") (exists f))
-    [ "pp/Makefile"; "tuna/Makefile"; "sundial/Makefile";
-      "libs/filmstrip/dune" ]
+     addressable from the root; libs/filmstrip is a real package.  The product
+     trees are excluded from this dune project, so they are only visible in a
+     real checkout, not in a _build sandbox. *)
+  check "libs/filmstrip/dune is present" (exists "libs/filmstrip/dune");
+  if in_checkout then
+    List.iter
+      (fun f -> check (f ^ " is present") (exists f))
+      [ "pp/README.md"; "tuna/README.md"; "sundial/dune" ]
 
 (* Criterion 2: .ci/deploy.yml carries the four path filters and the four jobs,
    each running its own product's build. *)
