@@ -79,9 +79,22 @@ let () =
     (contains m "rev-list --no-merges --count HEAD -- \"$prefix/\"");
   check "merge aborts on lost history" (contains m "history lost");
   check "merge is resumable without re-merging" (contains m "already merged");
+  (* the promoted anchors sit exactly where the incoming trees write, so the
+     merge has to clear them or git stops on "untracked working tree files
+     would be overwritten" and the lineage never lands. *)
+  check "merge clears the promoted anchors before merging"
+    (contains m "would be overwritten" && contains m "rm -f \"$MR/$prefix/$anchor\"");
   let v = read "scripts/verify_monorepo_merge.sh" in
+  check "merge writes a lineage marker per tree"
+    (contains m "MR4: merge $prefix history from $name");
   check "verify counts per prefix"
     (contains v "rev-list --no-merges --count HEAD");
+  (* the count alone cannot say WHICH tree failed to land, so the checker also
+     looks for the per-tree merge marker the merge script writes. *)
+  check "verify checks the pp lineage marker"
+    (contains v "MR4: merge $prefix history from $src");
+  check "verify checks every merged tree's marker"
+    (contains v "'libs/filmstrip:filmstrip.git'");
   check "verify checks libs/filmstrip is a directory"
     (contains v "libs/filmstrip is a directory");
   (* the path-filtered deploy jobs run `make -C <tree>`, so each merged tree is
