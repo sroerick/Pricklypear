@@ -97,17 +97,52 @@ COMMENT ON FUNCTION pp_node_visible(ltree, text) IS
   'tree_nodes read floor: may the current pp.user see this row. Called by both RLS policies and by the read wrappers so they cannot drift.';
 
 -- ---------------------------------------------------------------------------
+-- 1b. The write-side visibility flag, honored on the READ side
+--     (claims-visibility, operator policy 11-12: "everything should be public
+--     by default"). A row's body vis decides; an absent flag is PUBLIC, so an
+--     unflagged write in another identity's namespace (data.u.hollis,
+--     data.u.gregor, …) reads world-readable without any second step. Private
+--     is the per-scope opt-in and it consults the grant lookup (membership in
+--     the space containing the path) — owner and granted readers read it, and
+--     it is never a blanket deny. Writes (WITH CHECK) are NOT widened: the
+--     flag governs reads only.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION pp_vis_readable(p_path ltree, p_payload jsonb)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+AS $fn$
+  SELECT COALESCE(current_setting('pp.user', true), '') = 'root'
+      OR COALESCE(p_payload #>> '{body,vis}', 'public') = 'public'
+      OR (COALESCE(p_payload #>> '{body,vis}', '') = 'users'
+          AND COALESCE(current_setting('pp.user', true), '') NOT IN ('', 'anonymous'))
+      OR (COALESCE(p_payload #>> '{body,vis}', '') = 'private'
+          AND tree_path_in_member_space(p_path, current_setting('pp.user', true)))
+$fn$;
+
+COMMENT ON FUNCTION pp_vis_readable(ltree, jsonb) IS
+  'claims-visibility read side: body vis absent/public reads world-readable (the default), users = signed-in, private = member-space grant. Reads only.';
+
+-- ---------------------------------------------------------------------------
 -- 2. Both policies call the predicate. Same expression, so the union is the
 --    same expression the policies had before.
 -- ---------------------------------------------------------------------------
+-- claims-visibility (operator policy 11-12, "everything should be public by
+-- default"): the READ side honors the write-side flag. A row whose body vis is
+-- absent or 'public' reads world-readable in every namespace, data.u.<owner>
+-- and data.note.u.<owner> included — that is the default; private stays
+-- owner-or-member-space. WITH CHECK is untouched: a public flag widens reads,
+-- never writes into another identity's namespace.
 DROP POLICY IF EXISTS datum_user_isolation ON tree_nodes;
 CREATE POLICY datum_user_isolation ON tree_nodes
-  USING (pp_node_visible(path, kind))
+  USING (pp_node_visible(path, kind)
+         OR pp_vis_readable(path, payload))
   WITH CHECK (pp_node_visible(path, kind));
 
 DROP POLICY IF EXISTS note_user_isolation ON tree_nodes;
 CREATE POLICY note_user_isolation ON tree_nodes
-  USING (pp_node_visible(path, kind))
+  USING (pp_node_visible(path, kind)
+         OR pp_vis_readable(path, payload))
   WITH CHECK (pp_node_visible(path, kind));
 
 -- ---------------------------------------------------------------------------
@@ -132,7 +167,8 @@ SET search_path = pg_catalog, public
 AS $fn$
   SELECT n.* FROM tree_nodes n
    WHERE n.path = p_path
-     AND pp_node_visible(n.path, n.kind)
+     AND (pp_node_visible(n.path, n.kind)
+          OR pp_vis_readable(n.path, n.payload))
 $fn$;
 
 CREATE OR REPLACE FUNCTION pp_node_list(
@@ -152,7 +188,8 @@ AS $fn$
                    OR (nlevel(n.path) = nlevel(p_prefix) + 2
                        AND subpath(n.path, nlevel(p_prefix), 1)::text = 'h'))))
      AND (p_kind IS NULL OR n.kind = p_kind)
-     AND pp_node_visible(n.path, n.kind)
+     AND (pp_node_visible(n.path, n.kind)
+          OR pp_vis_readable(n.path, n.payload))
    ORDER BY n.rank COLLATE "C" NULLS LAST, n.path::text ASC
    LIMIT COALESCE(p_cap, 1000)
 $fn$;
@@ -186,12 +223,24 @@ BEGIN
     || quote_literal('{body,' || p_field || '}') || ' = $1 '
     || 'AND ($2::ltree IS NULL OR n.path <@ $2::ltree) '
     || 'AND ($3::text IS NULL OR n.kind = $3::text) '
+    -- claims-visibility (operator policy 11-12): the DEFAULT is public — an
+    -- unflagged write in another identity's namespace reads world-readable —
+    -- and a private opt-in consults the grant lookup (space membership)
+    -- instead of denying unconditionally.
     || 'AND ($4::text IS NULL '
+    || '     OR $4::text = ''root'' '
     || '     OR COALESCE(n.path <@ $5::ltree, false) '
-    || '     OR COALESCE(n.payload #>> ''{body,vis}'', ''private'') = ''public'' '
-    || '     OR (COALESCE(n.payload #>> ''{body,vis}'', ''private'') = ''users'' '
-    || '         AND $4::text <> ''anonymous'')) '
-    || 'AND pp_node_visible(n.path, n.kind) '
+    || '     OR COALESCE(n.payload #>> ''{body,vis}'', ''public'') = ''public'' '
+    || '     OR (COALESCE(n.payload #>> ''{body,vis}'', ''public'') = ''users'' '
+    || '         AND $4::text <> ''anonymous'') '
+    || '     OR (COALESCE(n.payload #>> ''{body,vis}'', ''public'') = ''private'' '
+    || '         AND tree_path_in_member_space(n.path, $4::text))) '
+    -- the READ floor honors the write-side flag: a public/unflagged row is
+    -- readable outside the viewer's garden, so the vis clause above is not
+    -- undone by the garden/data.u floor (claims-visibility: gregor's
+    -- broadcast of u.you's wall slug read 404 through this wrapper before).
+    || 'AND (pp_node_visible(n.path, n.kind) '
+    || '     OR pp_vis_readable(n.path, n.payload)) '
     || 'ORDER BY n.path::text ASC LIMIT COALESCE($6::int, 50)';
   RETURN QUERY EXECUTE v_sql
     USING p_value, p_prefix, p_kind, p_viewer, p_garden, p_cap;
