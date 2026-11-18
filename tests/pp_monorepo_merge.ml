@@ -73,11 +73,23 @@ let () =
   List.iter
     (fun d -> check (d ^ "/ is a directory") (Sys.is_directory (path d)))
     [ "pp"; "tuna"; "sundial" ];
+  (* the merge itself must refuse to finish when a tree loses commits, not only
+     the checker afterwards: history is the memory at cutover time too. *)
+  check "merge enforces the per-prefix count"
+    (contains m "rev-list --no-merges --count HEAD -- \"$prefix/\"");
+  check "merge aborts on lost history" (contains m "history lost");
+  check "merge is resumable without re-merging" (contains m "already merged");
   let v = read "scripts/verify_monorepo_merge.sh" in
   check "verify counts per prefix"
     (contains v "rev-list --no-merges --count HEAD");
   check "verify checks libs/filmstrip is a directory"
-    (contains v "libs/filmstrip is a directory")
+    (contains v "libs/filmstrip is a directory");
+  (* the path-filtered deploy jobs run `make -C <tree>`, so each merged tree is
+     addressable from the root; libs/filmstrip is a real package. *)
+  List.iter
+    (fun f -> check (f ^ " is present") (exists f))
+    [ "pp/Makefile"; "tuna/Makefile"; "sundial/Makefile";
+      "libs/filmstrip/dune" ]
 
 (* Criterion 2: .ci/deploy.yml carries the four path filters and the four jobs,
    each running its own product's build. *)
