@@ -241,7 +241,8 @@
     (list "destroy" "✕")
     (list "switch" "⇥")
     (list "collapse" "⇱")
-    (list "single" "⛶"))
+    (list "single" "⛶")
+    (list "move" "⇢"))
   "Verb word -> glyph pairs (the UI vocabulary table). A verb with no\nentry (or an entry whose glyph is empty) renders its WORD -- glyphs\nare an improvement over words, never a hard requirement.")
 
 (define filmstrip/app-link
@@ -448,15 +449,22 @@ empty set, never a parse error).")
         (render-html
           (filmstrip/oob-msg "filmstrip: no such pane"))
         (let*
-          ((panes2 (filmstrip/remove-at panes i))
-            (focus2 (filmstrip/close-focus i focus (length panes2))))
+          ;; v2 SHELF: close SHELVES the pane (the record survives, its
+          ;; body DOM stays behind hx-preserve); /filmstrip/destroy is
+          ;; the only verb that forgets a pane. Focus heals per
+          ;; close-heal (never onto a pane the operator cannot see).
+          ((p2 (dict-set (nth panes i) "state" "shelved"))
+            (panes2 (filmstrip/replace-at panes i p2))
+            (focus2 (filmstrip/close-heal panes2)))
           (seq
             (filmstrip/save-all cascade panes2 focus2)
             (render-html
               (html/join
                 (list
                   (filmstrip/oob-msg "")
-                  (filmstrip/oob-delete-pane id)
+                  (filmstrip/shelf-oob)
+                  (filmstrip/winbox-oob)
+                  (filmstrip/oob-section p2 #f)
                     (filmstrip/oob-coltabs)
                   (if
                     (if (>= focus2 0) (not (= focus2 focus)) #f)
@@ -1976,13 +1984,11 @@ pane owns the fixed lift). A focused rail pane is a ring, not a window
         "section"
         (html/attrs
           (list
-            (html/attr
-              "class"
-              (string-append
-                "fs-pane"
-                " fs-"
-                (filmstrip/pane-width p)
-                (if focused? " focused" "")))
+            ;; the class rides filmstrip/pane-sclass (the declared ONE
+            ;; assembly): an OOB swap must not drift from the natural
+            ;; render -- a shelved pane's swap has to carry .shelved or
+            ;; the close would leave a visible section behind.
+            (html/attr "class" (filmstrip/pane-sclass p focused?))
             (html/attr "id" (string-append "fs-pane-" id))
               (html/attr "data-pane" id)
               (html/attr "data-region" (filmstrip/pane-region p))
@@ -2220,8 +2226,25 @@ desktop 0).")
                   (html/attr "hx-target" "#fs-sink")
                       (html/attr "hx-swap" "innerHTML"))
                     (filmstrip/optimistic-attrs "close")))
-              "close"))))))
-  "Pane title bar: route label + width cycle + close, all htmx POSTs.")
+              "close")
+            (html/tag
+              "button"
+              (html/attrs
+                (list
+                  (html/attr "class" "fs-btn")
+                  (html/attr "title" (filmstrip/verb-hint "move"))
+                  (html/attr "aria-label" "move")
+                  (html/attr "data-verb" "move")
+                  (html/attr "hx-post" "/filmstrip/move-to")
+                  (html/attr
+                    "hx-vals"
+                    (string-append "{\"id\":\"" id "\"}"))
+                  (html/attr "hx-target" "#fs-sink")
+                  (html/attr "hx-swap" "innerHTML")))
+              (html/text (filmstrip/act-glyph "move"))))))))
+  "Pane title bar: route label + width cycle + close (shelve) + the move
+glyph (posts /filmstrip/move-to with no d: the declared desktop ring
+cycles), all htmx POSTs.")
 
 (define filmstrip/pane-html
   (lambda
@@ -2502,7 +2525,11 @@ skips them).")
                   (filmstrip/oob-msg "")
                   (filmstrip/shelf-oob)
                   (filmstrip/winbox-oob)
-                    (filmstrip/oob-section p2 (= i focus))
+                    ;; the pane CHANGED CONTAINER (main strip <-> rail
+                    ;; box), so the whole surface re-renders -- an
+                    ;; oob-section swap alone would leave the pane in
+                    ;; its old container.
+                    (filmstrip/oob-content-strip panes2 focus)
                     (filmstrip/oob-coltabs)))))))))
   "POST /filmstrip/pin: id param -> trade the pane's region (main/rail\nv3 pin). Rail = dock semantics: the body stays LIVE inside the rail\n(glochid CSS shows [data-region=rail] bodies) beside the focused main\npane. Same grammar as filmstrip/width: OOB section swap (body DOM\npreserved via hx-preserve), plus winbox/shelf OOB refreshes (the win\nrow's pin word re-labels by region).")
 
@@ -3498,9 +3525,16 @@ arrive open with their eager kids.")
             (if
               (null? raw)
               (list)
-              (let
-                ((s (as-str raw)))
-                (if (string-eq s "") (list) (json-parse s))))))
+              ;; verbs arrive as JSON TEXT from a host-built node dict
+              ;; and as a NATIVE verb-row list when the node itself came
+              ;; out of json-parse (a kids sublevel: objects decode to
+              ;; alists under json-values-alist) -- accept both.
+              (if
+                (string? raw)
+                (let
+                  ((s (as-str raw)))
+                  (if (string-eq s "") (list) (json-parse s)))
+                raw))))
         (is-dir (string-eq kind "dir"))
         (kids
           (let
