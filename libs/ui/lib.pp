@@ -269,7 +269,9 @@
               "hx-on::before:swap"
               "this.dataset.stick=(this.dataset.send||!this.dataset.init||this.scrollHeight-this.scrollTop-this.clientHeight<160)?'1':'';this.dataset.init=1;delete this.dataset.send"
               "hx-on::after:swap"
-                "if(this.dataset.stick)this.scrollTop=this.scrollHeight")
+                "if(this.dataset.stick)this.scrollTop=this.scrollHeight"
+              "hx-on:scroll"
+              "if(this.scrollTop<64&&this.scrollHeight>this.clientHeight+64){var b=document.querySelector('#chat-older-more button');if(b&&!b.dataset.busy){b.dataset.busy='1';b.click()}}")
         (if
           (string-eq poll "")
           (list)
