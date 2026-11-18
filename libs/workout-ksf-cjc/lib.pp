@@ -1,5 +1,5 @@
 ;; package workout-ksf-cjc -- the first program-as-sub-module.
-;; Spec: specs/workout-ksf-cjc.md. Composes with the core workout lib.
+;; Spec: borge/workout-ksf-cjc.borg. Composes with the core workout lib.
 ;; Uses defines instead of nested lets for clarity.
 
 (package workout-ksf-cjc

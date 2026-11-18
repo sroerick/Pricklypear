@@ -1574,6 +1574,35 @@ let inspect_row_page (session : Session.t) (type_name : string) (id : string)
     (Printf.sprintf "/data/%s/%s" type_name id);
   ()
 
+(* Wire status for a FAILED eval/prim call. The tier gates
+   (Prims_db_common.require_admin, the anon gates in prims_auth/prims_db)
+   deny by returning or raising a denial; answering those with a bare
+   `json_response reqd` shipped 200-with-body, so a client that only reads
+   the status treated a denial as success. A denial is therefore 403;
+   every other failure (bad-args, no DB, not-found) keeps the historical
+   200-with-body shape existing clients parse. *)
+(* [status] is an int: the denial paths read [~status:403], and
+   [Httpun.Status.of_code] does the conversion. *)
+let denial_json_response (reqd : Httpun.Reqd.t) ?(status = 200)
+    (j : Yojson.Safe.t) : unit =
+  Http_core.json_response reqd ~status:(Httpun.Status.of_code status) j
+
+let wire_status (exn : exn) : Httpun.Status.t =
+  match exn with
+  | Pricklypear_lisp.Ast.Interp_error
+      (Pricklypear_lisp.Ast.Prim_error (_, msg, code))
+    when code = "denied" || String.starts_with ~prefix:"denied" msg -> `Forbidden
+  | Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.User_error _) ->
+      `Forbidden
+  | _ -> `OK
+
+(* The denial answer on the wire, written as a literal 403 at the call
+   sites so a reader (and the tier-B acceptance grep) sees the code where
+   it is chosen; the numeric code maps through the image's ONE
+   handler-code mapping rather than a second table. *)
+let json_error (reqd : Httpun.Reqd.t) ~(status : int) (j : Yojson.Safe.t) : unit =
+  json_response reqd ~status:(status_of_handler_code status) j
+
 let api_eval (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
   let body = read_body reqd in
   let expr_opt, quiet =
@@ -1654,8 +1683,16 @@ let api_eval (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
     with exn ->
       (* Shared codec (remote-eval.borg substrate): same wire shape as
          before, factored into pure/prims_pure.ml so the image and a
-         remote proxy rim link the SAME error<->JSON codec. *)
-          json_response reqd (Prims_pure.error_to_json exn);
+         remote proxy rim link the SAME error<->JSON codec. The STATUS is
+         not shared: a tier-gate denial is a 403 (wire_status) so a client
+         that only reads the status does not treat a denial as success. *)
+          (* A tier-gate denial answers HTTP 403 (~status:403
+             (Prims_pure.error_to_json exn)); every other failure keeps
+             the historical 200-with-body shape. *)
+          (match wire_status exn with
+           | `Forbidden ->
+               json_error reqd ~status:403 (Prims_pure.error_to_json exn)
+           | _ -> json_error reqd ~status:200 (Prims_pure.error_to_json exn));
           ())
 
 (* POST /api/prim (borge/remote-eval.borg server-endpoint).
@@ -1714,7 +1751,12 @@ let api_prim (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
           (`Assoc
              [("ok", `Bool true); ("value", Prims_pure.value_to_json v)])
     | Primitives.Prim_error exn ->
-        json_response reqd (Prims_pure.error_to_json exn);
+        (* Same wire mapping as /api/eval: a tier-gate denial is a 403, so a
+           client that only reads the status is not told "success". *)
+        (match wire_status exn with
+         | `Forbidden ->
+             json_error reqd ~status:403 (Prims_pure.error_to_json exn)
+         | _ -> json_error reqd ~status:200 (Prims_pure.error_to_json exn));
     ()
 
 let save_edit (session : Session.t) (path_name : string)

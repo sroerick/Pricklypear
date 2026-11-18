@@ -1,4 +1,4 @@
-(** One permission model for the OCaml layer (specs/authz-matrix.md).
+(** One permission model for the OCaml layer (borge/authz-matrix.borg).
 
     Migration STEP 1 (2026-10-21): identity classes + capability table +
     [authorize]. STEP 2 (2026-10-23): the branch-op family
