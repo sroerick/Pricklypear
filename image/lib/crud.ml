@@ -1613,10 +1613,12 @@ let path_granted (conn : Store_db.conn) ~(path : string) ~(viewer : string)
     default is public, and [granted] is the grant lookup a private scope
     consults (space membership) — never a blanket deny. *)
 let note_vis_allows ~(vis : string) ~(viewer : string) ~(granted : bool) : bool =
-  match vis with
-  | "private" -> granted
-  | "users" -> viewer <> "anonymous"
-  | _ -> true (* "public" and every unflagged/unrecognized write *)
+  if viewer = "root" then true (* sovereign reader: admin/root reads everything *)
+  else
+    match vis with
+    | "private" -> granted
+    | "users" -> viewer <> "anonymous"
+    | _ -> true (* "public" and every unflagged/unrecognized write *)
 
 let gate_note_vis ~(conn : Store_db.conn)
     ~(node : Tree_store.node option) ~(path : string)

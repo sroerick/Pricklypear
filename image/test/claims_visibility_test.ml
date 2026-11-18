@@ -74,8 +74,8 @@ let test_guest_scope_private () =
 let test_root_reads_all () =
   (* root/kernel reads pass viewer=None and stay ungated by the gate; at the
      decision level that is a sovereign grant on the private client scope. *)
-  Alcotest.(check int) "root reads u.cos's private client scope" 200
-    (status ~vis:(Some "private") ~viewer:"root" ~granted:true);
+  Alcotest.(check int) "root reads u.cos's private client scope (no grant)" 200
+    (status ~vis:(Some "private") ~viewer:"root" ~granted:false);
   (* "users" widens to every signed-in identity. *)
   Alcotest.(check int) "an unflagged-signed-in read of a users scope" 200
     (status ~vis:(Some "users") ~viewer:"u.gregor" ~granted:false);
