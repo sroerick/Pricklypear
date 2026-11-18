@@ -89,6 +89,18 @@ let () =
     (contains m "MR4: merge $prefix history from $name");
   check "verify counts per prefix"
     (contains v "rev-list --no-merges --count HEAD");
+  (* criterion 1 is stated in files as well as commits: the check must be the
+     card's own `git ls-tree -r --name-only HEAD -- <prefix> | wc -l` against
+     the source's `git ls-files | wc -l`, or a merge that keeps commits and
+     drops paths passes the gate and still fails the card. *)
+  check "verify counts files per prefix (git ls-tree vs git ls-files)"
+    (contains v "ls-tree -r --name-only HEAD" && contains v "ls-files | wc -l");
+  check "verify tests the three product trees' file counts"
+    (contains v "pp/ files == pricklypear.git"
+     && contains v "tuna/ files == tuna-work.git"
+     && contains v "sundial/ files == sundial.git");
+  check "verify exempts filmstrip only while its source carries no files"
+    (contains v "source carries no files");
   (* the count alone cannot say WHICH tree failed to land, so the checker also
      looks for the per-tree merge marker the merge script writes. *)
   check "verify checks the pp lineage marker"
@@ -97,6 +109,14 @@ let () =
     (contains v "'libs/filmstrip:filmstrip.git'");
   check "verify checks libs/filmstrip is a directory"
     (contains v "libs/filmstrip is a directory");
+  (* criterion 1 counts FILES per prefix (ls-tree -r --name-only), not only
+     commits: filter-repo can keep the whole lineage and still drop paths. *)
+  check "verify counts files per prefix"
+    (contains v "ls-tree -r --name-only HEAD --");
+  check "verify counts source files"
+    (contains v "ls-files | wc -l");
+  check "verify checks pp file count"
+    (contains v "pp/ files == pricklypear.git");
   (* the path-filtered deploy jobs run `make -C <tree>`, so each merged tree is
      addressable from the root; libs/filmstrip is a real package. *)
   List.iter
