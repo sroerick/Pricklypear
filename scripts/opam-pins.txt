@@ -1,0 +1,11 @@
+# opam pins required to build the image from a clean Linux switch.
+#
+# Apply with:
+#   while read -r pkg ver; do case $pkg in \#*|"") continue;; esac; \
+#     opam pin add "$pkg" "$ver" -y; done < scripts/opam-pins.txt
+#
+# httpun 0.2.0 renamed the body-writer/unit variants that
+# image/lib/http_agent.ml:22 matches on (Closed / Written), so an unpinned
+# resolve fails to compile the image. Pin the matched pair.
+httpun 0.1.0
+httpun-eio 0.1.0

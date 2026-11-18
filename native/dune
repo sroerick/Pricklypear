@@ -2,14 +2,26 @@
 ; vendored river 0.4.8 protocol XMLs (native/protocol/). The scanner
 ; also emits *_server.ml (not linked here; excluded from the executables
 ; since only the client side is used).
+;
+; These are the only stanzas in the repo that need wayland +
+; wayland-scanner-ocaml (a non-opam, distro/rust package). A clean Linux
+; switch has neither, so `dune build @all` used to die on four missing
+; wayland artifacts before anything else even compiled. Gate them behind
+; PP_SOIL=1: the default build stays green without wayland, and a box
+; that has the deps still builds the clients with
+;   PP_SOIL=1 dune build native/soil_hello.exe
+; (enabled_if takes env vars, not %{lib-available:...}, in executable
+; stanzas -- hence the flag rather than feature detection.)
 
 (rule
+ (enabled_if (= %{env:PP_SOIL=0} "1"))
  (targets river_window_management_v1_proto.ml river_window_management_v1_client.ml
           river_window_management_v1_server.ml)
  (deps protocol/river-window-management-v1.xml)
  (action (run wayland-scanner-ocaml protocol/river-window-management-v1.xml)))
 
 (rule
+ (enabled_if (= %{env:PP_SOIL=0} "1"))
  (targets river_xkb_bindings_v1_proto.ml river_xkb_bindings_v1_client.ml
           river_xkb_bindings_v1_server.ml)
  (deps protocol/river-xkb-bindings-v1.xml)
@@ -19,11 +31,13 @@
               protocol/river-xkb-bindings-v1.xml)))
 
 (executable
+ (enabled_if (= %{env:PP_SOIL=0} "1"))
  (name soil_strip)
  (modules (:standard \ river_window_management_v1_server river_xkb_bindings_v1_server))
  (libraries wayland eio eio_main unix yojson logs logs.fmt))
 
 (executable
+ (enabled_if (= %{env:PP_SOIL=0} "1"))
  (name soil_hello)
  (modules (:standard \ river_window_management_v1_server river_xkb_bindings_v1_server))
  (libraries wayland wayland.protocols eio eio_main unix yojson logs logs.fmt))

@@ -3463,7 +3463,16 @@ arrive open with their eager kids.")
 (define filmstrip/tree-lazy
   (lambda
     (nodes)
-    (list/map (lambda (n) (dict-set n "kids" "")) nodes))
+    (list/map
+      (lambda
+        (n)
+        (let
+          ((e (dict-get n "expand")))
+          (if
+            (if (null? e) #f (string-eq (as-str e) "true"))
+            n
+            (dict-set n "kids" ""))))
+      nodes))
   "Boot-lazy projection of a level: eager kids are EMPTIED so the head\nrender stays level-0-only (the request budget is a whole shared shell\n-- an eager head over the fs made the boot shell bust the 400k step\nceiling). The DOM rule still holds at boot: folding pulls the level\nfresh via toggle-once, and the SPLICE renders whatever eager kids the\nhost chose (a GET answers a small subtree in one response). Pane faces\nrender the level directly and honor kids -- one template, two\nmaterialization points. Node dicts ride JSON strings (v4 make-note:\ndict-set* refuses non-strings), so dict-set applies cleanly.")
 
 (define filmstrip/tree-level
@@ -3496,6 +3505,10 @@ arrive open with their eager kids.")
           (let
             ((k (dict-get n "kids")))
             (if (null? k) "" (as-str k))))
+        (expand
+          (let
+            ((e (dict-get n "expand")))
+            (if (null? e) #f (string-eq (as-str e) "true"))))
         (eager (and is-dir (not (string-eq kids ""))))
         (label-word
           (if
@@ -3577,6 +3590,13 @@ arrive open with their eager kids.")
         (details-attrs
           (append
             (list (html/attr "class" "fs-tr-node"))
+            ;; the default-open seed (rail-trees-v4 expand): a dir whose
+            ;; dict carries expand=true renders a parsed-open <details>
+            ;; (paired with eager kids -- a parsed-open fold never fires
+            ;; its toggle-once pull, so the kids must ride along).
+            (if (and is-dir expand)
+                (list (html/attr "open" "open"))
+                (list))
             (if
               (or (not is-dir) eager)
               (list)
