@@ -18,3 +18,18 @@
  (modules pp_clean_build_pins)
  (deps ../scripts/opam-pins.txt ../README.md ../libs/todo/lib.pp
    ../libs/chat/lib.pp))
+
+; MR4: the monorepo merge must be described in-tree, and its records (deploy
+; manifest, cutover log, factory repo config) must name the path-filtered
+; deploy law and the one-repo resolution.  Depending on the root promote
+; targets (deploy.yml, cutover.log, repos.yml) forces them to be published to
+; .ci/ and configs/ before the test reads the committed paths.
+(test
+ (name pp_monorepo_merge)
+ (modules pp_monorepo_merge)
+ (deps ../dune ../dune-project ../.gitignore
+   ../deploy.yml ../cutover.log ../repos.yml
+   ../scripts/monorepo-deploy.yml ../scripts/monorepo-cutover.log
+   ../scripts/monorepo-repos.yml ../scripts/monorepo-merge.sh
+   ../scripts/verify_monorepo_merge.sh ../scripts/check_monorepo_trees.sh
+   ../libs/filmstrip/lib.pp ../libs/filmstrip/dune))
