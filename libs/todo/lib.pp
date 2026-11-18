@@ -4314,12 +4314,12 @@
               (redirect (string-append "/todos?view=" view)))))
         (let
           ((lists (todo/list/all)))
+          ;; Card f237239f: one title line per render. The header is the h1
+          ;; alone; the view's own headings and rows follow, so a list page
+          ;; never prints the same title/description text twice.
           (html/page
             (list
               (html/h1 "To-dos")
-              (html/p*
-                (html/attr "class" "muted")
-                "Lists (Basecamp) + notes scrape (org). Click a title for details.")
               (todo/ui/main* (todo/ui/view) lists)))))))
   "The /todos entry. perf 1104: the list pool is read ONCE here and threaded
      into todo/ui/main*; a GET render used to read it twice (todo/list/ensure-inbox
