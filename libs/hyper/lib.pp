@@ -79,7 +79,8 @@
                   handler
                   verb
                   path
-                  (cons (cons "hx-request" "true") all-params)))
+                  all-params
+                  (list (cons "hx-request" "true"))))
               (new-page (soup/page-copy page))
               (target
                 (if

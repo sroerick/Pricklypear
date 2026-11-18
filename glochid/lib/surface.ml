@@ -1631,7 +1631,7 @@ the title tooltip (hover affordance), zero JS.")
               ;; OOBs the level rows into the freshly-revealed box; a
               ;; revisit sends no rows -- its expansion DOM stays alive.
               (if (and fresh? (not (null? target)))
-                  (filmstrip/tree-oob target)
+                  (filmstrip/tree-oob target #f)
                   "")))))))
   "POST /filmstrip/railmode: root param -> persist mode + MRU boxrows;
 OOB the sentinel (class rm-<root>; CSS shows only that tree); and a
@@ -1727,7 +1727,7 @@ one response would make htmx run its OOB pass twice over the same
 node, so the shelf hook answers empty.")
 
 (define filmstrip/winbox-oob
-  (lambda () (filmstrip/tree-oob (car (filmstrip/tree-roots))))
+  (lambda () (filmstrip/tree-oob (car (filmstrip/tree-roots)) #f))
   "v4: same -- the windows tree REPLACES the winbox (close/restore/
 destroy/refresh call this on every mutation response).")
 
