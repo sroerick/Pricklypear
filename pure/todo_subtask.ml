@@ -41,7 +41,8 @@ let is_leaf (t : t) (id : string) : bool = children t id = []
 let set_status (t : t) ~(id : string) (status : status) : t =
   List.map (fun (n : node) -> if n.id = id then { n with status } else n) t
 
-let land (t : t) ~(id : string) : t = set_status t ~id Landed
+(** Mark one card landed (the /land transition). *)
+let mark_landed (t : t) ~(id : string) : t = set_status t ~id Landed
 
 (** File a card. Nobody under it ([parent] = None) keeps it top-level;
     filing an existing card again MOVES it (the old parent's children list
