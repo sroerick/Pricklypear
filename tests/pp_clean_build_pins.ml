@@ -51,4 +51,11 @@ let () =
      chat still defines it (a rename there re-breaks fresh-DB boot). *)
   check "libs/todo/lib.pp" (read "../libs/todo/lib.pp") "lookbook-add";
   check "libs/chat/lib.pp" (read "../libs/chat/lib.pp") "define chat/lookbook-add";
+  (* (e) card 75272c4a: a comment posted from a card detail page must come
+     back to the SAME card, not the list. The composer rides htmx (the
+     #todo-main outerHTML swap) and the plain-POST fallback keeps the card
+     id in the redirect, so neither arm can drop you on the main list. *)
+  let todo_lib = read "../libs/todo/lib.pp" in
+  check "libs/todo/lib.pp" todo_lib "todo-comment-form";
+  check "libs/todo/lib.pp" todo_lib "(string-append \"&id=\" (as-str id))";
   if !failures > 0 then exit 1

@@ -4398,11 +4398,32 @@ composer splices in the chat transcript elements once chat has loaded). The seed
                     #f)
                   (as-str lid)
                   (if (null? v) "everything" (as-str v)))))
-             (lists (todo/list/all)))
+             (lists (todo/list/all))
+             (id (request-param "id")))
             (if
               (hx-request?)
               (render-html (todo/ui/main* view lists))
-              (redirect (string-append "/todos?view=" view)))))
+              (redirect
+                (string-append
+                  "/todos?view="
+                  view
+                  ;; Card 75272c4a: a comment (or a save) posted from the
+                  ;; detail page comes back to the SAME card, not the list.
+                  ;; The htmx arm swaps #todo-main in place; this is the
+                  ;; no-JS / plain-POST fallback.
+                  (if
+                    (if
+                      (null? id)
+                      #f
+                      (if
+                        (string-eq (as-str id) "")
+                        #f
+                        (if
+                          (string-eq (as-str (request-param "action")) "comment")
+                          #t
+                          (string-eq (as-str (request-param "action")) "save"))))
+                    (string-append "&id=" (as-str id))
+                    ""))))))
         (let
           ((lists (todo/list/all)))
           ;; Card f237239f: one title line per render. The header is the h1
