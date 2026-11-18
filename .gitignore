@@ -41,6 +41,9 @@ id_rsa.pub
 # runtime / local data
 /tmp/
 *.log
+# .ci/cutover.log is the MR4 cutover record of record (scripts/monorepo-cutover.log
+# promoted by dune); the *.log rule above must not swallow it.
+!.ci/cutover.log
 *.pid
 .pi-subagents/
 .pi/

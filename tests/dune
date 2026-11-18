@@ -32,4 +32,6 @@
    ../scripts/monorepo-deploy.yml ../scripts/monorepo-cutover.log
    ../scripts/monorepo-repos.yml ../scripts/monorepo-merge.sh
    ../scripts/verify_monorepo_merge.sh
-   ../libs/filmstrip/lib.pp))
+   ../libs/filmstrip/lib.pp
+   ../pp/Makefile ../pp/README.md ../tuna/Makefile ../tuna/README.md
+   ../sundial/Makefile ../sundial/README.md))

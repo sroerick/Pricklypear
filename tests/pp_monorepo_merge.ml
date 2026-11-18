@@ -63,6 +63,10 @@ let () =
     [ "pp:"; "tuna:"; "sundial:"; "libs/filmstrip:" ];
   check "filmstrip tree is present" (Sys.is_directory (path "libs/filmstrip"));
   check "filmstrip lib.pp is present" (exists "libs/filmstrip/lib.pp");
+  (* the other three trees are real directories under the one root too. *)
+  List.iter
+    (fun d -> check (d ^ "/ is a directory") (Sys.is_directory (path d)))
+    [ "pp"; "tuna"; "sundial" ];
   let v = read "scripts/verify_monorepo_merge.sh" in
   check "verify counts per prefix"
     (contains v "rev-list --no-merges --count HEAD");
