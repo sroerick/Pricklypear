@@ -30,6 +30,12 @@ let read rel =
   close_in ic;
   s
 
+(* A promoted record is addressed by its dune target name (deploy.yml,
+   repos.yml, cutover.log) inside the build sandbox, and by its committed
+   destination (.ci/deploy.yml, configs/repos.yml, .ci/cutover.log) in a plain
+   checkout; accept either so the check reads the same record both ways. *)
+let promoted target committed = if exists target then read target else read committed
+
 let contains hay needle =
   let nh = String.length hay and nn = String.length needle in
   let rec go i =
@@ -110,11 +116,21 @@ let () =
 let () =
   let rec_ = read "scripts/monorepo-repos.yml" in
   check "repos.yml names a monorepo checkout" (contains rec_ "path:");
-  check "repos.yml is the promoted copy" (read "repos.yml" = rec_);
+  check "repos.yml is the promoted copy"
+    (promoted "repos.yml" "configs/repos.yml" = rec_);
   check "deploy manifest is the promoted copy"
-    (read "deploy.yml" = read "scripts/monorepo-deploy.yml");
+    (promoted "deploy.yml" ".ci/deploy.yml"
+    = read "scripts/monorepo-deploy.yml");
   check "cutover log is the promoted copy"
-    (read "cutover.log" = read "scripts/monorepo-cutover.log")
+    (promoted "cutover.log" ".ci/cutover.log"
+    = read "scripts/monorepo-cutover.log");
+  (* the loop's acceptance script must check the same resolution the factory
+     uses, or a green merge could still route cards at an old repo. *)
+  let v = read "scripts/verify_monorepo_merge.sh" in
+  check "verify names the monorepo checkout path"
+    (contains v "grep -qxF '    path: $MR'");
+  check "verify checks card_repo" (contains v "card_repo: monorepo");
+  check "verify checks the promoted copies" (contains v "cmp -s")
 
 (* Criterion 4: the cutover log is bracketed CUTOVER-START .. CUTOVER-END, and
    the old repos stay armed for rollback (executable pre-receive hooks). *)
