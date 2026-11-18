@@ -54,7 +54,9 @@ __pycache__/
 *.pyc
 lisp/bin/read_test.ml
 
-# agent / design-session debris (never re-commit)
+# agent / design-session debris (never re-commit).  The MR4 re-includes for the
+# three merged trees live at the END of this file: git honours the LAST matching
+# pattern, so a negation written here would be undone by the patterns below.
 
 # pp-flow scratch briefs/logs when PP_FLOW_LOG_DIR points at the repo
 # (default is .ralph/, already ignored above)
@@ -98,3 +100,20 @@ docs/pricklypear-book.pdf
 # Zig engine build artifacts (engine/)
 engine/zig-out/
 engine/.zig-cache/
+
+# MR4 (criterion 1): criterion 1 counts PATHS under each prefix -- `git ls-tree
+# -r --name-only HEAD -- <prefix>` must equal the source repo's `git ls-files |
+# wc -l` -- so no ignore rule above may swallow a file the three source
+# histories carry.  git applies the LAST matching pattern, so these negations
+# have to sit at the end of the file: a whole tree that lands under pp/, tuna/
+# or sundial/ with files missing is a merge that fails its own gate.
+!pp/.borge-bugs/
+!pp/spikes/
+!pp/spikes/upsets/
+!pp/.ralph/
+!tuna/.ralph/
+!tuna/reference/tree-calculus/.vscode/
+!tuna/reference/tree-calculus/implementation/typescript/package.json
+!tuna/reference/tree-calculus/implementation/typescript/package-lock.json
+!tuna/reference/tree-calculus/implementation/wasm/min-bin/main.wat.bak
+!sundial/.ralph/

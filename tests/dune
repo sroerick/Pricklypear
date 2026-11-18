@@ -27,7 +27,7 @@
 (test
  (name pp_monorepo_merge)
  (modules pp_monorepo_merge)
- (deps ../dune ../dune-project
+ (deps ../dune ../dune-project ../.gitignore
    ../deploy.yml ../cutover.log ../repos.yml
    ../scripts/monorepo-deploy.yml ../scripts/monorepo-cutover.log
    ../scripts/monorepo-repos.yml ../scripts/monorepo-merge.sh

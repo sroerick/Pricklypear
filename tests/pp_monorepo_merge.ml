@@ -173,6 +173,11 @@ let () =
     (contains v "source repo $src is present");
   check "verify demands files under each product prefix"
     (contains v "carries files (not anchors only)");
+  (* a reviewed FAIL on this card was a branch that promoted every record and
+     still had no pp/, tuna/, sundial/ in the checkout: the gate has to assert
+     the trees are there, not only that the manifest names them. *)
+  check "verify demands the merged trees in the checkout"
+    (contains v "is a directory in the checkout");
   (* criterion 1 counts FILES per prefix (ls-tree -r --name-only), not only
      commits: filter-repo can keep the whole lineage and still drop paths. *)
   check "verify counts files per prefix"
@@ -186,10 +191,37 @@ let () =
      trees are excluded from this dune project, so they are only visible in a
      real checkout, not in a _build sandbox. *)
   check "libs/filmstrip/dune is present" (exists "libs/filmstrip/dune");
-  if in_checkout then
+  (* The merged trees are whole checkouts of their source repos, so their files
+     sit at <prefix>/<source path>: sundial's own dune project is
+     sundial/sundial/dune, not a root-level anchor.  Assert one real file per
+     product tree, plus that each prefix carries more than the promoted
+     Makefile/README anchor -- the reviewed FAIL was a green build over a
+     checkout with no merged trees in it at all. *)
+  if in_checkout then begin
     List.iter
       (fun f -> check (f ^ " is present") (exists f))
-      [ "pp/README.md"; "tuna/README.md"; "sundial/dune" ]
+      [ "pp/README.md"; "tuna/README.md"; "sundial/sundial/dune" ];
+    List.iter
+      (fun d ->
+        let n = try Array.length (Sys.readdir (path d)) with Sys_error _ -> 0 in
+        check (d ^ "/ carries files (not anchors only)") (n > 2))
+      [ "pp"; "tuna"; "sundial" ]
+  end
+
+(* Criterion 1 is stated in PATHS, so the merge must not lose a path to this
+   repository's own ignore rules: the product trees are whole checkouts and
+   their histories carry files whose patterns the root .gitignore ignores
+   (tuna's .vscode/, package.json/package-lock.json, one .wat.bak; pp's and
+   tuna's .ralph/, pp's .borge-bugs/).  A swallowed path makes the committed
+   tree short of its source, which is exactly the reviewed failure of this card
+   in file-count form -- so the re-includes are checked, not assumed. *)
+let () =
+  let gi = read ".gitignore" in
+  List.iter
+    (fun p -> check ("gitignore re-includes " ^ p) (contains gi p))
+    [ "!tuna/.ralph/"; "!pp/.ralph/"; "!sundial/.ralph/"; "!pp/.borge-bugs/";
+      "!tuna/reference/tree-calculus/.vscode/";
+      "!tuna/reference/tree-calculus/implementation/typescript/package.json" ]
 
 (* Criterion 2: .ci/deploy.yml carries the four path filters and the four jobs,
    each running its own product's build. *)
