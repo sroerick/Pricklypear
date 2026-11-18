@@ -133,12 +133,14 @@
 (define lookbook/base-elements
   (lambda
     ()
-    (chat/lookbook-add
-      (chat/lookbook-add
-        lookbook/seed-elements
-        chat/lb-elements)
-      lookbook/todo-elements))
-  "The lib seed inventory composed with the declared package vocabularies:\nchat's transcript elements + todo's assignment control. The seed is read from\nlookbook/seed-elements (a VALUE, not a call to the seam): defs are lazy\nrecipes, so capturing base-elements here would force the seam from inside the\nseam (cyclic thunk force). libs/todo declares lookbook/todo-elements and must\nNOT redefine this name -- a package-level definition is clobbered by the next\npackage to load.")
+    ;; Self-contained on purpose: todo seeds BEFORE chat, so a call to
+    ;; chat/lookbook-add here is unbound and boot logs
+    ;; "todo form 5 failed: unbound chat/lookbook-add". The idempotent
+    ;; chat/lookbook-add seam still owns the composed inventory once chat
+    ;; loads and clobbers this def.
+    (append lookbook/seed-elements lookbook/todo-elements))
+  "The lib seed inventory composed with the declared package vocabularies:\ntodo's declared ui vocabulary, self-contained while todo seeds (libs/chat's
+composer splices in the chat transcript elements once chat has loaded). The seed is read from\nlookbook/seed-elements (a VALUE, not a call to the seam): defs are lazy\nrecipes, so capturing base-elements here would force the seam from inside the\nseam (cyclic thunk force). libs/todo declares lookbook/todo-elements and must\nNOT redefine this name -- a package-level definition is clobbered by the next\npackage to load.")
 
 ;; ---- lookbook registration ----
 ;; The package vocabulary is a declared VALUE; the one composer of
