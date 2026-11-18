@@ -58,4 +58,14 @@ let () =
   let todo_lib = read "../libs/todo/lib.pp" in
   check "libs/todo/lib.pp" todo_lib "todo-comment-form";
   check "libs/todo/lib.pp" todo_lib "(string-append \"&id=\" (as-str id))";
+  (* (f) card 8b8405: every comment write stamps author + generation on the
+     row, an unresolvable author is REFUSED (never stamped anonymous), and a
+     row that predates the stamp still reads as author-unknown. Dropping any
+     of the three is a regression. *)
+  check "libs/todo/lib.pp" todo_lib "comment refused: no resolvable author";
+  check "libs/todo/lib.pp" todo_lib "\"author\" who";
+  check "libs/todo/lib.pp" todo_lib "\"generation\" (as-str (gen-now))";
+  check "libs/todo/lib.pp" todo_lib "todo/datum/feed-author";
+  check "libs/todo/lib.pp" todo_lib "todo-feed-acted-by";
+  check "libs/todo/lib.pp" todo_lib "todo-feed-gen";
   if !failures > 0 then exit 1

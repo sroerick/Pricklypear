@@ -373,15 +373,36 @@ composer splices in the chat transcript elements once chat has loaded). The seed
 (define todo/comment/add
   (lambda
     (item body)
-    "Append a comment datum to card item; returns the comment id. Author +
-     ts ride the row metadata (session user / created_at)."
+    "Append a comment datum to card item; returns the comment id. The author
+     is resolved HERE and an unresolvable one (anonymous / empty) is REFUSED:
+     an unattributed comment is a silent forgery, so nothing is written and an
+     (error ...) envelope comes back instead of an anonymous stamp. Author +
+     generation also ride the ROW BODY beside item_id/body (deliberate extra
+     fields; todo-comment declares item_id+body and validate_fields only
+     requires the declared ones), so a reader never has to guess attribution;
+     rows that predate the stamp still read (todo/datum/feed-author marks them
+     author-unknown)."
     (todo/comments-init!)
-    (as-str
-      (todo/tree/create
-        "todo-comment"
-        (dict-set*
-          "{}"
-          (list "item_id" (as-str item) "body" (as-str body)))))))
+    (let
+      ((who (as-str (whoami))))
+      (if
+        (or
+          (string-eq who "")
+          (string-eq who "anonymous")
+          (string-eq who "unknown"))
+        (err/shape
+          "comment refused: no resolvable author (anonymous session); nothing written"
+          "denied")
+        (as-str
+          (todo/tree/create
+            "todo-comment"
+            (dict-set*
+              "{}"
+              (list
+                "item_id" (as-str item)
+                "body" (as-str body)
+                "author" who
+                "generation" (as-str (gen-now))))))))))
 
 (define todo/comment/list
   (lambda
@@ -710,6 +731,39 @@ composer splices in the chat transcript elements once chat has loaded). The seed
               (todo/state/next-for-item cur id)))))))
   "Advance item id to its next state; () when missing. Cycles within the\n     item's OWN effective pipeline (own `pipeline` override > list columns >\n     global default) — borge/workstreams.borg pipeline-model, so /todos and\n     /kanban agree and a card on its own pipeline never leaves it.")
 
+(define todo/datum/feed-author
+  (lambda
+    (n)
+    "The author a feed row is attributed to, with the ROW METADATA as the
+     fallback. A stamped comment carries body.author (todo/comment/add resolves
+     it and refuses an unattributable write); a row written before the stamp
+     has only the tree author column. A row with neither is marked
+     author-unknown — NEVER dropped, so an old comment still reads."
+    (let
+      ((b (dict-get n "body")))
+      (let
+        ((want (as-str (dict-get b "author"))))
+        (let
+          ((row-author (as-str (dict-get n "author"))))
+          (if
+            (not (string-eq want ""))
+            want
+            (if
+              (or (string-eq row-author "") (string-eq row-author "anonymous"))
+              "author-unknown"
+              row-author))))))
+  "Attribution for one comment row: stamped body.author, else the row author,
+   else author-unknown.")
+
+(define todo/datum/feed-gen
+  (lambda
+    (b)
+    "The generation a stamped comment records, or \"unknown\" for a row that
+     predates the stamp."
+    (let ((g (as-str (dict-get b "generation"))))
+      (if (string-eq g "") "unknown" g)))
+  "Generation of one stamped comment row, or unknown.")
+
 (define todo/datum/feed-entry
   (lambda
     (kind n)
@@ -725,7 +779,8 @@ composer splices in the chat transcript elements once chat has loaded). The seed
             "kind" "comment"
             "id" (as-str (dict-get n "id"))
             "ts" (as-str (dict-get n "created_at"))
-            "author" (as-str (dict-get n "author"))
+            "author" (todo/datum/feed-author n)
+            "gen" (todo/datum/feed-gen b)
             "text" (as-str (dict-get b "body"))))
         (dict-set*
           "{}"
@@ -6002,6 +6057,43 @@ clear the claim (review 2026-10-27). Composes todo/ui/assignee-option.")
                                     (html/a (string-append "/todos?view=" view) "Cancel")))))))
                         (todo/ui/feed-html id view))))))))))))))
 
+(define todo/ui/gen-history-html
+  (lambda
+    (entries)
+    "The generation history of a card's comments: one line per stamped
+     comment naming the generation it was written at and the author it was
+     acted by. A row that predates the stamp reads gen=unknown /
+     author-unknown instead of being dropped (todo/datum/feed-gen,
+     todo/datum/feed-author)."
+    (let
+      ((rows
+        (list/filter
+          (lambda (e) (string-eq (as-str (dict-get e "kind")) "comment"))
+          entries)))
+      (html/div
+        (html/attr "class" "todo-gen-history")
+        (html/join
+          (list
+            (html/h3 (html/text "Generation history"))
+            (if
+              (null? rows)
+              (html/p* (html/attr "class" "muted") "No recorded generations.")
+              (html/ul
+                (html/attr "class" "todo-gen-list")
+                (html/join
+                  (list/map
+                    (lambda (e)
+                      (html/li
+                        (html/text
+                          (string-append
+                            "gen "
+                            (as-str (dict-get e "gen"))
+                            " — acted by "
+                            (as-str (dict-get e "author"))
+                            " @ "
+                            (as-str (dict-get e "ts"))))))
+                    rows))))))))))
+
 (define todo/ui/feed-html
   (lambda
     (id view)
@@ -6028,6 +6120,7 @@ clear the claim (review 2026-10-27). Composes todo/ui/assignee-option.")
             (list
               (html/h2 (html/text "Activity"))
               items
+              (todo/ui/gen-history-html entries)
               (html/form
                 "POST"
                 "/todos"
@@ -6075,12 +6168,23 @@ clear the claim (review 2026-10-27). Composes todo/ui/assignee-option.")
     (let
       ((kind (as-str (dict-get e "kind")))
         (author (as-str (dict-get e "author")))
-        (ts (as-str (dict-get e "ts"))))
+        (ts (as-str (dict-get e "ts")))
+        (gen (as-str (dict-get e "gen"))))
       (let
         ((stamp
           (html/span
             (html/attr "class" "muted todo-feed-stamp")
-            (html/text (string-append author " @ " ts)))))
+            (html/join
+              (list
+                (html/span
+                  (html/attr "class" "todo-feed-acted-by")
+                  (html/text (string-append author " @ " ts)))
+                (if
+                  (or (string-eq gen "") (string-eq gen "unknown"))
+                  " "
+                  (html/span
+                    (html/attr "class" "todo-feed-gen")
+                    (html/text (string-append " gen " gen)))))))))
         (if
           (string-eq kind "event")
           (html/li
