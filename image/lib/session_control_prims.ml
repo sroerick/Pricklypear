@@ -254,13 +254,19 @@ let register ~(hooks : hooks) (t : t) (tbl : Primitives.t) : unit =
          | _ -> None)
     | _ -> None
   in
-  let check_public_handler (handler : string) : (unit, string) result =
+  let check_public_handler ~(route_path : string) (handler : string)
+    : (unit, string) result =
     (* Fail-closed public-route gate (BORGE-1785212463 / 1785212603).
        Infer effects from the in-memory env (synchronous, fresh) via the
        pure [Route_gate] module. The previous store read was stale after
        the define persist race and DEFAULTED TO ALLOW on unknown handlers;
-       now unknown / non-function handlers are DENIED. *)
-    (Pricklypear_lisp.Route_gate.check_public_handler ~env:t.eval_state.env handler)
+       now unknown / non-function handlers are DENIED.
+
+       Card 7a85f7fa: the denial text is prefixed with the route path so a
+       batch eval that hid the refusal still names the form that never
+       bound when the refusal is raised (below). *)
+    (Pricklypear_lisp.Route_gate.check_public_route_handler
+       ~env:t.eval_state.env ~path:route_path handler)
   in
   (* bumpers M3 route-notices (borge/bumpers.borg notices-envelope /
      fragment-by-default): on a successful route publish, generate +
@@ -341,11 +347,21 @@ let register ~(hooks : hooks) (t : t) (tbl : Primitives.t) : unit =
        public handler runs (BORGE-1785212463 dispatch gate). *)
     let gate =
         if visibility = "public" && not t.seed_boot
-      then check_public_handler handler
+      then check_public_handler ~route_path handler
       else (Ok ())
     in
     (match gate with
-     | Error msg -> (Pricklypear_lisp.Ast.VStr msg)
+     | Error msg ->
+         (* Card 7a85f7fa: the denial used to come back as an ORDINARY
+            STRING value, so a batch eval that registered a good route and
+            then a refused one reported ok:true and the unbound route was
+            invisible. Raise instead: the batch eval fails and names the
+            route path + the unresolvable name; routes already registered
+            earlier in that batch stay bound (this is the last form's
+            failure, not a rollback). *)
+         raise
+           (Pricklypear_lisp.Ast.Interp_error
+              (Pricklypear_lisp.Ast.User_error (msg, "route-denied")))
     | Ok () ->
           (* spec_delegation: delegated sessions register in-memory only -
              the view_bindings row is a code write, and delegation is for

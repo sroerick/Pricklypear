@@ -3720,6 +3720,7 @@ composer splices in the chat transcript elements once chat has loaded). The seed
           (list
             (todo/nav-link view "everything" "Everything" "")
             (todo/nav-link view "from-notes" "From notes" "")
+            (todo/nav-link view "doasq" "doasq" "approvals")
             (todo/nav-link
               view
               "archived"
@@ -7031,8 +7032,8 @@ empty text kid when unassigned (so a caller always projects a value).")
 
 (define todo/list/synthetic?
   (lambda (v)
-    (or (string-eq v "") (string-eq v "everything") (string-eq v "from-notes") (string-eq v "archived")))
-  "Whether a /todos view key is a built-in view rather than a list id/slug.")
+    (or (string-eq v "") (string-eq v "everything") (string-eq v "from-notes") (string-eq v "doasq") (string-eq v "archived")))
+  "Whether a /todos view key is a built-in view (the synthetic views: everything, from-notes, doasq, archived) rather than a list id/slug.")
 
 (define todo/list/find-slug
   (lambda (lists v)
@@ -7117,7 +7118,9 @@ empty text kid when unassigned (so a caller always projects a value).")
                 (if
                   (string-eq view "from-notes")
                   ""
-                  (if (string-eq view "archived") "" view-id))))
+                  (if (string-eq view "archived")
+                    ""
+                    (if (string-eq view "doasq") "" view-id)))))
             (board-items (todo/item/all))
             (body
               (cond
@@ -7141,6 +7144,8 @@ empty text kid when unassigned (so a caller always projects a value).")
                           (todo/from-notes-html view board-items))))))
                 ((string-eq view "from-notes")
                   (todo/from-notes-html view board-items))
+                ((string-eq view "doasq")
+                  (todo/ui/doasq-view board-items))
                 (#t (todo/item/html view-id)))))
           (html/div
             (html/attr "id" "todo-main")
@@ -7240,15 +7245,51 @@ empty text kid when unassigned (so a caller always projects a value).")
                       (html/button (html/attr "type" "submit") "+ list")))))))))))
     "nav: items snapshot comes from the caller (empty list fetches once here); archived count only; lists render without per-list ratios - dict-get JSON parses per item blew the route budget")
 
+(define todo/ui/doasq-view
+  (lambda
+    (items)
+    (let
+      ((reqs
+        (list/filter
+          (lambda
+            (row)
+            (string-eq
+              (as-str (todo/item/list-id (cdr row)))
+              todo/state/approval-list-id))
+          items)))
+      (html/join
+        (list
+          (html/h2 "doasq — the privileged-request queue")
+          (html/p*
+            (html/attr "class" "muted")
+            (html/a "/doasq" "open the review surface"))
+          (html/ul
+            (html/attr "class" "card todo-list")
+            (list/foldl
+              (lambda
+                (acc row)
+                (string-append
+                  acc
+                  (html/li
+                    (html/a
+                      (string-append "/todos?id=" (as-str (car row)))
+                      (todo/item/title (cdr row))))))
+              ""
+              (list/take reqs todo/page/cap)))))))
+  "The doasq view of /todos: every card on the doasq-requests list (the
+     shared approval queue; same pinned id as doasq/list-id), each linked to
+     its /todos detail page, plus the link to /doasq's review surface.")
+
 (define todo/ui/nav-options
   (lambda
     (view lists arch-n)
-    "Option list for the view selector: the three synthetic views, then one
-       entry per todo list. Card 42e2a9d4: the old nav rendered a link plus a
+    "Option list for the view selector: the four synthetic views (everything,
+       from-notes, doasq, archived), then one entry per todo list. Card 42e2a9d4: the old nav rendered a link plus a
        delete form per list, which ate two thirds of a phone screen."
     (string-append
       (html/option "everything" "Everything" (string-eq view "everything"))
       (html/option "from-notes" "From notes" (string-eq view "from-notes"))
+      (html/option "doasq" "doasq" (string-eq view "doasq"))
       (html/option
         "archived"
         (string-append "Archived (" (as-str arch-n) ")")
