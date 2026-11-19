@@ -655,7 +655,7 @@ let register (t : t) (tbl : Primitives.t) : unit =
             let body_json =
               Prims_db_common.json_body ~ctx:"tree/put" body_v
             in
-            Crud.tree_put t.store ~path ~body_json ~author:uname
+            Crud.tree_put t.store ~path ~body_json ~author:uname ()
         | [ path_v; body_v; kind_v; type_v ] ->
             (* Importer form: a FIRST write at a new path lands with the
                named kind/type instead of the bare folder default (the
@@ -670,7 +670,7 @@ let register (t : t) (tbl : Primitives.t) : unit =
               Prims_common.coerce_str ~ctx:"tree/put type" type_v
             in
             Crud.tree_put t.store ~path ~body_json ~kind ~type_name
-              ~author:uname
+              ~author:uname ()
         | _ ->
             ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("tree/put", "need path body-json [kind type]", "bad-args"))))));
 

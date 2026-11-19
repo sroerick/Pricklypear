@@ -2381,7 +2381,7 @@ let tree_upsert (store : Store.t) ~(path : string) ~(kind : string)
    constraints, so a claim body never has to satisfy a data type).
    Ledger: same data.write event as tree/upsert. *)
 let tree_put (store : Store.t) ~(path : string) ~(body_json : string)
-    ?(kind = "") ?(type_name = "") ~(author : string) : value =
+    ~(author : string) ?(kind = "") ?(type_name = "") () : value =
   with_tree_tx store ~none:(fun () -> no_db "tree/put") (fun conn ->
       let existing = Tree_store.get_by_path conn ~path in
       let kind, type_name =

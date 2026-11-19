@@ -447,15 +447,17 @@ let test_tree_put_claim () =
   with_store (fun store ->
       let path = Printf.sprintf "claims.u.tester.tp%d" (Random.int 1_000_000) in
       let body = "{\"kind\":\"asserted\",\"claim\":\"tree/put writes\"}" in
-      (match C.tree_put store ~path ~body_json:body ~author:"tester" with
+      (match C.tree_put store ~path ~body_json:body ~author:"tester" () with
        | VStr p -> Alcotest.(check string) "put returns the path" path p
        | _ -> Alcotest.fail "tree/put should return the written path");
       (match C.tree_get store ~path () with
-       | VObj _ -> ()
+       | VStr json ->
+           Alcotest.(check bool) "claim body readable via tree/get" true
+             (contains_sub json "tree/put writes")
        | VNil -> Alcotest.fail "tree/put: claim not readable via tree/get"
        | _ -> Alcotest.fail "tree/get returned an unexpected shape");
       (* second put at the same path: still the folder kind, still versions *)
-      (match C.tree_put store ~path ~body_json:body ~author:"tester" with
+      (match C.tree_put store ~path ~body_json:body ~author:"tester" () with
        | VStr p -> Alcotest.(check string) "second put returns the path" path p
        | _ -> Alcotest.fail "tree/put second write should return the path");
       match S.conn_of store with
