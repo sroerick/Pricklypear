@@ -68,4 +68,9 @@ let () =
   check "libs/todo/lib.pp" todo_lib "todo/datum/feed-author";
   check "libs/todo/lib.pp" todo_lib "todo-feed-acted-by";
   check "libs/todo/lib.pp" todo_lib "todo-feed-gen";
+  (* (g) card c1d1842e: the todo list's view selector carries a doasq entry
+     alongside its sibling synthetic views, in the SAME three-field shape
+     (value, label, selected) with no empty value or placeholder label. *)
+  check "libs/todo/lib.pp" todo_lib
+    "(html/option \"doasq\" \"doasq\" (string-eq view \"doasq\"))";
   if !failures > 0 then exit 1
