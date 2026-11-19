@@ -60,7 +60,10 @@ and value =
     force so self-referential cycles raise instead of diverging. *)
 and thunk_cell =
   | Unforced of thunk_payload
-  | Forcing
+  | Forcing of thunk_payload
+      (* in-flight force; carries its payload so an abandoned in-flight
+         cell (owner raised, or a redefinition refreshed the binding
+         mid-force) can be settled instead of looking self-referential *)
   | Forced of value
   | Failed of exn
 

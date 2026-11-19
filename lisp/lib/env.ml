@@ -66,49 +66,98 @@ let retryable_thunk_exn (exn : exn) : bool =
   | Interp_error (Unbound_var _) -> true
   | _ -> false
 
+(* In-flight forces owned by THIS call stack (card 8660796a). A cell
+   observed [Forcing] whose payload is physically one of ours is a genuine
+   self-reference; one owned by a DIFFERENT force is an abandoned in-flight
+   cell (the owner raised, or a define_thunk refreshed the binding
+   mid-force) and is settled here instead of raising the historical
+   "cyclic thunk force", which used to 500 every anonymous request through
+   a redefined name until the session restarted. *)
+let in_flight : thunk_payload list ref = ref []
+
+let owns_force (payload : thunk_payload) : bool =
+  List.exists (fun p -> p == payload) !in_flight
+
+let release_force (payload : thunk_payload) : unit =
+  let rec drop = function
+    | [] -> []
+    | p :: rest -> if p == payload then rest else p :: drop rest
+  in
+  in_flight := drop !in_flight
+
 let rec force_value (v : value) : value =
   match v with
   | VThunk cell ->
       (match !cell with
        | Forced v -> v
        | Failed exn -> raise exn
-       | Forcing ->
-           raise
-             (Interp_error
-                (User_error
-                   ("cyclic thunk force (binding refers to itself)",
-                    "cyclic-thunk")))
+       | Forcing owner ->
+           if owns_force owner then
+             raise
+               (Interp_error
+                  (User_error
+                     ("cyclic thunk force (binding refers to itself)",
+                      "cyclic-thunk")))
+           else begin
+             (* Another fiber's force abandoned this cell (it raised and
+                left the memo behind) — settle it and retry here. *)
+             cell := Unforced owner;
+             force_value v
+           end
        | Unforced payload ->
-           cell := Forcing;
+           cell := Forcing payload;
+           in_flight := payload :: !in_flight;
+           (* Only the OWNER settles the cell (physical-equality guard):
+              a define_thunk refreshing the binding mid-force wins over the
+              stale result computed by the superseded force. *)
+           let settle_value (result : value) =
+             release_force payload;
+             (match !cell with
+              | Forcing p when p == payload -> cell := Forced result
+              | _ -> ());
+             result
+           in
+           let settle_exn (exn : exn) =
+             release_force payload;
+             (* Memoize only DETERMINISTIC failures. Budget_exceeded is
+                context-dependent — the same body forces fine under a
+                fresh budget, so memoizing it poisons the binding for
+                the whole session (image.audit-2026-10-05: one /notes
+                render near budget end failed the force of notes/ui/*
+                thunks and every later /notes request 500'd at full
+                budget until rehydrate). Leave the cell Unforced so a
+                later lookup retries; everything else replays. *)
+             (match !cell with
+              | Forcing p when p == payload ->
+                  (match exn with
+                   | _ when retryable_thunk_exn exn -> cell := Unforced payload
+                   | _ -> cell := Failed exn)
+              | _ -> ());
+             raise exn
+           in
            (match
               payload.thunk_force payload.thunk_env payload.thunk_body
             with
             | v ->
-                let v = force_value v in
-                cell := Forced v;
-                v
-            | exception exn ->
-                (* Memoize only DETERMINISTIC failures. Budget_exceeded is
-                   context-dependent — the same body forces fine under a
-                   fresh budget, so memoizing it poisons the binding for
-                   the whole session (image.audit-2026-10-05: one /notes
-                   render near budget end failed the force of notes/ui/*
-                   thunks and every later /notes request 500'd at full
-                   budget until rehydrate). Leave the cell Unforced so a
-                   later lookup retries; everything else replays. *)
-                (match exn with
-                 | _ when retryable_thunk_exn exn -> cell := Unforced payload
-                 | _ -> cell := Failed exn);
-                raise exn))
+                (match force_value v with
+                 | result -> settle_value result
+                 | exception exn -> settle_exn exn)
+            | exception exn -> settle_exn exn))
   | v -> v
 
 (** Bind [name] in [e] to a not-yet-evaluated body (image load_defs).
     [force] is the evaluator used when the binding is first touched. *)
 let define_thunk (e : env) (name : string)
     ~(force : env -> expr -> value) (body : expr) : unit =
-  Hashtbl.replace e.bindings name
-    (VThunk (ref (Unforced { thunk_body = body; thunk_env = e;
-                             thunk_force = force })))
+  let payload = { thunk_body = body; thunk_env = e; thunk_force = force } in
+  let cell =
+    match Hashtbl.find_opt e.bindings name with
+    | Some (VThunk cell) ->
+        cell := Unforced payload;
+        cell
+    | Some _ | None -> ref (Unforced payload)
+  in
+  Hashtbl.replace e.bindings name (VThunk cell)
 
 (** [lookup e name] returns [Some v] if [name] is bound in [e] or any
     ancestor, else [None]. Walks the parent chain to the root.
