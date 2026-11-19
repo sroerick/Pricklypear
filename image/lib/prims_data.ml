@@ -386,6 +386,39 @@ let register (t : t) (tbl : Primitives.t) : unit =
       | _ ->
           ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("tree/subtree", "need path [, limit]", "bad-args"))))));
 
+  (* History-traversal prims (tree-time.reads-as-of-gen), FLAG-GATED behind
+     PP_READS_AS_OF_GEN: with the flag off each of the three refuses cleanly
+     with the same "denied" Prim_error (unset = off, safe default). The
+     older gen-read/gen-diff/undo surface is unconditional. *)
+  register_crud "tree/log"
+    (fun args ->
+      Crud.require_reads_as_of_gen "tree/log";
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr path ] -> Crud.tree_log t.store ~path
+      | _ ->
+          ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("tree/log", "need path", "bad-args"))))));
+
+  register_crud "tree/at"
+    (fun args ->
+      Crud.require_reads_as_of_gen "tree/at";
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr path; Pricklypear_lisp.Ast.VInt g ] ->
+          Crud.tree_at t.store ~path ~gen:g
+      | _ ->
+          ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("tree/at", "need path gen", "bad-args"))))));
+
+  register_crud "tree/diff"
+    (fun args ->
+      Crud.require_reads_as_of_gen "tree/diff";
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr path
+        ; Pricklypear_lisp.Ast.VInt ga
+        ; Pricklypear_lisp.Ast.VInt gb
+        ] ->
+          Crud.tree_diff t.store ~path ~gen_a:ga ~gen_b:gb
+      | _ ->
+          ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("tree/diff", "need path gen-a gen-b", "bad-args"))))));
+
   (* Lens-aware read prims (one-tree.tree-read-prims, BORGE-1785516993).
      Resolve a RELATIVE logical path (fn/type/route/pkg suffixes such as
      "fn.notes/doc/get", "pkg.todo", "route./issues") against the SESSION's
