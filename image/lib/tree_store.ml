@@ -851,6 +851,24 @@ let versioned_history (conn : Store_db.conn) ~(path : string) () : version list 
   in
   (List.filter_map version_of_row rows)
 
+(** reads-as-of-gen feature flag (tree-time.reads-as-of-gen): the history
+    TRAVERSAL prims — tree/log, tree/at, tree/diff — are gated behind
+    PP_READS_AS_OF_GEN so the surface can be enabled per deployment while
+    the versioned read foundation (versioned_head / versioned_history, and
+    the gen-read / gen-diff / undo prims) stays unconditional. Unset, "0",
+    "false", "no", "off" = OFF (safe default: the traversal prims refuse
+    cleanly). Pure so the contract is testable without a DB. *)
+let reads_as_of_gen_of_env (v : string option) : bool =
+  match v with
+  | None -> false
+  | Some s ->
+      (match String.lowercase_ascii (String.trim s) with
+       | "0" | "false" | "no" | "off" -> false
+       | _ -> true)
+
+let reads_as_of_gen_enabled () : bool =
+  reads_as_of_gen_of_env (Sys.getenv_opt "PP_READS_AS_OF_GEN")
+
 
 (** SQL for [list_subtree]: the containment wrapper when PP_RLS_WRAPPERS is
     on, the pre-1104 direct read when it is off. Both order and cap the same

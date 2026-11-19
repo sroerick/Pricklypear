@@ -372,6 +372,103 @@ let test_undo_note_kind () =
        | Some conn -> ignore (T.delete_path conn ~path ~recursive:true)
        | None -> ()))
 
+(* ---- history traversal prims: tree/log, tree/at, tree/diff ----
+   FLAG-GATED behind PP_READS_AS_OF_GEN (unset = off, safe default): with the
+   flag on the three traverse a path's version chain (newest-first log, body
+   at gen never head, node-granular diff); with the flag off each refuses
+   cleanly with the same "denied" Prim_error. *)
+
+let with_traversal_flag_on f =
+  Unix.putenv "PP_READS_AS_OF_GEN" "1";
+  Fun.protect
+    ~finally:(fun () -> Unix.putenv "PP_READS_AS_OF_GEN" "0")
+    f
+
+(** title in a flat body object (tree/at returns the payload body itself). *)
+let flat_title (kv : (string * Yojson.Safe.t) list) : string option =
+  match List.assoc_opt "title" kv with
+  | Some (`String t) -> Some t
+  | _ -> None
+
+let test_tree_log_at_diff () =
+  with_store (fun store ->
+      let type_name = uniq "t" in
+      declare_type store ~name:type_name ~fields:[ "title"; "body" ];
+      let path = make_datum store ~type_name ~title:"a" in
+      let g0 = head_gen store path in
+      (match S.conn_of store with
+       | Some conn ->
+           ignore
+             (T.upsert_datum conn ~path ~type_name
+                ~body_json:"{\"title\":\"a2\",\"body\":\"b2\"}"
+                ~author:"tester" ~rank:None)
+       | None -> ());
+      let g1 = head_gen store path in
+      with_traversal_flag_on (fun () ->
+          (* tree/log: that path's gens, NEWEST first *)
+          (match C.tree_log store ~path with
+           | VList (first :: _) ->
+               (match first with
+                | VStr s ->
+                    (match Yojson.Safe.from_string s with
+                     | `Assoc kv ->
+                         Alcotest.(check (option string))
+                           "tree/log newest entry is the head gen"
+                           (Some (Int64.to_string g1))
+                           (match List.assoc_opt "gen" kv with
+                            | Some (`String g) -> Some g
+                            | _ -> None)
+                     | _ -> Alcotest.fail "tree/log entry not an object")
+                | _ -> Alcotest.fail "tree/log entry not a string")
+           | _ -> Alcotest.fail "tree/log returned no versions");
+          (* tree/at g0 -> the body at that gen, NOT head *)
+          (match C.tree_at store ~path ~gen:g0 with
+           | VStr s ->
+               (match Yojson.Safe.from_string s with
+                | `Assoc kv ->
+                    Alcotest.(check (option string)) "tree/at g0 -> a"
+                      (Some "a") (flat_title kv)
+                | _ -> Alcotest.fail "tree/at not an object")
+           | _ -> Alcotest.fail "tree/at at g0 missing");
+          (* an unused gen is nil *)
+          (match C.tree_at store ~path ~gen:1L with
+           | VNil -> ()
+           | _ -> Alcotest.fail "tree/at unused gen should be nil");
+          (* tree/diff: hash-equal leaves -> "same"; else node diff *)
+          (match C.tree_diff store ~path ~gen_a:g1 ~gen_b:g1 with
+           | VStr "same" -> ()
+           | _ -> Alcotest.fail "tree/diff of one gen should be 'same'");
+          (match C.tree_diff store ~path ~gen_a:g0 ~gen_b:g1 with
+           | VStr "same" ->
+               Alcotest.fail "tree/diff of differing gens reported same"
+           | VStr s ->
+               (match Yojson.Safe.from_string s with
+                | `Assoc kv ->
+                    Alcotest.(check bool) "tree/diff delta has title" true
+                      (match List.assoc_opt "delta" kv with
+                       | Some (`Assoc d) -> List.mem_assoc "title" d
+                       | _ -> false)
+                | _ -> Alcotest.fail "tree/diff not an object")
+           | _ -> Alcotest.fail "tree/diff missing"));
+      (* cleanup *)
+      (match S.conn_of store with
+       | Some conn -> ignore (T.delete_datum conn ~type_name ~id:(path_id path))
+       | None -> ()))
+
+let test_traversal_flag_off () =
+  Unix.putenv "PP_READS_AS_OF_GEN" "0";
+  let refuses name =
+    match C.require_reads_as_of_gen name with
+    | () -> false
+    | exception Pricklypear_lisp.Ast.Interp_error _ -> true
+  in
+  Alcotest.(check bool) "tree/log refuses when flag off" true
+    (refuses "tree/log");
+  Alcotest.(check bool) "tree/at refuses when flag off" true
+    (refuses "tree/at");
+  Alcotest.(check bool) "tree/diff refuses when flag off" true
+    (refuses "tree/diff")
+
 let () =
   Random.self_init ();
   Alcotest.run "reads_as_of_gen"
@@ -386,5 +483,9 @@ let () =
           Alcotest.test_case "undo restore-by-write" `Quick test_undo;
           Alcotest.test_case "undo kind-aware (note payload not datumed)"
             `Quick test_undo_note_kind;
+          Alcotest.test_case "tree/log, tree/at, tree/diff (flag on)" `Quick
+            test_tree_log_at_diff;
+          Alcotest.test_case "traversal prims refuse when flag off" `Quick
+            test_traversal_flag_off;
         ] );
     ]

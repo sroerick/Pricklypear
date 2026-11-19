@@ -2017,6 +2017,111 @@ let tree_gen_diff (store : Store.t) ~(path : string)
                     ])))
        | _ -> VNil))
 
+(* ---- history traversal prims (tree/log, tree/at, tree/diff) ----
+   The reads-as-of-gen FLAG-GATED traversal surface (tree-time.
+   reads-as-of-gen): tree/log lists a path's gens newest-first, tree/at
+   returns the BODY at a gen (never head), tree/diff is the node-granular
+   diff between two gens ("same" on hash-equal leaves). The gate lives in
+   [require_reads_as_of_gen] so every prim refuses cleanly and identically
+   when the flag is off; the older gen-read/gen-diff/undo surface is
+   unaffected. *)
+
+(** Flag gate for the three traversal prims: raises the prim's own
+    "denied" Prim_error when PP_READS_AS_OF_GEN is off (unset = off). *)
+let require_reads_as_of_gen (name : string) : unit =
+  if not (Tree_store.reads_as_of_gen_enabled ()) then
+    raise
+      (Pricklypear_lisp.Ast.Interp_error
+         (Pricklypear_lisp.Ast.Prim_error
+            ( name,
+              "reads-as-of-gen is off (set PP_READS_AS_OF_GEN=1)",
+              "denied" )))
+
+(** The version chain to traverse for [path]: an absolute b.*/data.* path
+    is read directly; a RELATIVE logical suffix (kind.name) is crossed
+    through the branch lens chain closest-wins — exactly the rule
+    gen-read/gen-diff use for relative paths. *)
+let versions_for_path (store : Store.t) (conn : Store_db.conn)
+    ~(path : string) : Tree_store.version list =
+  if absolute_tree_path path then Tree_store.versioned_history conn ~path ()
+  else
+    let mk_path bid =
+      match Tree_store.lens_suffix_path ~branch_id:bid path with
+      | Some p -> p
+      | None -> ""
+    in
+    match
+      Tree_store.lens_versioned_in_chain conn ~at_gen:None ~mk_path
+        (lens_chain store)
+    with
+    | Some v ->
+        Tree_store.versioned_history conn ~path:v.Tree_store.v_path ()
+    | None -> []
+
+(* (tree/log path) -> VList of version-JSON strings for that path, NEWEST
+   gen first (any compartment: absolute b.*/data.* path or a relative lens
+   suffix). Version JSON is gen-read's vocabulary (version_to_json):
+   id/path/kind/type/body/author/hash/created_at/gen/tombstone/rank.
+   No history -> empty list. *)
+let tree_log (store : Store.t) ~(path : string) : value =
+  with_tree_tx store ~none:(fun () -> VList []) (fun conn ->
+      let versions = versions_for_path store conn ~path in
+      (VList
+         (List.map
+            (fun v -> VStr (Tree_store.version_to_json v))
+            (List.rev versions))))
+
+(* (tree/at path gen) -> the node BODY at [gen], never head: the payload
+   body [path] carried as of that coordinate (newest version row at-or-
+   below the gen, extracted with body_of_version — the same payload
+   surface undo restores from). VNil = nothing existed at that gen (an
+   unused gen, including a coordinate before the path's first version) or
+   the row is a tombstone. *)
+let tree_at (store : Store.t) ~(path : string) ~(gen : int64) : value =
+  with_tree_tx store ~none:(fun () -> VNil) (fun conn ->
+      let v =
+        if absolute_tree_path path then
+          Tree_store.versioned_head conn ~path ~at_gen:gen ()
+        else
+          let mk_path bid =
+            match Tree_store.lens_suffix_path ~branch_id:bid path with
+            | Some p -> p
+            | None -> ""
+          in
+          Tree_store.lens_versioned_in_chain conn ~at_gen:(Some gen) ~mk_path
+            (lens_chain store)
+      in
+      match v with
+      | None -> VNil
+      | Some v when v.Tree_store.v_tombstone -> VNil
+      | Some v ->
+          (match body_of_version v with
+           | [] -> VNil
+           | kv -> (VStr (Yojson.Safe.to_string (`Assoc kv)))))
+
+(* (tree/diff path gen-a gen-b) -> "same" when both leaves are hash-equal
+   (and same rank), else the node-granular diff JSON {path,a,b,same,
+   delta}. Same algorithm as gen-diff; a relative suffix is resolved
+   across the branch lens chain first so the diff is on the EFFECTIVE
+   path. *)
+let tree_diff (store : Store.t) ~(path : string) ~(gen_a : int64)
+    ~(gen_b : int64) : value =
+  if absolute_tree_path path then tree_gen_diff store ~path ~gen_a ~gen_b
+  else
+    with_tree_tx store ~none:(fun () -> VNil) (fun conn ->
+        let mk_path bid =
+          match Tree_store.lens_suffix_path ~branch_id:bid path with
+          | Some p -> p
+          | None -> ""
+        in
+        match
+          Tree_store.lens_versioned_in_chain conn ~at_gen:None ~mk_path
+            (lens_chain store)
+        with
+        | None -> VNil
+        | Some v ->
+            tree_gen_diff store ~path:v.Tree_store.v_path ~gen_a ~gen_b)
+
 (* (undo path [n]) -> restore the value at head-n as a NEW write at head+1.
    Restore-by-write (not head-pointer manipulation): the restore is itself a
    versioned append, so undo is lossless and redoable ((undo path) again on
