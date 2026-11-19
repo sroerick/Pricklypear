@@ -71,6 +71,12 @@ chk_has pane_reads_prim "(garden-welcome)" "$(cat "$LIB")"
 chk_has pane_is_first "$(printf '(list (filmstrip/welcome-pane-html))')" \
   "$(tr -d '\n' < "$LIB" | sed 's/  */ /g')"
 
+# Banana button: the page carries the button and its exact alert text.
+chk_has banana_button "alert('Yes! we have no bananas')" \
+  "$(cat "$ROOT/libs/filmstrip/page.ml")"
+chk_has banana_on_page "banana () ^ strip ()" \
+  "$(cat "$ROOT/libs/filmstrip/page.ml")"
+
 echo "----"
 echo "pass=$pass fail=$fail"
 [ "$fail" = 0 ]
