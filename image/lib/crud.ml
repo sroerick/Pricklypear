@@ -2381,7 +2381,7 @@ let tree_upsert (store : Store.t) ~(path : string) ~(kind : string)
    constraints, so a claim body never has to satisfy a data type).
    Ledger: same data.write event as tree/upsert. *)
 let tree_put (store : Store.t) ~(path : string) ~(body_json : string)
-    ~(author : string) : value =
+    ?(kind = "") ?(type_name = "") ~(author : string) : value =
   with_tree_tx store ~none:(fun () -> no_db "tree/put") (fun conn ->
       let existing = Tree_store.get_by_path conn ~path in
       let kind, type_name =
@@ -2389,7 +2389,12 @@ let tree_put (store : Store.t) ~(path : string) ~(body_json : string)
         | Some n ->
             (n.Tree_store.kind,
              (match n.Tree_store.type_name with Some t -> t | None -> ""))
-        | None -> ("folder", "")
+        | None ->
+            (* A claim needs no declared kind, so the default landing kind
+               stays folder. An IMPORTER migrating a typed tree (the borge
+               book loader's chapters/spec nodes) names the kind + type it
+               is landing, so the rows keep their type on a first write. *)
+            ((if kind = "" then "folder" else kind), type_name)
       in
       let r =
         if kind = "datum" then

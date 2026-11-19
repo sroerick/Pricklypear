@@ -1035,9 +1035,32 @@
 
 (define workstreams/run-save
   (lambda (run-id fields)
-    "Write the whole row body back (owner-confined: the holding
-     supervisor). Returns the run id."
-    (todo/tree/save "run" run-id fields)))
+    "Write the whole run row body back (owner-confined: the holding
+     supervisor) through the SUBSTRATE CLAIM WRITE (tree/put, card
+     107369d1): the run row IS the factory's claim, so its writes land as
+     versioned substrate writes — tree/log shows the put and tree/at reads
+     the body back. The row is created by run-new (todo/tree/create, a
+     datum), so tree/put keeps its kind/type; a computed-path miss falls
+     back to the node scan like todo/tree/save. Returns the run id, or ()
+     when the write was refused."
+    (let
+      ((nid (as-str run-id)))
+      (let
+        ((p (node-path (quote run) nid)))
+        (let
+          ((path
+            (if
+              (null? (tree/get p))
+              (let
+                ((hit (todo/tree/find-node-scan (quote run) nid)))
+                (if (null? hit) p (as-str (dict-get hit "path"))))
+              p)))
+          (let
+            ((r (as-str (tree/put path fields))))
+            (if
+              (string-starts-with? r "data.")
+              nid
+              ())))))))
 
 (define workstreams/run-start
   (lambda (run-id)
