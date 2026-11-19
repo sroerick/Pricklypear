@@ -521,6 +521,56 @@ empty set, never a parse error).")
         (filmstrip/col-leaf? (cdr col)))))
   "A column is a leaf column when any entry targets a route.")
 
+(define filmstrip/welcome-pane-html
+  (lambda
+    ()
+    (html/tag
+      "section"
+      (html/attrs
+        (list
+          (html/attr "class" "fs-pane fs-full fs-welcome")
+          (html/attr "id" "fs-pane-welcome")
+          (html/attr "data-pane" "welcome")
+          (html/attr "data-region" "main")
+          (html/attr "data-desktop" "0")))
+      (html/join
+        (list
+          (html/tag
+            "header"
+            (html/attr "class" "fs-head")
+            (html/span
+              (html/attr "class" "fs-title")
+              (html/text "welcome")))
+          (html/tag
+            "div"
+            (html/attrs
+              (list
+                (html/attr "class" "fs-body")
+                (html/attr "id" "fs-body-welcome")))
+            (html/p*
+              (html/attr "class" "fs-welcome-note")
+              (guard
+                (lambda (e) "Welcome to Pricklypear")
+                (garden-welcome))))))))
+  "The FIRST pane of the strip: a welcome note whose text is read at\
+render time from $GARDEN_DIR/welcome.md (card 2c440c53). The lib never\
+holds the text -- the garden-welcome prim reads the file on every\
+render, so roerick edits welcome.md and reloads; no definition edit, no\
+deploy. Unset/empty GARDEN_DIR, a missing file, or a blank file answers\
+the one permitted fallback (\"Welcome to Pricklypear\"), which the guard\
+also supplies if a host does not bind the prim at all.")
+
+(define filmstrip/main-strip-html
+  (lambda (panes focus)
+    (html/join
+      (append
+        (list (filmstrip/welcome-pane-html))
+        (filmstrip/panes-region panes focus "main"))))
+  "The main strip: the garden welcome pane FIRST, then every main-region\
+pane section (filmstrip/panes-region). The welcome pane is plain\
+markup, not a workspace record -- it is not openable, closable, or\
+persisted; it is the strip's standing first column.")
+
 (define filmstrip/content-area
   (lambda (panes focus)
     (html/tag
@@ -537,7 +587,7 @@ empty set, never a parse error).")
               (list
                 (html/attr "id" "fs-content")
                 (html/attr "class" "fs-content")))
-            (html/join (filmstrip/panes-region panes focus "main")))
+            (filmstrip/main-strip-html panes focus))
           (filmstrip/rail-box panes focus)))))
   "The surface area (v5): the main strip FIRST, then the rail box.
 Wrapping both under #fs-surface gives the region-move OOB ONE swap

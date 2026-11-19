@@ -1,0 +1,13 @@
+;; filmstrip welcome-pane vectors (card 2c440c53 criterion 2): the pane body
+;; is read at render time from $GARDEN_DIR/welcome.md. vectors.ksh drives the
+;; probe binary (which calls the same Garden_note.welcome_text the
+;; garden-welcome prim registers) plus the source-level wiring in lib.pp, so
+;; `dune runtest` and `ksh libs/filmstrip/test/vectors.ksh` agree.
+(rule
+ (alias runtest)
+ (deps
+  vectors.ksh
+  ../lib.pp
+  %{workspace_root}/test/garden_note_probe.exe)
+ (action
+  (run /bin/ksh %{dep:vectors.ksh})))

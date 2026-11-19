@@ -20,7 +20,7 @@
           function_stats
           fd_gauge
           activity_ledger knock_policy presence
-           crud media packages loader profile repl_endpoint
+           crud media packages loader profile repl_endpoint garden_note
           ops_log ops_stats ops_incidents
           timing
           ast_html db_cost analyze http_analyze
