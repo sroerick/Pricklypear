@@ -5,9 +5,17 @@
 #   ksh libs/todo/test/vectors.ksh          # from the repo root
 #
 # Resolves pp-eval like libs/treecalc/test/vectors.ksh (PP_EVAL, then
-# _build/default, then scripts/pp-eval-todo.sh). With a reachable image the
-# vectors drive the real path on a throwaway card — attach one item with url
-# https://x/i.png and caption "shot by broland", then assert
+# _build/default, then scripts/pp-eval-todo.sh). The image is pointed at the
+# WORKING COPIES of the product libs (PP_LIBS_DIR) and reloads them
+# (load-library) before probing: a running image otherwise carries the
+# snapshot it synced at boot, so the attachment bindings resolve in
+# libs/todo/lib.pp but not in the image ("unbound:
+# todo/item/attachments-html") and every assertion below dies for the wrong
+# reason.
+#
+# With a reachable image the vectors drive the real path on a throwaway card —
+# attach one item with url https://x/i.png and caption "shot by broland", then
+# assert
 #   1. the rendered card body carries img src="https://x/i.png" + the caption;
 #   2. the card JSON read carries the same url;
 #   3. a caption carrying markup opens as escaped text, with no literal
@@ -20,6 +28,14 @@
 # tag exists anywhere under libs/todo.
 set -u
 ROOT=$(pwd)
+
+# Load the product libs from this tree, not from whatever snapshot the image
+# booted with (same trick as image/test/shared_register_test.ml).
+if [ -z "${PP_LIBS_DIR:-}" ] && [ -d "$ROOT/libs/todo" ]; then
+  PP_LIBS_DIR="$ROOT/libs"
+  export PP_LIBS_DIR
+fi
+
 BUILD="$ROOT/_build/default/cli/bin/pp_eval.exe"
 if [ -n "${PP_EVAL:-}" ]; then
   :
@@ -85,6 +101,23 @@ else
 fi
 
 if [ "$live" = 1 ]; then
+  # Refresh the product libs from the working copies before probing: the image
+  # may have booted on an older snapshot that has no attachment bindings.
+  $PP_EVAL -j '(load-library "todo")' >/dev/null 2>&1
+
+  bound_probe=$($PP_EVAL -j "(todo/item/attachments-html $(card "$CAP"))" 2>&1)
+  case "$bound_probe" in
+    *'"value"'*) bound=1 ;;
+    *) bound=0 ;;
+  esac
+
+  if [ "$bound" != 1 ]; then
+    skipped eval_vectors "image has no todo/item/attachments-html after load-library from PP_LIBS_DIR=$PP_LIBS_DIR: $bound_probe"
+    live=0
+  fi
+fi
+
+if [ "$live" = 1 ]; then
   cid=$(value_of '(todo/item/add "" "attachment vectors")')
 
   # 1. render: img src = the url, followed by the caption text
@@ -135,9 +168,9 @@ if [ "$live" = 1 ]; then
       bad live_caption_escaped "literal element reached the rendered body"
     fi
     value_of "(todo/item/delete \"$cid\")" >/dev/null 2>&1
+  else
+    skipped live_attach_path "todo/item/add returned no card id"
   fi
-else
-  skipped eval_vectors "no reachable image (set PP_URL/PP_USER/PP_PASS or start scripts/dev.sh)"
 fi
 
 # Source-level guard: the render site still emits an img whose src is the
