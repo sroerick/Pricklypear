@@ -87,7 +87,7 @@ let env_lambda_bindings (env : Env.env) : (string * expr) list =
     Returns [Ok ()] if the handler is a defined function (or prim) whose
     inferred effects fit the public-route allowlist; [Error msg] otherwise.
     Unknown / non-function handlers return [Error] (fail-closed). *)
-let check_public_handler ~(env : Env.env) (handler : string)
+let check_handler_core ~(env : Env.env) (handler : string)
     : (unit, string) result =
   let allow = Effect.public_route_allow () in
   let check fx =
@@ -182,6 +182,29 @@ let check_public_handler ~(env : Env.env) (handler : string)
               handler))
   | Some (VThunk _) -> deny_not_a_function ()
   | Some _ -> deny_not_a_function ()
+
+(** The plain gate: [check_handler_core] without a route path. Dispatch
+    re-checks with this (Session.call_handler), where the route is already
+    known from the request. *)
+let check_public_handler ~(env : Env.env) (handler : string)
+    : (unit, string) result =
+  check_handler_core ~env handler
+
+(** Publish-time gate for a route at [path]: the same verdict, but every
+    denial text is prefixed with the route path.
+
+    Card 7a85f7fa (PP: route registration failures are silent in batch
+    evals): a (public-route …) form whose handler was refused came back as
+    an ORDINARY string value, so a batch eval that registered two good
+    routes and then a refused one reported ok:true and the caller never
+    learned the third route was never bound. The caller now raises the
+    denial; this variant makes sure the raised text names the FORM that
+    failed as well as the unresolvable name. *)
+let check_public_route_handler ~(env : Env.env) ~(path : string)
+    (handler : string) : (unit, string) result =
+  match check_handler_core ~env handler with
+  | Ok () -> Ok ()
+  | Error msg -> Error (Printf.sprintf "%s: %s" path msg)
 
 (** Extract the handler BODY expression for [name] from [env] without
     executing anything — the same raw, force-free walk the gate uses

@@ -42,6 +42,7 @@ let setup_env () =
   eval_one "(define (welcome) (good-helper))";
   eval_one "(define (uses-broken) (broken-sibling))";
   eval_one "(define (self-broken) (let* ((x 1)) x (redirect \"/y\")))";
+  eval_one "(define (mystery-page) (number->string 42))";
   env
 
 let checks =
@@ -113,4 +114,45 @@ let checks =
          | None -> Alcotest.fail "page handler should have a body" ));
   ]
 
-let () = Alcotest.run "route_gate" [ "sibling-hardening", checks ]
+let route_checks =
+  [ ( "publish gate denial names the route path and the bad name",
+      `Quick,
+      fun () ->
+        let env = Env.create () in
+        let ev s = ignore (Eval.eval_string ~prims:Eval.empty_prims env s) in
+        ev "(define (good-one) (* 6 7))";
+        ev "(define (good-two) (* 7 7))";
+        ev "(define (bad-page) (number->string 3))";
+        match Route_gate.check_public_route_handler ~env ~path:"/theologia/section"
+                "bad-page"
+        with
+        | Ok () -> Alcotest.fail "a handler calling an unclassified name must deny"
+        | Error m ->
+            Alcotest.(check bool) "names the route path" true
+              (contains ~sub:"/theologia/section" m);
+            Alcotest.(check bool) "names the unresolvable name" true
+              (contains ~sub:"number->string" m);
+            Alcotest.(check bool) "raw gate keeps the plain text" true
+              (contains ~sub:"references unresolvable name"
+                 (match Route_gate.check_public_handler ~env "bad-page" with
+                  | Error m -> m
+                  | Ok () -> "")));
+    ( "good routes keep their verdicts in the same env",
+      `Quick,
+      fun () ->
+        let env = Env.create () in
+        let ev s = ignore (Eval.eval_string ~prims:Eval.empty_prims env s) in
+        ev "(define (good-one) (* 6 7))";
+        ev "(define (good-two) (* 7 7))";
+        List.iter
+          (fun h ->
+            match Route_gate.check_public_route_handler ~env ~path:("/" ^ h) h with
+            | Ok () -> ()
+            | Error m -> Alcotest.fail m)
+          [ "good-one"; "good-two" ] );
+  ]
+
+let () =
+  Alcotest.run "route_gate"
+    [ ("sibling-hardening", checks); ("denial-text", route_checks) ]
+
