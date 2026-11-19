@@ -227,6 +227,11 @@ let read_db_prims = [
   "tree/note-index-full"; "tree/folder-index"; "tree/children-html";
   "tree/path-label"; "tree/segments"; "tree/get-uuid"; "tree/garden-root";
   "tree/lens-get"; "tree/lens-children"; "tree/lens-subtree";
+  (* history traversal (tree-time.reads-as-of-gen): flag-gated reads of a
+     path's op chain / body-as-of-gen / two-gen diff. Unclassified these
+     failed boot's prim classification check (2026-10-27: review-boot died
+     on "unclassified prim tree/at"). *)
+  "tree/log"; "tree/at"; "tree/diff";
   "node-path";
   (* author-visible reads (agent-native-m2): rows-author/find-rows-author
      return [id; author; fields] triples with the same RLS visibility as
@@ -287,7 +292,7 @@ let write_db_prims = [
      al in public handlers. *)
   "eval-string"; "bench"; "example-eval";
   (* tree/data writes (prims_data) *)
-  "tree/upsert"; "tree/delete"; "tree/move"; "tree/move-before";
+  "tree/upsert"; "tree/put"; "tree/delete"; "tree/move"; "tree/move-before";
   "tree/move-after"; "tree/reorder"; "tree/insert-child";
   "link"; "unlink";
   "type-fields";

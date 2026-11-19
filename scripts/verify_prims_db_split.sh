@@ -50,7 +50,7 @@ EXPECTED_NAMES='[
   "tree/lens-subtree", "tree/list", "tree/list-kind", "tree/move", "tree/move-after",
   "tree/move-before", "tree/next", "tree/note-index", "tree/parent", "tree/path-label",
   "tree/prev", "tree/reorder", "tree/search-text", "tree/segments", "tree/siblings",
-  "tree/subtree", "tree/upsert", "type-fields", "undo", "unlink", "unschedule",
+  "tree/put", "tree/subtree", "tree/upsert", "type-fields", "undo", "unlink", "unschedule",
   "update", "update-field", "verify-ssh-key"
 ]'
 

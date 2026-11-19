@@ -640,6 +640,40 @@ let register (t : t) (tbl : Primitives.t) : unit =
         | _ ->
             ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("tree/upsert", "need path kind type body-json", "bad-args"))))));
 
+  (* (tree/put path body-json) -> written path. The substrate CLAIM write
+     path (card 107369d1): exit 0 plus a versioned write, so tree/log shows
+     the put and tree/at returns the claim. Body is the same JSON boundary
+     as tree/upsert (structured alist accepted). *)
+  register_crud "tree/put"
+    (fun args ->
+      let uname = actor () in
+      if uname = "anonymous" then deny_anon "tree/put"
+      else
+        match args with
+        | [ path_v; body_v ] ->
+            let path = Prims_common.coerce_str ~ctx:"tree/put path" path_v in
+            let body_json =
+              Prims_db_common.json_body ~ctx:"tree/put" body_v
+            in
+            Crud.tree_put t.store ~path ~body_json ~author:uname ()
+        | [ path_v; body_v; kind_v; type_v ] ->
+            (* Importer form: a FIRST write at a new path lands with the
+               named kind/type instead of the bare folder default (the
+               borge book loader's chapters + spec nodes). An existing
+               node keeps its kind/type either way. *)
+            let path = Prims_common.coerce_str ~ctx:"tree/put path" path_v in
+            let body_json =
+              Prims_db_common.json_body ~ctx:"tree/put" body_v
+            in
+            let kind = Prims_common.coerce_str ~ctx:"tree/put kind" kind_v in
+            let type_name =
+              Prims_common.coerce_str ~ctx:"tree/put type" type_v
+            in
+            Crud.tree_put t.store ~path ~body_json ~kind ~type_name
+              ~author:uname ()
+        | _ ->
+            ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("tree/put", "need path body-json [kind type]", "bad-args"))))));
+
   register_crud "tree/delete"
     (fun args ->
       let uname = actor () in

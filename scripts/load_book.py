@@ -151,13 +151,19 @@ class Op:
         self.rank = rank
 
     def form(self) -> str:
-        up = '(tree/upsert %s %s %s %s)' % (
+        # The borge importer writes through the SUBSTRATE CLAIM WRITE
+        # (tree/put, card 107369d1): every landed chapter/spec node is a
+        # versioned substrate write, so tree/log shows the put and tree/at
+        # reads the body back. The importer form carries the kind/type
+        # explicitly so a FIRST write at a new path lands typed instead of
+        # as a bare folder.
+        up = '(tree/put %s %s %s %s)' % (
             nop_quote(self.path),
+            nop_quote(jdump(self.body)),
             nop_quote(self.kind),
             nop_quote(self.type_name),
-            nop_quote(jdump(self.body)),
         )
-        # tree/upsert reports failures as STRINGS (it never raises), so a
+        # tree/put reports failures as STRINGS (it never raises), so a
         # failed upsert inside a load-string batch would count as a loaded
         # form and only surface later as an opaque verify mismatch. Wrap
         # every upsert: success returns the path, anything else raises

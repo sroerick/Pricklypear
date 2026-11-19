@@ -437,6 +437,45 @@ let test_move_undeclared_rejected () =
           | None -> Alcotest.fail "node disappeared after rejected move"
           | Some _ -> ()))
 
+(* ---- Crud.tree_put: the substrate claim write (card 107369d1) ---- *)
+(* Acceptance: the put exits 0 (returns the path), tree/at reads the claim
+   body back (the node body IS the claim payload), and every write lands in
+   the substrate log (a tree_versions row for the path, which tree/log
+   folds). A new path lands as a folder; a second put at the same path
+   keeps that kind and versions again. *)
+let test_tree_put_claim () =
+  with_store (fun store ->
+      let path = Printf.sprintf "claims.u.tester.tp%d" (Random.int 1_000_000) in
+      let body = "{\"kind\":\"asserted\",\"claim\":\"tree/put writes\"}" in
+      (match C.tree_put store ~path ~body_json:body ~author:"tester" () with
+       | VStr p -> Alcotest.(check string) "put returns the path" path p
+       | _ -> Alcotest.fail "tree/put should return the written path");
+      (match C.tree_get store ~path () with
+       | VStr json ->
+           Alcotest.(check bool) "claim body readable via tree/get" true
+             (contains_sub json "tree/put writes")
+       | VNil -> Alcotest.fail "tree/put: claim not readable via tree/get"
+       | _ -> Alcotest.fail "tree/get returned an unexpected shape");
+      (* second put at the same path: still the folder kind, still versions *)
+      (match C.tree_put store ~path ~body_json:body ~author:"tester" () with
+       | VStr p -> Alcotest.(check string) "second put returns the path" path p
+       | _ -> Alcotest.fail "tree/put second write should return the path");
+      match S.conn_of store with
+      | None -> ()
+      | Some conn ->
+          let n =
+            match
+              S.exec conn
+                ~params:[ Pgx.Value.of_string path ]
+                "SELECT count(*)::text FROM tree_versions WHERE path = $1::ltree"
+            with
+            | [ [ c ] ] ->
+                (match Pgx.Value.to_string c with Some s -> s | None -> "?")
+            | _ -> "?"
+          in
+          Alcotest.(check bool) "substrate log has a version row" true
+            (n <> "0"))
+
 let () =
   Random.self_init ();
   Alcotest.run "tree_datum"
@@ -461,4 +500,6 @@ let () =
               test_declared_empty_freeform;
             Alcotest.test_case "move to undeclared type rejected" `Quick
               test_move_undeclared_rejected;
+            Alcotest.test_case "tree/put claim write" `Quick
+              test_tree_put_claim;
           ] ) ]
