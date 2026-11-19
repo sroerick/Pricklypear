@@ -170,6 +170,19 @@ ksh scripts/public_artifacts.sh   # refresh book.pdf + src.tgz when tools allow
 | `/src.tgz` | Pruned source tarball |
 | `/login` | Workspace login |
 
+## The garden welcome note (GARDEN_DIR)
+
+The first pane of the filmstrip is a welcome note owned by the gardener, not
+by code. Its body is read at render time from `$GARDEN_DIR/welcome.md`:
+
+- `GARDEN_DIR` — the directory holding the garden note.
+  **Default:** `$HOME/.pricklypear/garden`.
+- **Edit step:** `$EDITOR "$GARDEN_DIR/welcome.md"` — write plain markdown
+  prose, save, reload the page. No definition edit, no redeploy.
+- Unset or empty `GARDEN_DIR`, a missing file, or a blank file renders the
+  one permitted fallback: `Welcome to Pricklypear`.
+- Vectors: `ksh libs/filmstrip/test/vectors.ksh`.
+
 ## Spec workflow
 
 Use borge (`plan` / `make` / `review`) when changing design-backed

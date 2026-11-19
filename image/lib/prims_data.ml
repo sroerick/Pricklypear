@@ -18,6 +18,15 @@ let register (t : t) (tbl : Primitives.t) : unit =
              (Pricklypear_lisp.Ast.Prim_error (op, "denied for delegated sessions and tenants (data, never for code)", "denied")))
   in
 
+  (* (garden-welcome) -> VStr note-text. The garden note (card
+     2c440c53): $GARDEN_DIR/welcome.md read AT CALL time, so the
+     filmstrip's first pane renders whatever roerick last saved to the
+     file -- no definition edit, no deploy. Unset/empty GARDEN_DIR, a
+     missing file, or a blank file answers the one permitted fallback
+     string ("Welcome to Pricklypear"). *)
+  Primitives.register tbl "garden-welcome"
+    (fun _args -> Pricklypear_lisp.Ast.VStr (Garden_note.welcome_text ()));
+
   (* (get 'type id) -> VStr fields-json | VNil *)
   register_crud "get"
     (fun args ->
