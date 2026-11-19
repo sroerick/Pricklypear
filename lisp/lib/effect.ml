@@ -287,7 +287,7 @@ let write_db_prims = [
      al in public handlers. *)
   "eval-string"; "bench"; "example-eval";
   (* tree/data writes (prims_data) *)
-  "tree/upsert"; "tree/delete"; "tree/move"; "tree/move-before";
+  "tree/upsert"; "tree/put"; "tree/delete"; "tree/move"; "tree/move-before";
   "tree/move-after"; "tree/reorder"; "tree/insert-child";
   "link"; "unlink";
   "type-fields";

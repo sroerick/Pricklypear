@@ -2372,6 +2372,39 @@ let tree_upsert (store : Store.t) ~(path : string) ~(kind : string)
   | Ok p -> (VStr p)
   | Error e -> (VStr e)
 
+(* (tree/put path body-json) -> the written path. The substrate CLAIM write
+   path (card 107369d1; borge/run-primitive.borg evidence: a claim is written
+   at the claim boundary, never by overloading the typed datum prims). The
+   write is an ordinary versioned tree_nodes write, so tree/log shows the put
+   and tree/at reads the body back; an existing path keeps its kind/type, a
+   new path lands as a folder (the hier kind with no slug/uuid/typed-field
+   constraints, so a claim body never has to satisfy a data type).
+   Ledger: same data.write event as tree/upsert. *)
+let tree_put (store : Store.t) ~(path : string) ~(body_json : string)
+    ~(author : string) : value =
+  with_tree_tx store ~none:(fun () -> no_db "tree/put") (fun conn ->
+      let existing = Tree_store.get_by_path conn ~path in
+      let kind, type_name =
+        match existing with
+        | Some n ->
+            (n.Tree_store.kind,
+             (match n.Tree_store.type_name with Some t -> t | None -> ""))
+        | None -> ("folder", "")
+      in
+      let r =
+        if kind = "datum" then
+          tree_upsert_outcome store ~path ~kind ~type_name ~body_json ~author
+        else
+          let r =
+            Tree_store.upsert_hier conn ~path ~kind ~type_name ~body_json
+              ~author ~rank:None
+          in
+          emit_tree_write ~caller:author ~target:path
+            ~outcome:(match r with Ok _ -> "ok" | Error _ -> "error");
+          r
+      in
+      (match r with Ok p -> (VStr p) | Error e -> (VStr e)))
+
 let tree_delete (store : Store.t) ~(path : string) ~(recursive : bool)
     : value =
   (* One tx: the incoming-edge count and the delete see the same state,

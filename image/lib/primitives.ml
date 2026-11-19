@@ -363,6 +363,7 @@ let prim_summary (name : string) : string =
   | "sync/plan" -> "server-side sync reconcile: send a client (path,hash) manifest [+ base manifest] → JSON reconciliation report / three-way merge plan (local-first sync)"
   | "sync/push" -> "apply a client two-way push (manifest + bodies) for the caller's data.u.<user>.* subtree; returns {applied, server_only_paths, diverge_paths, generation} (local-first sync v1; diverge reported, not auto-merged)"
   | "tree/upsert" -> "upsert folder|note|heading at path"
+  | "tree/put" -> "substrate claim write: write a JSON body at an absolute path (existing node keeps its kind/type; new path lands as a folder) → path; every write is versioned, so tree/log shows it and tree/at reads it back"
   | "tree/delete" -> "delete path [, recursive]"
   | "tree/move" -> "move subtree old-path → new-path"
   | "tree/reorder" -> "set node rank directly (base-36 fractional string; \"\" clears) → node JSON"
