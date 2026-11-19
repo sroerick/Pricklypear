@@ -3720,6 +3720,7 @@ composer splices in the chat transcript elements once chat has loaded). The seed
           (list
             (todo/nav-link view "everything" "Everything" "")
             (todo/nav-link view "from-notes" "From notes" "")
+            (todo/nav-link view "doasq" "doasq" "approvals")
             (todo/nav-link
               view
               "archived"

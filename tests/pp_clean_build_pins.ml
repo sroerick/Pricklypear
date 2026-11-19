@@ -73,4 +73,9 @@ let () =
      (value, label, selected) with no empty value or placeholder label. *)
   check "libs/todo/lib.pp" todo_lib
     "(html/option \"doasq\" \"doasq\" (string-eq view \"doasq\"))";
+  (* ... and the nav link list itself carries it, in the same
+     (view key label extra) shape as everything / from-notes / archived,
+     with every field supplied (no empty placeholder in the new entry). *)
+  check "libs/todo/lib.pp" todo_lib
+    "(todo/nav-link view \"doasq\" \"doasq\" \"approvals\")";
   if !failures > 0 then exit 1
