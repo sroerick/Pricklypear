@@ -13,6 +13,7 @@
           prims_code prims_agent prims_llm prims_ops
           net_prims prims_hyper
           example_eval
+          public_board
           session_control_prims
           boot_seed
           session

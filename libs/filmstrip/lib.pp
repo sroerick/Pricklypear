@@ -560,13 +560,65 @@ deploy. Unset/empty GARDEN_DIR, a missing file, or a blank file answers\
 the one permitted fallback (\"Welcome to Pricklypear\"), which the guard\
 also supplies if a host does not bind the prim at all.")
 
+(define filmstrip/board-rows
+  (lambda ()
+    (list/map
+      (lambda (row)
+        (let ((f (cdr row)))
+          (list
+            (as-str (dict-get f "title"))
+            (as-str (dict-get f "state")))))
+      (todo/item/all)))
+  "The public board projection: every card as (title state) ONLY. Notes
+are internal detail and never leave this function (public-by-default
+visibility policy 5a30a045); the board read is the same todo/item/all
+the board panes read, so the pane is live on every request.")
+
+(define filmstrip/board-pane-html
+  (lambda ()
+    (html/tag
+      "section"
+      (html/attrs
+        (list
+          (html/attr "class" "fs-pane fs-full fs-board")
+          (html/attr "id" "fs-pane-board")
+          (html/attr "data-pane" "board")
+          (html/attr "data-region" "main")
+          (html/attr "data-desktop" "0")))
+      (html/join
+        (list
+          (html/tag
+            "header"
+            (html/attr "class" "fs-head")
+            (html/span
+              (html/attr "class" "fs-title")
+              (html/text "board")))
+          (html/tag
+            "div"
+            (html/attrs
+              (list
+                (html/attr "class" "fs-body")
+                (html/attr "id" "fs-body-board")))
+            (guard
+              (lambda (e) (html/p* (html/attr "class" "muted") "board unavailable"))
+              (public-board-tiles (filmstrip/board-rows))))))))
+  "The PUBLIC, NON-INTERACTIVE board pane (card a6ca7850): one tile per
+board card showing the title and its state, grouped by state, rendered
+by the (public-board-tiles) prim over the board's own read path
+(todo/item/all). Titles and states are public; notes are dropped in
+filmstrip/board-rows before the prim ever sees them. The body carries no
+form, no link, no POST target and no hx-* attr -- the pane is inert
+markup, safe on an anonymous route.")
+
 (define filmstrip/main-strip-html
   (lambda (panes focus)
     (html/join
       (append
         (list (filmstrip/welcome-pane-html))
+        (list (filmstrip/board-pane-html))
         (filmstrip/panes-region panes focus "main"))))
-  "The main strip: the garden welcome pane FIRST, then every main-region\
+  "The main strip: the garden welcome pane FIRST, then the public board
+pane, then every main-region\
 pane section (filmstrip/panes-region). The welcome pane is plain\
 markup, not a workspace record -- it is not openable, closable, or\
 persisted; it is the strip's standing first column.")

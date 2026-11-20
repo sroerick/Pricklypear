@@ -330,6 +330,22 @@
  (modules standalone_route_test)
  (libraries pricklypear-image pricklypear-lisp pricklypear-common alcotest eio_main))
 
+;; Public non-interactive board pane (card a6ca7850): title+state tiles,
+;; grouped by state, notes redacted, and no interactive surface. The projection
+;; itself (Public_board.render_body) needs no DB, no session, no Eio; the walk
+;; to the public GET does (Eio_main.run) and reads the manifest via
+;; pricklypear-common, so both are linked here rather than left unbound.
+(test
+ (name public_board_test)
+ (modules public_board_test)
+ (libraries pricklypear-image pricklypear-common alcotest eio_main))
+
+;; The same projection, printed for libs/filmstrip/test/vectors.ksh.
+(executable
+ (name public_board_probe)
+ (modules public_board_probe)
+ (libraries pricklypear-image))
+
 (test
  (name session_split_test)
  (modules session_split_test)
@@ -420,6 +436,11 @@
  (name todo_subtasks_test)
  (modules todo_subtasks_test)
  (libraries pricklypear-image alcotest))
+
+(test
+ (name todo_attachments_test)
+ (modules todo_attachments_test)
+ (libraries pricklypear-image pricklypear-lisp alcotest unix))
 
 
 (test

@@ -27,6 +27,34 @@ let register (t : t) (tbl : Primitives.t) : unit =
   Primitives.register tbl "garden-welcome"
     (fun _args -> Pricklypear_lisp.Ast.VStr (Garden_note.welcome_text ()));
 
+  (* (public-board-tiles [[title state] …]) -> VStr pane body. Card
+     a6ca7850: the PUBLIC, non-interactive board pane. The caller hands over
+     title+state ONLY -- notes never cross this boundary (public-by-default
+     visibility policy 5a30a045) -- and Public_board.render_body emits inert
+     markup: no form, no href, no hx-*, no POST target. *)
+  Primitives.register tbl "public-board-tiles"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VList rows ] ->
+          let cards =
+            List.filter_map
+              (function
+                | Pricklypear_lisp.Ast.VList
+                    [ Pricklypear_lisp.Ast.VStr title;
+                      Pricklypear_lisp.Ast.VStr state ] ->
+                    Some { Public_board.title; state; notes = "" }
+                | _ -> None)
+              rows
+          in
+          Pricklypear_lisp.Ast.VStr (Public_board.render_body cards)
+      | _ ->
+          raise
+            (Pricklypear_lisp.Ast.Interp_error
+               (Pricklypear_lisp.Ast.Prim_error
+                  ( "public-board-tiles",
+                    "bad args (need [[title state] …])",
+                    "bad-args" ))));
+
   (* (get 'type id) -> VStr fields-json | VNil *)
   register_crud "get"
     (fun args ->
