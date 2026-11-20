@@ -39,6 +39,13 @@
     todo/item/archive
     todo/item/assign
     todo/item/assignee
+    todo/item/attach
+    todo/item/attachment-field
+    todo/item/attachment-html
+    todo/item/attachment-json
+    todo/item/attachments
+    todo/item/attachments-html
+    todo/item/attachments-version
     todo/item/branch
     todo/item/branch-kind
     todo/item/cycle
@@ -1378,6 +1385,7 @@ composer splices in the chat transcript elements once chat has loaded). The seed
                                       (html/button (html/attr "type" "submit") "Save")
                                       " "
                                       (html/a (string-append "/todos?view=" view) "Cancel")))))))
+                          (todo/item/attachments-html fields)
                           (todo/ui/feed-html id view))))))))))))))
 
 
@@ -1908,6 +1916,150 @@ composer splices in the chat transcript elements once chat has loaded). The seed
     (let
       ((a (dict-get fields "acceptance")))
       (if (null? a) "" (as-str a)))))
+
+;; ---- attachments (card 34443e: screenshot attachments on cards) ----
+;; An attachment is a POINTER with provenance, not a blob: {url, caption,
+;; added_by, added_ts} where the PNG lives outside the store (the reporting
+;; agent's own hosting) and the card references it by URL. The ordered list
+;; rides the `attachments` field as JSON text (the columns/recipes
+;; convention: a datum field is a string), so the field appears in the
+;; generic card JSON read with no extra plumbing, and any identity with
+;; write access to the card can attach.
+(define todo/item/attachments
+  (lambda
+    (fields)
+    "The ordered attachment list of item fields: maps with the keys url,
+     caption, added_by, added_ts. () when the card carries none. The field
+     arrives in ONE of two shapes and BOTH must read: a structured list of
+     maps (json-values-alist decodes a datum's attachments array to alists
+     — the shape tree/get and dict-get hand back after an attach), or a
+     JSON TEXT string (the legacy/string-set shape, e.g. a dict built as a
+     VStr JSON object, where dict-get returns the array re-serialized).
+     Coercing the structured shape with as-str read NOTHING (\"\") and
+     every card rendered as if it carried no attachments."
+    (let
+      ((a (dict-get fields "attachments")))
+      (if
+        (null? a)
+        (list)
+        (if
+          (string? a)
+          (let
+            ((s (as-str a)))
+            (if (string-eq s "") (list) (json-parse s)))
+          a)))))
+
+(define todo/item/attachment-field
+  (lambda
+    (a k)
+    "One string field of an attachment map; empty when absent."
+    (let
+      ((v (dict-get a (as-str k))))
+      (if (null? v) "" (as-str v)))))
+
+(define todo/item/attachment-json
+  (lambda
+    (url caption by ts)
+    "One attachment as canonical JSON OBJECT text with the keys url,
+     caption, added_by, added_ts. Built as a cons ALIST on purpose:
+     json-emit writes an alist as a JSON object, while a dict-set value is
+     already JSON TEXT and emits as a quoted string, double-encoding every
+     map into an array of strings (the card then read back strings, not
+     maps)."
+    (json-emit
+      (list
+        (cons "url" (as-str url))
+        (cons "caption" (as-str caption))
+        (cons "added_by" (as-str by))
+        (cons "added_ts" (as-str ts))))))
+
+(define todo/item/attachments-version
+  (lambda () "2")
+  "Version marker for the attachment plumbing (2 = the ordered list is
+     stored as real JSON OBJECTS). A test reads it AFTER
+     (load-library \"todo\") to tell a current binding from a stale image
+     snapshot, which would otherwise fail the live vectors for the wrong
+     reason.")
+
+(define todo/json-elems
+  (lambda
+    (xs)
+    "Comma-joined json-emit of a list's elements; empty for (). Used to
+     splice an attachment onto the stored array without a list-append prim."
+    (list/foldl
+      (lambda
+        (acc x)
+        (if
+          (string-eq acc "")
+          (json-emit x)
+          (string-append acc "," (json-emit x))))
+      ""
+      xs)))
+
+(define todo/item/attach
+  (lambda
+    (id url caption)
+    "Append one attachment {url, caption, added_by, added_ts} to card id and
+     return id, or () when the item is missing. A content edit via
+     tree/set-field, NOT a state transition: no todo-event. The author and
+     stamp are resolved HERE, so a pointer never arrives unattributed."
+    (let
+      ((row (todo/tree/get "todo-item" (as-str id))))
+      (if
+        (null? row)
+        ()
+        (let
+          ((one (todo/item/attachment-json url caption (whoami) (now))))
+          (let
+            ((ex (todo/item/attachments row)))
+            (seq
+              (todo/tree/set-field
+                "todo-item"
+                (as-str id)
+                "attachments"
+                (string-append
+                  "["
+                  (todo/json-elems ex)
+                  (if (null? ex) "" ",")
+                  one
+                  "]"))
+              (as-str id))))))))
+
+(define todo/item/attachment-html
+  (lambda
+    (a)
+    "One attachment rendered for the card detail page: an img whose src is
+     the attachment URL, followed by its ESCAPED caption text."
+    (html/div
+      (html/attr "class" "todo-attachment")
+      (html/join
+        (list
+          (html/img
+            (todo/item/attachment-field a "url")
+            (todo/item/attachment-field a "caption")
+            "todo-attachment-img")
+          (html/span
+            (html/attr "class" "todo-attachment-caption")
+            (html/text (todo/item/attachment-field a "caption"))))))))
+
+(define todo/item/attachments-html
+  (lambda
+    (fields)
+    "The card's attachment block: every attachment's img + caption in stored
+     order; the empty string when the card carries none."
+    (let
+      ((xs (todo/item/attachments fields)))
+      (if
+        (null? xs)
+        ""
+        (html/div
+          (html/attr "class" "todo-attachments")
+          (list/foldl
+            (lambda
+              (acc a)
+              (string-append acc (todo/item/attachment-html a)))
+            ""
+            xs))))))
 
 (define todo/item/active
   (lambda
@@ -6049,6 +6201,7 @@ clear the claim (review 2026-10-27). Composes todo/ui/assignee-option.")
                                     (list
                                       (html/p* (html/attr "class" "muted") "Acceptance")
                                       (html/pre (html/text acceptance))))))
+                              (todo/item/attachments-html fields)
                               (html/div
                                 ""
                                 (html/join
