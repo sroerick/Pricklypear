@@ -42,8 +42,10 @@
     todo/item/attach
     todo/item/attachment-field
     todo/item/attachment-html
+    todo/item/attachment-json
     todo/item/attachments
     todo/item/attachments-html
+    todo/item/attachments-version
     todo/item/branch
     todo/item/branch-kind
     todo/item/cycle
@@ -1927,16 +1929,25 @@ composer splices in the chat transcript elements once chat has loaded). The seed
   (lambda
     (fields)
     "The ordered attachment list of item fields: maps with the keys url,
-     caption, added_by, added_ts. () when the card carries none. Stored as
-     JSON text in the `attachments` field."
+     caption, added_by, added_ts. () when the card carries none. The field
+     arrives in ONE of two shapes and BOTH must read: a structured list of
+     maps (json-values-alist decodes a datum's attachments array to alists
+     — the shape tree/get and dict-get hand back after an attach), or a
+     JSON TEXT string (the legacy/string-set shape, e.g. a dict built as a
+     VStr JSON object, where dict-get returns the array re-serialized).
+     Coercing the structured shape with as-str read NOTHING (\"\") and
+     every card rendered as if it carried no attachments."
     (let
       ((a (dict-get fields "attachments")))
       (if
         (null? a)
         (list)
-        (let
-          ((s (as-str a)))
-          (if (string-eq s "") (list) (json-parse s)))))))
+        (if
+          (string? a)
+          (let
+            ((s (as-str a)))
+            (if (string-eq s "") (list) (json-parse s)))
+          a)))))
 
 (define todo/item/attachment-field
   (lambda
@@ -1945,6 +1956,30 @@ composer splices in the chat transcript elements once chat has loaded). The seed
     (let
       ((v (dict-get a (as-str k))))
       (if (null? v) "" (as-str v)))))
+
+(define todo/item/attachment-json
+  (lambda
+    (url caption by ts)
+    "One attachment as canonical JSON OBJECT text with the keys url,
+     caption, added_by, added_ts. Built as a cons ALIST on purpose:
+     json-emit writes an alist as a JSON object, while a dict-set value is
+     already JSON TEXT and emits as a quoted string, double-encoding every
+     map into an array of strings (the card then read back strings, not
+     maps)."
+    (json-emit
+      (list
+        (cons "url" (as-str url))
+        (cons "caption" (as-str caption))
+        (cons "added_by" (as-str by))
+        (cons "added_ts" (as-str ts))))))
+
+(define todo/item/attachments-version
+  (lambda () "2")
+  "Version marker for the attachment plumbing (2 = the ordered list is
+     stored as real JSON OBJECTS). A test reads it AFTER
+     (load-library \"todo\") to tell a current binding from a stale image
+     snapshot, which would otherwise fail the live vectors for the wrong
+     reason.")
 
 (define todo/json-elems
   (lambda
@@ -1974,15 +2009,7 @@ composer splices in the chat transcript elements once chat has loaded). The seed
         (null? row)
         ()
         (let
-          ((one
-            (json-emit
-              (dict-set*
-                "{}"
-                (list
-                  "url" (as-str url)
-                  "caption" (as-str caption)
-                  "added_by" (as-str (whoami))
-                  "added_ts" (as-str (now)))))))
+          ((one (todo/item/attachment-json url caption (whoami) (now))))
           (let
             ((ex (todo/item/attachments row)))
             (seq

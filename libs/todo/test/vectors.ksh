@@ -77,8 +77,12 @@ skipped() { skip=$((skip+1)); echo "SKIP $1: $2"; }
 
 # One attachment map, built through json-emit (no hand-written JSON), wrapped
 # into the `attachments` field text a todo-item datum carries.
+# Built as a cons ALIST: json-emit writes an alist as a JSON OBJECT, while a
+# dict-set* value is already JSON TEXT and re-emits as a quoted STRING,
+# double-encoding the map into an array of strings (the read then hands back
+# strings, not maps — c1 of the branch review).
 one() { # one CAPTION
-  printf '(json-emit (dict-set* "{}" (list "url" "%s" "caption" "%s" "added_by" "vectors" "added_ts" "0")))' "$URL" "$1"
+  printf '(json-emit (list (cons "url" "%s") (cons "caption" "%s") (cons "added_by" "vectors") (cons "added_ts" "0")))' "$URL" "$1"
 }
 
 card() { # card CAPTION -> a fields dict carrying exactly one attachment
@@ -114,6 +118,22 @@ if [ "$live" = 1 ]; then
   if [ "$bound" != 1 ]; then
     skipped eval_vectors "image has no todo/item/attachments-html after load-library from PP_LIBS_DIR=$PP_LIBS_DIR: $bound_probe"
     live=0
+  fi
+
+  # A BOUND name is not enough: the image may still carry an older body of the
+  # attachment renders (load-library on a warm branch does not clobber every
+  # inherited define), and asserting against a stale body reports the previous
+  # implementation's defects as this branch's failures. The version marker is
+  # read AFTER the reload and gates every eval assertion below.
+  if [ "$live" = 1 ]; then
+    cur=$($PP_EVAL -j '(todo/item/attachments-version)' 2>&1)
+    case "$cur" in
+      *'"value":"2"'*) : ;;
+      *)
+        skipped eval_vectors "image attachment binding is STALE after load-library (no todo/item/attachments-version 2: $cur); restart the image on PP_LIBS_DIR=$PP_LIBS_DIR and re-run"
+        live=0
+        ;;
+    esac
   fi
 fi
 
@@ -171,6 +191,21 @@ if [ "$live" = 1 ]; then
   else
     skipped live_attach_path "todo/item/add returned no card id"
   fi
+fi
+
+# DB-free leg: the same three assertions evaluated in-process against the
+# WORKING libs (no image, no Postgres, no pp-eval) by the dune test that runs
+# the attachment defines out of libs/todo/lib.pp and renders both stored
+# shapes. The live leg above SKIPs when the image is absent or carries a stale
+# binding, so this one is what holds on a bare checkout.
+if [ -x "$ROOT/_build/default/image/test/todo_attachments_test.exe" ]; then
+  if ( cd "$ROOT" && "$ROOT/_build/default/image/test/todo_attachments_test.exe" >/dev/null 2>&1 ); then
+    ok db_free_attachment_vectors
+  else
+    bad db_free_attachment_vectors "image/test/todo_attachments_test.exe failed (run: dune exec image/test/todo_attachments_test.exe)"
+  fi
+else
+  skipped db_free_attachment_vectors "build it first: dune build image/test/todo_attachments_test.exe"
 fi
 
 # Source-level guard: the render site still emits an img whose src is the
