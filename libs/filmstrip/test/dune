@@ -8,6 +8,8 @@
  (deps
   vectors.ksh
   ../lib.pp
-  %{workspace_root}/test/garden_note_probe.exe)
+  ../page.ml
+  %{workspace_root}/test/garden_note_probe.exe
+  %{workspace_root}/image/test/public_board_probe.exe)
  (action
   (run /bin/ksh %{dep:vectors.ksh})))

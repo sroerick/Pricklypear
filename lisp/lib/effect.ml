@@ -171,6 +171,8 @@ let pure_prims = [
   "parse-date"; "xml-parse"; "random-uuid";
   "verify-ssh-key";  (* pure crypto check on args; no store *)
   "media-url";       (* builds /media/<id> string; no store read *)
+  "garden-welcome";  (* reads $GARDEN_DIR/welcome.md at call time; no store *)
+  "public-board-tiles";  (* pure markup from caller-supplied [title state] pairs *)
   (* prims_pure shared-catalog extras + hypermedia harness (2026-09-10
      boot-assertion catch): string/list utils, request-body shaping,
      soup/* in-memory DOM ops, impact session-memory queue writes. *)
