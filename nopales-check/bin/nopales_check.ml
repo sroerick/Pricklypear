@@ -59,12 +59,19 @@ let () =
         parse rest
   in
   parse (List.tl (Array.to_list Sys.argv));
+  if !baseline <> "" && !save_baseline <> "" then begin
+    Printf.eprintf "choose --baseline (gate) or --save-baseline (record), not both\n";
+    exit 2
+  end;
   let paths = List.rev !paths in
   try
     let r = Pp_nopales_check.Check.run ~json:!json ~strict:!strict ~perf:!perf
               ~unbound_bare:!unbound_bare ~effects:!effects ~txn:!txn
               ~baseline:!baseline ~save_baseline:!save_baseline paths in
-    exit (Pp_nopales_check.Check.exit_code ~strict:!strict r)
+    let code = Pp_nopales_check.Check.exit_code ~strict:!strict r in
+    (* recording a baseline is maintenance, not a gate: the findings it just
+       recorded must not fail the command that recorded them. *)
+    exit (if !save_baseline <> "" && code = 1 then 0 else code)
   with
   | Sys_error msg | Failure msg ->
       Printf.eprintf "nopales-check: %s\n" msg;

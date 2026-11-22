@@ -131,8 +131,10 @@ nopales-check --baseline .nopales-check.json        # in CI / before promote
 The key is `(file, code, name, message)`, not the line, so moving a definition
 does not resurrect it; it is a *multiset*, so a second identical call site is a
 new finding and a changed arity message never matches. A missing or malformed
-baseline exits 2 rather than suppressing silently. Run both from the repo root:
-the baseline stores the path spelling it was given.
+baseline exits 2 rather than suppressing silently. `--save-baseline` is
+maintenance, not a gate: it records and exits 0 even though the recorded
+findings remain. Run both from the repo root: the baseline stores the path
+spelling it was given.
 
 ## Effects
 
