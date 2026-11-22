@@ -1,0 +1,5 @@
+(test
+ (name test_check)
+ (modules test_check)
+ (libraries pp_nopales_check)
+ (deps (source_tree fixtures)))

@@ -1,0 +1,4 @@
+(executable
+ (name nopales_check)
+ (modules nopales_check)
+ (libraries pp_nopales_check))

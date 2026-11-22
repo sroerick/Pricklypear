@@ -1,0 +1,4 @@
+(library
+ (name pp_nopales_check)
+ (modules check)
+ (libraries pricklypear-lisp pricklypear-pure-prims pricklypear-image pp_perf_lint yojson))
