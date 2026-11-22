@@ -97,5 +97,35 @@ let () =
     fail "two writes outside with-transaction must produce a txn hint";
   if has_code tx "txn" "eff-txn" then
     fail "with-transaction must suppress the txn hint";
+  (* baseline: adopt the gate while the existing list is burned down *)
+  let with_temp_pp text f =
+    let path = Filename.temp_file "nopales-check" ".pp" in
+    let oc = open_out path in
+    output_string oc text;
+    close_out oc;
+    Fun.protect ~finally:(fun () -> try Sys.remove path with _ -> ())
+      (fun () -> f path)
+  in
+  with_temp_pp "(define (f a b) a)\n(define (g) (f 1))\n" (fun path ->
+      let base = Filename.temp_file "nopales-check" ".json" in
+      Fun.protect ~finally:(fun () -> try Sys.remove base with _ -> ())
+        (fun () ->
+          let r1 = Pp_nopales_check.Check.run [ path ] in
+          Pp_nopales_check.Check.write_baseline base r1.findings;
+          let r2 = Pp_nopales_check.Check.run ~baseline:base [ path ] in
+          if r2.findings <> [] || r2.suppressed <> 1 then
+            fail "the baseline did not suppress the recorded arity finding";
+          let oc = open_out_gen [ Open_append ] 0o600 path in
+          output_string oc "(define (h) (f 2))\n";
+          close_out oc;
+          let r3 = Pp_nopales_check.Check.run ~baseline:base [ path ] in
+          if r3.errors <> 1 || r3.suppressed <> 1 then
+            fail "a second identical call site must not be suppressed";
+          let oc = open_out path in
+          output_string oc "(define (f a b) a)\n(define (g) (f 1 2 3))\n";
+          close_out oc;
+          let r4 = Pp_nopales_check.Check.run ~baseline:base [ path ] in
+          if r4.errors <> 1 || r4.suppressed <> 0 then
+            fail "a changed arity message must not match the baseline"));
   Printf.printf "check-test: ok (%d files, %d defines, %d errors, %d warns)\n"
     r.files r.defines r.errors r.warns

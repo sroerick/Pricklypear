@@ -8,27 +8,33 @@
     Design notes, because the shape is the argument:
 
     - The reader produces raw [App] trees (special forms are dispatched at eval,
-      not by the reader). It does not macroexpand. A checker therefore has to
-      model the binding forms the corpus actually uses or it drowns in false
-      positives. Measured 2026-11-21 over libs/*/lib.pp: [let*] 493 uses,
-      [guard] 35, [cond] 8, and no [case]/[match]/[do]. Those are handled
-      structurally; everything else in [Eval.special_form_names] is walked as
-      expressions.
-    - A list in the corpus is not always a call. An unknown head may be a user
-      macro whose arguments are syntax, so the walker reports it and does NOT
-      descend into its arguments. That is the difference between a checker and a
-      false-positive generator.
+      not by the reader) and does not macroexpand, so the checker runs the
+      corpus's own [defmacro]s through [Eval.macroexpand_expr] before walking.
+      It still models the binding forms the corpus actually uses that the
+      expander leaves behind: [let*] 493 uses, [guard] 35, [cond] 8, and no
+      [case]/[match]/[do] (measured 2026-11-21 over libs/*/lib.pp).
+    - A list in the corpus is not always a call. An unknown head may be a host
+      primitive (bare names have no catalogue here) or a macro whose arguments
+      are syntax, so the walker does not descend into an unresolved head's
+      arguments. Only a qualified name is a claim about the corpus.
     - Positions are exact: [read_node] keeps (line, col) for every node, so a
       finding points at the call, not at the define that contains it. The
       positioned tree is cross-checked against [Reader.read_all] so the two
-      cannot drift (the tripwire perflint already uses).
+      cannot drift (the tripwire perflint already uses). A macro-introduced
+      form takes its enclosing form's line, and a bare unbound name reports its
+      define's line (the printed name is not unique in a file).
     - R1 (DB prim inside a per-row loop) is folded in as one severity class:
       perflint's own scan, RED -> ERROR, AMBER -> WARN.
+    - The capability pass ([--effects]) is the interpreter's own inference
+      ([Effect.infer] with corpus-wide [known_fn]), not a second effect model.
+      It classifies each define for the change-set gates and turns an
+      unclassifiable qualified call into [unknown], the fail-closed class.
 
     Severities:
       ERROR  reader error, arity mismatch, unbound package-qualified name,
              perflint RED.
-      WARN   unknown qualified callable, perflint AMBER.
+      WARN   unknown qualified callable, unbound bare name, failed macro
+             expansion, perflint AMBER, advisory txn hint ([--txn]).
     Exit: 0 clean, 1 any ERROR (or any WARN under [--strict]), 2 unreadable. *)
 
 module Ast = Pricklypear_lisp.Ast
@@ -71,6 +77,7 @@ type define_effect = {
   de_effects : string list;
   de_classes : string list;
   de_unknown : string list;  (* unresolved qualified heads, when any *)
+  de_ambiguous : bool;       (* the same name is defined more than once *)
 }
 
 type report = {
@@ -80,6 +87,7 @@ type report = {
   effects : define_effect list;  (* computed only with [--effects] *)
   errors : int;
   warns : int;
+  suppressed : int;   (* findings hidden by [--baseline] *)
 }
 
 let severity_name = function Error -> "ERROR" | Warn -> "WARN"
@@ -598,6 +606,12 @@ let unclassified_qualified defs e =
 let effect_pass ctx raw =
   let bindings = List.map (fun (name, body, _, _) -> (name, body)) raw in
   let known_fn = Effect.known_fn_of_bindings bindings in
+  let counts = Hashtbl.create 1024 in
+  List.iter
+    (fun (name, _, _, _) ->
+      Hashtbl.replace counts name
+        (1 + (match Hashtbl.find_opt counts name with Some n -> n | None -> 0)))
+    raw;
   List.map
     (fun (name, body, file, line) ->
       let fx = Effect.infer ~known_fn body in
@@ -615,7 +629,9 @@ let effect_pass ctx raw =
         de_effects =
           List.map Effect.eff_to_string (Effect.EffSet.to_list fx);
         de_classes = classes;
-        de_unknown = unknown })
+        de_unknown = unknown;
+        de_ambiguous =
+          (match Hashtbl.find_opt counts name with Some n -> n > 1 | None -> false) })
     (List.rev raw)
 
 (** Advisory transactional hints (multi-write / row lock outside
@@ -678,12 +694,81 @@ let perf_findings files =
     files
 
 (* ------------------------------------------------------------------ *)
+(* baseline: adopt the checker without a flag day                     *)
+(* ------------------------------------------------------------------ *)
+
+(** Identity ignores the line: a definition that moves must not reappear as a
+    new defect. The message carries the argument counts and names, so a changed
+    arity or a different unbound name is a different finding. *)
+let finding_key (f : finding) =
+  Printf.sprintf "%s|%s|%s|%s" f.file f.code f.name f.message
+
+let counts_of_findings findings =
+  let t = Hashtbl.create 256 in
+  List.iter
+    (fun f ->
+      let k = finding_key f in
+      Hashtbl.replace t k
+        (1 + (match Hashtbl.find_opt t k with Some n -> n | None -> 0)))
+    findings;
+  t
+
+(** Read a baseline written by [write_baseline]. Raises on a missing file or a
+    shape it did not write: a gate that cannot read its baseline must not
+    silently suppress nothing. *)
+let load_baseline path =
+  let j = Yojson.Safe.from_file path in
+  match j with
+  | `Assoc o ->
+      (match List.assoc_opt "findings" o with
+       | Some (`Assoc kvs) ->
+           let t = Hashtbl.create 256 in
+           List.iter
+             (fun (k, v) ->
+               match v with
+               | `Int n when n > 0 -> Hashtbl.replace t k n
+               | _ -> ())
+             kvs;
+           t
+       | _ -> failwith (path ^ ": baseline has no findings object"))
+  | _ -> failwith (path ^ ": baseline is not a JSON object")
+
+let write_baseline path findings =
+  let counts = counts_of_findings findings in
+  let kvs = Hashtbl.fold (fun k n acc -> (k, `Int n) :: acc) counts [] in
+  let j =
+    `Assoc
+      [ ("schema", `Int 1);
+        ("tool", `String "nopales-check");
+        ("findings", `Assoc kvs) ]
+  in
+  let oc = open_out path in
+  output_string oc (Yojson.Safe.pretty_to_string j);
+  output_char oc '\n';
+  close_out oc
+
+(** Suppress the first [baseline[key]] occurrences of each identical finding.
+    A multiset, not a set: a second call site with the same message is new. *)
+let apply_baseline findings base =
+  let left = Hashtbl.copy base in
+  let kept =
+    List.filter
+      (fun f ->
+        let k = finding_key f in
+        match Hashtbl.find_opt left k with
+        | Some n when n > 0 -> Hashtbl.replace left k (n - 1); false
+        | _ -> true)
+      findings
+  in
+  (kept, List.length findings - List.length kept)
+
+(* ------------------------------------------------------------------ *)
 (* run                                                                *)
 (* ------------------------------------------------------------------ *)
 
 let run ?(json = false) ?(strict = false) ?(perf = true)
     ?(unbound_bare = true) ?(effects = false) ?(txn = false)
-    (paths : string list) : report =
+    ?(baseline = "") ?(save_baseline = "") (paths : string list) : report =
   let ctx =
     { defs = Hashtbl.create 4096;
       specials = Hashtbl.create 64;
@@ -772,19 +857,29 @@ let run ?(json = false) ?(strict = false) ?(perf = true)
   if txn then txn_pass ctx !raw_defs;
   let ours = List.rev ctx.findings in
   let perf_fs = if perf then perf_findings (List.map fst parsed) else [] in
-  let findings =
+  let all_findings =
     List.sort
       (fun (a : finding) (b : finding) ->
         let c = String.compare a.file b.file in
         if c <> 0 then c else compare a.line b.line)
       (ours @ perf_fs)
   in
+  if save_baseline <> "" then begin
+    write_baseline save_baseline all_findings;
+    if not json then
+      Printf.printf "baseline: %s (%d finding(s))\n" save_baseline
+        (List.length all_findings)
+  end;
+  let findings, suppressed =
+    if baseline = "" then (all_findings, 0)
+    else apply_baseline all_findings (load_baseline baseline)
+  in
   let errors = List.length (List.filter (fun (f : finding) ->
       f.severity = Error) findings) in
   let warns = List.length findings - errors in
   let report =
     { files = List.length parsed; defines = Hashtbl.length ctx.defs;
-      findings; effects = effects_report; errors; warns }
+      findings; effects = effects_report; errors; warns; suppressed }
   in
   if json then begin
     let base =
@@ -792,6 +887,7 @@ let run ?(json = false) ?(strict = false) ?(perf = true)
         ("defines", `Int report.defines);
         ("errors", `Int errors);
         ("warns", `Int warns);
+        ("suppressed", `Int suppressed);
         ( "findings",
           `List
             (List.map
@@ -817,7 +913,8 @@ let run ?(json = false) ?(strict = false) ?(perf = true)
                     ("line", `Int e.de_line);
                     ("classes", `List (List.map (fun c -> `String c) e.de_classes));
                     ("effects", `List (List.map (fun x -> `String x) e.de_effects));
-                    ("unknown", `List (List.map (fun x -> `String x) e.de_unknown)) ])
+                    ("unknown", `List (List.map (fun x -> `String x) e.de_unknown));
+                    ("ambiguous", `Bool e.de_ambiguous) ])
               effects_report))
         :: base
       else base
@@ -832,13 +929,14 @@ let run ?(json = false) ?(strict = false) ?(perf = true)
     if effects then begin
       List.iter
         (fun (e : define_effect) ->
-          Printf.printf "%s:%d: EFFECT %s classes=%s effects=%s%s\n"
+          Printf.printf "%s:%d: EFFECT %s classes=%s effects=%s%s%s\n"
             e.de_file e.de_line e.de_name
             (String.concat "+" e.de_classes)
             (if e.de_effects = [] then "none"
              else String.concat "+" e.de_effects)
             (if e.de_unknown = [] then ""
-             else " unknown=" ^ String.concat "+" e.de_unknown))
+             else " unknown=" ^ String.concat "+" e.de_unknown)
+            (if e.de_ambiguous then " ambiguous" else ""))
         effects_report;
       let hist = Hashtbl.create 8 in
       List.iter
@@ -857,8 +955,10 @@ let run ?(json = false) ?(strict = false) ?(perf = true)
         (String.concat ", "
            (List.map (fun (c, n) -> Printf.sprintf "%s=%d" c n) pairs))
     end;
-    Printf.printf "%d file(s), %d define(s), %d error(s), %d warning(s)\n"
+    Printf.printf "%d file(s), %d define(s), %d error(s), %d warning(s)%s\n"
       report.files report.defines errors warns
+      (if suppressed > 0 then Printf.sprintf ", %d suppressed by baseline" suppressed
+       else "")
   end;
   report
 
