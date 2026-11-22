@@ -1,0 +1,18 @@
+# Nopales package vendor lock.
+#
+# One package per line:
+#
+#   <package> <repo-or-path> <revision>
+#
+# `package` must match the loader grammar ([a-z0-9_-]); `repo-or-path`
+# is a git URL or a local path; `revision` is a commit, tag, or branch.
+#
+# `scripts/vendor.sh` fetches the pinned revision into vendor/.sources/
+# and materializes the repo root at vendor/<package>/ (lib.pp included).
+# The materialized copies are build artifacts and are gitignored; this
+# lock and vendor/README.md are the only tracked files here.
+#
+# Example:
+#
+#   weather git@github.com:sroerick/weather.git 0123456789abcdef
+#

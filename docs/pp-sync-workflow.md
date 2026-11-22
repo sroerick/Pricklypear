@@ -20,6 +20,12 @@ seed is *additive* (only fills missing names), so a fix hand-edited
 into `libs/` for a name that already exists on main is committed but
 **never deployed**. You cannot fix live by editing the mirror.
 
+External Nopales packages live under `vendor/` instead: a pinned
+`vendor/packages.lock` plus generated `vendor/<pkg>/lib.pp` trees
+(`scripts/vendor.sh`). `pp-sync` deliberately does not read or write
+`vendor/` — those packages keep their own repo workflow. The loader and
+boot seed search both roots, `libs/` first.
+
 ## Change-type decision table
 
 Every change has exactly one first-class path. Don't improvise; use the row.

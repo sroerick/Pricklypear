@@ -2102,6 +2102,89 @@
    )
   )
 
+  (subsection package-vendor
+   (doc "External Nopales packages as a second root: a pinned vendor lock, materialized libs/<pkg>-shaped trees, and a loader/seed search path")
+   (status partial)
+   (implements
+    image/lib/loader.ml
+    image/lib/boot_seed.ml
+    image/test/loader_test.ml
+    scripts/vendor.sh
+    scripts/verify_vendor.sh
+    scripts/dev.sh
+    scripts/measure-boot.sh
+    scripts/build-release-openbsd.ksh
+    vendor/packages.lock
+    vendor/README.md)
+   (verify
+    (build "dune build @all")
+    (test "image/test/loader_test.exe — PP_LIBS_PATH searches roots in order; a vendored package loads and its define works")
+    (test "image/test/loader_test.exe — full_seed_packages unions all roots, preferred core names still first")
+    (smoke "scripts/verify_vendor.sh — offline fetch/status/list/clean over a pinned local git fixture"))
+   (details
+    (doc (|
+         WHY
+
+         Product Nopales currently ships inside the Pricklypear repo
+         as libs/<pkg>/lib.pp. That keeps the boot seed, vault, and
+         release simple, but it also makes every product package a
+         PP-repo concern. The distribution target is external project
+         repos vendored into a deployment at a pinned revision.
+
+         THIS SLICE
+
+         libs/ stays the core + vault. vendor/ is a second package
+         root with the same shape: vendor/<pkg>/lib.pp. A lock
+         (vendor/packages.lock) pins package -> repo -> revision;
+         scripts/vendor.sh fetches into vendor/.sources/<pkg> and
+         materializes the repo root under vendor/<pkg>. The
+         materialized copies are gitignored build artifacts.
+
+         LOADER
+
+         Loader.libs_dirs is the search path: PP_LIBS_PATH when
+         set (colon-separated), else libs_dir () plus a sibling
+         vendor/ directory when it exists. First root wins for a
+         package name. Loader.library_path checks <root>/<name>/lib.pp
+         and <root>/<name>.pp in every root. Boot_seed.full_seed_packages
+         unions the roots; seed_package_priority still owns the core
+         order and non-preferred packages append alphabetically.
+
+         RELEASE
+
+         build-release-openbsd.ksh stages vendor/ beside libs/ (and
+         drops .sources). Because the loader defaults to the sibling
+         root, the release needs no PP_LIBS_PATH: PP_LIBS_DIR still
+         names libs/, and vendor/ is found next to it.
+
+         MONOREPO SIBLING
+
+         pp-borge is a monorepo project (monorepo/pp-borge), not a
+         vendor pin. It is a package root beside pp/libs: dev adds
+         ../pp-borge to PP_LIBS_PATH, and the release stages it under
+         vendor/pp-borge beside libs/. vendor/packages.lock stays for
+         truly external repos. Its pp-borge.borg is the project spec.
+
+         AUTHORITY (deliberately unchanged)
+
+         Live system/main remains the runtime source of truth for
+         package code, and pp-sync still owns libs/. A vendored
+         package is a pinned read projection, not a new write
+         authority. Making an external repo the authority would
+         change branching.vault-authority (pull/snapshot/land/reseed
+         homes) and is a separate decision.
+
+         NON-GOALS
+
+         - A dependency/requires graph or multi-file import forms:
+           package-surface still defers them.
+         - Version solving. The lock pins one revision per package.
+         - pp-sync writing vendor/. External packages keep their own
+           repo workflow until the authority decision is made.
+    |))
+   )
+  )
+
   (subsection function-observability
    (doc "Inspect functions: recursion/tail highlight, step counts, DB cost, big-O heuristic, on-demand LLM analysis, inside-out peel")
    (status implemented)

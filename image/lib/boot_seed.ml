@@ -73,28 +73,34 @@ let apply_profile ~(profile : string list) : string list =
   let extras = List.filter (fun n -> not (List.mem n preferred)) profile in
   preferred @ extras
 
+let packages_in_root (root : string) : string list =
+  try
+    Sys.readdir root
+    |> Array.to_list
+    |> List.filter (fun name ->
+           name <> ""
+           && name.[0] <> '_'
+           && name.[0] <> '.'
+           (* Alternate skins (theme-paper, …) load on demand via
+              theme/set → load-library; seeding them would only
+              thrash in-memory theme/* before rehydrate. *)
+           && not (String.starts_with ~prefix:"theme-" name)
+           &&
+           let pp =
+             Filename.concat root (Filename.concat name "lib.pp")
+           in
+           Sys.file_exists pp)
+    |> List.sort String.compare
+  with _ -> []
+
 let full_seed_packages () : string list =
   let preferred = seed_package_priority in
-  let root = Loader.libs_dir () in
+  (* Vendored packages are a second root (see Loader.libs_dirs): core
+     names keep their explicit priority, everything else is appended
+     alphabetically across all roots. *)
   let discovered =
-    try
-      Sys.readdir root
-      |> Array.to_list
-      |> List.filter (fun name ->
-             name <> ""
-             && name.[0] <> '_'
-             && name.[0] <> '.'
-             (* Alternate skins (theme-paper, …) load on demand via
-                theme/set → load-library; seeding them would only
-                thrash in-memory theme/* before rehydrate. *)
-             && not (String.starts_with ~prefix:"theme-" name)
-             &&
-             let pp =
-               Filename.concat root (Filename.concat name "lib.pp")
-             in
-             Sys.file_exists pp)
-      |> List.sort String.compare
-    with _ -> []
+    List.concat_map packages_in_root (Loader.libs_dirs ())
+    |> List.sort_uniq String.compare
   in
   let extras =
     List.filter (fun n -> not (List.mem n preferred)) discovered

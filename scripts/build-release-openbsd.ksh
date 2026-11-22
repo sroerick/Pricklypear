@@ -53,6 +53,21 @@ cp migrations/*.sql "$STAGE/migrations/"
 if [ -d libs ]; then
   cp -R libs/. "$STAGE/libs/"
 fi
+# Vendored Nopales packages (vendor/packages.lock is the source; the
+# generated package dirs are build artifacts). The loader searches a
+# sibling vendor/ root automatically, so no PP_LIBS_PATH is needed here.
+if [ -d vendor ]; then
+  mkdir -p "$STAGE/vendor"
+  cp -R vendor/. "$STAGE/vendor/"
+  rm -rf "$STAGE/vendor/.sources"
+fi
+# Monorepo sibling Nopales projects are package roots. Stage pp-borge
+# beside libs/ so the loader's sibling vendor/ default finds it without
+# a PP_LIBS_PATH in the deployed env.
+if [ -d "$PP_ROOT/../pp-borge" ]; then
+  mkdir -p "$STAGE/vendor/pp-borge"
+  cp -R "$PP_ROOT/../pp-borge/." "$STAGE/vendor/pp-borge/"
+fi
 # Instance profiles (spec_town_profile): staged BESIDE libs/ so the
 # runtime default (dirname(PP_LIBS_DIR)/profiles) finds profiles/<name>
 # without a PP_PROFILE_DIR override.
@@ -80,6 +95,7 @@ log "pack public source tree"
     --exclude='.borge-bugs' \
     --exclude='public-artifacts' \
     --exclude='build' \
+    --exclude='vendor/.sources' \
     --exclude='__pycache__' \
     --exclude='*.pyc' \
     --exclude='scripts/ship-to-vultr.ksh' \
@@ -92,7 +108,7 @@ log "pack public source tree"
 ) 2>/dev/null || {
   # OpenBSD tar may lack GNU long options — copy key trees
   log "WARN: full tar failed; using tree fallback"
-  for d in lisp common image migrations libs scripts docs borge profiles; do
+  for d in lisp common image migrations libs vendor scripts docs borge profiles; do
     [ -d "$d" ] && cp -R "$d" "$STAGE/src/"
   done
   for f in *.borg README.md AGENTS.md dune-project; do

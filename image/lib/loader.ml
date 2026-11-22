@@ -12,13 +12,47 @@ let libs_dir () : string =
       else if Sys.file_exists "../libs" then "../libs"
       else "libs"
 
+(** Roots searched for [lib.pp] package files, in precedence order.
+
+    [PP_LIBS_PATH] (colon-separated) is the explicit override. Otherwise
+    the primary [libs_dir] is searched first, then a sibling [vendor/]
+    directory when it exists. The sibling convention is what lets a
+    release stage extra packages without changing [PP_LIBS_DIR]: the
+    release has [libs/] and [vendor/] side by side.
+
+    First root wins for a package name. [libs_dir] itself stays the
+    primary root: profiles and the vault live beside it. *)
+let libs_dirs () : string list =
+  match Sys.getenv_opt "PP_LIBS_PATH" with
+  | Some path when String.trim path <> "" ->
+      let roots =
+        String.split_on_char ':' path
+        |> List.map String.trim
+        |> List.filter (fun d -> d <> "")
+      in
+      if roots = [] then [ libs_dir () ] else roots
+  | _ ->
+      let primary = libs_dir () in
+      let vendor = Filename.concat (Filename.dirname primary) "vendor" in
+      if Sys.file_exists vendor && Sys.is_directory vendor then
+        [ primary; vendor ]
+      else [ primary ]
+
 let library_path (name : string) : string =
-  let root = libs_dir () in
-  let a = Filename.concat root (Filename.concat name "lib.pp") in
-  let b = Filename.concat root (name ^ ".pp") in
-  if Sys.file_exists a then a
-  else if Sys.file_exists b then b
-  else a
+  let candidates =
+    List.concat_map
+      (fun root ->
+        [ Filename.concat root (Filename.concat name "lib.pp")
+        ; Filename.concat root (name ^ ".pp")
+        ])
+      (libs_dirs ())
+  in
+  match List.find_opt Sys.file_exists candidates with
+  | Some path -> path
+  | None -> (
+      match candidates with
+      | first :: _ -> first
+      | [] -> Filename.concat (libs_dir ()) (Filename.concat name "lib.pp"))
 
 (* i-1788670098: load-library takes a PACKAGE name, not a path.
    Filename.concat passes ".." components and absolute names through

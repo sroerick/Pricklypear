@@ -29,6 +29,13 @@ PP_DB_USER="${PP_DB_USER:-postgres}"
 PP_HTTP_PORT="${PP_HTTP_PORT:-18080}"
 PP_REPL_PORT="${PP_REPL_PORT:-17878}"
 PP_LIBS_DIR="${PP_LIBS_DIR:-$PP_ROOT/libs}"
+PP_LIBS_PATH="${PP_LIBS_PATH:-}"
+if [ -z "$PP_LIBS_PATH" ]; then
+  PP_LIBS_PATH="$PP_LIBS_DIR"
+  if [ -d "$PP_ROOT/../pp-borge" ]; then
+    PP_LIBS_PATH="$PP_LIBS_PATH:$PP_ROOT/../pp-borge"
+  fi
+fi
 PP_SOURCE_ROOT="${PP_SOURCE_ROOT:-$PP_ROOT}"
 PP_PUBLIC_DIR="${PP_PUBLIC_DIR:-$PP_ROOT/public-artifacts}"
 PP_STATIC_DIR="${PP_STATIC_DIR:-$PP_ROOT/image/static}"
@@ -111,6 +118,7 @@ start_and_time() {
   PP_DB_NAME="$PP_DB_NAME" \
   PP_DB_USER="$PP_DB_USER" \
   PP_LIBS_DIR="$PP_LIBS_DIR" \
+  PP_LIBS_PATH="$PP_LIBS_PATH" \
   PP_SOURCE_ROOT="$PP_SOURCE_ROOT" \
   PP_PUBLIC_DIR="$PP_PUBLIC_DIR" \
   PP_STATIC_DIR="$PP_STATIC_DIR" \

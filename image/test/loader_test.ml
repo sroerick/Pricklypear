@@ -46,7 +46,10 @@ let real_libs_dir () =
   Filename.concat dir "libs"
 
 let point_pp_libs_dir (dir : string) : unit =
-  Unix.putenv "PP_LIBS_DIR" dir
+  Unix.putenv "PP_LIBS_DIR" dir;
+  (* every test owns its roots; a leaked PP_LIBS_PATH from a previous
+     case must not turn a single-root test into a multi-root one. *)
+  Unix.putenv "PP_LIBS_PATH" ""
 
 (* Image prim table + env with prims auto-bound as VPrim names (the
    session attach shape); eval_form services Prim_call via Control_rim. *)
@@ -220,6 +223,75 @@ let test_discover_seed_packages () =
     [ "std"; "theme"; "ui"; "css"; "notes"; "zpkg" ];
   List.iter (fun d -> Unix.rmdir (Filename.concat tmp d)) dirs;
   Unix.rmdir tmp
+
+(* L6b (vendor slice): a second package root. libs stays the primary
+   root; PP_LIBS_PATH can add more, and the loader/seed discover both.
+   This is the runtime half of vendor/: a pinned package materialized at
+   vendor/<pkg>/lib.pp is indistinguishable from libs/<pkg>/lib.pp. *)
+let test_libs_path_multi_root () =
+  let tmp =
+    Filename.concat (Filename.get_temp_dir_name ())
+      (Printf.sprintf "pp_loader_roots_test_%d" (Unix.getpid ()))
+  in
+  let core = Filename.concat tmp "core" in
+  let vend = Filename.concat tmp "vend" in
+  let () =
+    if Sys.file_exists tmp then
+      ignore (Sys.command ("rm -rf " ^ Filename.quote tmp));
+    Unix.mkdir tmp 0o755;
+    Unix.mkdir core 0o755;
+    Unix.mkdir vend 0o755
+  in
+  let write_pkg root pkg body =
+    let dir = Filename.concat root pkg in
+    Unix.mkdir dir 0o755;
+    let oc = open_out (Filename.concat dir "lib.pp") in
+    output_string oc body;
+    close_out oc
+  in
+  write_pkg core "corepkg" "(define corepkg/hello 1)\n";
+  write_pkg vend "vpkg" "(define vpkg/hello 42)\n";
+  Unix.putenv "PP_LIBS_DIR" core;
+  Unix.putenv "PP_LIBS_PATH" (core ^ ":" ^ vend);
+  (* explicit roots are searched in order *)
+  Alcotest.(check (list string)) "roots in order" [ core; vend ]
+    (Pricklypear_image_lib.Loader.libs_dirs ());
+  Alcotest.(check string) "core package path"
+    (Filename.concat core (Filename.concat "corepkg" "lib.pp"))
+    (Pricklypear_image_lib.Loader.library_path "corepkg");
+  Alcotest.(check string) "vendor package path"
+    (Filename.concat vend (Filename.concat "vpkg" "lib.pp"))
+    (Pricklypear_image_lib.Loader.library_path "vpkg");
+  (* seed discovery unions both roots, preferred names still first *)
+  let pkgs = Pricklypear_image_lib.Boot_seed.full_seed_packages () in
+  List.iter
+    (fun p ->
+       Alcotest.(check bool) ("discovered " ^ p) true (List.mem p pkgs))
+    [ "corepkg"; "vpkg" ];
+  let pri = Pricklypear_image_lib.Session.seed_package_priority in
+  Alcotest.(check bool) "non-preferred after preferred" true
+    (List.length pkgs >= List.length pri
+     && not (List.mem "vpkg" (first_n (List.length pri) pkgs)));
+  (* and a vendored package loads through the real loader *)
+  let eval_form, env, prims = eval_form_of () in
+  (match
+     Pricklypear_image_lib.Loader.load_library ~eval_form "vpkg"
+   with
+   | Ok msg ->
+       Alcotest.(check bool) "loaded vendored" true
+         (contains_seq msg "loaded 1 form(s)")
+   | Error e -> Alcotest.fail ("vendored package failed: " ^ e));
+  let v =
+    Pricklypear_image_lib.Control_rim.run ~prims (fun () ->
+        Pricklypear_lisp.Eval.eval
+          ~budget:(Pricklypear_lisp.Eval.make_budget ())
+          ~prims:Pricklypear_lisp.Eval.empty_prims env (Var "vpkg/hello"))
+  in
+  Alcotest.(check string) "vendored define works" "42"
+    (Pricklypear_lisp.Reader.pp_value v);
+  (* restore a real root for the tests that follow *)
+  point_pp_libs_dir (real_libs_dir ());
+  ignore (Sys.command ("rm -rf " ^ Filename.quote tmp))
 
 (* Drop top-level (package <name> (export …)) metadata forms — a
    SESSION-level form (session.ml intercepts it in its eval_form BEFORE
@@ -415,6 +487,7 @@ let () =
         ; ("strip-line-comments", `Quick, test_strip_line_comments)
         ; ("seed-priority-order", `Quick, test_seed_priority_order)
         ; ("discover-seed-packages", `Quick, test_discover_seed_packages)
+        ; ("libs-path-multi-root", `Quick, test_libs_path_multi_root)
         ; ("real-std-loads", `Quick, test_real_std_loads)
         ; ("library-name-grammar", `Quick, test_library_name_grammar)
         ; ("load-library-valid", `Quick, test_load_library_valid)

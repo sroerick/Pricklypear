@@ -435,6 +435,17 @@ auth is **in-process** in the image.
 - `lisp/` — pure interpreter for Nopales (no I/O). Testable with no services.
 - `common/` — pure shared types (incl. `auth_types.ml`).
 - `migrations/` — SQL applied by `scripts/dev.sh` (and deploy hooks).
+- `libs/` — core Nopales packages and the vault (`libs/<pkg>/lib.pp`).
+  The boot seed and `pp-sync` own this tree.
+- `vendor/` — external Nopales packages pinned by
+  `vendor/packages.lock`; `scripts/vendor.sh` materializes each repo at
+  `vendor/<pkg>/lib.pp` (generated, gitignored). The loader searches
+  `libs/` first, then a sibling `vendor/`; `PP_LIBS_PATH` overrides the
+  roots. Live `system/main` remains the runtime authority, and `pp-sync`
+  still writes only `libs/`.
+  Monorepo sibling projects (`../pp-borge/`, …) are package roots too:
+  `scripts/dev.sh` adds them to `PP_LIBS_PATH`, and the release stages
+  them under `vendor/` beside `libs/`.
 - `image/` — the single unix binary: Nopales, REPL, htmx, Postgres, **auth**.
   Auth modules: `image/lib/auth_password.ml`, `image/lib/auth_store.ml`.
 - `scripts/` — dev orchestration. `scripts/dev.sh start` brings up PG
