@@ -108,4 +108,4 @@ Do not add a fifth/sixth literal to `tree_seed_types()` for a one-off corpus:
 that is the drift path 016 and `i-seed-list-3copies-2026-08-12` exist to
 close, and it makes every fresh environment depend on a migration edit.
    |))))
-  ))
+)

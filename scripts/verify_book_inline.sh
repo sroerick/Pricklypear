@@ -27,7 +27,11 @@ fail=0
 # rule. If a chapter ever gains its own (inline ...) directive the walk
 # is no longer flat — fail loudly so the exactly-once counting below
 # stays honest.
-nested=$(grep -l '(inline' borge/*.borg 2>/dev/null || true)
+# A directive is a form at the start of a line. Do not match prose that
+# happens to contain "(inline ..." inside an agent note or doc string
+# (filmstrip.borg's 2026-09-16 note did, and made this check fail on a
+# clean tree).
+nested=$(grep -lE '^[[:space:]]*\(inline[[:space:]]' borge/*.borg 2>/dev/null || true)
 if [ -n "$nested" ]; then
   echo "FAIL: nested (inline ...) directives inside borge/ — the canonical walk is no longer root-flat; extend this check to follow the inline tree:"
   echo "$nested"

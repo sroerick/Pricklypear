@@ -348,7 +348,7 @@
     PATH when the final segment was neither 32 nor 36 chars (PP substring
     takes (start LENGTH); the dot probe read (+ i 1) CHARS), so a ghost row
     carried a path where an id belongs. It now returns the final segment
-    verbatim.
+    verbatim.")
   (implements "libs/workstreams/lib.pp (workstreams/factory-counts, workstreams/factory-html; pulse-page gains the block)")
   (* agent note (|2026-10-25: the operator-side monitor factory-watch.py lives
      in the workspace, NOT in this image — it reads the same run rows over
@@ -364,7 +364,7 @@
      (test "todo/item/all returns one row per id and todo/item/active is exactly the non-terminal subset (probe 2026-10-26: 371 rows / 371 ids, active 307)"
            "a count over todo/item/active matches workstreams/pulse-nodes' non-archived count for the same identity (307 = 307)"
            "todo/list/all returns one row per list (5 rows / 5 ids / 5 titles)"
-           "todo/tree/path-id returns the final path segment for a non-UUID tail, never the whole path")))
+           "todo/tree/path-id returns the final path segment for a non-UUID tail, never the whole path"))))
 
  (section default-pipeline
   (doc "The GLOBAL DEFAULT pipeline is the ENGINEERING taxonomy, not the
