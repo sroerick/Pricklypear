@@ -83,7 +83,26 @@ let load_source ~(rt : t) (src : string) : unit =
     (rt.seam.run_in_rim (fun () ->
          let v =
            try
-             Eval.read_eval_all_direct ~prims:rt.seam.prims rt.seam.env src
+             (* (package ...) is the image's manifest/directive form.
+                The thin glochid runtime has no package registry, but a
+                package body may wrap defines; keep the non-clause
+                children and drop the manifest clauses (version, requires,
+                provides, export, contributes, doc). *)
+             let forms = Reader.read_all src in
+             let expanded =
+               List.concat_map
+                 (function
+                   | App (Var "package", _ :: rest) ->
+                       List.filter
+                         (fun f -> not (Package_manifest.is_clause f))
+                         rest
+                   | f -> [ f ])
+                 forms
+             in
+             let text =
+               String.concat "\n" (List.map Reader.pp_expr expanded)
+             in
+             Eval.read_eval_all_direct ~prims:rt.seam.prims rt.seam.env text
            with
            | Ast.Interp_error ie ->
                Printf.eprintf "boot-load: %s\n%!" (Ast.pp_interp_error ie);
