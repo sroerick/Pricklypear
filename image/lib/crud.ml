@@ -1915,11 +1915,14 @@ let absolute_tree_path (path : string) : bool =
 
 (* Root-level claims (paths under spec. and spec_origin.) are versioned
    tree nodes, but they are neither code nor datum, so the absolute-path
-   branch above does not cover them. Try the literal path FIRST for every
-   non-absolute read; only fall through to the branch lens suffix when no
-   version exists at the literal path. This is what lets tree/at + tree/log
-   read a pinned spec claim's history (pp-borge pins/materialize) without
-   changing lens reads for fn/type/route suffixes. *)
+   branch above does not cover them. They are literal paths, not lens
+   suffixes; read them at the literal path. Every other relative path keeps
+   the existing branch-lens resolution. This is what lets tree/at + tree/log
+   read a pinned spec claim's history (pp-borge pins/materialize). *)
+let root_claim_path (path : string) : bool =
+  String.starts_with ~prefix:"spec." path
+  || String.starts_with ~prefix:"spec_origin." path
+
 let exact_versioned_head conn ~(path : string) ~(at_gen : int64 option) =
   match at_gen with
   | Some g -> Tree_store.versioned_head conn ~path ~at_gen:g ()
@@ -1927,20 +1930,18 @@ let exact_versioned_head conn ~(path : string) ~(at_gen : int64 option) =
 
 let versioned_read conn ~(store : Store.t) ~(path : string)
     ~(at_gen : int64 option) =
-  if absolute_tree_path path then exact_versioned_head conn ~path ~at_gen
+  if absolute_tree_path path || root_claim_path path then
+    exact_versioned_head conn ~path ~at_gen
   else
-    match exact_versioned_head conn ~path ~at_gen with
-    | Some _ as v -> v
-    | None ->
-        (* relative logical suffix -> resolve effective path across the
-           branch lens chain (closest-wins), then read as-of-gen. *)
-        let mk_path bid =
-          match Tree_store.lens_suffix_path ~branch_id:bid path with
-          | Some p -> p
-          | None -> ""
-        in
-        Tree_store.lens_versioned_in_chain conn ~at_gen ~mk_path
-          (lens_chain store)
+    (* relative logical suffix -> resolve effective path across the
+       branch lens chain (closest-wins), then read as-of-gen. *)
+    let mk_path bid =
+      match Tree_store.lens_suffix_path ~branch_id:bid path with
+      | Some p -> p
+      | None -> ""
+    in
+    Tree_store.lens_versioned_in_chain conn ~at_gen ~mk_path
+      (lens_chain store)
 
 let tree_gen_read (store : Store.t) ~(path : string) ~(gen : int64) : value =
   with_tree_tx store ~none:(fun () -> VNil) (fun conn ->
@@ -2055,24 +2056,21 @@ let require_reads_as_of_gen (name : string) : unit =
     gen-read/gen-diff use for relative paths. *)
 let versions_for_path (store : Store.t) (conn : Store_db.conn)
     ~(path : string) : Tree_store.version list =
-  if absolute_tree_path path then Tree_store.versioned_history conn ~path ()
+  if absolute_tree_path path || root_claim_path path then
+    Tree_store.versioned_history conn ~path ()
   else
-    (* literal root claim path first, then the branch lens suffix *)
-    match Tree_store.versioned_history conn ~path () with
-    | _ :: _ as versions -> versions
-    | [] ->
-        let mk_path bid =
-          match Tree_store.lens_suffix_path ~branch_id:bid path with
-          | Some p -> p
-          | None -> ""
-        in
-        match
-          Tree_store.lens_versioned_in_chain conn ~at_gen:None ~mk_path
-            (lens_chain store)
-        with
-        | Some v ->
-            Tree_store.versioned_history conn ~path:v.Tree_store.v_path ()
-        | None -> []
+    let mk_path bid =
+      match Tree_store.lens_suffix_path ~branch_id:bid path with
+      | Some p -> p
+      | None -> ""
+    in
+    match
+      Tree_store.lens_versioned_in_chain conn ~at_gen:None ~mk_path
+        (lens_chain store)
+    with
+    | Some v ->
+        Tree_store.versioned_history conn ~path:v.Tree_store.v_path ()
+    | None -> []
 
 (* (tree/log path) -> VList of version-JSON strings for that path, NEWEST
    gen first (any compartment: absolute b.*/data.* path, a literal root
