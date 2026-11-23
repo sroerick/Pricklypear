@@ -60,6 +60,14 @@ if [ -f "$PLUGINS/pp-borge/import_corpus.py" ]; then
   ok "pp-borge importer self-test"
 fi
 
+# pp-borge's work board consumes borge's fact stream and derives stable
+# per-claim indexes, with status inheritance and no todo-card generation.
+if [ -f "$PLUGINS/pp-borge/project_work.py" ]; then
+  python3 "$PLUGINS/pp-borge/project_work.py" --self-test \
+    || fail "pp-borge project_work.py --self-test failed"
+  ok "pp-borge work projection self-test"
+fi
+
 # pp-borge stages a pinned claim at .borg/cards/<cid>.borg; the host write is
 # pure and must keep writing exact bytes (and never a file on a skip).
 if [ -f "$PLUGINS/pp-borge/materialize.py" ]; then
