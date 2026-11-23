@@ -59,7 +59,10 @@
            habitat (chapter editing, marginals, propose-a-patch) is
            a v2 question, explicitly deferred — same reserve as
            habitat-workflow.book-view's "two books merge" line, now
-           upgraded from open question to named v2.
+           upgraded from open question to named v2. The typed document
+           contract for that v2 question is fixed in document-subtypes
+           below; generic notes writes to book/work projections remain
+           forbidden, not an undocumented editing shortcut.
 
         3. ONE PARSER, TWO PROJECTIONS. borge (lib/lang) remains the
            only parser of .borg. `borge book print` and the new
@@ -181,6 +184,76 @@
           /book UI toggle. The toggle IS the "spec vs textbook"
           argument made tangible.
    |))))
+
+  (subsection document-subtypes
+   (doc "notes and Borge as typed subtypes of one document family: shared
+         reading abstractions, distinct authorities and write surfaces")
+   (status planned)
+   (verify
+    (smoke "a NoteDocument and a BorgeDocument both render the shared title/prose/children view without dropping Borge status or provenance")
+    (smoke "the generic notes save path refuses BorgeDocument and creates no claim or projection version")
+    (smoke "a Borge edit that fails Borge parse writes no new claim version and moves no card pin")
+    (smoke "a stale expected spec_version refuses edit and creates no Git, claim, or projection divergence"))
+   (details (doc (|
+        DECISION (2026-11-23): unified reading does NOT require a unified
+        storage format, and shared s-expression syntax does NOT make notes
+        and .borg interchangeable documents. This is a domain subtype and
+        capability contract, not a requirement for literal inheritance in
+        the row store.
+
+        DOCUMENT FAMILY (the shared read-model boundary)
+
+          identity, revision, title, source-reference, capabilities, and a
+          readable title/prose/children tree. Links and compositions carry
+          document references, never converted copies. Notes and Borge can
+          share viewing, navigation, outline composition, and provenance
+          rendering through this contract.
+
+          NoteDocument adds slug, garden, outline nodes, and note-owned
+          write semantics. Its notes save path applies only to this subtype.
+
+          BorgeDocument adds claim, spec_version, project, Borge AST,
+          section identities, statuses, implements/verify blocks, convention,
+          and Git provenance. A Borge requirement reference names claim +
+          section (+ explicit version for execution), not a copied todo card.
+
+        AUTHORITY + PROJECTIONS
+
+        - Canonical Borge text and its claim/version history are the live
+          authority described in habitat-loader. spec_work and data.book
+          rows are regenerated typed projections, never independent write
+          authorities; disposable overlap between such projections should
+          be consolidated rather than developed into parallel books.
+        - notes rows remain independently authored NoteDocuments, not
+          Borge mirrors. A course remains the existing composition example:
+          it references chapter identities, preserving the same distinction.
+        - Factory branches, reviews, leases, verdicts, and landing state are
+          separate execution metadata keyed by Borge requirement reference.
+          Borge statuses are not todo states; implemented is not automatic
+          DONE, and board projection alone enables no provider execution.
+        - Different authorities on the same side stay separately replicated
+          to an approved document (never intermediary-owned). Live claims
+          and Git .borg receive only explicit reconciled writes; projection
+          rows from an importer are never the editing target.
+
+        FUTURE V2 WRITE PROTOCOL (planned; no current editing authority)
+
+        - Raw-text editing may cover the complete format after Borge parse
+          validation. Structured section editing (doc/status/new section)
+          uses Borge's AST and canonical writer; borge remains the ONLY
+          parser, as required by ONE PARSER, TWO PROJECTIONS above.
+        - A write begins with claim + expected spec_version, validates and
+          emits the whole .borg, parses it again, then explicitly reconciles
+          a new claim version with the reviewed monorepo path. A parse
+          failure writes nothing anywhere. A stale expected version is an
+          obituary-style refusal, never a silent clobber. Existing card pins
+          move only after an explicit re-pin; projections regenerate after
+          the accepted claim change.
+        - Until this protocol is implemented, habitat book/work surfaces
+          stay READ-ONLY. Do not expose Borge documents through ordinary
+          notes editing, reinterpret Borge status as note/todo state, or add
+          a second Borge parser to make the shared reader appear writable.
+    |))))
 
   (subsection eval-examples
    (doc "read-time eval of nopales example blocks in the reader's session; restricted prim table; (book/verify) as the book's self-test")
