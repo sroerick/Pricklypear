@@ -186,6 +186,7 @@ let pure_prims = [
   "soup/parent"; "soup/diff"; "soup/apply-parts!";
   "impact-clear"; "impact-mark";  (* session-memory impact queue *)
   "route/lookup";    (* session-memory route table lookup *)
+  "contributions";   (* session-memory shell contributions from package manifests *)
 ]
 
 let read_db_prims = [

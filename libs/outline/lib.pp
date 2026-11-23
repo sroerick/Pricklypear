@@ -1,6 +1,10 @@
 ;; package outline -- exported from live branch system/main
 ;; Sync: scripts/pp-sync.sh status|pull|snapshot
 
+(package outline
+  (contributes
+    (css outline/css)))
+
 (define outline/action-btn
   (lambda
     (slug nid op label class show-archived)

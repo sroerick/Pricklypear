@@ -443,9 +443,13 @@ auth is **in-process** in the image.
   `libs/` first, then a sibling `vendor/`; `PP_LIBS_PATH` overrides the
   roots. Live `system/main` remains the runtime authority, and `pp-sync`
   still writes only `libs/`.
-  Monorepo sibling projects (`../pp-borge/`, …) are package roots too:
-  `scripts/dev.sh` adds them to `PP_LIBS_PATH`, and the release stages
-  them under `vendor/` beside `libs/`.
+  Monorepo plugins (`<repo>/plugins/<pkg>/lib.pp`, e.g.
+  `../plugins/pp-borge/`) are package roots too: `scripts/dev.sh` adds
+  `<repo>/plugins` to `PP_LIBS_PATH`, and the release stages each package
+  under `vendor/` beside `libs/`. A package may declare `(version …)` and
+  `(requires …)`; the boot seed topologically sorts `requires` (candidate
+  order is the tiebreak) and excludes missing/cyclic packages loudly.
+  `nopales-check --packages` resolves the same graph statically.
 - `image/` — the single unix binary: Nopales, REPL, htmx, Postgres, **auth**.
   Auth modules: `image/lib/auth_password.ml`, `image/lib/auth_store.ml`.
 - `scripts/` — dev orchestration. `scripts/dev.sh start` brings up PG

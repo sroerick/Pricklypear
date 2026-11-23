@@ -1,6 +1,10 @@
 ;; package astro -- exported from live branch system/main
 ;; Sync: scripts/pp-sync.sh status|pull|snapshot
 
+(package astro
+  (contributes
+    (home astro/widget)))
+
 (define astro/date-parts
   (lambda
     (d)

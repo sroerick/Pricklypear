@@ -2,4 +2,4 @@
  (name test_check)
  (modules test_check)
  (libraries pp_nopales_check)
- (deps (source_tree fixtures)))
+ (deps (source_tree fixtures) (source_tree package_fixtures)))

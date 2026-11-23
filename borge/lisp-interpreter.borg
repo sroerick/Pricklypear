@@ -2111,6 +2111,7 @@
     image/test/loader_test.ml
     scripts/vendor.sh
     scripts/verify_vendor.sh
+    scripts/verify_plugins.sh
     scripts/dev.sh
     scripts/measure-boot.sh
     scripts/build-release-openbsd.ksh
@@ -2119,8 +2120,10 @@
    (verify
     (build "dune build @all")
     (test "image/test/loader_test.exe — PP_LIBS_PATH searches roots in order; a vendored package loads and its define works")
+    (test "image/test/loader_test.exe — the monorepo plugins/<pkg>/lib.pp root resolves")
     (test "image/test/loader_test.exe — full_seed_packages unions all roots, preferred core names still first")
-    (smoke "scripts/verify_vendor.sh — offline fetch/status/list/clean over a pinned local git fixture"))
+    (smoke "scripts/verify_vendor.sh — offline fetch/status/list/clean over a pinned local git fixture")
+    (smoke "scripts/verify_plugins.sh — plugins/<pkg>/lib.pp layout and the dev/release roots"))
    (details
     (doc (|
          WHY
@@ -2159,11 +2162,12 @@
 
          MONOREPO SIBLING
 
-         pp-borge is a monorepo project (monorepo/pp-borge), not a
-         vendor pin. It is a package root beside pp/libs: dev adds
-         ../pp-borge to PP_LIBS_PATH, and the release stages it under
-         vendor/pp-borge beside libs/. vendor/packages.lock stays for
-         truly external repos. Its pp-borge.borg is the project spec.
+         pp-borge is a monorepo plugin (wyo/plugins/pp-borge), not a
+         vendor pin. plugins/ is a package root beside pp/libs: dev adds
+         <repo>/plugins to PP_LIBS_PATH, and the release stages each
+         plugins/<pkg> under vendor/<pkg> beside libs/.
+         vendor/packages.lock stays for truly external repos. Its
+         pp-borge.borg is the project spec.
 
          AUTHORITY (deliberately unchanged)
 
@@ -2176,11 +2180,97 @@
 
          NON-GOALS
 
-         - A dependency/requires graph or multi-file import forms:
-           package-surface still defers them.
          - Version solving. The lock pins one revision per package.
          - pp-sync writing vendor/. External packages keep their own
            repo workflow until the authority decision is made.
+    |))
+   )
+  )
+
+  (subsection package-manifest
+   (doc "The (package …) form is the package manifest: name, version,\n    requires, provides, export and contributes. The boot seed reads it and\n    topologically sorts; a missing or cyclic requirement is excluded\n    loudly instead of seeding a caller without its dependency.")
+   (status implemented)
+   (implements
+    lisp/lib/package_manifest.ml
+    lisp/test/package_manifest_test.ml
+    image/lib/boot_seed.ml
+    image/test/seed_order_test.ml
+    image/lib/session.ml
+    nopales-check/lib/check.ml
+    nopales-check/test/test_check.ml)
+   (verify
+    (test "package_manifest_test — version/requires/provides/export/contributes parse; no form = Ok None")
+    (test "seed_order_test — requires sort first; missing deps remove dependents; cycles are excluded")
+    (test "session_split_test — a package's css/nav/home/app contributions reach (contributions 'kind) and a later session inherits them; a re-load replaces the package's slots")
+    (test "nopales-check test — --packages reports missing/cyclic/duplicate manifests and undeclared calls")
+    (smoke "nopales-check --packages libs ../plugins — no package findings on the shipped corpus"))
+   (details
+    (doc (|
+         SHAPE
+
+           (package notes
+             (version "0.3.0")
+             (requires std html css outline tree structed roam)
+             (provides notes/doc notes/page)
+             (contributes
+               (css notes/css notes/tree-css)
+               (nav notes/capture/nav)
+               (home notes/home)
+               (app "n" "Notes" "one line" "/notes"))
+             (export notes/doc/get notes/doc/upsert))
+
+         Clauses are metadata. session.ml sets current_package BEFORE
+         evaluating any non-clause form inside the package body, so a
+         wrapped define (quake, stream) is stamped with its own package;
+         it skips version/requires/provides/export/contributes/doc rather
+         than evaluating them as calls.
+
+         CONTRIBUTIONS
+
+         css/nav/home name package functions; a css item may also be a
+         value (a css/sheet, e.g. notes/tree-css), which the shell uses
+         as-is. (contributions 'kind) resolves the names against the live
+         session env and returns the values (vlambdas, CSS values, or app
+         tile JSON), skipping anything the package did not bind. Core
+         libs/ui no longer calls notes/css, todo/css, weather/widget,
+         notes/capture/nav, … — it composes the registry.
+
+         The registry is host metadata, not a per-session binding: the
+         boot seed evaluates the package forms in the boot session, so
+         Package_manifest keeps a global registry that Session.make
+         copies for every later identity. register_contributions is
+         idempotent and keyed by contribution, so load-library/reseed
+         replaces a package's own slots and drops clauses the new
+         manifest no longer declares.
+
+         SEED ORDER
+
+         Boot_seed.resolve_seed_order takes discovery order (the preferred
+         list, then alphabetical extras) as the tiebreak, builds requires
+         edges, and runs Kahn's algorithm. Missing requirements remove the
+         package and its dependents (fixed point); cycles are removed and
+         named. Both land in the existing loud BOOT SEED FAILURES line, so
+         a broken plugin does not take the rest of the boot down.
+
+         CHECKER
+
+         nopales-check --packages is opt-in. It resolves requires against
+         the corpus (libs plus any plugins root), reports missing/cyclic/
+         duplicate/bad manifests as ERROR, and an undeclared cross-package
+         call as WARN — only for files that declare a manifest, so the
+         older packages do not become a flag day. A name the file defines
+         itself is not a cross-package reference (std defines html/…).
+
+         NON-GOALS
+
+         - Version solving: (requires (pkg ">=1")) records the name and
+           ignores the constraint until a resolver exists.
+         - Multi-file packages and import forms: one lib.pp per package.
+         - Filmstrip launcher consumption of app tiles: the app kind is
+           registered and exposed, but filmstrip/apps still owns its host
+           seam (deferred).
+         - Menu route taxonomy: ui/menu still lists the default habitat's
+           route names; it no longer calls app package functions.
     |))
    )
   )

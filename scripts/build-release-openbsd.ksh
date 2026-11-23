@@ -35,7 +35,8 @@ eval "$(opam env --switch=poohstack --set-switch)"
 export LIBRARY_PATH="/usr/local/lib${LIBRARY_PATH:+:${LIBRARY_PATH}}"
 
 log "dune build"
-dune build image/bin/main.exe glochid/bin/main.exe
+# --root: under the wyo monorepo the parent dune project excludes pp/.
+dune build --root "$PP_ROOT" image/bin/main.exe glochid/bin/main.exe
 
 IMG_BIN="$PP_ROOT/_build/default/image/bin/main.exe"
 [ -f "$IMG_BIN" ] || { log "missing binary: $IMG_BIN"; exit 1; }
@@ -61,12 +62,22 @@ if [ -d vendor ]; then
   cp -R vendor/. "$STAGE/vendor/"
   rm -rf "$STAGE/vendor/.sources"
 fi
-# Monorepo sibling Nopales projects are package roots. Stage pp-borge
-# beside libs/ so the loader's sibling vendor/ default finds it without
-# a PP_LIBS_PATH in the deployed env.
-if [ -d "$PP_ROOT/../pp-borge" ]; then
-  mkdir -p "$STAGE/vendor/pp-borge"
-  cp -R "$PP_ROOT/../pp-borge/." "$STAGE/vendor/pp-borge/"
+# Monorepo Nopales plugins live at <repo>/plugins/<pkg>/lib.pp. Stage
+# each package beside libs/ (under vendor/) so the loader's sibling
+# vendor/ default finds it without a PP_LIBS_PATH in the deployed env.
+PLUGINS_DIR="$PP_ROOT/../plugins"
+if [ -d "$PLUGINS_DIR" ]; then
+  for pkgdir in "$PLUGINS_DIR"/*; do
+    [ -d "$pkgdir" ] || continue
+    pkg=$(basename "$pkgdir")
+    [ -f "$pkgdir/lib.pp" ] || continue
+    if [ -e "$STAGE/vendor/$pkg" ]; then
+      log "duplicate package $pkg: monorepo plugin collides with vendor/ entry"
+      exit 1
+    fi
+    mkdir -p "$STAGE/vendor/$pkg"
+    cp -R "$pkgdir/." "$STAGE/vendor/$pkg/"
+  done
 fi
 # Instance profiles (spec_town_profile): staged BESIDE libs/ so the
 # runtime default (dirname(PP_LIBS_DIR)/profiles) finds profiles/<name>

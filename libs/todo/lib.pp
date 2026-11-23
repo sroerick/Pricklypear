@@ -124,7 +124,9 @@
       todo/undep
     todo/ui/handle-post
     todo/item/unassign
-  ))
+  )
+  (contributes
+    (css todo/css)))
 
 (define lookbook/add-elements
   (lambda

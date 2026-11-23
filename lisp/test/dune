@@ -77,3 +77,8 @@
  (name ast_body_codec_test)
  (modules ast_body_codec_test)
  (libraries pricklypear-lisp alcotest))
+
+(test
+ (name package_manifest_test)
+ (modules package_manifest_test)
+ (libraries pricklypear-lisp alcotest))

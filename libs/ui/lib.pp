@@ -374,30 +374,32 @@
       "/* ui/css */\n"
       (css/render
         (css/sheet
-          (list
-            (css/use (theme/vars))
-            (css/use (ui/theme))
-            (css/use (ui/theme-header))
-            (css/use (ui/theme-table))
-            (css/use (ui/theme-form))
-            (css/use (ui/theme-button))
-            (css/use (outline/css))
-            (css/use (notes/css))
-            (css/use (todo/css))
-            (css/use (calendar/css))
-            (css/use (weather/css))
-            (css/use (layout/card-css))
-              (css/use (chat/css))
-            (css/use (bible/css))
-            (css/use (ui/theme-menu))
-            (css/use (ui/theme-branches))
-            (css/use (ui/theme-code-browser))
-            (css/use (ui/theme-capture))
-            (css/use (ui/theme-mobile))
-            (css/use (ui/theme-nav))
-            (css/use notes/tree-css)
-            (css/use (theme/extra)))))))
-  "Render the combined UI stylesheet.")
+          (append
+            (list
+              (css/use (theme/vars))
+              (css/use (ui/theme))
+              (css/use (ui/theme-header))
+              (css/use (ui/theme-table))
+              (css/use (ui/theme-form))
+              (css/use (ui/theme-button))
+              (css/use (layout/card-css))
+              (css/use (ui/theme-menu))
+              (css/use (ui/theme-branches))
+              (css/use (ui/theme-code-browser))
+              (css/use (ui/theme-capture))
+              (css/use (ui/theme-mobile))
+              (css/use (ui/theme-nav)))
+            (append
+              (list/map
+                (lambda
+                  (f)
+                  (if
+                    (string-eq (type-of f) "lambda")
+                    (css/use (apply f (list)))
+                    (css/use f)))
+                (contributions 'css))
+              (list (css/use (theme/extra)))))))))
+  "Render the combined UI stylesheet: core chrome plus package css contributions.")
 
 (define ui/elm
   (lambda
@@ -417,8 +419,17 @@
 (define ui/home
   (lambda
     ()
-    (html/page (list (weather/widget) (astro/widget))))
-  "Render the home page with weather and astro widgets.")
+    (let
+      ((widgets
+         (list/map
+           (lambda (f) (apply f (list)))
+           (contributions 'home))))
+      (html/page
+        (if
+          (null? widgets)
+          (list (html/p "Nothing installed yet."))
+          widgets))))
+  "Render the home page from package home-widget contributions.")
 
 (define ui/home-style
   (lambda
@@ -447,56 +458,63 @@
 (define ui/menu
   (lambda
     ()
-    (list
-      (menu/link "home" "/")
-      (menu/raw (notes/capture/nav))
-      (menu/group
-        "apps"
-        (list
-          (menu/group
-            "writing"
-            (list
-              (menu/link "notes" "/notes")
-              (menu/link "inbox" "/notes?slug=inbox")
-              (menu/link "plans" "/plans")
-              (menu/link "bookmarks" "/bookmarks")))
-          (menu/group
-            "study"
-            (list
-              (menu/link "dabar" "/dabar")
-              (menu/link "strongs" "/strongs")
-              (menu/link "flashcards" "/flashcards")))
-          (menu/group
-            "tasks"
-            (list
-              (menu/link "todos" "/todos")
-              (menu/link "calendar" "/calendar")))
-          (menu/group
-            "connect"
-            (list
-              (menu/link "contacts" "/contacts")
-              (menu/link "chat" "/chat")))
-          (menu/group
-            "tools"
-            (list
-              (menu/link "weather" "/weather")
-              (menu/link "agent" "/agent")
-              (menu/link "calories" "/cal")))))
-      (menu/group
-        "system"
-        (list
-          (menu/link "functions" "/bindings")
-          (menu/link "ref" "/ref")
-          (menu/link "pages" "/pages")
-          (menu/link "data" "/types")
-          (menu/link "branches" "/branches")
-          (menu/link "analytics" "/analytics")
-          (menu/link "llm keys" "/settings/keys")
-          (menu/link "ssh keys" "/settings/ssh")
-          (menu/link "themes" "/settings/theme")
-          (menu/link "about" "/about")
-          (menu/link "repl" "/repl")))))
-  "Build the site navigation menu structure.")
+    (let
+      ((navs
+         (list/map
+           (lambda (f) (menu/raw (apply f (list))))
+           (contributions 'nav)))
+       (core
+         (list
+           (menu/group
+             "apps"
+             (list
+               (menu/group
+                 "writing"
+                 (list
+                   (menu/link "notes" "/notes")
+                   (menu/link "inbox" "/notes?slug=inbox")
+                   (menu/link "plans" "/plans")
+                   (menu/link "bookmarks" "/bookmarks")))
+               (menu/group
+                 "study"
+                 (list
+                   (menu/link "dabar" "/dabar")
+                   (menu/link "strongs" "/strongs")
+                   (menu/link "flashcards" "/flashcards")))
+               (menu/group
+                 "tasks"
+                 (list
+                   (menu/link "todos" "/todos")
+                   (menu/link "calendar" "/calendar")))
+               (menu/group
+                 "connect"
+                 (list
+                   (menu/link "contacts" "/contacts")
+                   (menu/link "chat" "/chat")))
+               (menu/group
+                 "tools"
+                 (list
+                   (menu/link "weather" "/weather")
+                   (menu/link "agent" "/agent")
+                   (menu/link "calories" "/cal")))))
+           (menu/group
+             "system"
+             (list
+               (menu/link "functions" "/bindings")
+               (menu/link "ref" "/ref")
+               (menu/link "pages" "/pages")
+               (menu/link "data" "/types")
+               (menu/link "branches" "/branches")
+               (menu/link "analytics" "/analytics")
+               (menu/link "llm keys" "/settings/keys")
+               (menu/link "ssh keys" "/settings/ssh")
+               (menu/link "themes" "/settings/theme")
+               (menu/link "about" "/about")
+               (menu/link "repl" "/repl"))))))
+      (append
+        (list (menu/link "home" "/"))
+        (append navs core))))
+  "Build the site navigation menu structure: core taxonomy plus package nav contributions.")
 
 (define ui/nav
   (lambda

@@ -32,9 +32,11 @@
 
     Severities:
       ERROR  reader error, arity mismatch, unbound package-qualified name,
-             perflint RED.
+             perflint RED, bad/duplicate/missing/cyclic package manifest
+             ([--packages]).
       WARN   unknown qualified callable, unbound bare name, failed macro
-             expansion, perflint AMBER, advisory txn hint ([--txn]).
+             expansion, perflint AMBER, advisory txn hint ([--txn]),
+             undeclared cross-package dependency ([--packages]).
     Exit: 0 clean, 1 any ERROR (or any WARN under [--strict]), 2 unreadable. *)
 
 module Ast = Pricklypear_lisp.Ast
@@ -238,7 +240,7 @@ let add ctx ~line ~severity ~code ~name ~message =
   (* One unknown callable per file is enough to act on; arity, unbound and perf
      findings are per site, because each site is a separate fix. *)
   let key =
-    if code = "unknown-callable"
+    if code = "unknown-callable" || code = "package-undeclared"
     then Printf.sprintf "%s|%s|%s" ctx.file code name
     else if code = "txn"
     then Printf.sprintf "%s|%s|%s|%d|%s" ctx.file code name line message
@@ -763,12 +765,171 @@ let apply_baseline findings base =
   (kept, List.length findings - List.length kept)
 
 (* ------------------------------------------------------------------ *)
+(* package pass: manifest dependencies                                *)
+(* ------------------------------------------------------------------ *)
+
+(** Qualified names in a file with their lines, skipping [quote] and the
+    [(package …)] manifest (whose export names are not calls). *)
+let rec collect_refs (n : node) : (string * int) list =
+  match n.expr with
+  | Ast.App (Ast.Var ("quote" | "package"), _) -> []
+  | Ast.Var s when String.contains s '/' -> [ (s, n.line) ]
+  | Ast.App (_, _) -> List.concat_map collect_refs n.kids
+  | Ast.Quote _ | Ast.Lit _ | Ast.Prim _ -> []
+  | _ -> []
+
+(** Names this FILE defines. A package may define outside its own prefix
+    (std defines html/…, css/…, list/…), so a reference is self if the
+    defining file is this one, not merely if the prefix matches the
+    package name. *)
+let top_defined (nodes : node list) : string list =
+  let rec add acc (n : node) =
+    match n.kids with
+    | h :: target :: _
+      when is_var h "define" || is_var h "defmacro" ->
+        (match target.expr with
+         | Ast.Var name -> name :: acc
+         | Ast.App (Ast.Var name, _) -> name :: acc
+         | _ -> acc)
+    | h :: xs when is_var h "begin" || is_var h "seq" ->
+        List.fold_left add acc xs
+    | _ -> acc
+  in
+  List.fold_left add [] nodes
+
+(** Manifest checks, opt-in with [--packages]. The corpus is not annotated
+    yet, so only files that declare a [(package …)] manifest are checked
+    for undeclared cross-package references. Missing requirements and
+    cycles are always checked once a manifest exists.
+
+    Findings:
+      ERROR package-manifest  the manifest does not parse
+      ERROR package-duplicate the same package name is declared twice
+      ERROR package-missing   (requires x) has no lib.pp in the corpus
+      ERROR package-cycle     a package requires itself or a cycle
+      WARN  package-undeclared a cross-package call without (requires pkg) *)
+let package_pass ctx (parsed : (string * node list) list) =
+  let man = Hashtbl.create 128 in
+  let known = Hashtbl.create 128 in
+  let by_file = Hashtbl.create 128 in
+  (* Legacy packages have no manifest; their directory is still the name. *)
+  List.iter
+    (fun (file, _) ->
+       if Filename.basename file = "lib.pp" then begin
+         let pkg = Filename.basename (Filename.dirname file) in
+         if pkg <> "" && pkg <> "." && pkg <> ".." then
+           Hashtbl.replace known pkg ()
+       end)
+    parsed;
+  List.iter
+    (fun (file, _nodes) ->
+       ctx.file <- file;
+       match Pricklypear_lisp.Package_manifest.parse_source (read_file file) with
+       | Error e ->
+           add ctx ~line:1 ~severity:Error ~code:"package-manifest"
+             ~name:(Filename.basename file) ~message:e
+       | Ok None -> ()
+       | Ok (Some (m : Pricklypear_lisp.Package_manifest.t)) ->
+           if Hashtbl.mem man m.name then
+             add ctx ~line:1 ~severity:Error ~code:"package-duplicate"
+               ~name:m.name
+               ~message:
+                 (Printf.sprintf "package %s is declared in more than one file"
+                    m.name)
+           else begin
+             Hashtbl.replace man m.name (file, m);
+             Hashtbl.replace known m.name ();
+             Hashtbl.replace by_file file m
+           end)
+    parsed;
+  (* requires: self and missing. A required package with no lib.pp at all
+     is a hard error; a package that exists but failed its own manifest
+     parse already has a package-manifest error. *)
+  Hashtbl.iter
+    (fun name (file, (m : Pricklypear_lisp.Package_manifest.t)) ->
+       ctx.file <- file;
+       List.iter
+         (fun dep ->
+            if dep = name then
+              add ctx ~line:1 ~severity:Error ~code:"package-cycle" ~name
+                ~message:(Printf.sprintf "%s requires itself" name)
+            else if not (Hashtbl.mem known dep) then
+              add ctx ~line:1 ~severity:Error ~code:"package-missing" ~name
+                ~message:
+                  (Printf.sprintf
+                     "%s requires %s, which has no lib.pp in the corpus"
+                     name dep))
+         m.requires)
+    man;
+  (* Cycle detection over manifest requires edges. *)
+  let color = Hashtbl.create 128 in
+  let rec visit path name =
+    match Hashtbl.find_opt color name with
+    | Some 1 ->
+        let rec drop = function
+          | [] -> []
+          | x :: xs -> if x = name then x :: xs else drop xs
+        in
+        let cycle = drop path in
+        let cycle = if cycle = [] then [ name ] else cycle @ [ name ] in
+        let file = try fst (Hashtbl.find man name) with Not_found -> "" in
+        ctx.file <- file;
+        add ctx ~line:1 ~severity:Error ~code:"package-cycle" ~name
+          ~message:
+            (Printf.sprintf "dependency cycle: %s"
+               (String.concat " -> " cycle))
+    | Some 2 -> ()
+    | _ ->
+        Hashtbl.replace color name 1;
+        (match Hashtbl.find_opt man name with
+         | Some (_, (m : Pricklypear_lisp.Package_manifest.t)) ->
+             List.iter
+               (fun dep ->
+                  if dep <> name && Hashtbl.mem man dep then
+                    visit (path @ [ name ]) dep)
+               m.requires
+         | None -> ());
+        Hashtbl.replace color name 2
+  in
+  Hashtbl.iter (fun name _ -> visit [] name) man;
+  (* Undeclared cross-package references, only for manifest-bearing files. *)
+  List.iter
+    (fun (file, nodes) ->
+       match Hashtbl.find_opt by_file file with
+       | None -> ()
+       | Some (m : Pricklypear_lisp.Package_manifest.t) ->
+           ctx.file <- file;
+           let refs = List.concat_map collect_refs nodes in
+           let own = top_defined nodes in
+           List.iter
+             (fun (full, line) ->
+                match String.index_opt full '/' with
+                | None -> ()
+                | Some i ->
+                    let pkg = String.sub full 0 i in
+                    if pkg <> m.name && Hashtbl.mem known pkg
+                       && not (List.mem pkg m.requires)
+                       && not (List.mem full own)
+                       && not (List.mem full m.provides)
+                       && not (List.mem full m.exports)
+                    then
+                      add ctx ~line ~severity:Warn
+                        ~code:"package-undeclared" ~name:full
+                        ~message:
+                          (Printf.sprintf
+                             "%s is in %s, but %s does not require %s"
+                             full pkg m.name pkg))
+             refs)
+    parsed
+
+(* ------------------------------------------------------------------ *)
 (* run                                                                *)
 (* ------------------------------------------------------------------ *)
 
 let run ?(json = false) ?(strict = false) ?(perf = true)
     ?(unbound_bare = true) ?(effects = false) ?(txn = false)
-    ?(baseline = "") ?(save_baseline = "") (paths : string list) : report =
+    ?(baseline = "") ?(save_baseline = "") ?(packages = false)
+    (paths : string list) : report =
   let ctx =
     { defs = Hashtbl.create 4096;
       specials = Hashtbl.create 64;
@@ -812,6 +973,8 @@ let run ?(json = false) ?(strict = false) ?(perf = true)
       ctx.file <- file;
       List.iter (collect_top ctx) nodes)
     parsed;
+  (* package manifests: dependency graph and undeclared references *)
+  if packages then package_pass ctx parsed;
   (* pass 2: macroexpand each top-level form, then walk it. Positions come
      from the unexpanded tree, so a finding inside user-written code is exact;
      a form the expansion introduced takes the enclosing form's line. *)

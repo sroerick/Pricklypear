@@ -1,12 +1,12 @@
 (** nopales-check: static checking for a language with no compile phase.
 
-    usage: nopales-check [--json] [--strict] [--effects] [--txn] [--baseline FILE] [PATHS…]
+    usage: nopales-check [--json] [--strict] [--effects] [--txn] [--packages] [--baseline FILE] [PATHS…]
 
     Default path is libs/ (recursively, *.pp). Exit 0 clean, 1 any ERROR
     (or any WARN with --strict), 2 nothing readable. *)
 
 let usage =
-  "usage: nopales-check [--json] [--strict] [--effects] [--txn] [--baseline FILE] [PATHS...]\n\
+  "usage: nopales-check [--json] [--strict] [--effects] [--txn] [--packages] [--baseline FILE] [PATHS...]\n\
    \n\
    Walks the Nopales corpus with the interpreter's own reader and reports:\n\
    \n\
@@ -24,6 +24,11 @@ let usage =
    per define plus a class histogram. --txn adds the advisory transactional\n\
    hints (multi-write or select-for-update outside with-transaction).\n\
    \n\
+   --packages reads (package … (requires …)) manifests: ERROR on a parse\n\
+   failure, duplicate package, missing requirement or dependency cycle; WARN\n\
+   on a cross-package call in a manifest-bearing file that does not declare\n\
+   that package in (requires …).\n\
+   \n\
    --baseline FILE suppresses findings already in FILE (written by\n\
    --save-baseline FILE), so a repo can adopt the gate while it burns down the\n\
    existing list; identical findings are counted, so a new call site is new.\n\
@@ -34,6 +39,7 @@ let usage =
 let () =
   let json = ref false and strict = ref false and perf = ref true
   and unbound_bare = ref true and effects = ref false and txn = ref false
+  and packages = ref false
   and baseline = ref "" and save_baseline = ref "" and paths = ref [] in
   let rec parse = function
     | [] -> ()
@@ -44,6 +50,7 @@ let () =
     | "--no-unbound-bare" :: rest -> unbound_bare := false; parse rest
     | "--effects" :: rest -> effects := true; parse rest
     | "--txn" :: rest -> txn := true; parse rest
+    | "--packages" :: rest -> packages := true; parse rest
     | "--baseline" :: v :: rest -> baseline := v; parse rest
     | "--save-baseline" :: v :: rest -> save_baseline := v; parse rest
     | (("--baseline" | "--save-baseline") as opt) :: [] ->
@@ -67,6 +74,7 @@ let () =
   try
     let r = Pp_nopales_check.Check.run ~json:!json ~strict:!strict ~perf:!perf
               ~unbound_bare:!unbound_bare ~effects:!effects ~txn:!txn
+              ~packages:!packages
               ~baseline:!baseline ~save_baseline:!save_baseline paths in
     let code = Pp_nopales_check.Check.exit_code ~strict:!strict r in
     (* recording a baseline is maintenance, not a gate: the findings it just

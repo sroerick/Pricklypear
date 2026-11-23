@@ -20,12 +20,20 @@ dune build ./nopales-check/bin/nopales_check.exe
 ./_build/default/nopales-check/bin/nopales_check.exe --no-unbound-bare
 ./_build/default/nopales-check/bin/nopales_check.exe --effects  # capability pass
 ./_build/default/nopales-check/bin/nopales_check.exe --txn      # advisory txn hints
+./_build/default/nopales-check/bin/nopales_check.exe --packages # manifest deps
+./_build/default/nopales-check/bin/nopales_check.exe libs plugins --packages
 ./_build/default/nopales-check/bin/nopales_check.exe --save-baseline .nopales-check.json
 ./_build/default/nopales-check/bin/nopales_check.exe --baseline .nopales-check.json
 ```
 
 Exit: `0` clean, `1` any ERROR (or any WARN with `--strict`), `2` nothing
 readable.
+
+`--packages` expects the whole package set (`libs` plus any `plugins` roots)
+so a declared `(requires x)` can be resolved. Only files that declare a
+`(package …)` manifest are checked for undeclared cross-package references;
+the older packages without a manifest are still known by their directory name
+and can be required.
 
 ## What it checks
 
@@ -35,10 +43,15 @@ readable.
 | ERROR | `arity` | a call to a known define with the wrong number of arguments |
 | ERROR | `unbound` | a package-qualified name (`a/b`) that no definition binds |
 | ERROR | `perf-r1` | perflint RED: a DB prim inside a per-row loop lambda |
+| ERROR | `package-manifest` | a `(package …)` manifest does not parse |
+| ERROR | `package-duplicate` | the same package name is declared in two files |
+| ERROR | `package-missing` | `(requires x)` has no `lib.pp` in the corpus |
+| ERROR | `package-cycle` | a package requires itself or a requires-cycle |
 | WARN | `unknown-callable` | a qualified call that is not a define, special form or known prim |
 | WARN | `unbound` | a bare name the expanded body never binds |
 | WARN | `macro-expand` | a form's macro expansion failed; the unexpanded form was walked |
 | WARN | `perf-r1` | perflint AMBER: the prim is in a helper the loop calls |
+| WARN | `package-undeclared` | a manifest-bearing file calls `pkg/…` without `(requires pkg)` |
 
 Calls point at the exact source line. A bare name reports its enclosing
 **define's** line instead, because the printed form `x` is not unique in a file

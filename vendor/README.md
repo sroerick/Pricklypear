@@ -31,7 +31,7 @@ of truth. Vendored packages are a pinned read projection; `pp-sync`
 still owns `libs/`. Making an external repo the write authority is a
 separate decision.
 
-Monorepo sibling projects (for example `../pp-borge/`) are package
-roots too, but they are not vendor entries: `scripts/dev.sh` adds them
-to `PP_LIBS_PATH`, and the release stages them under `vendor/` beside
-`libs/`.
+Monorepo plugins (for example `<repo>/plugins/pp-borge/`) are package
+roots too, but they are not vendor entries: `scripts/dev.sh` adds
+`<repo>/plugins` to `PP_LIBS_PATH`, and the release stages each package
+under `vendor/` beside `libs/`.

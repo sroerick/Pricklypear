@@ -29,11 +29,16 @@ PP_DB_USER="${PP_DB_USER:-postgres}"
 PP_HTTP_PORT="${PP_HTTP_PORT:-18080}"
 PP_REPL_PORT="${PP_REPL_PORT:-17878}"
 PP_LIBS_DIR="${PP_LIBS_DIR:-$PP_ROOT/libs}"
+# Monorepo plugins (plugins/<pkg>/lib.pp) and external vendor packages
+# are package roots after the core libs/ root.
 PP_LIBS_PATH="${PP_LIBS_PATH:-}"
 if [ -z "$PP_LIBS_PATH" ]; then
   PP_LIBS_PATH="$PP_LIBS_DIR"
-  if [ -d "$PP_ROOT/../pp-borge" ]; then
-    PP_LIBS_PATH="$PP_LIBS_PATH:$PP_ROOT/../pp-borge"
+  if [ -d "$PP_ROOT/../plugins" ]; then
+    PP_LIBS_PATH="$PP_LIBS_PATH:$PP_ROOT/../plugins"
+  fi
+  if [ -d "$PP_ROOT/vendor" ]; then
+    PP_LIBS_PATH="$PP_LIBS_PATH:$PP_ROOT/vendor"
   fi
 fi
 PP_SOURCE_ROOT="${PP_SOURCE_ROOT:-$PP_ROOT}"

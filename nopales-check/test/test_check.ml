@@ -127,5 +127,27 @@ let () =
           let r4 = Pp_nopales_check.Check.run ~baseline:base [ path ] in
           if r4.errors <> 1 || r4.suppressed <> 0 then
             fail "a changed arity message must not match the baseline"));
+  (* package manifests: --packages resolves requires, catches cycles, a
+     missing dependency, duplicate package names and undeclared calls. *)
+  let pkgs = Filename.concat (Filename.dirname dir) "package_fixtures" in
+  let pr = Pp_nopales_check.Check.run ~packages:true [ pkgs ] in
+  if not (has_code pr "package-missing" "missing") then
+    fail "a missing (requires nope) was not reported";
+  if not (has_code pr "package-cycle" "cycle-a") then
+    fail "cycle-a was not reported as a package cycle";
+  if not (has_code pr "package-undeclared" "c/z") then
+    fail "undeclared's call to c/z was not reported";
+  if not (has_code pr "package-duplicate" "dup") then
+    fail "the duplicate dup manifest was not reported";
+  if not (has_code pr "package-manifest" "bad.pp") then
+    fail "the invalid manifest in bad.pp was not reported";
+  if has_code pr "package-missing" "a" then
+    fail "a's (requires b) was resolved but reported missing";
+  let plain = Pp_nopales_check.Check.run [ pkgs ] in
+  let is_pkg (f : Pp_nopales_check.Check.finding) =
+    String.length f.code >= 8 && String.sub f.code 0 8 = "package-"
+  in
+  if List.exists is_pkg plain.Pp_nopales_check.Check.findings then
+    fail "package checks must be opt-in (--packages)";
   Printf.printf "check-test: ok (%d files, %d defines, %d errors, %d warns)\n"
     r.files r.defines r.errors r.warns

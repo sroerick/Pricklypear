@@ -471,3 +471,8 @@
  (name pp_smoke)
  (modules pp_smoke)
  (libraries pricklypear-image pricklypear-common pricklypear-lisp eio_main))
+
+(test
+ (name seed_order_test)
+ (modules seed_order_test)
+ (libraries pricklypear-image pricklypear-lisp alcotest unix))

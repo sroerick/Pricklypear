@@ -435,6 +435,7 @@ let prim_summary (name : string) : string =
   | "cancel-job" -> "cancel a pending job: (cancel-job id)"
   | "package-exports" -> "shallow public names for a package (std freeze or pkg/local)"
   | "package-bindings" -> "all binding names with package prefix (any depth)"
+  | "contributions" -> "shell contributions of a kind: css | nav | home | app"
   | "list-packages" -> "top-level package prefixes from function_defs"
   | "apropos-docs" -> "(name doc) pairs for names containing pattern"
   | "describe" -> "selective reveal: package summary or one binding doc"

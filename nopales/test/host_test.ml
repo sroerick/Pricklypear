@@ -49,7 +49,7 @@ let test_forms_in_order () =
 let test_package_form_skipped () =
   let h = Host.create () in
   check_show "deploy metadata skipped" "42" (ok h
-    "(package demo (doc \"a package\"))\n42")
+    "(package demo\n  (version \"1.0.0\")\n  (requires std)\n  (doc \"a package\"))\n42")
 
 let test_std_seed () =
   let h = Host.create () in

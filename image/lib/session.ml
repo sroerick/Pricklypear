@@ -979,80 +979,59 @@ let rec eval_one (t : t) (input : string) : Pricklypear_lisp.Ast.value =
 
 and handle_package_form (t : t) (args : Pricklypear_lisp.Ast.expr list)
   : Pricklypear_lisp.Ast.value =
-  let name_of = function
-    | Pricklypear_lisp.Ast.Var s -> Some s
-    | Pricklypear_lisp.Ast.Lit (Pricklypear_lisp.Ast.VStr s) -> Some s
-    | _ -> None
+  let form =
+    Pricklypear_lisp.Ast.App (Pricklypear_lisp.Ast.Var "package", args)
   in
-  let export_names = function
-    | Pricklypear_lisp.Ast.App (Pricklypear_lisp.Ast.Var "export", xs) ->
-        List.filter_map name_of xs
-    | _ -> []
-  in
-  match args with
-  | name_e :: rest ->
-      (match name_of name_e with
-       | None ->
-           (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("package", "need name symbol/string", "bad-args"))))
-       | Some name ->
-           let name = String.trim name in
-           if name = "" then
-             (Pricklypear_lisp.Ast.VStr "package: empty name")
-           else if name = "kernel" then
-             (Pricklypear_lisp.Ast.VStr "package: reserved name: kernel")
-           else begin
-             let exports =
-               match rest with
-               | [ exp_form ] -> export_names exp_form
-               | _ ->
-                   List.concat_map export_names rest
-             in
-             (* image.package-form-defines (2026-10-07): forms nested in
-                the package body that are NOT export declarations are
-                evaluated — historically they were silently dropped, so a
-                lib whose defines sat inside (package …) seeded nothing
-                but its header ("loaded N form(s)" counted the header)
-                and every session inherited unbound handlers. Evaluating
-                them keeps wrapped libs working and makes the define-
-                interceptor (persist + env bind) see them. Defines at
-                top level remain the convention (spec: the libs chapter). *)
-             List.iter
-               (fun f ->
-                 match f with
-                 | Pricklypear_lisp.Ast.App
-                     (Pricklypear_lisp.Ast.Var "export", _) -> ()
-                 | _ -> ignore (eval_form t f))
-               rest;
-             t.eval_state.current_package <- Some name;
-              let () =
-                (* spec_delegation: delegated sessions never write the
-                   package registry or bindings stamps (code, not data). *)
-                if t.manifest.username = "anonymous" || restricted t then ()
-                else begin
-                 let trace = Sys.getenv_opt "PP_TRACE_LOAD" <> None in
-                 let t1 = Unix.gettimeofday () in
-                 let () =
-                   Store.upsert_package_registry t.store ~name ~exports
-                     ~author:t.manifest.username ~enabled_preserve:true ()
-                 in
-                 let t2 = Unix.gettimeofday () in
-                 Store.stamp_package_bindings t.store ~package:name ~exports;
-                 let t3 = Unix.gettimeofday () in
-                 let () =
-                   if trace then
-                     Printf.eprintf
-                       "[package] %s: registry %.1f ms, stamp %.1f ms\n%!"
-                       name ((t2 -. t1) *. 1000.0) ((t3 -. t2) *. 1000.0)
-                 in
-                 ()
-               end
-             in
-             (Pricklypear_lisp.Ast.VStr
-                  (Printf.sprintf "package %s (%d exports)" name
-                     (List.length exports)))
-           end)
-  | [] ->
-      (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("package", "need name", "bad-args"))))
+  match Pricklypear_lisp.Package_manifest.parse_form form with
+  | Error e ->
+      raise
+        (Pricklypear_lisp.Ast.Interp_error
+           (Pricklypear_lisp.Ast.Prim_error ("package", e, "bad-args")))
+  | Ok m ->
+      let name = m.Pricklypear_lisp.Package_manifest.name in
+      let exports = m.Pricklypear_lisp.Package_manifest.exports in
+      t.contributions <-
+        Pricklypear_lisp.Package_manifest.register_contributions
+          ~package:name t.contributions
+          m.Pricklypear_lisp.Package_manifest.contributions;
+      Pricklypear_lisp.Package_manifest.register_global ~package:name
+        m.Pricklypear_lisp.Package_manifest.contributions;
+      (* image.package-form-defines (2026-10-07): forms nested in the
+         package body that are not manifest clauses are evaluated.
+         image.package-form-manifest (2026-11-22): set the package name
+         BEFORE evaluating them, so a wrapped define (quake, stream) is
+         stamped with its own package. Manifest clauses — version,
+         requires, provides, export, contributes, doc — are metadata,
+         never calls. *)
+      t.eval_state.current_package <- Some name;
+      List.iter
+        (fun f ->
+           if not (Pricklypear_lisp.Package_manifest.is_clause f) then
+             ignore (eval_form t f))
+        (match args with _ :: rest -> rest | [] -> []);
+      let () =
+        (* spec_delegation: delegated sessions never write the package
+           registry or bindings stamps (code, not data). *)
+        if t.manifest.username = "anonymous" || restricted t then ()
+        else begin
+          let trace = Sys.getenv_opt "PP_TRACE_LOAD" <> None in
+          let t1 = Unix.gettimeofday () in
+          let () =
+            Store.upsert_package_registry t.store ~name ~exports
+              ~author:t.manifest.username ~enabled_preserve:true ()
+          in
+          let t2 = Unix.gettimeofday () in
+          Store.stamp_package_bindings t.store ~package:name ~exports;
+          let t3 = Unix.gettimeofday () in
+          if trace then
+            Printf.eprintf
+              "[package] %s: registry %.1f ms, stamp %.1f ms\n%!"
+              name ((t2 -. t1) *. 1000.0) ((t3 -. t2) *. 1000.0)
+        end
+      in
+      Pricklypear_lisp.Ast.VStr
+        (Printf.sprintf "package %s (%d exports)" name
+           (List.length exports))
 
 and eval_form (t : t) (expr : Pricklypear_lisp.Ast.expr)
     : Pricklypear_lisp.Ast.value =
@@ -1638,6 +1617,8 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
       manifest;
       store;
       routes;
+      contributions =
+        Pricklypear_lisp.Package_manifest.global_contribution_list ();
       started_at = Unix.gettimeofday ();
       kernel_catalog = [];  (* filled after all prims register *)
       ui_shell =
@@ -1681,6 +1662,56 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
      then rebind t.eval_state.prims to the populated table. These prims capture
      (!t), so they read/write store+manifest on each invocation. *)
   register_session_control_prims !t prim_table;
+  (* Shell contributions registered by package manifests. css/nav/home
+     return the bound values (a lambda, or a CSS value like
+     notes/tree-css), so Nopales applies them with (apply f (list)).
+     app returns one JSON string per launcher tile. *)
+  Primitives.register prim_table "contributions"
+    (fun args ->
+       let kind =
+         match args with
+         | [ Pricklypear_lisp.Ast.VStr k ]
+         | [ Pricklypear_lisp.Ast.VSymbol k ] ->
+             String.lowercase_ascii (String.trim k)
+         | _ ->
+             raise
+               (Pricklypear_lisp.Ast.Interp_error
+                  (Pricklypear_lisp.Ast.Prim_error
+                     ("contributions", "need 'css | 'nav | 'home | 'app",
+                      "bad-args")))
+       in
+       if not (List.mem kind [ "css"; "nav"; "home"; "app" ]) then
+         raise
+           (Pricklypear_lisp.Ast.Interp_error
+              (Pricklypear_lisp.Ast.Prim_error
+                 ("contributions", "need 'css | 'nav | 'home | 'app",
+                  "bad-args")));
+       let env = (!t).eval_state.env in
+       let values =
+         Pricklypear_lisp.Package_manifest.functions_of_kind kind
+           (!t).contributions
+         |> List.filter_map (Pricklypear_lisp.Env.lookup env)
+       in
+       let apps =
+         if kind <> "app" then []
+         else
+           List.filter_map
+             (fun (_pkg, c) ->
+                match c with
+                | Pricklypear_lisp.Package_manifest.App_tile
+                    { glyph; name; summary; href } ->
+                    Some
+                      (Pricklypear_lisp.Ast.VStr
+                         (Yojson.Safe.to_string
+                            (`Assoc
+                               [ ("glyph", `String glyph)
+                               ; ("name", `String name)
+                               ; ("summary", `String summary)
+                               ; ("href", `String href) ])))
+                | _ -> None)
+             (!t).contributions
+       in
+       Pricklypear_lisp.Ast.VList (values @ apps));
     (* HTTP request-context prims (it33): request-method/path/param(s)/body +
        redirect. FIBER-LOCAL via Request_context.with_request while
        call_handler runs (2026-11-02; was a session field, which a parallel

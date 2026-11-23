@@ -58,13 +58,17 @@ PP_DB_USER="${PP_DB_USER:-postgres}"
 PP_HTTP_PORT="${PP_HTTP_PORT:-18080}"
 PP_REPL_PORT="${PP_REPL_PORT:-17878}"
 PP_LIBS_DIR="${PP_LIBS_DIR:-$PP_ROOT/libs}"
-# Monorepo sibling Nopales projects are package roots too. pp-borge is
-# the first; vendor/ stays the home for truly external packages.
+# Monorepo Nopales plugins live at the repo root: plugins/<pkg>/lib.pp.
+# vendor/ stays the home for truly external packages. Both are package
+# roots, searched after the core libs/ root.
 PP_LIBS_PATH="${PP_LIBS_PATH:-}"
 if [ -z "$PP_LIBS_PATH" ]; then
   PP_LIBS_PATH="$PP_LIBS_DIR"
-  if [ -d "$PP_ROOT/../pp-borge" ]; then
-    PP_LIBS_PATH="$PP_LIBS_PATH:$PP_ROOT/../pp-borge"
+  if [ -d "$PP_ROOT/../plugins" ]; then
+    PP_LIBS_PATH="$PP_LIBS_PATH:$PP_ROOT/../plugins"
+  fi
+  if [ -d "$PP_ROOT/vendor" ]; then
+    PP_LIBS_PATH="$PP_LIBS_PATH:$PP_ROOT/vendor"
   fi
 fi
 PP_SOURCE_ROOT="${PP_SOURCE_ROOT:-$PP_ROOT}"
@@ -90,7 +94,9 @@ opam_env() {
 build_all() {
   opam_env
   echo "[dev] building all packages (poohstack)..."
-  (cd "$PP_ROOT" && dune build @all)
+  # --root: this tree lives under the wyo monorepo, whose root dune
+  # project excludes pp/; plain `dune build` would climb to it and abort.
+  (cd "$PP_ROOT" && dune build --root "$PP_ROOT" @all)
 }
 
 pg_pidfile="$PP_DEV_DIR/pg.pid"

@@ -4,5 +4,5 @@
  (modules ast reader env eval effect control special_forms route_gate
           recursion complexity explain ast_diff ast_path sexp_diff
            sexp_merge file_projection
-          budget pattern quote_value)
+          budget pattern quote_value package_manifest)
  (libraries yojson digestif))

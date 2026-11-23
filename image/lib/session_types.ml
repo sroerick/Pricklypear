@@ -123,6 +123,15 @@ type t = {
      Value is (handler, visibility) where visibility is public|private.
      http.ml reads from here on every request (no DB round-trip). *)
   routes : (string, string * string) Hashtbl.t;
+  (** Shell contributions registered by package manifests:
+      (package, contribution). Session.make copies the host registry
+      (Package_manifest.global_contributions) built by the boot seed and
+      updated by load-library; read by
+      (contributions 'css|'nav|'home|'app). Unbound names are skipped at
+      render time, so a disabled/absent package contributes nothing
+      without core ui depending on it. *)
+  mutable contributions :
+    (string * Pricklypear_lisp.Package_manifest.contribution) list;
   mutable started_at : float;
   (** Kernel prim catalog for Functions browser: (name, summary) list. *)
   mutable kernel_catalog : (string * string) list;

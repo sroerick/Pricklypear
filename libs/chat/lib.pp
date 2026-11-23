@@ -1,6 +1,10 @@
 ;; package chat -- exported from live branch system/main
 ;; Sync: scripts/pp-sync.sh status|pull|snapshot
 
+(package chat
+  (contributes
+    (css chat/css)))
+
 (define chat/all-messages
   (lambda () (rows (quote chat-message) 2000))
   "Return up to 2000 chat-message rows. 10-23: was 200 - the scan window

@@ -293,6 +293,60 @@ let test_libs_path_multi_root () =
   point_pp_libs_dir (real_libs_dir ());
   ignore (Sys.command ("rm -rf " ^ Filename.quote tmp))
 
+(* L6c (monorepo plugins): the wyo layout is pp/libs as the primary root
+   and <repo>/plugins/<pkg>/lib.pp as a sibling root one level above pp.
+   dev.sh and the release scripts use exactly this shape, so the root is
+   wyo/, never the plugin directory itself. *)
+let test_monorepo_plugin_root () =
+  let tmp =
+    Filename.concat (Filename.get_temp_dir_name ())
+      (Printf.sprintf "pp_loader_monorepo_test_%d" (Unix.getpid ()))
+  in
+  let pp = Filename.concat tmp "pp" in
+  let libs = Filename.concat pp "libs" in
+  let plugins = Filename.concat tmp "plugins" in
+  let pkg = Filename.concat plugins "pp-borge" in
+  let () =
+    if Sys.file_exists tmp then
+      ignore (Sys.command ("rm -rf " ^ Filename.quote tmp));
+    ignore (Sys.command ("mkdir -p " ^ Filename.quote libs));
+    Unix.mkdir plugins 0o755;
+    Unix.mkdir pkg 0o755;
+    let oc = open_out (Filename.concat pkg "lib.pp") in
+    output_string oc "(define pp-borge/version \"0.0.0-test\")\n";
+    close_out oc
+  in
+  Unix.putenv "PP_LIBS_DIR" libs;
+  Unix.putenv "PP_LIBS_PATH" (libs ^ ":" ^ plugins);
+  Alcotest.(check (list string)) "roots" [ libs; plugins ]
+    (Pricklypear_image_lib.Loader.libs_dirs ());
+  Alcotest.(check string) "plugin path"
+    (Filename.concat pkg "lib.pp")
+    (Pricklypear_image_lib.Loader.library_path "pp-borge");
+  Alcotest.(check bool) "plugin discovered" true
+    (List.mem "pp-borge"
+       (Pricklypear_image_lib.Boot_seed.full_seed_packages ()));
+  let eval_form, env, prims = eval_form_of () in
+  (match
+     Pricklypear_image_lib.Loader.load_library ~eval_form "pp-borge"
+   with
+   | Ok msg ->
+       Alcotest.(check bool) "loaded plugin" true
+         (contains_seq msg "loaded 1 form(s)")
+   | Error e -> Alcotest.fail ("plugin failed: " ^ e));
+  let v =
+    Pricklypear_image_lib.Control_rim.run ~prims (fun () ->
+        Pricklypear_lisp.Eval.eval
+          ~budget:(Pricklypear_lisp.Eval.make_budget ())
+          ~prims:Pricklypear_lisp.Eval.empty_prims env
+          (Var "pp-borge/version"))
+  in
+  Alcotest.(check string) "plugin define works" "\"0.0.0-test\""
+    (Pricklypear_lisp.Reader.pp_value v);
+  (* restore a real root for the tests that follow *)
+  point_pp_libs_dir (real_libs_dir ());
+  ignore (Sys.command ("rm -rf " ^ Filename.quote tmp))
+
 (* Drop top-level (package <name> (export …)) metadata forms — a
    SESSION-level form (session.ml intercepts it in its eval_form BEFORE
    arg evaluation; the kernel has no package form and its symbol args
@@ -488,6 +542,7 @@ let () =
         ; ("seed-priority-order", `Quick, test_seed_priority_order)
         ; ("discover-seed-packages", `Quick, test_discover_seed_packages)
         ; ("libs-path-multi-root", `Quick, test_libs_path_multi_root)
+        ; ("monorepo-plugin-root", `Quick, test_monorepo_plugin_root)
         ; ("real-std-loads", `Quick, test_real_std_loads)
         ; ("library-name-grammar", `Quick, test_library_name_grammar)
         ; ("load-library-valid", `Quick, test_load_library_valid)

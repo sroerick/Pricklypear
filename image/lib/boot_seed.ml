@@ -107,6 +107,151 @@ let full_seed_packages () : string list =
   in
   preferred @ extras
 
+(** Resolved boot order from package manifests.
+
+    [candidates] is discovery order (the preferred list, then extras
+    alphabetically). Each candidate's [lib.pp] may carry a
+    [(package …)] manifest with [(requires …)]. We topologically sort,
+    using candidate order as the tiebreak, and return failures for
+    packages that cannot be seeded safely: a manifest that does not
+    parse or names a different package, a missing requirement (and its
+    dependents, transitively), or a dependency cycle. A package with no
+    manifest is a leaf with no requirements — backward compatible with
+    the packages that predate the manifest. *)
+type seed_plan = {
+  order : string list;
+  failures : (string * string) list;
+}
+
+let manifest_for (name : string)
+    : (Pricklypear_lisp.Package_manifest.t, string) result =
+  match Loader.read_file (Loader.library_path name) with
+  | Error e -> Error e
+  | Ok src -> (
+      match Pricklypear_lisp.Package_manifest.parse_source src with
+      | Ok None -> Ok (Pricklypear_lisp.Package_manifest.empty name)
+      | Ok (Some m) -> Ok m
+      | Error e -> Error e)
+
+let resolve_seed_order (candidates : string list) : seed_plan =
+  let rank = Hashtbl.create 128 in
+  List.iteri (fun i n -> Hashtbl.replace rank n i) candidates;
+  let cmp a b =
+    let ra = try Hashtbl.find rank a with Not_found -> max_int in
+    let rb = try Hashtbl.find rank b with Not_found -> max_int in
+    if ra <> rb then compare ra rb else String.compare a b
+  in
+  let man = Hashtbl.create 128 in
+  let failures = ref [] in
+  let fail name msg = failures := (name, msg) :: !failures in
+  List.iter
+    (fun name ->
+       match manifest_for name with
+       | Error e -> fail name ("manifest: " ^ e)
+       | Ok m ->
+           if m.Pricklypear_lisp.Package_manifest.name <> name then
+             fail name
+               (Printf.sprintf "manifest names %s, directory is %s"
+                  m.Pricklypear_lisp.Package_manifest.name name)
+           else Hashtbl.replace man name m)
+    candidates;
+  (* Fixed point: remove packages with missing/self requirements, then
+     remove their dependents. A package that cannot be seeded must not
+     leave a caller in the order behind. *)
+  let present = Hashtbl.create 128 in
+  Hashtbl.iter (fun n _ -> Hashtbl.replace present n ()) man;
+  let changed = ref true in
+  while !changed do
+    changed := false;
+    let doomed = ref [] in
+    Hashtbl.iter
+      (fun name (m : Pricklypear_lisp.Package_manifest.t) ->
+         if Hashtbl.mem present name then
+           List.iter
+             (fun dep ->
+                if dep = name then
+                  doomed := (name, "package requires itself") :: !doomed
+                else if not (Hashtbl.mem present dep) then
+                  doomed :=
+                    (name,
+                     Printf.sprintf "requires unavailable package %s" dep)
+                    :: !doomed)
+             m.requires)
+      man;
+    List.iter
+      (fun (name, msg) ->
+         if Hashtbl.mem present name then begin
+           Hashtbl.remove present name;
+           fail name msg;
+           changed := true
+         end)
+      !doomed
+  done;
+  (* Kahn's algorithm, with candidate order as the ready-set tiebreak. *)
+  let indeg = Hashtbl.create 128 in
+  let dependents = Hashtbl.create 128 in
+  Hashtbl.iter
+    (fun name (m : Pricklypear_lisp.Package_manifest.t) ->
+       if Hashtbl.mem present name then begin
+         let deps =
+           List.filter (fun d -> d <> name && Hashtbl.mem present d) m.requires
+           |> List.sort_uniq String.compare
+         in
+         Hashtbl.replace indeg name (List.length deps);
+         List.iter
+           (fun d ->
+              let xs =
+                try Hashtbl.find dependents d with Not_found -> []
+              in
+              Hashtbl.replace dependents d (name :: xs))
+           deps
+       end)
+    man;
+  let ready = ref [] in
+  let add_ready n =
+    if Hashtbl.mem indeg n && Hashtbl.find indeg n = 0 then begin
+      Hashtbl.remove indeg n;
+      let rec ins = function
+        | [] -> [ n ]
+        | x :: xs -> if cmp n x < 0 then n :: x :: xs else x :: ins xs
+      in
+      ready := ins !ready
+    end
+  in
+  Hashtbl.iter (fun n _ -> add_ready n) (Hashtbl.copy indeg);
+  let order = ref [] in
+  while !ready <> [] do
+    match !ready with
+    | [] -> ()
+    | n :: rest ->
+        ready := rest;
+        order := n :: !order;
+        List.iter
+          (fun d ->
+             if Hashtbl.mem indeg d then begin
+               let k = Hashtbl.find indeg d - 1 in
+               if k <= 0 then begin
+                 Hashtbl.replace indeg d 0;
+                 add_ready d
+               end else Hashtbl.replace indeg d k
+             end)
+          (try Hashtbl.find dependents n with Not_found -> [])
+  done;
+  let order = List.rev !order in
+  (* Anything left has indegree > 0: a cycle, or a package that depends
+     on one. Exclude the whole unresolved set and name it. *)
+  let remaining =
+    Hashtbl.fold (fun n _ acc -> n :: acc) indeg [] |> List.sort cmp
+  in
+  if remaining <> [] then
+    List.iter
+      (fun n ->
+         fail n
+           (Printf.sprintf "dependency cycle/unresolved (with: %s)"
+              (String.concat " " (List.filter (fun x -> x <> n) remaining))))
+      remaining;
+  { order; failures = List.rev !failures }
+
 (** Boot seed set. No PP_PROFILE: full discovery, byte-identical to the
     pre-profile behavior. PP_PROFILE set: the profile file IS the seed
     set (and the tenant load-library allowlist). A profile that cannot
@@ -269,6 +414,21 @@ let seed_agents_note ~(ops : ops) (t : t) : unit =
         | None -> ()
         | Some e -> failed := (name ^ ": " ^ e) :: !failed
       in
+      (* Resolve manifests before the finally closure so the summary
+         names the actual seed set and dependency failures land in the
+         same loud BOOT SEED FAILURES line as load failures. *)
+      let candidates = discover_seed_packages () in
+      let plan =
+        try resolve_seed_order candidates
+        with exn ->
+          (* Never leave seed_boot / load-skip state dirty because a
+             manifest read blew up; fall back to discovery order and let
+             load_library report the package failure. *)
+          Printf.eprintf
+            "[session] seed order failed: %s — using discovery order\n%!"
+            (Printexc.to_string exn);
+          { order = candidates; failures = [] }
+      in
       let finally () =
         t.eval_state.load_skip_names <- prev_skip;
         t.ui_shell.suppress_refresh_on_define <- false;
@@ -276,27 +436,30 @@ let seed_agents_note ~(ops : ops) (t : t) : unit =
         let elapsed_ms =
           int_of_float ((Unix.gettimeofday () -. started) *. 1000.0) in
         Printf.eprintf "[session] boot seed: %d packages, %d ms%s\n%!"
-          (List.length (discover_seed_packages ())) elapsed_ms
+          (List.length plan.order) elapsed_ms
           (match !failed with
            | [] -> ""
            | xs ->
                Printf.sprintf
                  "\n[session] *** BOOT SEED FAILURES (%d): %s — those \
                   packages' defines/routes are MISSING; fix libs/<pkg> \
-                  and reseed ***"
+                  or plugins/<pkg> and reseed ***"
                  (List.length xs) (String.concat " | " xs))
       in
       Fun.protect ~finally (fun () ->
-          let pkgs = discover_seed_packages () in
-          Printf.eprintf "[session] seed_stdlib packages (%d): %s\n%!"
-            (List.length pkgs) (String.concat " " pkgs);
+          List.iter
+            (fun (name, e) -> record_failure name (Some e))
+            plan.failures;
+          Printf.eprintf "[session] seed_stdlib packages (%d/%d): %s\n%!"
+            (List.length plan.order) (List.length candidates)
+            (String.concat " " plan.order);
           let rec go = function
             | [] -> ()
             | name :: rest ->
                 let () = record_failure name (seed_one ~ops t name) in
                 go rest
           in
-          go pkgs))
+          go plan.order))
 
 (** Ensure username/personal exists as an EMPTY child of system/main.
     Inheritance (not copy) means main defaults stay visible; personal

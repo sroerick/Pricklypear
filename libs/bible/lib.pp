@@ -1,6 +1,10 @@
 ;; package bible -- exported from live branch system/main
 ;; Sync: scripts/pp-sync.sh status|pull|snapshot
 
+(package bible
+  (contributes
+    (css bible/css)))
+
 (define bible/abbrev-of
   (lambda
     (book)

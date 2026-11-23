@@ -1,6 +1,11 @@
 ;; package weather -- exported from live branch system/main
 ;; Sync: scripts/pp-sync.sh status|pull|snapshot
 
+(package weather
+  (contributes
+    (css weather/css)
+    (home weather/widget)))
+
 (define weather/css
   (lambda
     ()

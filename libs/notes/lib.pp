@@ -1,6 +1,11 @@
 ;; package notes -- exported from live branch system/main
 ;; Sync: scripts/pp-sync.sh status|pull|snapshot
 
+(package notes
+  (contributes
+    (css notes/css notes/tree-css)
+    (nav notes/capture/nav)))
+
 (define notes/all-todos
   (lambda
     ()

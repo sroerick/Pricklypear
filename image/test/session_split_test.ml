@@ -398,6 +398,65 @@ let test_handler_heals_from_live_env () =
               ("heal left the snapshot env without the callee: " ^ msg)
         | S.Handler_client_error msg ->
             Alcotest.fail ("unexpected client error: " ^ msg))
+
+let eval_int t src =
+  match
+    (try S.eval_string_rim t src
+     with Pricklypear_lisp.Ast.Interp_error e ->
+       Alcotest.fail (Pricklypear_lisp.Ast.pp_interp_error e))
+  with
+  | Ast.VInt n -> Int64.to_int n
+  | v ->
+      Alcotest.fail
+        (Printf.sprintf "%s: expected VInt, got %s" src
+           (Pricklypear_lisp.Reader.pp_value v))
+
+(* The package manifest's shell contributions land in the session
+   registry; (contributions 'kind) resolves them against the live env.
+   A re-load replaces the package's slots and drops what it no longer
+   declares. *)
+let test_contributions () =
+  Pricklypear_lisp.Package_manifest.reset_global_contributions ();
+  let t = anon_session () in
+  let run src =
+    try ignore (S.eval_one t src)
+    with Pricklypear_lisp.Ast.Interp_error e ->
+      Alcotest.fail (Pricklypear_lisp.Ast.pp_interp_error e)
+  in
+  run
+    {|(package demo
+  (contributes
+    (css demo/css)
+    (nav demo/nav)
+    (home demo/home)
+    (app "g" "Demo" "one line" "/demo")))|};
+  run "(define demo/css (lambda () (list \"rule\" \"x\" (list))))";
+  run "(define demo/nav (lambda () \"<a>demo</a>\"))";
+  run "(define demo/home (lambda () \"<p>demo</p>\"))";
+  Alcotest.(check int) "css contribution" 1
+    (eval_int t "(count (contributions 'css))");
+  Alcotest.(check string) "css is callable" "lambda"
+    (eval_str t "(type-of (car (contributions 'css)))");
+  Alcotest.(check int) "nav contribution" 1
+    (eval_int t "(count (contributions 'nav))");
+  Alcotest.(check int) "home contribution" 1
+    (eval_int t "(count (contributions 'home))");
+  Alcotest.(check int) "app contribution" 1
+    (eval_int t "(count (contributions 'app))");
+  (* Contributions are host metadata: a session built after the package
+     loaded (the browser/REPL case) must inherit them even though its env
+     is a fresh record. *)
+  let t2 = anon_session () in
+  Alcotest.(check int) "new session inherits the registry" 1
+    (eval_int t2 "(count (contributions 'app))");
+  run "(package demo (contributes (css demo/css)))";
+  Alcotest.(check int) "css survives re-load" 1
+    (eval_int t "(count (contributions 'css))");
+  Alcotest.(check int) "nav dropped by re-load" 0
+    (eval_int t "(count (contributions 'nav))");
+  Alcotest.(check int) "home dropped by re-load" 0
+    (eval_int t "(count (contributions 'home))")
+
 (* Control_rim captures Eio effects, so eval-touching cases run inside
    the Eio scheduler (rls_floor_test precedent). *)
 let in_eio f = Eio_main.run (fun _ -> f ())
@@ -425,6 +484,9 @@ let () =
 
           ; Alcotest.test_case "handler heals a live-env-only binding" `Quick
               (fun () -> in_eio test_handler_heals_from_live_env)
+
+          ; Alcotest.test_case "package contributions" `Quick
+              (fun () -> in_eio test_contributions)
 
         ; Alcotest.test_case "boot seed re-exports" `Quick
             test_boot_seed_reexports
