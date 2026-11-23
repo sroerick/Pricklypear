@@ -62,8 +62,9 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
 
   (* (gen-read path gen) -> node body at gen, crossed over the same branch
      lens rules head reads use (tree-time.reads-as-of-gen). path may be an
-     absolute b.*/data.* path or a RELATIVE logical suffix (kind.name)
-     resolved closest-wins through the branch lens chain. gen is the as-of
+     absolute b.*/data.* path, a literal root claim path, or a RELATIVE
+     logical suffix (kind.name) resolved closest-wins through the branch
+     lens chain. gen is the as-of
      coordinate; 0/omitted means head. Returns version JSON (the version_to_json
      surface: id/path/kind/type/body/author/hash/created_at/gen/tombstone) or
      nil when the path is unversioned at that gen. ReadDb cap. *)

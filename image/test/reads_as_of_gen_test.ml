@@ -7,8 +7,9 @@
       - tree/get <path> <gen>  : optional :gen N resolves the node at that
         gen (versioned), omitted = head (live tree_nodes).
       - gen-read <path> <gen>  : node body at gen as version JSON; supports
-        absolute b.*/data.* paths AND relative logical suffixes crossed
-        through the branch lens chain (closest-wins).
+        absolute b.*/data.* paths, literal root claim paths under spec.,
+        AND relative logical suffixes crossed through the branch lens chain
+        (closest-wins).
       - gen-diff <path> ga gb  : node-granular diff — hashes first, walk on
         mismatch; returns "same" when both leaves hash-identical.
       - undo <path> [n]        : restore the value at head-n as a NEW write at
@@ -390,6 +391,27 @@ let flat_title (kv : (string * Yojson.Safe.t) list) : string option =
   | Some (`String t) -> Some t
   | _ -> None
 
+(** state in a flat claim body (tree/at on a spec.* claim). *)
+let flat_state (kv : (string * Yojson.Safe.t) list) : string option =
+  match List.assoc_opt "state" kv with
+  | Some (`String s) -> Some s
+  | _ -> None
+
+(** state in a version_to_json envelope (gen-read on a spec.* claim). *)
+let version_json_state (store : S.t) (path : string) (gen : int64)
+    : string option =
+  match C.tree_gen_read store ~path ~gen with
+  | VStr s ->
+      (try
+         (match Yojson.Safe.from_string s with
+          | `Assoc kv ->
+              (match List.assoc_opt "body" kv with
+               | Some (`Assoc bkv) -> flat_state bkv
+               | _ -> None)
+          | _ -> None)
+       with _ -> None)
+  | _ -> None
+
 let test_tree_log_at_diff () =
   with_store (fun store ->
       let type_name = uniq "t" in
@@ -455,6 +477,66 @@ let test_tree_log_at_diff () =
        | Some conn -> ignore (T.delete_datum conn ~type_name ~id:(path_id path))
        | None -> ()))
 
+(* A root-level claim (a path under spec.) is versioned but is neither a b.
+   nor a data. path, so the literal-path fallback is what makes its history
+   readable. This is the read surface pp-borge pins/materialize needs. *)
+let test_root_claim_versioned_reads () =
+  with_store (fun store ->
+      let path = "spec." ^ uniq "claim" in
+      let put_state state =
+        match S.conn_of store with
+        | Some conn ->
+            (match
+               T.upsert_hier conn ~path ~kind:"note" ~type_name:"spec-claim"
+                 ~body_json:
+                   (Printf.sprintf
+                      "{\"kind\":\"spec-claim\",\"state\":\"%s\",\"text\":\"%s\"}"
+                      state state)
+                 ~author:"tester" ~rank:None
+             with
+             | Ok p -> p
+             | Error e -> Alcotest.fail ("claim write failed: " ^ e))
+        | None -> Alcotest.fail "no conn"
+      in
+      ignore (put_state "draft");
+      let g0 = head_gen store path in
+      ignore (put_state "active");
+      let g1 = head_gen store path in
+      Alcotest.(check bool) "claim gens differ" true (Int64.compare g0 g1 <> 0);
+      with_traversal_flag_on (fun () ->
+          (match C.tree_log store ~path with
+           | VList (first :: second :: _) ->
+               let gen_of = function
+                 | VStr s ->
+                     (match Yojson.Safe.from_string s with
+                      | `Assoc kv ->
+                          (match List.assoc_opt "gen" kv with
+                           | Some (`String g) -> Some g
+                           | _ -> None)
+                      | _ -> None)
+                 | _ -> None
+               in
+               Alcotest.(check (option string)) "claim log newest gen"
+                 (Some (Int64.to_string g1)) (gen_of first);
+               Alcotest.(check (option string)) "claim log older gen"
+                 (Some (Int64.to_string g0)) (gen_of second)
+           | _ -> Alcotest.fail "tree/log returned no claim versions");
+          (match C.tree_at store ~path ~gen:g0 with
+           | VStr s ->
+               (match Yojson.Safe.from_string s with
+                | `Assoc kv ->
+                    Alcotest.(check (option string)) "tree/at claim g0 draft"
+                      (Some "draft") (flat_state kv)
+                | _ -> Alcotest.fail "tree/at claim not an object")
+           | _ -> Alcotest.fail "tree/at claim g0 missing");
+          Alcotest.(check (option string)) "gen-read claim g0 draft"
+            (Some "draft") (version_json_state store path g0);
+          Alcotest.(check (option string)) "gen-read claim head active"
+            (Some "active") (version_json_state store path g1));
+      (match S.conn_of store with
+       | Some conn -> ignore (T.delete_path conn ~path ~recursive:false)
+       | None -> ()))
+
 let test_traversal_flag_off () =
   Unix.putenv "PP_READS_AS_OF_GEN" "0";
   let refuses name =
@@ -485,6 +567,8 @@ let () =
             `Quick test_undo_note_kind;
           Alcotest.test_case "tree/log, tree/at, tree/diff (flag on)" `Quick
             test_tree_log_at_diff;
+          Alcotest.test_case "root claim (spec.*) versioned reads" `Quick
+            test_root_claim_versioned_reads;
           Alcotest.test_case "traversal prims refuse when flag off" `Quick
             test_traversal_flag_off;
         ] );

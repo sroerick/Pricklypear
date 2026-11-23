@@ -1913,27 +1913,39 @@ let replication_unit (store : Store.t) () : value =
 let absolute_tree_path (path : string) : bool =
   String.starts_with ~prefix:"b." path || String.starts_with ~prefix:"data." path
 
+(* Root-level claims (paths under spec. and spec_origin.) are versioned
+   tree nodes, but they are neither code nor datum, so the absolute-path
+   branch above does not cover them. Try the literal path FIRST for every
+   non-absolute read; only fall through to the branch lens suffix when no
+   version exists at the literal path. This is what lets tree/at + tree/log
+   read a pinned spec claim's history (pp-borge pins/materialize) without
+   changing lens reads for fn/type/route suffixes. *)
+let exact_versioned_head conn ~(path : string) ~(at_gen : int64 option) =
+  match at_gen with
+  | Some g -> Tree_store.versioned_head conn ~path ~at_gen:g ()
+  | None -> Tree_store.versioned_head conn ~path ()
+
+let versioned_read conn ~(store : Store.t) ~(path : string)
+    ~(at_gen : int64 option) =
+  if absolute_tree_path path then exact_versioned_head conn ~path ~at_gen
+  else
+    match exact_versioned_head conn ~path ~at_gen with
+    | Some _ as v -> v
+    | None ->
+        (* relative logical suffix -> resolve effective path across the
+           branch lens chain (closest-wins), then read as-of-gen. *)
+        let mk_path bid =
+          match Tree_store.lens_suffix_path ~branch_id:bid path with
+          | Some p -> p
+          | None -> ""
+        in
+        Tree_store.lens_versioned_in_chain conn ~at_gen ~mk_path
+          (lens_chain store)
+
 let tree_gen_read (store : Store.t) ~(path : string) ~(gen : int64) : value =
   with_tree_tx store ~none:(fun () -> VNil) (fun conn ->
-      let v =
-        if absolute_tree_path path then
-          if gen <= 0L then
-            (* head *)
-            Tree_store.versioned_head conn ~path ()
-          else
-            Tree_store.versioned_head conn ~path ~at_gen:gen ()
-        else
-          (* relative logical suffix -> resolve effective path across the
-             branch lens chain (closest-wins), then read as-of-gen. *)
-          let at_gen_opt = if gen <= 0L then None else Some gen in
-          let mk_path bid =
-            match Tree_store.lens_suffix_path ~branch_id:bid path with
-            | Some p -> p
-            | None -> ""
-          in
-          Tree_store.lens_versioned_in_chain conn ~at_gen:at_gen_opt ~mk_path
-            (lens_chain store)
-      in
+      let at_gen_opt = if gen <= 0L then None else Some gen in
+      let v = versioned_read conn ~store ~path ~at_gen:at_gen_opt in
       (match v with
        | None -> VNil
        | Some v -> (VStr (Tree_store.version_to_json v))))
@@ -2045,22 +2057,27 @@ let versions_for_path (store : Store.t) (conn : Store_db.conn)
     ~(path : string) : Tree_store.version list =
   if absolute_tree_path path then Tree_store.versioned_history conn ~path ()
   else
-    let mk_path bid =
-      match Tree_store.lens_suffix_path ~branch_id:bid path with
-      | Some p -> p
-      | None -> ""
-    in
-    match
-      Tree_store.lens_versioned_in_chain conn ~at_gen:None ~mk_path
-        (lens_chain store)
-    with
-    | Some v ->
-        Tree_store.versioned_history conn ~path:v.Tree_store.v_path ()
-    | None -> []
+    (* literal root claim path first, then the branch lens suffix *)
+    match Tree_store.versioned_history conn ~path () with
+    | _ :: _ as versions -> versions
+    | [] ->
+        let mk_path bid =
+          match Tree_store.lens_suffix_path ~branch_id:bid path with
+          | Some p -> p
+          | None -> ""
+        in
+        match
+          Tree_store.lens_versioned_in_chain conn ~at_gen:None ~mk_path
+            (lens_chain store)
+        with
+        | Some v ->
+            Tree_store.versioned_history conn ~path:v.Tree_store.v_path ()
+        | None -> []
 
 (* (tree/log path) -> VList of version-JSON strings for that path, NEWEST
-   gen first (any compartment: absolute b.*/data.* path or a relative lens
-   suffix). Version JSON is gen-read's vocabulary (version_to_json):
+   gen first (any compartment: absolute b.*/data.* path, a literal root
+   claim path, or a relative lens suffix). Version JSON is gen-read's
+   vocabulary (version_to_json):
    id/path/kind/type/body/author/hash/created_at/gen/tombstone/rank.
    No history -> empty list. *)
 let tree_log (store : Store.t) ~(path : string) : value =
@@ -2074,23 +2091,13 @@ let tree_log (store : Store.t) ~(path : string) : value =
 (* (tree/at path gen) -> the node BODY at [gen], never head: the payload
    body [path] carried as of that coordinate (newest version row at-or-
    below the gen, extracted with body_of_version — the same payload
-   surface undo restores from). VNil = nothing existed at that gen (an
-   unused gen, including a coordinate before the path's first version) or
-   the row is a tombstone. *)
+   surface undo restores from). [path] may be absolute, a literal root
+   claim path, or a relative lens suffix. VNil = nothing existed at that
+   gen (an unused gen, including a coordinate before the path's first
+   version) or the row is a tombstone. *)
 let tree_at (store : Store.t) ~(path : string) ~(gen : int64) : value =
   with_tree_tx store ~none:(fun () -> VNil) (fun conn ->
-      let v =
-        if absolute_tree_path path then
-          Tree_store.versioned_head conn ~path ~at_gen:gen ()
-        else
-          let mk_path bid =
-            match Tree_store.lens_suffix_path ~branch_id:bid path with
-            | Some p -> p
-            | None -> ""
-          in
-          Tree_store.lens_versioned_in_chain conn ~at_gen:(Some gen) ~mk_path
-            (lens_chain store)
-      in
+      let v = versioned_read conn ~store ~path ~at_gen:(Some gen) in
       match v with
       | None -> VNil
       | Some v when v.Tree_store.v_tombstone -> VNil
