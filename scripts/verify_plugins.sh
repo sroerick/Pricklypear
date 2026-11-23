@@ -70,4 +70,15 @@ if [ -f "$PLUGINS/pp-borge/materialize.py" ]; then
   ok "pp-borge materialize self-test"
 fi
 
+# pp-borge's drift floor treats borge's error verdict as the review failure and
+# never turns a crash or an empty run into a comment. The offline half uses a
+# fake borge, so it needs no binary, image or network.
+if [ -f "$PLUGINS/pp-borge/drift_card.py" ]; then
+  command -v python3 >/dev/null 2>&1 \
+    || fail "python3 not found (needed for the pp-borge drift test)"
+  python3 "$PLUGINS/pp-borge/drift_card.py" --self-test \
+    || fail "pp-borge drift_card.py --self-test failed"
+  ok "pp-borge drift self-test"
+fi
+
 ok "plugins root: $PLUGINS ($n package(s))"
