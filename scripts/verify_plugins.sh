@@ -50,4 +50,14 @@ done
 grep -q 'PLUGINS_DIR="\$PP_ROOT/\.\./plugins"' "$PP_ROOT/scripts/build-release-openbsd.ksh" \
   || fail "build-release-openbsd.ksh does not stage \$PP_ROOT/../plugins"
 
+# pp-borge ships a corpus importer; its path mapping/escaping is pure and
+# must stay in lockstep with the Nopales pp-borge/claim-path.
+if [ -f "$PLUGINS/pp-borge/import_corpus.py" ]; then
+  command -v python3 >/dev/null 2>&1 \
+    || fail "python3 not found (needed for the pp-borge self-test)"
+  python3 "$PLUGINS/pp-borge/import_corpus.py" --self-test \
+    || fail "pp-borge import_corpus.py --self-test failed"
+  ok "pp-borge importer self-test"
+fi
+
 ok "plugins root: $PLUGINS ($n package(s))"
