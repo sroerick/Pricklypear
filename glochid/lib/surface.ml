@@ -243,6 +243,15 @@ let surface_source = {pp|
 ;; request whose lawful lifetime is "a whole glochid turn".
 ;; hx-config '{"'timeout'":0}' disables htmx's 60s defaultTimeout for a
 ;; request whose lawful lifetime is "a whole glochid turn".
+(define (chat/pp-links)
+  "The optional-adapter nav words; empty in base mode (no PP routes)."
+  (if (glochid/pp-active?)
+      (string-append
+        (filmstrip/app-link "/rooms" "rooms")
+        " · "
+        (filmstrip/app-link "/bindings" "/bindings")
+        " · ")
+      ""))
 (define (chat/head frag)
   ;; The 'glochid' root anchor is shell-level (it reloads / in place) — a
   ;; plain <a> inside a fragment is the escape bug class, so fragments
@@ -255,10 +264,7 @@ let surface_source = {pp|
     " <span class=\"muted\">— "
     (filmstrip/app-link "/code" "/code")
     " · "
-    (filmstrip/app-link "/rooms" "rooms")
-    " · "
-    (filmstrip/app-link "/bindings" "/bindings")
-    " · "
+    (chat/pp-links)
     (filmstrip/app-link "/sessions" "/sessions")
     " · "
     (filmstrip/app-link "/settings" "/settings")
@@ -666,7 +672,7 @@ file-arm twin). The retired table walk (bind/rows + bind/packages-html
 + bind/pkg-html) wanted a second template the shared outline makes
 moot: a package label folds in place, a function label open-or-focuses
 its detail pane, the trail is the only way up.")
-(route "/bindings" "bind/page")
+(if (glochid/pp-active?) (route "/bindings" "bind/page") (list))
 |pp}
 
 (** The glochid layer (borge/glochid.borg filmstrip-shell). Load order:
@@ -1107,8 +1113,11 @@ retired, see the obituary above.")
     (append
       (list
         (list "chat" "/chat")
-        (list "code" "/code")
-        (list "bindings" "/bindings")
+        (list "code" "/code"))
+      (if (glochid/pp-active?)
+          (list (list "bindings" "/bindings"))
+          (list))
+      (list
         (list "lookbook" "/lookbook")
         (list "sessions" "/sessions")
         (list "settings" "/settings")
@@ -1164,11 +1173,13 @@ only ever names the picked route (entry-html wears it as fs-sel).")
 ;; never a glochid-side renaming.
 (define glochid/fwd-apps
   (lambda ()
-    (list
-      (list "todo" "/todos")
-      (list "notes" "/notes")
-      (list "calendar" "/calendar")
-      (list "rooms" "/rooms"))))
+    (if (glochid/pp-active?)
+        (list
+          (list "todo" "/todos")
+          (list "notes" "/notes")
+          (list "calendar" "/calendar")
+          (list "rooms" "/rooms"))
+        (list))))
 
 ;; one stable id per app so boosted anchors swap INTO the wrapper's
 ;; inner (the wrapper survives every swap); hx-boost catches anchors
@@ -1402,11 +1413,14 @@ message (falsifiable inventory, never source sniffing).")
 
 (define filmstrip/tree-roots
   (lambda ()
-    (list
+    (append
+      (list
         (list "windows" "windows" filmstrip/windows-tree)
-      (list "code" "code" glochid/code-tree)
-      (list "prims" "prims" glochid/prims-tree)
-      (list "ui" "ui" glochid/ui-tree)))
+        (list "code" "code" glochid/code-tree))
+      (if (glochid/pp-active?)
+          (list (list "prims" "prims" glochid/prims-tree))
+          (list))
+      (list (list "ui" "ui" glochid/ui-tree))))
   "glochid's rail tree roots (windows / files / prims / ui). Redefining
 the lib's default host seam; the renderer + endpoints stay shared.
 The ui root inventories the DECLARED lookbook elements (the
@@ -2280,10 +2294,13 @@ every live main pane of the desktop, so the heal picks the ring only
 ;; habitat-pane faces: the root routes for open-or-focus + route/lookup
 ;; sanity. Sub-paths ride the OCaml gate plane (fwd prefixes), never
 ;; the Nopales table.
-(route "/todos" "glochid/fwd-todo")
-(route "/notes" "glochid/fwd-notes")
-(route "/calendar" "glochid/fwd-calendar")
-(route "/rooms" "glochid/fwd-rooms")
+(if (glochid/pp-active?)
+    (begin
+      (route "/todos" "glochid/fwd-todo")
+      (route "/notes" "glochid/fwd-notes")
+      (route "/calendar" "glochid/fwd-calendar")
+      (route "/rooms" "glochid/fwd-rooms"))
+    (list))
 
 (route "/" "glochid/shell")
 (route "/filmstrip" "glochid/shell")
@@ -2413,7 +2430,7 @@ let register_lookbook_prims ~(rt : Runtime.t) : unit =
                (Ast.Prim_error
                   ("lookbook/eval", "usage: (lookbook/eval src)", "bad-args"))))
 
-let load ~(rt : Runtime.t) : unit =
+let load ~(rt : Runtime.t) ~(pp : bool) : unit =
   register_config_default_prims ~rt;
   register_theme_prims ~rt;
   register_lookbook_prims ~rt;
@@ -2427,5 +2444,12 @@ let load ~(rt : Runtime.t) : unit =
   (* libs/lookbook: declared ui values + the two projections (the
      lookbook face in surface_source rides it through lookbook/eval). *)
   Runtime.load_source ~rt Libs_source.lookbook_lib;
+  (* Optional Pricklypear activation: the surfaced Nopales layer reads
+     [glochid/pp-active?] at boot to register PP-only routes and to build
+     the app/rail lists. Injected here so `Surface.load ~pp:false`
+     (the default) is genuinely base-only, and no host prim is needed. *)
+  Runtime.load_source ~rt
+    (Printf.sprintf "(define (glochid/pp-active?) %s)"
+       (if pp then "#t" else "#f"));
   Runtime.load_source ~rt glochid_source;
   Runtime.load_source ~rt surface_source

@@ -714,5 +714,10 @@ let fwd_register ~(rt : Runtime.t) ~(env : Eio_unix.Stdenv.base) : unit =
                      ( "habitat/fwd-prefix",
                        "kernel paths cannot be forwarded (auth.route-visibility)",
                        "refused" )))
-       | _ -> prim_err "habitat/fwd-prefix" "usage: (habitat/fwd-prefix path)")
+       | _ -> prim_err "habitat/fwd-prefix" "usage: (habitat/fwd-prefix path)");
+  (* P1: install the HTTP gate seam. This runs only when the adapter is
+     explicitly activated (main calls fwd_register under --pp); the base
+     binary keeps Forward's no-adapter defaults. *)
+  Forward.install ~match_path:fwd_matches_prefix
+    ~respond_with:forward_response
 

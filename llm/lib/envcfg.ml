@@ -11,11 +11,27 @@ let getenv name ~default =
   | Some s when s <> "" -> s
   | Some _ | None -> default
 
+(** Keys a project [./.env] may set for glochid: provider configuration only.
+    A cloned repository controls this file, so it must not be able to set
+    HOME/XDG_CONFIG_HOME (plugin discovery + trust store), PATH, session
+    dirs, adapter activation, or any other process knob. pp-remote keeps
+    the unrestricted default. *)
+let provider_key (k : string) : bool =
+  match k with
+  | "GLOCHID_API_KEY" | "GLOCHID_BASE_URL" | "GLOCHID_MODEL"
+  | "GLOCHID_MAX_TURNS"
+  | "AGENT_API_KEY" | "AGENT_BASE_URL" | "AGENT_MODEL"
+  | "AGENT_MAX_TURNS" ->
+      true
+  | _ -> false
+
 (* Auto-load ./.env if present (KEY=VALUE or `export KEY=VALUE` lines).
    Runs before any cfg/env read so AGENT_API_KEY etc. land without the
    user sourcing the file. Quoted values are unquoted; blank lines and
-   # comments are skipped. Failures are silent (file optional). *)
-let load_dotenv () : unit =
+   # comments are skipped. Failures are silent (file optional).
+   [allow] filters which keys reach the process env: pass
+   [Envcfg.provider_key] in a project-controlled agent. *)
+let load_dotenv ?(allow = fun (_ : string) -> true) () : unit =
   let path = ".env" in
   match open_in path with
   | exception _ -> ()
@@ -42,7 +58,7 @@ let load_dotenv () : unit =
                  then String.sub v_raw 1 (n - 2)
                  else v_raw
                in
-               Unix.putenv k v
+               if allow k then Unix.putenv k v
            | None -> ()
          end
        done

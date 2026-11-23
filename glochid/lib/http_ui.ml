@@ -120,7 +120,7 @@ let dispatch_fwd (env : Eio_unix.Stdenv.base) (reqd : Httpun.Reqd.t)
     (method_ : string) (path : string) (query : string) (body : string)
     ~(hx : bool) =
   match
-    Habitat.forward_response ~env ~meth:method_ ~path ~query ~body ~hx
+    Forward.respond ~env ~meth:method_ ~path ~query ~body ~hx
   with
   | Error e ->
       Http_kit.respond_html reqd ~status:`Internal_server_error ~relay:[]
@@ -337,7 +337,7 @@ let serve ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t)
         if String.length path >= 8 && String.sub path 0 8 = "/assets/" then
           fork_work (fun () ->
               serve_asset reqd (String.sub path 8 (String.length path - 8)))
-        else if Habitat.fwd_matches_prefix path <> None then
+        else if Forward.matches path <> None then
           fork_work (fun () ->
               let body = Http_kit.read_body reqd in
               dispatch_fwd env reqd "GET" path
@@ -354,7 +354,7 @@ let serve ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t)
                registered prefix (/todo /notes /calendar) forwards to the
                habitat with the operator's session (glochid.borg
                habitat-panes). *)
-            if Habitat.fwd_matches_prefix path <> None then
+            if Forward.matches path <> None then
               fork_work (fun () ->
                   let body = Http_kit.read_body reqd in
                   dispatch_fwd env reqd "POST" path

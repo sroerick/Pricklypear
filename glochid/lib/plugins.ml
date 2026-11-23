@@ -38,6 +38,43 @@ let project_dir () =
   then ".agent/plugins"
   else ".glochid/plugins"
 
+(* ---- project trust (borge/glochid.borg plugin-model SAFETY, U1) ----
+   Global plugins are the operator's own and load unconditionally.
+   PROJECT plugins are skipped unless the operator has explicitly trusted
+   this canonical project path. Trust is path-keyed (not content-keyed):
+   inspectable, and the documented limitation is that re-cloning at the
+   same path inherits the decision. --no-plugins disables every dir. *)
+let trust_file () : string =
+  Filename.concat (Config.config_home ()) "trusted-projects.txt"
+
+let project_root () : string =
+  try Unix.realpath (Sys.getcwd ()) with _ -> Sys.getcwd ()
+
+let trusted_projects () : string list =
+  try
+    let ic = open_in_bin (trust_file ()) in
+    let s = In_channel.input_all ic in
+    close_in ic;
+    String.split_on_char '\n' s
+    |> List.map String.trim
+    |> List.filter (fun l -> l <> "")
+  with Sys_error _ -> []
+
+let is_trusted () : bool = List.mem (project_root ()) (trusted_projects ())
+
+(** Record the canonical cwd as trusted and return it. Idempotent. *)
+let trust_project () : string =
+  let root = project_root () in
+  if not (is_trusted ()) then begin
+    Config.mkdir_p (Filename.dirname (trust_file ()));
+    let oc =
+      open_out_gen [ Open_append; Open_creat ] 0o600 (trust_file ())
+    in
+    output_string oc (root ^ "\n");
+    close_out oc
+  end;
+  root
+
 let slurp path =
   let ic = open_in_bin path in
   let n = in_channel_length ic in
@@ -66,15 +103,25 @@ let load_file (rt : Runtime.t) (path : string) : (unit, string) Result.t =
       Error (Printf.sprintf "read error %d:%d: %s" ln col msg)
   | Ast.Interp_error ie -> Error (Ast.pp_interp_error ie)
 
-(** Load all plugins; print a one-line report per file to stderr. *)
-let load_all (rt : Runtime.t) : unit =
-  let dirs = [ global_dir (); project_dir () ] in
+(** Load a directory's plugins; print a one-line report per file to stderr. *)
+let load_dir (rt : Runtime.t) (dir : string) : unit =
   List.iter
-    (fun dir ->
-      List.iter
-        (fun path ->
-          match load_file rt path with
-          | Ok () -> Printf.eprintf "[plugins] %s ✓\n%!" path
-          | Error e -> Printf.eprintf "[plugins] %s ✗ %s\n%!" path e)
-        (pp_files_of dir))
-    dirs
+    (fun path ->
+      match load_file rt path with
+      | Ok () -> Printf.eprintf "[plugins] %s ✓\n%!" path
+      | Error e -> Printf.eprintf "[plugins] %s ✗ %s\n%!" path e)
+    (pp_files_of dir)
+
+(** Load all plugins. GLOBAL plugins always load; PROJECT plugins load only
+    when the canonical project is trusted (see [trust_project]). *)
+let load_all (rt : Runtime.t) : unit =
+  load_dir rt (global_dir ());
+  let pdir = project_dir () in
+  let pfiles = pp_files_of pdir in
+  if pfiles = [] then ()
+  else if is_trusted () then load_dir rt pdir
+  else
+    Printf.eprintf
+      "[plugins] skipped %d project plugin(s): untrusted project %s\n\
+       [plugins] trust this project explicitly with: glochid --trust-project\n%!"
+      (List.length pfiles) (project_root ())

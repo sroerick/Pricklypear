@@ -10,6 +10,11 @@
       --mock-script FILE   canned provider replies (test/demo)
       --model NAME
       --base-url URL
+      --pp                 activate the optional Pricklypear adapter
+                           (habitat memory, package/binding browsing, app
+                           panes; also GLOCHID_PP=1). Default OFF: the base
+                           makes no habitat call and registers no PP tools
+                           or routes.
       --once               run ONE full glochid turn from piped stdin and exit
       -p EXPR              eval one Nopales expr and exit (pipe mode)
 
@@ -41,16 +46,21 @@ let pre_facts =
    process directly on the operator's machine -- no container, no \
    sandbox; your commands affect the operator's real system."
 
-let fact_lines =
-  "- tools: read, bash, memory (habitat durable store), plus any Nopales \
-   plugin tools loaded from \
-   ~/.config/glochid/plugins/*.pp and ./.glochid/plugins/*.pp\n\
-   - /code on this binary's web surface is a read-only file browser over cwd\n\
-   - /bindings is a read-only browser of the habitat's function grammar via \
-     the bind/* bridge prims\n\
-   - memory tool: save durable facts/goals/decisions with action=remember \
-     (short title + content; optional tags \"a,b\"); search with \
-     action=search before saving to avoid duplicate rows\n"
+let fact_lines (pp : bool) =
+  "- tools: read, bash"
+  ^ (if pp then ", memory (habitat durable store)" else "")
+  ^ ", plus any Nopales plugin tools loaded from \
+     ~/.config/glochid/plugins/*.pp and ./.glochid/plugins/*.pp \
+     (project plugins load only in a trusted project)\n\
+     - /code on this binary's web surface is a read-only file browser over cwd\n"
+  ^
+  (if pp then
+     "- /bindings is a read-only browser of the habitat's function grammar via \
+      the bind/* bridge prims\n\
+      - memory tool: save durable facts/goals/decisions with action=remember \
+      (short title + content; optional tags \"a,b\"); search with \
+      action=search before saving to avoid duplicate rows\n"
+   else "")
 
 let post_facts =
   "Conduct:\n\
@@ -60,8 +70,9 @@ let post_facts =
    - Never print secret VALUES (env vars ending in _API_KEY, _TOKEN, \
    _SECRET); reference them by name. Avoid full `env` dumps."
 
-let harness_context ~(model : string) ~(base_url : string) : string =
-  Harness.context ~pre_facts ~fact_lines ~post_facts ~model ~base_url
+let harness_context ~(pp : bool) ~(model : string) ~(base_url : string) : string =
+  Harness.context ~pre_facts ~fact_lines:(fact_lines pp) ~post_facts ~model
+    ~base_url
 
 (* Streaming-aware print: accumulate text deltas into the current
    assistant line so token fragments don't each get their own header.
@@ -97,7 +108,19 @@ let print_event = function
    block + assembly (llm/lib/harness.ml) with this binary's own narrative
    segments. *)
 let () =
-  Envcfg.load_dotenv ();
+  (* A project .env is repository-controlled. Only provider configuration
+     keys may reach the process env; HOME/XDG (plugin discovery + trust
+     store), PATH, session dirs, and adapter activation are ignored.
+     Activation is additionally snapshotted before .env for defence in
+     depth: a cloned repo must not be able to turn the adapter on. *)
+  let pp_env_before_dotenv =
+    match (Sys.getenv_opt "GLOCHID_PP", Sys.getenv_opt "AGENT_PP") with
+    | Some "1", _ -> true
+    | Some _, _ -> false          (* explicit GLOCHID_PP wins, incl. "0" *)
+    | None, Some "1" -> true      (* legacy compat, only when unset *)
+    | None, _ -> false
+  in
+  Envcfg.load_dotenv ~allow:Envcfg.provider_key ();
   let mock_script = ref None in
   let model = ref None in
   let base_url = ref None in
@@ -105,6 +128,9 @@ let () =
   let pipe_expr = ref None in
   let once = ref false in
   let serve = ref false in
+  let pp = ref false in
+  let no_plugins = ref false in
+  let do_trust = ref false in
   let open_browser = ref false in
   let port = ref 18090 in
   let do_stop = ref false in
@@ -124,6 +150,12 @@ let () =
          "DIR local-first lens root; its __config.json (sync-provided llm key+base) feeds provider config");
         ("--once", Arg.Set once, "run one full glochid turn from piped stdin and exit");
         ("--serve", Arg.Set serve, "serve the HTML chat surface on 127.0.0.1 until Ctrl-C (default port 18090)");
+        ("--pp", Arg.Set pp,
+         "activate the optional Pricklypear adapter (memory, bindings, app panes); also GLOCHID_PP=1 (legacy AGENT_PP=1). Default off");
+        ("--no-plugins", Arg.Set no_plugins,
+         "load no plugins at all (global or project)");
+        ("--trust-project", Arg.Set do_trust,
+         "record the current project as trusted (its .glochid/plugins may load) and exit");
         ("--port", Arg.Int (fun p -> port := p), "PORT fixed port for --serve (default 18090; 0 = random)");
         ("--open", Arg.Set open_browser, "with --serve: best-effort browser launch");
         ("--stop", Arg.Set do_stop, "send SIGTERM to the running --serve process and exit");
@@ -137,7 +169,18 @@ let () =
         ("-p", Arg.String (fun s -> pipe_expr := Some s), "EXPR eval and exit");
       ]
   in
-  Arg.parse speclist anon "glochid [--mock-script F] [--provider N] [--once] [--serve [--port P] [--open]] [-p EXPR]";
+  Arg.parse speclist anon "glochid [--mock-script F] [--provider N] [--pp] [--no-plugins] [--trust-project] [--once] [--serve [--port P] [--open]] [-p EXPR]";
+  (* Explicit project trust: record and exit. Deliberately a command, not
+     an interactive prompt, so it is scriptable and auditable. *)
+  if !do_trust then begin
+    let root = Plugins.trust_project () in
+    Printf.printf "trusted project: %s\n" root;
+    exit 0
+  end;
+  (* Optional Pricklypear adapter: explicit activation only. The flag reads
+     the PROCESS environment, not ./.env, so a cloned project cannot turn
+     the adapter on by shipping a dotenv file. *)
+  let pp_active = !pp || pp_env_before_dotenv in
   (* Pipe mode is entered either explicitly (--once) or implicitly when
      stdin is not a tty (surfaces smoke #2: `echo ... | glochid ...`). *)
   if !do_stop then begin
@@ -163,26 +206,32 @@ let () =
   let rt = Runtime.make () in
   Tools.install ~env ~resolve_path:Runtime.resolve_path
     ~register:(fun name run -> Runtime.register_builtin_tool rt name ~run);
-  (* Habitat bridge (borge/glochid.borg memory-bridge): mem/* prims on the
-     shared env + the `memory` tool when env credentials exist (no
-     creds -> prims still registered; they fail-soft at call time).
-     Registers in every mode (serve, REPL, pipe). *)
-  Habitat.register ~rt ~env;
-  Habitat.fwd_register ~rt ~env;
-  (match Habitat.creds ~env with
-   | Some _ ->
-       Runtime.register_builtin_tool rt "memory" ~run:(fun args ->
-           Habitat.memory_tool ~env args)
-   | None -> ());
+  (* Optional Pricklypear adapter (borge/glochid.borg memory-bridge):
+     mem/* prims + the `memory` tool + the forwarding bridge. Registered
+     ONLY under explicit activation; the base startup reads no PP
+     credential and exposes no PP tool. When active with no credentials the
+     prims still fail soft at call time, as before. *)
+  if pp_active then begin
+    Habitat.register ~rt ~env;
+    Habitat.fwd_register ~rt ~env;
+    (match Habitat.creds ~env with
+     | Some _ ->
+         Runtime.register_builtin_tool rt "memory" ~run:(fun args ->
+             Habitat.memory_tool ~env args)
+     | None -> ())
+  end;
   (* Boot-load the Nopales surface (libs/html + libs/hyper + the chat/code
      route-table handlers) so the HTML surface is Nopales-authored and
-     redefinable live (borge/glochid.borg surfaces). *)
-  Surface.load ~rt;
+     redefinable live (borge/glochid.borg surfaces). [~pp] injects the
+     surface's own activation predicate, so PP-only routes/app faces are
+     absent from the base instead of failing at request time. *)
+  Surface.load ~rt ~pp:pp_active;
   (* habitat-pane forward prefixes (glochid.borg habitat-panes): register
      OCaml-side so the Nopales boot layer has no boot prim dependency --
      kernel paths refuse by construction in fwd_register_prefix. *)
-  ignore (List.map Habitat.fwd_register_prefix [ "/todos"; "/notes"; "/calendar"; "/rooms" ]);
-  Plugins.load_all rt;
+  if pp_active then
+    ignore (List.map Habitat.fwd_register_prefix [ "/todos"; "/notes"; "/calendar"; "/rooms" ]);
+  if not !no_plugins then Plugins.load_all rt;
   match !pipe_expr with
   | Some src ->
       (try
@@ -232,7 +281,7 @@ let () =
           base_url = cfg_base;
           api_key = cfg_key;
           model = cfg_model;
-          system = envget "SYSTEM" (harness_context ~model:cfg_model ~base_url:cfg_base);
+          system = envget "SYSTEM" (harness_context ~pp:pp_active ~model:cfg_model ~base_url:cfg_base);
         }
       in
       let script_cell =
@@ -267,9 +316,9 @@ let () =
         (* HTML primary surface: serve until shutdown resolves. *)
         let reload_surface () =
           Printf.eprintf "[glochid] SIGHUP: reloading surface + plugins\n%!";
-          (try Surface.load ~rt with e ->
+          (try Surface.load ~rt ~pp:pp_active with e ->
              Printf.eprintf "[glochid] surface reload failed: %s\n%!" (Printexc.to_string e));
-          (try Plugins.load_all rt with e ->
+          (try if not !no_plugins then Plugins.load_all rt with e ->
              Printf.eprintf "[glochid] plugin reload failed: %s\n%!" (Printexc.to_string e));
           Printf.eprintf "[glochid] reloaded\n%!"
         in
@@ -286,7 +335,9 @@ let () =
                                 provider-structured (the result file)
            The native kind is OPT-IN: the recorded flip gate is "do NOT flip
            the default until the loop has survived real overnight cards". *)
-        if !supervisor || envget "SUPERVISOR" "0" = "1" then
+        (* The PP run-primitive supervisor reads habitat credentials, so it
+           is adapter-only too: --pp (or GLOCHID_PP=1) is required. *)
+        if pp_active && (!supervisor || envget "SUPERVISOR" "0" = "1") then
           Eio.Fiber.fork ~sw (fun () -> Supervisor.run ~env ~sw);
         Fun.protect
           ~finally:(fun () -> Lifecycle.remove_pid_file ())

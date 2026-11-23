@@ -925,7 +925,7 @@ let test_welcome_mailto_footers ~rt () =
     same way the binary boots. *)
 let test_surfaces_nopales_routes ~rt () =
   (* Boot-load the surface (libs/html + libs/hyper + chat/code handlers). *)
-  Surface.load ~rt;
+  Surface.load ~rt ~pp:true;
   (* GET / renders the chat page skeleton with the htmx form + assets. *)
   (match Runtime.dispatch_route ~rt ~handler:"chat/page" ~method_:"GET"
            ~path:"/" ~params:[] ~headers:[] ~body:""
@@ -971,7 +971,7 @@ let test_surfaces_nopales_routes ~rt () =
     mode, and fails soft (muted notice on the root face, an empty
     level otherwise; no 500) when the bridge raises. *)
 let test_surfaces_bindings_browser ~rt () =
-  Surface.load ~rt;
+  Surface.load ~rt ~pp:true;
   Runtime.add_prim rt "bind/packages" (fun _ -> Ast.VStr {|["notes","todo"]|});
   Runtime.add_prim rt "bind/list" (fun _ -> Ast.VStr {|["todo/add","todo/list"]|});
   Runtime.add_prim rt "bind/get" (fun _ ->
@@ -1032,7 +1032,7 @@ let test_surfaces_bindings_browser ~rt () =
     -- and the server's OOB response lands already unfaded. A hyper/expect
     rides a real close roundtrip over the shell. *)
 let test_filmstrip_optimistic ~rt () =
-  Surface.load ~rt;
+  Surface.load ~rt ~pp:true;
   let has needle s =
     (try ignore (Str.search_forward (Str.regexp_string needle) s 0); true
      with Not_found -> false)
@@ -1139,7 +1139,7 @@ let test_filmstrip_optimistic ~rt () =
     issues face stands in on the agent runtime) plus a close-button
     roundtrip that empties the sink. *)
 let test_filmstrip_file_issue ~rt () =
-  Surface.load ~rt;
+  Surface.load ~rt ~pp:true;
   (* hermetic ws: a throwaway row file so stale pane state from an earlier
      test or run can never satisfy (or mask) the open roundtrip below *)
   let _ws = pin_ws ~rt "glochid-file-issue" in
@@ -1248,7 +1248,7 @@ let test_filmstrip_file_issue ~rt () =
     with its own scroll. hyper/expect rides a real GET / through the
     route machinery: the full page's <style> embeds glochid/base-css. *)
 let test_filmstrip_start_menu_cap ~rt () =
-  Surface.load ~rt;
+  Surface.load ~rt ~pp:true;
   let has needle s =
     (try ignore (Str.search_forward (Str.regexp_string needle) s 0); true
      with Not_found -> false)
@@ -1300,7 +1300,7 @@ let test_filmstrip_start_menu_cap ~rt () =
     answers its examples card and is registered in (lookbook/elements).
     hyper/expect rides a real GET / through the route machinery. *)
 let test_start_menu_repl ~rt () =
-  Surface.load ~rt;
+  Surface.load ~rt ~pp:true;
   (* hermetic ws: the shell reads the ws row (panes, focus, desktop), so an
      ambient row from an earlier test or a previous run shifts the render. *)
   let _ws = pin_ws ~rt "glochid-start-menu-repl" in
@@ -1360,7 +1360,7 @@ let test_start_menu_repl ~rt () =
     serves one level, and url-enc/url-dec round-trip. No habitat, no
     real workspace row needed -- filmstrip/ws-default covers the reads. *)
 let test_rail_trees ~rt () =
-  Surface.load ~rt;
+  Surface.load ~rt ~pp:true;
   let has needle s =
     (try ignore (Str.search_forward (Str.regexp_string needle) s 0); true
      with Not_found -> false)
@@ -1507,7 +1507,7 @@ let test_rail_trees ~rt () =
     ring); rail panes refuse (dock semantics); no d = cycle. Uses a
     temp ws file like the keys test. *)
 let test_move_to_desk ~rt () =
-  Surface.load ~rt;
+  Surface.load ~rt ~pp:true;
   let has needle s =
     (try ignore (Str.search_forward (Str.regexp_string needle) s 0); true
      with Not_found -> false)
@@ -1602,7 +1602,7 @@ let test_move_to_desk ~rt () =
     the multipart emitter's captured part list, then hyper/stream over a
     page that has #log. *)
 let test_turn_replay_hyper_stream ~rt () =
-  Surface.load ~rt;
+  Surface.load ~rt ~pp:true;
   (* Build a page with #log (what the chat page skeleton renders). *)
   ignore (Runtime.eval_string ~rt
     {|(define pg (soup/parse "<div id=log><div>ready</div></div>"))|});
@@ -1634,7 +1634,7 @@ let test_turn_replay_hyper_stream ~rt () =
     status line, never a 500. Uses a temp ws file so the suite never
     touches a real .agent/workspace.json. *)
 let test_glochid_keys ~rt () =
-  Surface.load ~rt;
+  Surface.load ~rt ~pp:true;
   let has needle s =
     (try ignore (Str.search_forward (Str.regexp_string needle) s 0); true
      with Not_found -> false)
@@ -1747,7 +1747,7 @@ let test_glochid_keys ~rt () =
     list with the REAL templates (same calls the drain loop makes), replay
     through hyper/stream, and assert the nested DOM. *)
 let test_turn_replay_nested_blocks ~rt () =
-  Surface.load ~rt;
+  Surface.load ~rt ~pp:true;
   (* Build the part list OCaml-side via Runtime.call_template — the same
      producer path the drain loop uses (template output unwrapped from
      its raw-html sentinel), bound into the env for hyper/stream. *)
@@ -1813,7 +1813,7 @@ let test_turn_replay_nested_blocks ~rt () =
     plane itself (put/forward) is exercised by the probe against a live
     habitat; here the prim is canned. *)
 let test_habitat_panes ~rt () =
-  Surface.load ~rt;
+  Surface.load ~rt ~pp:true;
   let has needle s =
     (try ignore (Str.search_forward (Str.regexp_string needle) s 0); true
      with Not_found -> false)
@@ -1866,7 +1866,7 @@ let test_habitat_panes ~rt () =
     stage-only params re-render), the ui rail root over the declared
     inventory, and the no-card fail-soft path. *)
 let test_lookbook ~rt () =
-  Surface.load ~rt;
+  Surface.load ~rt ~pp:true;
   let has needle s =
     (try ignore (Str.search_forward (Str.regexp_string needle) s 0); true
      with Not_found -> false)

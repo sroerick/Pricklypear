@@ -1,0 +1,24 @@
+;; glochid_pp — the OPTIONAL Pricklypear adapter (P1).
+;;
+;; The base library (../lib) must not depend on this library. It exposes the
+;; PP transport (habitat.ml: creds, /api/eval client, memory/binding prims,
+;; forward gate) and the PP run-primitive supervisor. The executable and the
+;; test suite link both; only `--pp` / GLOCHID_PP=1 activates anything here.
+;;
+;; Module names stay unwrapped (Habitat, Supervisor) so the composition root
+;; and the existing tests did not need a namespace rename.
+(library
+ (name glochid_pp)
+ (wrapped false)
+ (modules habitat supervisor)
+ (libraries
+  pricklypear-glochid.lib
+  pricklypear-llm
+  pricklypear-httpc
+  pricklypear-lisp
+  pricklypear-common
+  yojson
+  cstruct
+  eio
+  eio_main
+  unix))
