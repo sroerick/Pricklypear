@@ -68,6 +68,14 @@ if [ -f "$PLUGINS/pp-borge/project_work.py" ]; then
   ok "pp-borge work projection self-test"
 fi
 
+# Borge-reference execution has a non-card resolver and a non-commenting drift
+# path. Its opaque work id never crosses into the todo APIs.
+if [ -f "$PLUGINS/pp-borge/requirement.py" ]; then
+  python3 "$PLUGINS/pp-borge/requirement.py" --self-test \
+    || fail "pp-borge requirement.py --self-test failed"
+  ok "pp-borge requirement execution self-test"
+fi
+
 # pp-borge stages a pinned claim at .borg/cards/<cid>.borg; the host write is
 # pure and must keep writing exact bytes (and never a file on a skip).
 if [ -f "$PLUGINS/pp-borge/materialize.py" ]; then
