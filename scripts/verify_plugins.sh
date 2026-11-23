@@ -60,4 +60,14 @@ if [ -f "$PLUGINS/pp-borge/import_corpus.py" ]; then
   ok "pp-borge importer self-test"
 fi
 
+# pp-borge stages a pinned claim at .borg/cards/<cid>.borg; the host write is
+# pure and must keep writing exact bytes (and never a file on a skip).
+if [ -f "$PLUGINS/pp-borge/materialize.py" ]; then
+  command -v python3 >/dev/null 2>&1 \
+    || fail "python3 not found (needed for the pp-borge materialize test)"
+  python3 "$PLUGINS/pp-borge/materialize.py" --self-test \
+    || fail "pp-borge materialize.py --self-test failed"
+  ok "pp-borge materialize self-test"
+fi
+
 ok "plugins root: $PLUGINS ($n package(s))"
