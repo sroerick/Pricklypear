@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Deprecated shim — use the OCaml CLI.
 
-  dune build cli/bin/pp_eval.exe
+  dune build --root . cli/bin/pp_eval.exe
   export PP_EVAL=$PWD/_build/default/cli/bin/pp_eval.exe
   # or: scripts/pp-eval.sh …
 
@@ -33,7 +33,7 @@ def main() -> int:
     print(
         "pp_eval.py: OCaml pp-eval not found. Build:\n"
         "  eval $(opam env --switch=poohstack --set-switch)\n"
-        "  dune build cli/bin/pp_eval.exe\n"
+        "  dune build --root . cli/bin/pp_eval.exe\n"
         f"  export PP_EVAL={root}/_build/default/cli/bin/pp_eval.exe",
         file=sys.stderr,
     )

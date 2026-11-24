@@ -16,7 +16,7 @@ export PP_URL PP_USER="${PP_USER:-admin}" PP_PASS="${PP_PASS:-admin}" PP_EVAL
 
 if [ ! -x "$PP_EVAL" ]; then
   eval $(opam env --switch=poohstack --set-switch)
-  dune build cli/bin/pp_eval.exe image
+  dune build --root . cli/bin/pp_eval.exe image
   PP_EVAL="$ROOT/_build/default/cli/bin/pp_eval.exe"
 fi
 
@@ -25,8 +25,8 @@ curl -sf -o /dev/null "$PP_URL/health"
 
 echo "[verify_notes_tree] unit tests"
 eval $(opam env --switch=poohstack --set-switch)
-dune exec image/test/tree_store_test.exe
-dune exec image/test/primitives_test.exe >/tmp/pp-prims-test.out
+dune exec --root . image/test/tree_store_test.exe
+dune exec --root . image/test/primitives_test.exe >/tmp/pp-prims-test.out
 tail -3 /tmp/pp-prims-test.out
 
 echo "[verify_notes_tree] tree prims + notes façade"

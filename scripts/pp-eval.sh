@@ -40,11 +40,11 @@ if command -v dune >/dev/null 2>&1; then
   if [ -n "${OPAM_SWITCH_PREFIX:-}" ] || command -v opam >/dev/null 2>&1; then
     :
   fi
-  exec dune exec -- cli/bin/pp_eval.exe "$@"
+  exec dune exec --root . -- cli/bin/pp_eval.exe "$@"
 fi
 
 echo "pp-eval: no binary found. Build with:" >&2
 echo "  eval \$(opam env --switch=poohstack --set-switch)" >&2
-echo "  dune build cli/bin/pp_eval.exe" >&2
+echo "  dune build --root . cli/bin/pp_eval.exe" >&2
 echo "  export PP_EVAL=$BUILD" >&2
 exit 2

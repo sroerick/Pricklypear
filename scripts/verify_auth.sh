@@ -7,11 +7,11 @@ cd "$PP_ROOT"
 
 eval "$(opam env --switch=poohstack --set-switch)"
 
-echo "[verify_auth] dune build @all"
-dune build @all
+echo "[verify_auth] dune build --root . @all"
+dune build --root . @all
 
-echo "[verify_auth] dune runtest"
-dune runtest --force
+echo "[verify_auth] dune runtest --root ."
+dune runtest --root . --force
 
 echo "[verify_auth] ensuring dev stack"
 scripts/dev.sh start

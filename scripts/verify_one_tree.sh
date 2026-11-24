@@ -5,7 +5,7 @@
 #   - Postgres + image up via: scripts/dev.sh start
 #     (or already running on PP_HTTP_PORT / PP_DB_PORT)
 #   - Built tree: eval $(opam env --switch=poohstack --set-switch)
-#                 dune build @all
+#                 dune build --root . @all
 #
 # Env (defaults match scripts/dev.sh):
 #   PP_HTTP_PORT=18080  PP_DB_PORT=5433  PP_SOCKET_DIR=/tmp
@@ -37,8 +37,8 @@ if command -v opam >/dev/null 2>&1; then
   eval "$(opam env --switch=poohstack --set-switch)" 2>/dev/null || true
 fi
 cd "$PP_ROOT" || fail "cd $PP_ROOT"
-dune build @all || fail "dune build @all"
-dune runtest image/test/tree_store_test.exe || fail "tree_store_test"
+dune build --root . @all || fail "dune build @all"
+dune runtest --root . image/test/tree_store_test.exe || fail "tree_store_test"
 ok "dune build + tree_store_test"
 
 # 2a. label codec: SQL tree_enc_label must be ltree-safe and round-trip for
