@@ -1,7 +1,6 @@
 (** Round-trip tests for ai_store (needs Postgres from scripts/dev.sh).
 
-    Skips cleanly when PP_DB is unreachable so unit CI without PG still
-    builds. Live smoke is the primary verification. *)
+    Fails (UNVERIFIED) when PP_DB is unreachable. Live smoke is the primary verification. *)
 
 let env_or name dft =
   match Sys.getenv_opt name with Some s when s <> "" -> s | _ -> dft
@@ -21,8 +20,7 @@ let with_store f =
       Pricklypear_image_lib.Store.connect store;
       match Pricklypear_image_lib.Store.conn_of store with
       | None ->
-          Printf.printf
-            "SKIP: no postgres (set PP_DB_* / run scripts/dev.sh)\n%!"
+          Alcotest.fail "UNVERIFIED: no postgres (set PP_DB_* / run scripts/dev.sh)"
       | Some _ -> f store)
 
 let test_round_trip () =

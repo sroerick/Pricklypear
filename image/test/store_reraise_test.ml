@@ -29,7 +29,7 @@
        double insert) and rejects other classes (real 22012 divide-by-
        zero).
 
-   Skips cleanly when no Postgres is reachable (scripts/dev.sh). *)
+   Fails (UNVERIFIED) when no Postgres is reachable (scripts/dev.sh). *)
 
 module S = Pricklypear_image_lib.Store
 module A = Pricklypear_image_lib.Auth_store
@@ -74,11 +74,11 @@ let test_no_db_arms_unchanged () =
   Alcotest.(check bool) "no-DB get_user_by_username is None" true
     (A.get_user_by_username t "nope" = None)
 
-(* ---- real-PG group (skips when unreachable) ----
+(* ---- real-PG group (fails when unreachable) ----
 
    The dev cluster (scripts/dev.sh) superuser is [postgres] with trust
    auth; a prod-shaped env uses PP_DB_USER. Try the env user first, then
-   the dev.sh default — and SKIP EXPLICITLY (Alcotest.skip) when no
+   the dev.sh default — and FAIL (UNVERIFIED) when no
    connect succeeds, never a vacuous pass. *)
 
 let with_store ~database f =
@@ -104,11 +104,9 @@ let with_store ~database f =
       (match try_cfg users with
        | Some t -> f t
        | None ->
-           (* No Alcotest.skip in this version; the SKIP line is the loud
-             marker (rls_floor precedent). A real-PG claim requires the
-             tests to actually run — grep the output, never assume. *)
-           Printf.printf "SKIP: no postgres reachable (set PP_DB_* / run scripts/dev.sh)\n%!";
-           ()))
+           (* Unreachable PG is a failure, not a pass: an exit-0 skip
+             reads as green in a default dune runtest. *)
+           Alcotest.fail "UNVERIFIED: no postgres (set PP_DB_* / run scripts/dev.sh)"))
 
 (* A missing-table (42P01) OR missing-migration-function (42883) DB —
    both are "the schema isn't there"; what matters is RAISE, not the

@@ -1,5 +1,5 @@
 (** Branch diff classification (branching.diff): Store.diff_branches.
-    Needs Postgres (scripts/dev.sh). Skips if unreachable.
+    Needs Postgres (scripts/dev.sh). Fails (UNVERIFIED) if unreachable.
 
     Verifies: modified fn carries parsed from/to exprs; added/removed
     across two empty-lens children of main; shared unchanged defs are
@@ -21,8 +21,7 @@ let with_store f =
       S.connect store;
       match S.conn_of store with
       | None ->
-          Printf.printf
-            "SKIP: no postgres (set PP_DB_* / run scripts/dev.sh)\n%!"
+          Alcotest.fail "UNVERIFIED: no postgres (set PP_DB_* / run scripts/dev.sh)"
       | Some _ -> f store)
 
 let expr_of_int n =

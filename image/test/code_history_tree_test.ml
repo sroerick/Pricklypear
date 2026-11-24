@@ -15,7 +15,7 @@
     routes to tree_versions when the code path has version rows) and confirm
     code-diff still produces a diff against the nth-newest history entry.
 
-    Needs Postgres (scripts/dev.sh). Skips cleanly when unreachable.
+    Needs Postgres (scripts/dev.sh). Fails (UNVERIFIED) when unreachable.
 *)
 
 module S = Pricklypear_image_lib.Store
@@ -36,8 +36,7 @@ let with_store f =
       S.connect store;
       match S.conn_of store with
       | None ->
-          Printf.printf
-            "SKIP: no postgres (set PP_DB_* / run scripts/dev.sh)\n%!"
+          Alcotest.fail "UNVERIFIED: no postgres (set PP_DB_* / run scripts/dev.sh)"
       | Some _ -> f store)
 
 let uniq p = Printf.sprintf "cht_%s_%d_%d" p (Unix.getpid ()) (Random.int 1_000_000_000)

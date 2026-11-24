@@ -7,7 +7,7 @@
     versioned write (gen-read/undo carry order); a lens override of a
     node owns its own rank.
 
-    Needs Postgres (scripts/dev.sh). Skips cleanly when unreachable.
+    Needs Postgres (scripts/dev.sh). Fails (UNVERIFIED) when unreachable.
 
     Acceptance (one-tree.sibling-order verify stanzas):
       - insert three children, move third before first: children-of
@@ -38,8 +38,7 @@ let with_store f =
       S.connect store;
       match S.conn_of store with
       | None ->
-          Printf.printf
-            "SKIP: no postgres (set PP_DB_* / run scripts/dev.sh)\n%!"
+          Alcotest.fail "UNVERIFIED: no postgres (set PP_DB_* / run scripts/dev.sh)"
       | Some _ -> f store)
 
 let uniq p = Printf.sprintf "so_%s_%d" p (Random.int 1_000_000)

@@ -7,7 +7,7 @@
     reports the datum footprint instead of reading EMPTY. (describe …) carries
     the SCOPE grammar line.
 
-    Needs Postgres (scripts/dev.sh). Skips cleanly when unreachable. *)
+    Needs Postgres (scripts/dev.sh). Fails (UNVERIFIED) when unreachable. *)
 
 module S = Pricklypear_image_lib.Store
 module T = Pricklypear_image_lib.Tree_store
@@ -51,8 +51,7 @@ let with_store f =
       S.connect store;
       match S.conn_of store with
       | None ->
-          Printf.printf
-            "SKIP: no postgres (set PP_DB_* / run scripts/dev.sh)\n%!"
+          Alcotest.fail "UNVERIFIED: no postgres (set PP_DB_* / run scripts/dev.sh)"
       | Some _ -> f store)
 
 let write_fn store ~branch_id ~name ~body ~author =

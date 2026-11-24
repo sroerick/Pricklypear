@@ -5,7 +5,7 @@
     "profile" (author = the identity; mirrored data_rows path
     data.u.<user>.profile.<id>).
 
-    Against a real Postgres (scripts/dev.sh; skips when unreachable), the
+    Against a real Postgres (scripts/dev.sh; fails when unreachable), the
     profile must:
       - start false for a fresh identity (nothing stored);
       - persist: a NEW session of the same identity reads back what an
@@ -38,7 +38,7 @@ let with_store f =
       match S.conn_of st with
       | Some _ -> f st
       | _ ->
-          Printf.printf "SKIP: no postgres (set PP_DB_* / run scripts/dev.sh)\n%!")
+          Alcotest.fail "UNVERIFIED: no postgres (set PP_DB_* / run scripts/dev.sh)")
 
 let make_session st ~username ~user_id =
   let manifest =

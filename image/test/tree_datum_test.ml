@@ -11,7 +11,7 @@
     datum nodes too. created_at is stable across an upsert rewrite while
     updated_at advances.
 
-    Needs Postgres (scripts/dev.sh). Skips cleanly when unreachable.
+    Needs Postgres (scripts/dev.sh). Fails (UNVERIFIED) when unreachable.
 
     Acceptance (one-tree.tree-datum-prims verify stanzas):
       - tree/upsert a datum node of a declared type (all required fields) →
@@ -47,8 +47,7 @@ let with_store f =
       S.connect store;
       match S.conn_of store with
       | None ->
-          Printf.printf
-            "SKIP: no postgres (set PP_DB_* / run scripts/dev.sh)\n%!"
+          Alcotest.fail "UNVERIFIED: no postgres (set PP_DB_* / run scripts/dev.sh)"
       | Some _ -> f store)
 
 let uniq p = Printf.sprintf "td_%s_%d" p (Random.int 1_000_000)

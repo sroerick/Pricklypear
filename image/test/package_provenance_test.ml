@@ -9,7 +9,7 @@
 
     Membership must come from function_defs.package provenance (the
     (package …) form's stamp), with prefix only as a fallback. Needs PG
-    (scripts/dev.sh); skips cleanly when unreachable.
+    (scripts/dev.sh); fails (UNVERIFIED) when unreachable.
 
     We write directly via Store.persist_function ~package so the test
     does not depend on eval/package-form plumbing. *)
@@ -35,7 +35,7 @@ let with_store f =
       S.connect store;
       match S.conn_of store with
       | None ->
-          Printf.printf "SKIP: no postgres (set PP_DB_* / run scripts/dev.sh)\n%!"
+          Alcotest.fail "UNVERIFIED: no postgres (set PP_DB_* / run scripts/dev.sh)"
       | Some _ ->
           (* sweep leftovers from aborted runs *)
           (match S.conn_of store with

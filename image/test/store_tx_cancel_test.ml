@@ -33,16 +33,16 @@
        Store.current_tx is None) and asserts the next with_transaction
        ROLLS IT BACK, then opens a fresh tx, runs, and commits.
 
-   Skips cleanly when no Postgres is reachable (scripts/dev.sh). *)
+   Fails (UNVERIFIED) when no Postgres is reachable (scripts/dev.sh). *)
 
 module S = Pricklypear_image_lib.Store
 module IE = Pricklypear_image_lib.Io_eio
 
 let main_id = "00000000-0000-0000-0000-000000000001"
 
-(* Real-PG group (skips when unreachable) — same shape as
+(* Real-PG group (fails when unreachable) — same shape as
    store_reraise_test: try the env user first, then the dev.sh default
-   (postgres, trust auth), and skip loudly when nothing connects. *)
+   (postgres, trust auth), and fail when nothing connects. *)
 let with_store ~database f =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
@@ -63,9 +63,7 @@ let with_store ~database f =
       match try_cfg users with
       | Some t -> f t
       | None ->
-          Printf.printf
-            "SKIP: no postgres reachable (set PP_DB_* / run scripts/dev.sh)\n%!";
-          ())
+          Alcotest.fail "UNVERIFIED: no postgres (set PP_DB_* / run scripts/dev.sh)")
 
 (** A second store to the same database, used ONLY to observe the primary
     backend's pg_stat_activity.state. A same-connection probe cannot work:

@@ -2,7 +2,7 @@
    branch/pick — named writes transplant from a source branch's gen stream
    onto a target branch as NEW WRITES, cherry-pick over the log.
 
-   DB cases need Postgres via scripts/dev.sh and skip if unreachable.
+   DB cases need Postgres via scripts/dev.sh and fail if unreachable.
 
    Verifies:
    - pick at a checkpoint lands exactly the named bodies verbatim as new
@@ -38,8 +38,7 @@ let with_store f =
         S.connect store;
         match S.conn_of store with
         | None ->
-            Printf.printf
-              "SKIP: no postgres (set PP_DB_* / run scripts/dev.sh)\n%!"
+            Alcotest.fail "UNVERIFIED: no postgres (set PP_DB_* / run scripts/dev.sh)"
         | Some _ -> f store)
 
 let cleanup_branch store ~branch_id =

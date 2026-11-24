@@ -15,7 +15,7 @@
       resolves to None — nothing can be claimed by the caller.
 
    Suite session_actor needs no DB. Suite actor_provenance_db needs the
-   dev PG (scripts/dev.sh) and SKIPS cleanly when it is unreachable
+   dev PG (scripts/dev.sh) and FAILS (UNVERIFIED) when it is unreachable
    (auth_store_test precedent). *)
 
 module C = Pricklypear_image_lib.Crud
@@ -106,8 +106,7 @@ let with_store f =
       S.connect store;
       match S.conn_of store with
       | None ->
-          Printf.printf
-            "SKIP: no postgres (set PP_DB_* / run scripts/dev.sh)\n%!"
+          Alcotest.fail "UNVERIFIED: no postgres (set PP_DB_* / run scripts/dev.sh)"
       | Some _ ->
           cleanup_all store;
           f store)

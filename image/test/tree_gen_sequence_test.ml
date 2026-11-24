@@ -44,7 +44,7 @@
    run writes FRESH paths (a deterministic path would make a second run an
    ON CONFLICT echo-guard no-op and a stale leftover the echo guard skips).
 
-   Skips cleanly when no Postgres is reachable (scripts/dev.sh). *)
+   Fails (UNVERIFIED) when no Postgres is reachable (scripts/dev.sh). *)
 
 module S = Pricklypear_image_lib.Store
 module T = Pricklypear_image_lib.Tree_store
@@ -52,9 +52,9 @@ module IE = Pricklypear_image_lib.Io_eio
 
 let main_id = "00000000-0000-0000-0000-000000000001"
 
-(* Real-PG group (skips when unreachable) — same shape as
+(* Real-PG group (fails when unreachable) — same shape as
    store_reraise_test / store_tx_cancel_test: try the env user first,
-   then the dev.sh default (postgres, trust auth), and skip loudly when
+   then the dev.sh default (postgres, trust auth), and fail when
    nothing connects. *)
 let with_store ~database f =
   Eio_main.run @@ fun env ->
@@ -76,9 +76,7 @@ let with_store ~database f =
       match try_cfg users with
       | Some t -> f t
       | None ->
-          Printf.printf
-            "SKIP: no postgres reachable (set PP_DB_* / run scripts/dev.sh)\n%!";
-          ())
+          Alcotest.fail "UNVERIFIED: no postgres (set PP_DB_* / run scripts/dev.sh)")
 
 (** A second store to the same database = a SECOND pgx connection, used to
     write concurrently from an independent session (the point of the fix:

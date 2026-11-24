@@ -15,7 +15,7 @@
    app(+,[y;2]) proves the merge base was the FORK body — a head-base
    (main's post-move body) would have produced ours verbatim.
 
-   Needs Postgres (scripts/dev.sh). Skips if unreachable. *)
+   Needs Postgres (scripts/dev.sh). Fails (UNVERIFIED) if unreachable. *)
 
 module S = Pricklypear_image_lib.Store
 module A = Pricklypear_lisp.Ast
@@ -41,8 +41,7 @@ let with_store f =
       S.connect store;
       match S.conn_of store with
       | None ->
-          Printf.printf
-            "SKIP: no postgres (set PP_DB_* / run scripts/dev.sh)\n%!"
+          Alcotest.fail "UNVERIFIED: no postgres (set PP_DB_* / run scripts/dev.sh)"
       | Some _ -> f store)
 
 (* AST builders. base body = app(+, [x; 1]) — a fixed slot (app.fn) and
