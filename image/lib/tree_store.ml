@@ -1090,9 +1090,9 @@ let garden_root ~user =
 (* note-vis-p1: which user's namespace does [path] live under, if any?
    Both per-user namespaces count: the note garden (data.note.u.<owner>,
    labels stored RAW via path_label) and the claims namespace
-   (data.u.<owner>, labels stored ENCODED via enc_label) — claims-visibility
-   makes the read floor honor the write-side flag in both, so an unflagged
-   town namespace (u.hollis, u.gregor, …) reads world-readable. Paths
+   (data.u.<owner>, labels stored ENCODED via enc_label) — the read floor
+   honors the write-side flag in both, and an unflagged row reads private
+   (050; notes.borg note-visibility). Paths
    outside those (fn/route/data.book paths) have no owner and stay outside
    the vis gate. *)
 let note_garden_owner (path : string) : string option =
@@ -1443,9 +1443,9 @@ let get_by_uuid (conn : Store_db.conn) ~(uuid : string) : node option =
 
     [viewer] turns on the per-note vis floor (note-vis-p1): rows OUTSIDE
     the caller's own note garden must carry body vis users (any
-    signed-in caller) or be public — the DEFAULT for an unflagged write
-    (claims-visibility, operator policy 11-12) — or be private with the
-    viewer granted a membership in the containing space. Rows inside the
+    signed-in caller) or public, or be private (the DEFAULT for an
+    unflagged write, notes.borg note-visibility) with the viewer granted
+    a membership in the containing space. Rows inside the
     caller's garden pass unconditionally — vis only ever widens.
     Internal callers pass None and see the store unfiltered.
 
@@ -1527,14 +1527,11 @@ let find_by_body_field (conn : Store_db.conn) ~(kind : string option)
       if not vis_on then ""
       else
         Printf.sprintf
-          (* claims-visibility: the DEFAULT is public (operator policy 11-12,
-             "everything should be public by default") — an unflagged write in
-             another identity's namespace (the town namespaces) reads, and
-             private is an opt-in that still honors a grant lookup through the
-             space membership predicate. Before this, the floor hardcoded
-             'private' as the default and so 403/404'd writes the write side
-             had every right to call public. *)
-          "AND (path <@ $%d::ltree OR COALESCE(payload #>> '{body,vis}','public') = 'public' OR (COALESCE(payload #>> '{body,vis}','public') = 'users' AND $%d <> 'anonymous') OR (COALESCE(payload #>> '{body,vis}','public') = 'private' AND tree_path_in_member_space(path, $%d))) "
+          (* An absent vis is private (notes.borg note-visibility; owner
+             decision 2026-11-23). Public is an explicit flag; private honors
+             the space-membership grant. Mirrors Crud.note_vis_allows and
+             pp_vis_readable (050). *)
+          "AND (path <@ $%d::ltree OR COALESCE(payload #>> '{body,vis}','private') = 'public' OR (COALESCE(payload #>> '{body,vis}','private') = 'users' AND $%d <> 'anonymous') OR (COALESCE(payload #>> '{body,vis}','private') NOT IN ('public','users') AND tree_path_in_member_space(path, $%d))) "
           floor_i viewer_i viewer_i
     in
     let body_path = Printf.sprintf "{body,%s}" field in

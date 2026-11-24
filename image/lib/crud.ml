@@ -1600,11 +1600,11 @@ let wrap_path_exn name (f : unit -> value) : value =
 
 (* note-vis-p1: a direct-path read that lands in ANOTHER user's note
    garden (data.note.u.<owner>...) must clear the note's body vis floor.
-   The floor consults the WRITE-side visibility flag (claims-visibility,
-   operator policy 11-12: "everything should be public by default"):
-     public  = anyone, and the DEFAULT for an unflagged write — the town
-               namespaces (u.hollis, u.gregor, u.broland, …) read
-               world-readable without any flag;
+   The floor consults the WRITE-side visibility flag (notes.borg
+   note-visibility; owner decision 2026-11-23: private unless marked
+   public):
+     absent  = private — the DEFAULT; an unflagged write never widens;
+     public  = anyone, explicit flag only;
      users   = any signed-in caller;
      private = owner only, plus a GRANT lookup (a member of the space
                that contains the path reads it) — never a blanket deny,
@@ -1626,16 +1626,14 @@ let path_granted (conn : Store_db.conn) ~(path : string) ~(viewer : string)
   | _ -> false
 
 (** The read-floor decision, pure so the visibility contract is testable
-    without a DB (claims-visibility): the write-side flag decides, the
-    default is public, and [granted] is the grant lookup a private scope
-    consults (space membership) — never a blanket deny. *)
+    without a DB: the write-side flag decides, an absent or unrecognized
+    flag is private, and [granted] is the grant lookup a private scope
+    consults (space membership). No viewer name bypasses it. *)
 let note_vis_allows ~(vis : string) ~(viewer : string) ~(granted : bool) : bool =
-  if viewer = "root" then true (* sovereign reader: admin/root reads everything *)
-  else
-    match vis with
-    | "private" -> granted
-    | "users" -> viewer <> "anonymous"
-    | _ -> true (* "public" and every unflagged/unrecognized write *)
+  match vis with
+  | "public" -> true
+  | "users" -> viewer <> "anonymous"
+  | _ -> granted (* "private" and every unflagged/unrecognized write *)
 
 let gate_note_vis ~(conn : Store_db.conn)
     ~(node : Tree_store.node option) ~(path : string)
@@ -1647,7 +1645,7 @@ let gate_note_vis ~(conn : Store_db.conn)
          let vis =
            match Tree_store.body_string_field n.body "vis" with
            | Some s -> String.trim s
-           | None -> "public"
+           | None -> "private"
          in
          let allowed =
            note_vis_allows ~vis ~viewer:v

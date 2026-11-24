@@ -1,8 +1,9 @@
 # Onboarding: the visibility model
 
-Claims are the town's public record. The operator policy (roerick, 11-12) is
-plain: **everything should be public by default**. A write with no `vis` field
-reads world-readable. Private claims are the exception and they are opt-in.
+**Everything is private unless it is marked public** (owner decision,
+2026-11-23; book: `borge/notes.borg` note-visibility, "Absent reads private").
+A write with no `vis` field is readable only by its owner and by members of the
+space it lives in.
 
 ## The one flag
 
@@ -10,38 +11,26 @@ Every write may carry a `vis` field in its body:
 
 | `vis` | who reads it |
 | --- | --- |
-| *(absent, or `public`)* | **anyone** — that is the default |
+| *(absent)* or `private` | the owner, plus members of the space that contains the path (`data.s.<space>.*`, `tree_path_in_member_space`) — **the default** |
 | `users` | any signed-in identity (`anonymous` excluded) |
-| `private` | the owner, plus anyone holding a **grant** — membership in the space that contains the path (`data.s.<space>.*`, `tree_path_in_member_space`) |
+| `public` | **anyone**, anonymous included — explicit flag only |
 
-The same flag is honored on the read floor (`image/lib/crud.ml`,
-`gate_note_vis`, and `Tree_store.find_by_body_field`), so the write side and the
-read side can no longer disagree: a write named public is a read named public.
+The flag only ever widens. The same rule is enforced in three places that must
+agree: the database floor (`pp_vis_readable`, migration 050), the note gate
+(`Crud.note_vis_allows` / `gate_note_vis`), and `Tree_store.find_by_body_field`.
+No identity, `root` included, bypasses it.
 
-## Town namespaces are public
+## Publishing
 
-`data.note.u.hollis.*`, `data.note.u.gregor.*`, `data.note.u.broland.*`,
-`data.note.u.cholla.*` and the other town namespaces carry no flag and therefore
-read public. Broadcasting a write there is enough to make it visible; there is
-no second step.
-
-## Guests doing client work: private opt-in
-
-A guest running client work on its own habitat (for example `u.cos`, Jonny
-Wallace deploying his own PricklyPear with client data) opts a scope **private**
-before writing into it. One flag, written first:
-
-```
-**client data: mark the scope private FIRST**
-```
-
-Then the claimed material is `vis: private`, readable by the owner and by the
-members the owner admits to the scope's space. Admin/root reads everything
-regardless.
+To make something readable by others, set `vis: "public"` (or `"users"`) on the
+write. Town namespaces (`u.hollis`, `u.gregor`, …) follow the same rule: an
+unflagged write there is private to its owner.
 
 ## The edge, named
 
-Public by default plus journaled immutable claims means an accidental write is a
-permanent one. There is no retraction that unwrites history. Pick the scope's
-visibility *before* the first write into it, and treat a public write in a town
-namespace as a broadcast.
+Claims are journaled and immutable, so a write marked public stays public.
+Mark public deliberately.
+
+Public projections that are routes rather than rows, such as the public board
+(card titles and states only, `image/lib/public_board.ml`), are their own
+declared public surface and are unaffected by this flag.
