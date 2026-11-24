@@ -268,7 +268,11 @@ let node_of_row (row : Pgx.row) : node option =
 
 let cache_ttl_s = 30.0
 
-let cache_tbl : (string * string, float * int64 * node list) Hashtbl.t =
+(* Entry: (stored_at, family generation, grant generation, nodes). The
+   grant generation is the DB-side data_grants_generation counter (051):
+   grants change outside the image's write prims, so a data.* entry must
+   also match it or a revoke would be served until the TTL. *)
+let cache_tbl : (string * string, float * int64 * int64 * node list) Hashtbl.t =
   Hashtbl.create 16
 
 let cache_gen = ref 0L
@@ -900,14 +904,30 @@ let list_subtree (conn : Store_db.conn) ~(prefix : string)
     Freshness = the generation stamp plus TTL in the cache block above.
     Truncated reads (rows = limit) return fresh and stay uncached;
     complete snapshots are truncated to the caller's ask in memory. *)
+let grant_gen (conn : Store_db.conn) ~(prefix : string) : int64 =
+  (* Only datum paths are subject to grants; code paths (b.<branch>) skip
+     the read. No exception handler: inside a transaction a failed SELECT
+     aborts the tx, and hiding that would surface as a confusing later
+     error. The table ships with 051. *)
+  if not (prefix = "data" || String.starts_with ~prefix:"data." prefix) then 0L
+  else
+    match Store_db.exec conn "SELECT gen::text FROM data_grants_generation" with
+    | [ [ c ] ] ->
+        (match Pgx.Value.to_string c with
+         | Some s -> (try Int64.of_string s with _ -> 0L)
+         | None -> 0L)
+    | _ -> 0L
+
 let cached_list_subtree (conn : Store_db.conn) ~(prefix : string)
     ?(limit : int = 1000) () : node list =
   let key = (prefix, Store_db.current_pp_user ()) in
+  let grant_gen_now = grant_gen conn ~prefix in
   Eio.Mutex.lock cache_mu;
   let fam_gen_now = family_gen_locked prefix in
   let hit =
     match Hashtbl.find_opt cache_tbl key with
-    | Some (t, gen, nodes) when gen = fam_gen_now
+    | Some (t, gen, ggen, nodes) when gen = fam_gen_now
+        && ggen = grant_gen_now
         && Unix.gettimeofday () -. t < cache_ttl_s -> Some nodes
     | _ -> None
   in
@@ -928,7 +948,7 @@ let cached_list_subtree (conn : Store_db.conn) ~(prefix : string)
       if List.length nodes < limit then begin
         Eio.Mutex.lock cache_mu;
         Hashtbl.replace cache_tbl key
-            (Unix.gettimeofday (), fam_gen_now, nodes);
+            (Unix.gettimeofday (), fam_gen_now, grant_gen_now, nodes);
         Eio.Mutex.unlock cache_mu
       end;
       nodes

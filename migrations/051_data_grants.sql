@@ -20,11 +20,13 @@
 --        - the tree_data_rows view.
 --      pp_node_visible, and so WITH CHECK, is untouched: a grant never
 --      opens a write. crud.ml's read-side mirror is Crud.visible_read_sql.
+--   5. data_grants_generation, bumped per statement on data_grants, which
+--      the in-image subtree cache keys data.* entries on.
 --
 -- NOT IN THIS STEP (book ORDER and KNOWN LEAK SURFACES): groups as
 -- grantees, agent owners and their default grant (step 3), any prim or UI
--- that creates grants (step 4), the cached-subtree key on a grant
--- generation, backlinks/search, the replication unit, and the RLS cost
+-- that creates grants (step 4), backlinks/search, the replication unit,
+-- and the RLS cost
 -- measurement against the production budget. Until a prim exists, only a
 -- superuser session writes this table.
 --
@@ -105,6 +107,31 @@ DROP TRIGGER IF EXISTS data_grants_revoke_cascade ON data_grants;
 CREATE TRIGGER data_grants_revoke_cascade
   AFTER UPDATE OF revoked_at ON data_grants
   FOR EACH ROW EXECUTE FUNCTION data_grants_revoke_cascade();
+
+-- Grant generation: one counter bumped by every statement that changes
+-- data_grants (cascaded revokes included, since they are statements too).
+-- The in-image subtree cache (Tree_store.cached_list_subtree) stores it with
+-- each data.* entry, so a revoke is seen on the next read instead of after
+-- the cache TTL (book: KNOWN LEAK SURFACES, cached subtree reads).
+CREATE TABLE IF NOT EXISTS data_grants_generation (
+  id   boolean PRIMARY KEY DEFAULT true CHECK (id),
+  gen  bigint NOT NULL DEFAULT 0
+);
+INSERT INTO data_grants_generation (id, gen) VALUES (true, 0)
+  ON CONFLICT (id) DO NOTHING;
+
+CREATE OR REPLACE FUNCTION data_grants_bump_generation() RETURNS trigger
+LANGUAGE plpgsql AS $fn$
+BEGIN
+  UPDATE data_grants_generation SET gen = gen + 1 WHERE id;
+  RETURN NULL;
+END
+$fn$;
+
+DROP TRIGGER IF EXISTS data_grants_bump_generation ON data_grants;
+CREATE TRIGGER data_grants_bump_generation
+  AFTER INSERT OR UPDATE OR DELETE OR TRUNCATE ON data_grants
+  FOR EACH STATEMENT EXECUTE FUNCTION data_grants_bump_generation();
 
 -- The one grant predicate.
 CREATE OR REPLACE FUNCTION tree_path_granted(p_path ltree, p_user text)

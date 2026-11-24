@@ -16,9 +16,11 @@
         rights) and needs the parent's reshare right; revoking a grant
         revokes its descendants and hides the row on the next read.
 
-    Not covered here (later rollout steps / leak surfaces): cached subtree
-    reads keyed on a grant generation, backlinks and search, agent owner
-    defaults.
+      - a revoke is seen on the next read through the in-image subtree
+        cache (cached_list_subtree keys on the grant generation).
+
+    Not covered here (later rollout steps / leak surfaces): backlinks and
+    search, agent owner defaults.
 
     Needs scripts/dev.sh Postgres; fails (UNVERIFIED) when unreachable. *)
 
@@ -163,8 +165,13 @@ let as_probe conn f =
     "CREATE ROLE pp_grants_probe NOLOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT";
   exec conn "GRANT SELECT, INSERT ON tree_nodes TO pp_grants_probe";
   exec conn
-    "GRANT SELECT ON data_space_members, data_spaces, data_grants \
-     TO pp_grants_probe";
+    "GRANT SELECT ON data_space_members, data_spaces, data_grants, \
+     data_grants_generation TO pp_grants_probe";
+  (* list_subtree reads through the 049 SECURITY DEFINER wrappers, whose
+     EXECUTE is revoked from PUBLIC. *)
+  exec conn
+    "GRANT EXECUTE ON FUNCTION pp_node_list(ltree, text, int, int), \
+     pp_node_get(ltree) TO pp_grants_probe";
   Fun.protect
     ~finally:(fun () ->
       exec conn "RESET ROLE";
@@ -318,6 +325,28 @@ let test_revoke_cascades () =
           Alcotest.(check int) "RLS: carol cannot read after revoke" 0
             (rls_sees conn ~path:row "carol")))
 
+(* Verify line 2's tail: a revoke is visible on the next read even through
+   the in-image subtree cache (Tree_store.cached_list_subtree), whose
+   entries are otherwise only invalidated by the image's own write prims. *)
+let test_revoke_through_cache () =
+  with_rows (fun conn ~ty ~row ~sib:_ ->
+      let parent = String.sub row 0 (String.rindex row '.') in
+      let g = grant conn ~ty ~prefix:row ~grantee:"bob" ~rights:[ "read" ] () in
+      let cached_sees () =
+        Db.with_pp_user "bob" (fun () ->
+            as_probe conn (fun () ->
+                set_pp_user conn "bob";
+                TS.cached_list_subtree conn ~prefix:parent ()
+                |> List.exists (fun (n : TS.node) -> n.path = row)))
+      in
+      Alcotest.(check bool) "cached read: bob sees the granted row" true
+        (cached_sees ());
+      Alcotest.(check bool) "cached read again (served from cache)" true
+        (cached_sees ());
+      revoke conn ~id:g;
+      Alcotest.(check bool) "after revoke the cached read hides the row" false
+        (cached_sees ()))
+
 let () =
   Random.self_init ();
   Alcotest.run "sharing-grants"
@@ -331,5 +360,7 @@ let () =
         ; Alcotest.test_case "grantee kinds" `Quick test_grantee_kinds
         ; Alcotest.test_case "attenuation narrows" `Quick test_attenuation_narrows
         ; Alcotest.test_case "revoke cascades" `Quick test_revoke_cascades
+        ; Alcotest.test_case "revoke through the subtree cache" `Quick
+            test_revoke_through_cache
         ] )
     ]
