@@ -1529,10 +1529,11 @@ let find_by_body_field (conn : Store_db.conn) ~(kind : string option)
         Printf.sprintf
           (* An absent vis is private (notes.borg note-visibility; owner
              decision 2026-11-23). Public is an explicit flag; private honors
-             the space-membership grant. Mirrors Crud.note_vis_allows and
-             pp_vis_readable (050). *)
-          "AND (path <@ $%d::ltree OR COALESCE(payload #>> '{body,vis}','private') = 'public' OR (COALESCE(payload #>> '{body,vis}','private') = 'users' AND $%d <> 'anonymous') OR (COALESCE(payload #>> '{body,vis}','private') NOT IN ('public','users') AND tree_path_in_member_space(path, $%d))) "
-          floor_i viewer_i viewer_i
+             the space-membership grant; a live read grant (051) widens
+             any row. Mirrors Crud.note_vis_allows / path_granted and
+             pp_vis_readable. *)
+          "AND (path <@ $%d::ltree OR COALESCE(payload #>> '{body,vis}','private') = 'public' OR (COALESCE(payload #>> '{body,vis}','private') = 'users' AND $%d <> 'anonymous') OR (COALESCE(payload #>> '{body,vis}','private') NOT IN ('public','users') AND tree_path_in_member_space(path, $%d)) OR tree_path_granted(path, $%d)) "
+          floor_i viewer_i viewer_i viewer_i
     in
     let body_path = Printf.sprintf "{body,%s}" field in
     let sql =

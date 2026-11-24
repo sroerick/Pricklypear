@@ -185,18 +185,19 @@ let test_rls_floor () =
         "CREATE ROLE pp_spaces_probe NOLOGIN NOSUPERUSER NOBYPASSRLS \
          NOINHERIT";
       exec conn "GRANT SELECT, INSERT ON tree_nodes TO pp_spaces_probe";
-        (* the RLS policy evaluates tree_path_in_member_space / tree_user_is_admin,
-           which read these tables as the probe role (029/030/033). *)
+        (* the RLS policy evaluates tree_path_in_member_space / tree_user_is_admin
+           / tree_path_granted, which read these tables as the probe role
+           (029/030/033/051). *)
         exec conn
-          "GRANT SELECT ON data_space_members, data_spaces, users \
+          "GRANT SELECT ON data_space_members, data_spaces, users, data_grants \
            TO pp_spaces_probe";
       Fun.protect
         ~finally:(fun () ->
           exec conn "RESET ROLE";
           exec conn "REVOKE SELECT, INSERT ON tree_nodes FROM pp_spaces_probe";
             exec conn
-              "REVOKE SELECT ON data_space_members, data_spaces, users \
-               FROM pp_spaces_probe";
+              "REVOKE SELECT ON data_space_members, data_spaces, users, \
+               data_grants FROM pp_spaces_probe";
           exec conn "DROP ROLE IF EXISTS pp_spaces_probe")
         (fun () ->
           exec conn "SET ROLE pp_spaces_probe";

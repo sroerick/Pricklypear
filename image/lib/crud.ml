@@ -141,6 +141,15 @@ let visible_sql ~(user_param : int) : string =
     "(author = $%d OR tree_is_seed_type(type_name) OR tree_path_in_member_space(path, $%d) OR tree_user_is_admin($%d))"
     user_param user_param user_param
 
+(** Read-side confinement: [visible_sql] plus a live read grant on the row's
+    path (branching.borg sharing-grants, migration 051, tree_path_granted —
+    the same predicate the view and pp_vis_readable call). Use it for reads
+    only; the write paths keep [visible_sql], so a grant never opens a
+    write. *)
+let visible_read_sql ~(user_param : int) : string =
+  Printf.sprintf "(%s OR tree_path_granted(path, $%d))"
+    (visible_sql ~user_param) user_param
+
 (** If [type_name] is declared on the store's branch, validate [fields_json]
     against its field list. An UNDECLARED type is a clean rejection
     (one-tree typed-nodes declared-type gate): a datum write must name a
@@ -311,7 +320,7 @@ let get (store : Store.t) ~(type_name : string) ~(id : string) : value =
         let sql =
           "SELECT fields::text, author FROM " ^ data_rel () ^ " " ^
           "WHERE type_name = $1 AND id = $2::uuid AND " ^
-          visible_sql ~user_param:3 in
+          visible_read_sql ~user_param:3 in
         let rows =
           Store_db.exec conn
             ~params:[ Pgx.Value.of_string type_name;
@@ -735,7 +744,7 @@ let data_history_json (store : Store.t) ~(viewer : string)
         let sql =
           "SELECT path::text FROM " ^ data_rel () ^
           " WHERE type_name = $1 AND id = $2::uuid AND " ^
-          visible_sql ~user_param:3 in
+          visible_read_sql ~user_param:3 in
         (match
            Store_db.exec conn
              ~params:[ Pgx.Value.of_string type_name;
@@ -1043,7 +1052,7 @@ let list
         in
         let sql =
           "SELECT id::text, fields::text FROM " ^ data_rel () ^ " " ^
-          "WHERE type_name = $1 AND " ^ visible_sql ~user_param:3 ^
+          "WHERE type_name = $1 AND " ^ visible_read_sql ~user_param:3 ^
           order_by ^ " LIMIT $2" in
         let rows =
           Store_db.exec conn
@@ -1076,7 +1085,7 @@ let find_row
         let sql =
           "SELECT fields::text FROM " ^ data_rel () ^ " " ^
           "WHERE type_name = $1 AND fields->>$2 = $3 AND " ^
-          visible_sql ~user_param:4 ^ " " ^
+          visible_read_sql ~user_param:4 ^ " " ^
           (* latest: newest row wins (function_stat "last run" widget).
              Default stays oldest-first (first-row-wins) for existing
              callers (issues register etc.). *)
@@ -1131,7 +1140,7 @@ let find_rows
               i := !i + 2)
             filters;
           Buffer.add_string buf
-            (Printf.sprintf " AND %s" (visible_sql ~user_param:!i));
+            (Printf.sprintf " AND %s" (visible_read_sql ~user_param:!i));
           params := !params @ [ Pgx.Value.of_string user ];
           i := !i + 1;
             let order_by =
@@ -1177,7 +1186,7 @@ let list_with_author
         in
         let sql =
           "SELECT id::text, author, fields::text FROM " ^ data_rel () ^ " " ^
-          "WHERE type_name = $1 AND " ^ visible_sql ~user_param:3 ^
+          "WHERE type_name = $1 AND " ^ visible_read_sql ~user_param:3 ^
           order_by ^ " LIMIT $2" in
         let rows =
           Store_db.exec conn
@@ -1228,7 +1237,7 @@ let find_rows_with_author
               i := !i + 2)
             filters;
           Buffer.add_string buf
-            (Printf.sprintf " AND %s" (visible_sql ~user_param:!i));
+            (Printf.sprintf " AND %s" (visible_read_sql ~user_param:!i));
           params := !params @ [ Pgx.Value.of_string user ];
           i := !i + 1;
           let order_by =
@@ -1261,7 +1270,7 @@ let find_random (store : Store.t) ~(type_name : string) : value =
         let user = session_user () in
         let sql =
           "SELECT id::text, fields::text FROM " ^ data_rel () ^ " " ^
-          "WHERE type_name = $1 AND " ^ visible_sql ~user_param:2 ^ " " ^
+          "WHERE type_name = $1 AND " ^ visible_read_sql ~user_param:2 ^ " " ^
           "ORDER BY random() LIMIT 1"
         in
         let rows =
@@ -1291,7 +1300,7 @@ let find_text
         let sql =
           "SELECT id::text, fields::text FROM " ^ data_rel () ^ " " ^
           "WHERE type_name = $1 AND fields->>$2 ILIKE $3 AND " ^
-          visible_sql ~user_param:5 ^ " " ^
+          visible_read_sql ~user_param:5 ^ " " ^
           "ORDER BY created_at ASC LIMIT $4"
         in
         let pat = "%" ^ needle ^ "%" in
@@ -1332,7 +1341,7 @@ let count_by_type (store : Store.t) ~(type_name : string) : int =
       let user = session_user () in
       let sql =
         "SELECT COUNT(*)::int FROM " ^ data_rel () ^
-        " WHERE type_name = $1 AND " ^ visible_sql ~user_param:2
+        " WHERE type_name = $1 AND " ^ visible_read_sql ~user_param:2
       in
       let rows =
         Store_db.exec conn
@@ -1379,7 +1388,7 @@ let counts_by_type (store : Store.t) : (string * int) list =
       let user = session_user () in
       let sql =
         "SELECT type_name, COUNT(*)::int FROM " ^ data_rel () ^
-        " WHERE " ^ visible_sql ~user_param:1 ^
+        " WHERE " ^ visible_read_sql ~user_param:1 ^
         " GROUP BY type_name ORDER BY type_name ASC"
       in
       let rows =
@@ -1404,7 +1413,7 @@ let list_data_type_names (store : Store.t) : string list =
       let user = session_user () in
       let sql =
         "SELECT DISTINCT type_name FROM " ^ data_rel () ^
-        " WHERE " ^ visible_sql ~user_param:1 ^
+        " WHERE " ^ visible_read_sql ~user_param:1 ^
         " ORDER BY type_name ASC"
       in
       let rows =
@@ -1433,7 +1442,7 @@ let list_page
         "SELECT id::text, fields::text, author, " ^
         "created_at::text, updated_at::text " ^
         "FROM " ^ data_rel () ^ " WHERE type_name = $1 AND " ^
-        visible_sql ~user_param:4 ^ " " ^
+        visible_read_sql ~user_param:4 ^ " " ^
         "ORDER BY created_at ASC LIMIT $2 OFFSET $3"
       in
       let rows =
@@ -1473,7 +1482,7 @@ let get_row
         "SELECT id::text, fields::text, author, " ^
         "created_at::text, updated_at::text " ^
         "FROM " ^ data_rel () ^ " WHERE type_name = $1 AND id = $2::uuid AND " ^
-        visible_sql ~user_param:3
+        visible_read_sql ~user_param:3
       in
       let rows =
         Store_db.exec conn
@@ -1615,12 +1624,14 @@ let wrap_path_exn name (f : unit -> value) : value =
 let path_granted (conn : Store_db.conn) ~(path : string) ~(viewer : string)
     : bool =
   (* The grant side of a private scope: membership in the space that
-     contains [path] (a data.s.<space> subtree), the one membership predicate the
-     storage floor already trusts (tree_path_in_member_space, 029/043). *)
+     contains [path] (a data.s.<space> subtree, tree_path_in_member_space,
+     029/043) or a live read grant on it (tree_path_granted, 051) — the
+     predicates the storage floor already trusts. *)
   match
     Store_db.exec conn
       ~params:[ Pgx.Value.of_string path; Pgx.Value.of_string viewer ]
-      "SELECT tree_path_in_member_space($1::ltree, $2::text)"
+      "SELECT tree_path_in_member_space($1::ltree, $2::text) \
+       OR tree_path_granted($1::ltree, $2::text)"
   with
   | [ [ c ] ] -> Pgx.Value.to_bool c |> Option.value ~default:false
   | _ -> false
