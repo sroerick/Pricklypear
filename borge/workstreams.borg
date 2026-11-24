@@ -230,7 +230,7 @@
               "libs/kanban/lib.pp (kanban/stale; kanban/move-card; todo/item/set-state)"
               "libs/workstreams/lib.pp (/pulse stale flags + HUMAN-REVIEW rollup)"
               "work-triage triage-pass (read-plan-act loop; stream placement rule)")
-  (status implemented-live)
+  (status implemented)
   (verify
    (test "a filed issue is ONE object on the Board TODO column in the shared space, visible in the operator register"
          "a triaged issue carries kind, stream, priority, and an owner; the stream matches its kind + blast radius"
