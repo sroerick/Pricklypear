@@ -5,7 +5,8 @@
     "Add a todo-item to the list with the given state (uses create, the
      id-generating convenience; the board re-reads)."
     (let ((lid (if (string-eq (as-str list-id) "") (todo/ensure-inbox) (as-str list-id))))
-      (create (quote todo-item)
+      (todo/tree/create
+        "todo-item"
         (dict-set* "{}"
           (list
             "list_id" lid

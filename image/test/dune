@@ -442,6 +442,11 @@
  (modules todo_attachments_test)
  (libraries pricklypear-image pricklypear-lisp alcotest unix))
 
+(test
+ (name todo_card_invariants_test)
+ (modules todo_card_invariants_test)
+ (libraries pricklypear-image pricklypear-common pricklypear-lisp alcotest eio_main yojson pgx unix))
+
 
 (test
  (name authz_test)

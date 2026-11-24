@@ -5565,15 +5565,122 @@ composer splices in the chat transcript elements once chat has loaded). The seed
 
 
 
+(define todo/card/refuse
+  (lambda
+    (why)
+    (error "bad-args" (string-append "todo-item refused: " why "; nothing written")))
+  "Raise a real card-write error. Never return an ok:true error envelope for
+   malformed input: callers must not be able to mistake a refused write for an
+   id.")
+
+(define todo/card/check-title
+  (lambda
+    (fields)
+    (if
+      (string-eq (string-trim (todo/item/title fields)) "")
+      (todo/card/refuse "title must contain non-whitespace text")
+      fields)))
+
+(define todo/card/check-target
+  (lambda
+    (fields)
+    (let
+      ((branch (as-str (dict-get fields "branch")))
+        (kind (as-str (dict-get fields "branch_kind"))))
+      (if
+        (string-eq kind "")
+        fields
+        (if
+          (or (string-eq kind "git") (string-eq kind "habitat"))
+          (if
+            (string-eq branch "")
+            (todo/card/refuse "branch_kind requires a branch")
+            fields)
+          (todo/card/refuse "branch_kind must be git, habitat, or empty"))))))
+
+(define todo/card/check-state
+  (lambda
+    (fields)
+    (if
+      (todo/state/valid-in?
+        (todo/list/all)
+        fields
+        (todo/item/state fields))
+      fields
+      (todo/card/refuse
+        (string-append
+          "state \""
+          (todo/item/state fields)
+          "\" is not a column of the target pipeline")))))
+
+(define todo/card/changed?
+  (lambda
+    (old fields key)
+    (not
+      (string-eq
+        (as-str (dict-get old key))
+        (as-str (dict-get fields key))))))
+
+(define todo/card/validate-create
+  (lambda
+    (t fields)
+    (if
+      (string-eq (as-str t) "todo-item")
+      (seq
+        (todo/card/check-title fields)
+        (todo/card/check-target fields)
+        (todo/card/check-state fields))
+      fields))
+  "Pre-write invariants for a NEW card. Required detail fields such as
+   acceptance, branch, repo and kind deliberately remain optional; extension
+   fields are not inspected or removed.")
+
+(define todo/card/validate-save
+  (lambda
+    (t id fields)
+    (if
+      (not (string-eq (as-str t) "todo-item"))
+      fields
+      (let
+        ((old (todo/tree/get t id)))
+        (if
+          (null? old)
+          (todo/card/validate-create t fields)
+          (seq
+            (if (todo/card/changed? old fields "title")
+              (todo/card/check-title fields)
+              fields)
+            (if
+              (or
+                (todo/card/changed? old fields "branch")
+                (todo/card/changed? old fields "branch_kind"))
+              (todo/card/check-target fields)
+              fields)
+            (if
+              (or
+                (not
+                  (string-eq
+                    (todo/item/state old)
+                    (todo/item/state fields)))
+                (todo/card/changed? old fields "list_id")
+                (todo/card/changed? old fields "pipeline"))
+              (todo/card/check-state fields)
+              fields))))))
+  "Pre-write invariants for an existing card, checked only on dimensions the
+   write changes. A legacy card with an old invalid value can still receive
+   unrelated edits; attempting to edit that dimension must make it valid.")
+
 (define todo/tree/create
   (lambda
     (t fields)
-    (let
-      ((r (tree/upsert (node-path t "new") "datum" t fields)))
-      (if
-        (todo/tree/path-ok? r)
-        (todo/tree/redash (todo/tree/tail r))
-        r))))
+    (seq
+      (todo/card/validate-create t fields)
+      (let
+        ((r (tree/upsert (node-path t "new") "datum" t fields)))
+        (if
+          (todo/tree/path-ok? r)
+          (todo/tree/redash (todo/tree/tail r))
+          r)))))
 
 (define todo/tree/del
   (lambda
@@ -5832,22 +5939,24 @@ composer splices in the chat transcript elements once chat has loaded). The seed
 (define todo/tree/save
   (lambda
     (t id fields)
-    (let
-      ((nid (as-str id)))
+    (seq
+      (todo/card/validate-save t id fields)
       (let
-        ((p (node-path t nid)))
-        (seq
-          (tree/upsert
-            (if
-              (null? (tree/get p))
-              (let
-                ((hit (todo/tree/find-node-scan t nid)))
-                (if (null? hit) p (as-str (dict-get hit "path"))))
-              p)
-            "datum"
-            t
-            fields)
-          id)))))
+        ((nid (as-str id)))
+        (let
+          ((p (node-path t nid)))
+          (seq
+            (tree/upsert
+              (if
+                (null? (tree/get p))
+                (let
+                  ((hit (todo/tree/find-node-scan t nid)))
+                  (if (null? hit) p (as-str (dict-get hit "path"))))
+                p)
+              "datum"
+              t
+              fields)
+            id))))))
 
 (define todo/tree/set-field
   (lambda
