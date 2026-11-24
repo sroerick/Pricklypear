@@ -731,6 +731,30 @@
          (a migrator is v2; spaces are single-head, so stranded rows
          stay readable by members).
 
+         ADMISSION AUTHORITY (decided 2026-11-23): admission is keyed
+         by type_name ALONE (data_space_types PRIMARY KEY), so admitting
+         a type re-routes the FUTURE writes of EVERY identity, not just
+         the space's members. That is deployment-wide authority, and
+         space ownership is not enough for it: any non-anonymous
+         identity may create a space, so an owner-only gate let any
+         user make an open space, admit (or re-point) a type, and
+         receive every other user's subsequent rows of that type.
+         The rule:
+           - re-admitting a type to the space it is ALREADY admitted
+             to is an idempotent success for any authenticated caller,
+             with no write. Package lazy ensures (todo/ensure-space,
+             the chat lobby) stay best-effort and harmless.
+           - admitting a NOT-yet-admitted type requires kernel admin.
+           - re-pointing a type admitted to space A at space B requires
+             kernel admin. A space owner can never take a type away
+             from another space.
+         Consequence on a fresh instance: a package's lazy ensure only
+         takes effect once an ADMIN session runs it. Until then the
+         type stays per-user, which is the safe default (no silent
+         publication). Space ownership still governs members.
+         Row-granular, grant-based sharing is the planned successor
+         (subsection sharing-grants).
+
          WHAT THIS DELIBERATELY IS NOT:
            - NOT a branch. No fork, no merge, no inheritance chain,
              no checkout, no base_gen, no dirty/diverged status. The
@@ -797,8 +821,78 @@
     (test "S1: migration adds data_spaces + data_space_members; tree_datum_path gains the space variant; tree_data_rows + datum_user_isolation RLS gain the member-space disjunct; two member users see each other's space rows; a non-member's identical query returns nothing (RLS-enforced, not just view-filtered)")
     (test "S2: (space-admit 'todo s) routes (create 'todo …) to data.s.s.todo.<id>; (rows 'todo) as a member returns the union of members' space rows with per-row author attribution; a removed member's subsequent create errors with a membership error, not a silent per-user write")
     (smoke "S3: agent edits a shared todo; (data-history 'todo id) returns the human's before-image newest-first with author; the /data browser shows the space compartment and drills into history")
-    (smoke "a proxied /api/prim (rows 'todo) under an agent's basic auth sees exactly the spaces that agent is a member of — no more"))
+    (smoke "a proxied /api/prim (rows 'todo) under an agent's basic auth sees exactly the spaces that agent is a member of — no more")
+    (test "ADMISSION AUTHORITY: a non-admin space owner's admit of an unadmitted type is denied; a non-admin owner of space B cannot re-point a type admitted to space A (data_space_types unchanged); re-admitting to the same space succeeds for a non-owner with no write; kernel admin may admit and re-point"))
   )
+
+  (subsection sharing-grants
+   (doc "Row-granular sharing as path-prefix grants: the planned successor to type-level space admission")
+   (status planned)
+   (details
+    (doc (|
+         PROBLEM. Visibility today has three levels: private (data.u),
+         shared to members of a space or to every authenticated identity
+         (data.s, open spaces), and public routes. Sharing is decided per
+         TYPE (data_space_types), so 'share this one list' or 'my agents
+         see my todos, other people's agents do not' cannot be said.
+         The todo board became instance-wide because that was the only
+         level available to let a human's agents see the human's cards.
+
+         MODEL. A share is a GRANT on an ltree path prefix:
+           data_grants(
+             id          uuid PRIMARY KEY,
+             prefix      ltree NOT NULL,    -- a row, a type, a subtree
+             grantee     text NOT NULL,     -- username, group, 'authenticated' or 'anonymous'
+             rights      text[] NOT NULL,   -- read, comment, write, reshare
+             granted_by  text NOT NULL,
+             parent      uuid REFERENCES data_grants(id), -- attenuation lineage
+             revoked_at  timestamptz,
+             created_at  timestamptz NOT NULL DEFAULT now())
+         Visibility gains one disjunct, mirrored in SQL (view + RLS) and
+         in crud.ml's visible_sql, with the same two-mirror discipline as
+         tree_path_in_member_space:
+           EXISTS live grant g: path <@ g.prefix AND caller ∈ g.grantee
+         The shape follows tuna's grants (path_prefix, attenuation,
+         revocation through lineage): a re-share may only narrow
+         (sub-prefix, subset of rights), and revoking a grant kills its
+         descendants. The two systems then share one capability model.
+
+         WHERE ROWS LIVE vs WHO SEES THEM. A row lives in its author's
+         compartment. Sharing ADDS grants and never moves rows. That
+         removes first-writer space ownership and stranded-row
+         migrations. Spaces become named bundles of grants; open spaces
+         are a grant to 'authenticated'; public is a grant to
+         'anonymous'.
+
+         AGENT PRINCIPALS. Agent identities (008_agent_users) gain an
+         owner. By default an owner's agents hold a read+write grant on
+         the owner's data.u subtree, and no other identity's agents do.
+         Delegated tokens remain the per-session alternative.
+
+         KNOWN LEAK SURFACES (must be designed in, not patched later):
+           - cached subtree reads (Tree_store.cached_list_subtree) are
+             keyed by prefix + pp.user; the key gains the grant
+             generation, or a revoke stays invisible until eviction.
+           - backlinks / search / edges must not reveal that an
+             unreadable row exists.
+           - the replication unit (replication/unit) materializes the
+             authorized-read subtree; it follows grants, and a revoke
+             removes rows from the client lens.
+           - RLS cost: a GiST index on prefix, measured against the
+             todo/tree/rows production budget before rollout.
+
+         ORDER. (1) admission authority fix (shared-data-spaces,
+         2026-11-23). (2) data_grants + the visibility disjunct behind
+         the existing spaces. (3) agent owner relation and its default
+         grant. (4) per-row share UI. (5) retire type-level admission:
+         workstreams' open todo space becomes a grant.
+    |))
+   )
+   (verify
+    (test "a grant on one row's path makes exactly that row visible to the grantee (view, RLS under NOBYPASSRLS, and visible_sql agree); the sibling row stays invisible")
+    (test "an attenuated re-share cannot widen prefix or rights; revoking the parent grant hides the row from the child grantee on the next read, including through cached subtree reads")
+    (test "an owner's agent reads the owner's data.u rows by default; another owner's agent does not")
+    (test "backlinks and search over an unreadable row return nothing about it")))
 
   (subsection unbind
    (doc "Remove a branch-local binding; reveal shadowed system/main, never delete through")

@@ -91,7 +91,13 @@
      todo-list, todo-item, todo-comment, todo-event
    These four are admitted to ONE open space (name `todo`, owner =
    whoever seeds first). Admission routes FUTURE writes; it is a
-   type-level home, not a per-row flag.
+   type-level home, not a per-row flag. Since 2026-11-23
+   (branching.shared-data-spaces ADMISSION AUTHORITY) a first admission
+   needs kernel admin, so on a fresh instance todo/ensure-space only
+   takes effect in an admin session. Later non-admin calls are
+   idempotent no-ops. The successor that lets a human's agents see the
+   human's cards without instance-wide sharing is
+   branching.sharing-grants.
 
    CONSEQUENCE — EVERY todo IS NOW SHARED BY DEFAULT. That is intended:
    this is a team board, not a personal to-do app. Personal/intimate

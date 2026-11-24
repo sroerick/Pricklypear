@@ -303,7 +303,7 @@ let test_routing_and_guard () =
         (Crud.space_add_member store ~caller:"alice" ~kernel_admin:false
            ~space:sp ~username:"bob");
       ignore
-        (Crud.space_admit store ~caller:"alice" ~kernel_admin:false ~space:sp
+        (Crud.space_admit store ~caller:"alice" ~kernel_admin:true ~space:sp
            ~type_name:ty);
       (* member create routes to the space *)
       let id =
@@ -423,7 +423,7 @@ let test_history () =
         (Crud.space_add_member store ~caller:"alice" ~kernel_admin:false
            ~space:sp ~username:"bob");
       ignore
-        (Crud.space_admit store ~caller:"alice" ~kernel_admin:false ~space:sp
+        (Crud.space_admit store ~caller:"alice" ~kernel_admin:true ~space:sp
            ~type_name:ty);
       let id =
         match Crud.create store ~type_name:ty ~fields_json:"{\"n\":1}" ~author:"alice" with
@@ -483,7 +483,7 @@ let test_open_space () =
       let conn = Option.get (S.conn_of store) in
       ignore (Crud.space_create store ~caller:"alice" ~name:sp ~open_:true ());
       ignore
-        (Crud.space_admit store ~caller:"alice" ~kernel_admin:false ~space:sp
+        (Crud.space_admit store ~caller:"alice" ~kernel_admin:true ~space:sp
            ~type_name:ty);
       (* carol is NOT a member row — but the space is open: write works *)
       let id =
@@ -518,6 +518,60 @@ let test_open_space () =
           Crud.space_admit store ~caller:"bob" ~kernel_admin:false ~space:sp
             ~type_name:(ty ^ "x")))
 
+(* ---------------- ADMISSION AUTHORITY (2026-11-23) ----------------------
+   branching.shared-data-spaces: admission is keyed by type_name alone and
+   re-routes every identity's future writes, so a space owner who is not
+   kernel admin may neither admit a fresh type nor re-point an admitted
+   one; a same-space re-admit is an idempotent no-op for any caller. *)
+let test_admission_authority () =
+  with_s2 (fun store ~sp ~ty ->
+      let conn = Option.get (S.conn_of store) in
+      let sp_b = sp ^ "b" in
+      let admitted_to () =
+        match
+          Db.exec conn ~params:[ s ty ]
+            "SELECT space FROM data_space_types WHERE type_name = $1"
+        with
+        | [ [ c ] ] -> Pgx.Value.to_string c
+        | _ -> None
+      in
+      Fun.protect
+        ~finally:(fun () ->
+          exec conn
+            (Printf.sprintf "DELETE FROM data_space_types WHERE type_name='%s'; \
+                             DELETE FROM data_spaces WHERE name = '%s'" ty sp_b))
+        (fun () ->
+          ignore (Crud.space_create store ~caller:"alice" ~name:sp ~open_:true ());
+          ignore (Crud.space_create store ~caller:"mallory" ~name:sp_b ~open_:true ());
+          expect_denied "non-admin owner admits a fresh type" (fun () ->
+              Crud.space_admit store ~caller:"alice" ~kernel_admin:false
+                ~space:sp ~type_name:ty);
+          Alcotest.(check (option string)) "fresh type stays unadmitted" None
+            (admitted_to ());
+          ignore
+            (Crud.space_admit store ~caller:"admin" ~kernel_admin:true
+               ~space:sp ~type_name:ty);
+          Alcotest.(check (option string)) "admin admits" (Some sp)
+            (admitted_to ());
+          expect_denied "owner of another space re-points the type" (fun () ->
+              Crud.space_admit store ~caller:"mallory" ~kernel_admin:false
+                ~space:sp_b ~type_name:ty);
+          Alcotest.(check (option string)) "admission unchanged" (Some sp)
+            (admitted_to ());
+          (match
+             Crud.space_admit store ~caller:"carol" ~kernel_admin:false
+               ~space:sp ~type_name:ty
+           with
+           | Ast.VStr _ -> ()
+           | _ -> Alcotest.fail "same-space re-admit did not succeed");
+          Alcotest.(check (option string)) "re-admit is a no-op" (Some sp)
+            (admitted_to ());
+          ignore
+            (Crud.space_admit store ~caller:"admin" ~kernel_admin:true
+               ~space:sp_b ~type_name:ty);
+          Alcotest.(check (option string)) "admin may re-point" (Some sp_b)
+            (admitted_to ())))
+
 (* ---------------- regression: shared-space field write is not a silent
    no-op ------------------------------------------------ a1ce59db -------
    The todo surface's field-update path once wrote into a shared-space
@@ -542,7 +596,7 @@ let test_shared_field_update_lands () =
           (Crud.space_add_member store ~caller:"alice" ~kernel_admin:false
              ~space:sp ~username:"bob");
         ignore
-          (Crud.space_admit store ~caller:"alice" ~kernel_admin:false ~space:sp
+          (Crud.space_admit store ~caller:"alice" ~kernel_admin:true ~space:sp
              ~type_name:ty);
       let id = insert conn ~type_name:ty ~author:"alice" in
         (* bob is a member; update ONE field via the real Crud path.
@@ -687,6 +741,8 @@ let () =
             test_lifecycle;
           Alcotest.test_case "admit routing + non-member guard" `Quick
             test_routing_and_guard;
+          Alcotest.test_case "admission authority: admin-only, no re-point" `Quick
+            test_admission_authority;
         ] );
       ( "shared-data-spaces S3",
         [

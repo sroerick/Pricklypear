@@ -626,19 +626,36 @@ let space_admit (store : Store.t) ~(caller : string) ~(kernel_admin : bool)
   | Some conn ->
       if not (space_exists conn ~space) then
         space_prim_error "space-admit" (Printf.sprintf "no such space %s" space);
-      if not (space_owner_ok conn ~space ~caller ~kernel_admin) then
-        space_prim_error "space-admit"
-          (Printf.sprintf "%s is not an owner of space %s" caller space);
-      ignore
-        (Store_db.exec conn
-           ~params:[ Pgx.Value.of_string type_name;
-                     Pgx.Value.of_string space;
-                     Pgx.Value.of_string caller ]
-           "INSERT INTO data_space_types (type_name, space, admitted_by) \
-            VALUES ($1, $2, $3) \
-            ON CONFLICT (type_name) DO UPDATE \
-            SET space = EXCLUDED.space, admitted_by = EXCLUDED.admitted_by");
-      VStr (Printf.sprintf "type %s admitted to space %s" type_name space)
+      (* branching.shared-data-spaces ADMISSION AUTHORITY: admission is
+         keyed by type_name alone and re-routes every identity's future
+         writes, so only kernel admin may admit or re-point a type. A
+         re-admit to the same space is an idempotent no-op for anyone. *)
+      let admitted () =
+        VStr (Printf.sprintf "type %s admitted to space %s" type_name space)
+      in
+      match space_of_type conn ~type_name with
+      | Some current when current = space -> admitted ()
+      | Some other when not kernel_admin ->
+          space_prim_error "space-admit"
+            (Printf.sprintf
+               "type %s is admitted to space %s; only kernel admin may \
+                re-point it" type_name other)
+      | None when not kernel_admin ->
+          space_prim_error "space-admit"
+            (Printf.sprintf
+               "admitting type %s routes every identity's writes; only \
+                kernel admin may admit a type" type_name)
+      | _ ->
+          ignore
+            (Store_db.exec conn
+               ~params:[ Pgx.Value.of_string type_name;
+                         Pgx.Value.of_string space;
+                         Pgx.Value.of_string caller ]
+               "INSERT INTO data_space_types (type_name, space, admitted_by) \
+                VALUES ($1, $2, $3) \
+                ON CONFLICT (type_name) DO UPDATE \
+                SET space = EXCLUDED.space, admitted_by = EXCLUDED.admitted_by");
+          admitted ()
 
 let space_list (store : Store.t) ~(caller : string) ~(kernel_admin : bool)
     : value =
