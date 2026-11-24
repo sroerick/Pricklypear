@@ -41,12 +41,17 @@ GRANT EXECUTE ON FUNCTION tree_enc_label(text),
   TO pp_rls_definer, pp_rls_probe;
 
 -- Sharing grants (051): pp_vis_readable calls tree_path_granted, which reads
--- data_grants as the caller. Guarded so this file still runs before 051.
+-- data_grants as the caller. Guarded so this file still runs before 051/052.
 DO $$
 BEGIN
   IF to_regclass('public.data_grants') IS NOT NULL THEN
     GRANT SELECT ON data_grants TO pp_rls_definer, pp_rls_probe;
     GRANT EXECUTE ON FUNCTION tree_path_granted(ltree, text)
+      TO pp_rls_definer, pp_rls_probe;
+  END IF;
+  -- 052: pp_node_visible calls tree_path_write_granted.
+  IF to_regprocedure('tree_path_write_granted(ltree, text)') IS NOT NULL THEN
+    GRANT EXECUTE ON FUNCTION tree_path_write_granted(ltree, text)
       TO pp_rls_definer, pp_rls_probe;
   END IF;
 END $$;

@@ -19,8 +19,17 @@
       - a revoke is seen on the next read through the in-image subtree
         cache (cached_list_subtree keys on the grant generation).
 
+    Step 3 (agent owners, migration 052):
+      - an owner's agent reads AND writes the owner's data.u rows by
+        default (view, RLS under NOBYPASSRLS, Crud mirrors); another
+        owner's agent does neither;
+      - the default grant follows users.parent_user_id: unparenting the
+        agent revokes it, re-parenting restores it, and an owner's revoke
+        sticks;
+      - a write grant must carry read.
+
     Not covered here (later rollout steps / leak surfaces): backlinks and
-    search, agent owner defaults.
+    search.
 
     Needs scripts/dev.sh Postgres; fails (UNVERIFIED) when unreachable. *)
 
@@ -163,7 +172,16 @@ let as_probe conn f =
   exec conn "DROP ROLE IF EXISTS pp_grants_probe";
   exec conn
     "CREATE ROLE pp_grants_probe NOLOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT";
-  exec conn "GRANT SELECT, INSERT ON tree_nodes TO pp_grants_probe";
+  exec conn "GRANT SELECT, INSERT, UPDATE ON tree_nodes TO pp_grants_probe";
+  (* An UPDATE of a datum node fires the tree_nodes triggers (data_rows
+     mirror and its tree_nodes back-mirror, tree_versions, branch
+     generations), which write as the caller.
+     Plain table privileges never bypass RLS on tree_nodes, the floor under
+     test (the role is NOBYPASSRLS). *)
+  exec conn
+    "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public \
+     TO pp_grants_probe";
+  exec conn "GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO pp_grants_probe";
   exec conn
     "GRANT SELECT ON data_space_members, data_spaces, data_grants, \
      data_grants_generation TO pp_grants_probe";
@@ -347,6 +365,125 @@ let test_revoke_through_cache () =
       Alcotest.(check bool) "after revoke the cached read hides the row" false
         (cached_sees ()))
 
+(* ---------------- step 3: agent owners ---------------- *)
+
+(** Two humans, each with one agent ([<human>/agent], parent_user_id set),
+    and one private row authored by the first human. [f] gets the owner,
+    its agent, the other human's agent and the owner's row path. *)
+let with_agents f =
+  with_store (fun store ->
+      let conn = Option.get (S.conn_of store) in
+      let tag = Printf.sprintf "%06d" (Random.int 1_000_000) in
+      let ty = "gra" ^ tag in
+      let owner = "graown" ^ tag and other = "graoth" ^ tag in
+      let agent = owner ^ "/agent" and other_agent = other ^ "/agent" in
+      let users = [ agent; other_agent; owner; other ] in
+      Fun.protect
+        ~finally:(fun () ->
+          set_pp_user conn "";
+          List.iter
+            (fun u ->
+              ignore
+                (Db.exec conn ~params:[ s u ]
+                   "DELETE FROM data_grants WHERE grantee = $1");
+              ignore
+                (Db.exec conn ~params:[ s u ] "DELETE FROM users WHERE username = $1"))
+            users;
+          exec conn
+            (Printf.sprintf
+               "DELETE FROM tree_nodes WHERE kind='datum' AND type_name='%s'; \
+                DELETE FROM data_rows WHERE type_name='%s'"
+               ty ty))
+        (fun () ->
+          set_pp_user conn "";
+          let add_human u =
+            ignore
+              (Db.exec conn ~params:[ s u ]
+                 "INSERT INTO users (username) VALUES ($1)")
+          in
+          let add_agent ~parent u =
+            ignore
+              (Db.exec conn ~params:[ s u; s parent ]
+                 "INSERT INTO users (username, user_type, parent_user_id) \
+                  SELECT $1, 'agent', id FROM users WHERE username = $2")
+          in
+          add_human owner;
+          add_human other;
+          add_agent ~parent:owner agent;
+          add_agent ~parent:other other_agent;
+          let row = path_of conn ~id:(insert conn ~type_name:ty ~author:owner) in
+          f conn ~ty ~owner ~agent ~other_agent ~row))
+
+(* UPDATE the row as [who] under the probe role; returns rows affected. *)
+let rls_update conn ~path who =
+  set_pp_user conn who;
+  List.length
+    (Db.exec conn ~params:[ s path ]
+       "UPDATE tree_nodes SET updated_at = now() \
+        WHERE kind='datum' AND path = $1::ltree RETURNING 1")
+
+let test_agent_reads_and_writes_owner () =
+  with_agents (fun conn ~ty ~owner:_ ~agent ~other_agent ~row ->
+      Alcotest.(check int) "view: owner's agent reads the owner's row" 1
+        (view_count conn ~ty agent);
+      Alcotest.(check int) "view: another owner's agent does not" 0
+        (view_count conn ~ty other_agent);
+      Alcotest.(check int) "crud read: agent 1, other agent 0" 1
+        (crud_read_count conn ~ty agent);
+      Alcotest.(check int) "crud read: other agent 0" 0
+        (crud_read_count conn ~ty other_agent);
+      Alcotest.(check int) "crud write confinement admits the agent" 1
+        (crud_write_count conn ~ty agent);
+      Alcotest.(check int) "crud write confinement refuses the other agent" 0
+        (crud_write_count conn ~ty other_agent);
+      as_probe conn (fun () ->
+          Alcotest.(check int) "RLS: agent reads" 1 (rls_sees conn ~path:row agent);
+          Alcotest.(check int) "RLS: other agent cannot read" 0
+            (rls_sees conn ~path:row other_agent);
+          Alcotest.(check int) "RLS: agent updates the owner's row" 1
+            (rls_update conn ~path:row agent);
+          Alcotest.(check int) "RLS: other agent's update touches nothing" 0
+            (rls_update conn ~path:row other_agent)))
+
+let test_default_follows_relation () =
+  with_agents (fun conn ~ty ~owner ~agent ~other_agent:_ ~row:_ ->
+      let set_type ty' parent =
+        set_pp_user conn "";
+        ignore
+          (Db.exec conn ~params:[ s ty'; s agent; s parent ]
+             "UPDATE users SET user_type = $1, \
+              parent_user_id = (SELECT id FROM users WHERE username = $3) \
+              WHERE username = $2")
+      in
+      set_type "human" "";
+      Alcotest.(check int) "unparented agent loses the default grant" 0
+        (view_count conn ~ty agent);
+      set_type "agent" owner;
+      Alcotest.(check int) "re-parenting restores it" 1 (view_count conn ~ty agent);
+      set_pp_user conn "";
+      ignore
+        (Db.exec conn ~params:[ s agent ]
+           "UPDATE data_grants SET revoked_at = now() \
+            WHERE grantee = $1 AND revoked_at IS NULL");
+      Alcotest.(check int) "the owner's revoke hides the rows" 0
+        (view_count conn ~ty agent);
+      ignore
+        (Db.exec conn ~params:[ s agent ]
+           "UPDATE users SET allow_agent_promote = NOT allow_agent_promote \
+            WHERE username = $1");
+      Alcotest.(check int) "an unrelated users update does not resurrect it" 0
+        (view_count conn ~ty agent))
+
+let test_write_needs_read () =
+  with_rows (fun conn ~ty ~row ~sib:_ ->
+      let refused =
+        try
+          ignore (grant conn ~ty ~prefix:row ~grantee:"bob" ~rights:[ "write" ] ());
+          false
+        with _ -> true
+      in
+      Alcotest.(check bool) "a write grant without read is refused" true refused)
+
 let () =
   Random.self_init ();
   Alcotest.run "sharing-grants"
@@ -362,5 +499,12 @@ let () =
         ; Alcotest.test_case "revoke cascades" `Quick test_revoke_cascades
         ; Alcotest.test_case "revoke through the subtree cache" `Quick
             test_revoke_through_cache
+        ] )
+    ; ( "step 3: agent owners"
+      , [ Alcotest.test_case "owner's agent reads and writes; other's does not"
+            `Quick test_agent_reads_and_writes_owner
+        ; Alcotest.test_case "default grant follows the relation" `Quick
+            test_default_follows_relation
+        ; Alcotest.test_case "write grant needs read" `Quick test_write_needs_read
         ] )
     ]

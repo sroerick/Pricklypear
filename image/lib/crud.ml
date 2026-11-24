@@ -135,17 +135,21 @@ let with_tree_tx (store : Store.t) ~(none : unit -> 'a)
     checks the CALLER's membership (pp.user / session user), never the
     authoring function's — author-runs-as-author does not apply to the
     space compartment. Admin updates preserve data_rows.author
-    (update_datum binds no author); create still attributes the caller. *)
+    (update_datum binds no author); create still attributes the caller.
+    A live grant with the write right (branching.borg sharing-grants,
+    migration 052, tree_path_write_granted — the disjunct pp_node_visible
+    carries) also admits: an owner's agents hold one on the owner's data.u
+    subtree by default. *)
 let visible_sql ~(user_param : int) : string =
   Printf.sprintf
-    "(author = $%d OR tree_is_seed_type(type_name) OR tree_path_in_member_space(path, $%d) OR tree_user_is_admin($%d))"
-    user_param user_param user_param
+    "(author = $%d OR tree_is_seed_type(type_name) OR tree_path_in_member_space(path, $%d) OR tree_user_is_admin($%d) OR tree_path_write_granted(path, $%d))"
+    user_param user_param user_param user_param
 
 (** Read-side confinement: [visible_sql] plus a live read grant on the row's
     path (branching.borg sharing-grants, migration 051, tree_path_granted —
     the same predicate the view and pp_vis_readable call). Use it for reads
-    only; the write paths keep [visible_sql], so a grant never opens a
-    write. *)
+    only; the write paths keep [visible_sql], so only a grant carrying the
+    write right opens a write. *)
 let visible_read_sql ~(user_param : int) : string =
   Printf.sprintf "(%s OR tree_path_granted(path, $%d))"
     (visible_sql ~user_param) user_param
