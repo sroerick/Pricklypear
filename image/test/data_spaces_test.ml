@@ -173,6 +173,13 @@ let test_visible_sql_mirror () =
 let test_rls_floor () =
   with_fixture (fun conn ~sp ~ty ->
       ignore (insert conn ~type_name:ty ~author:"alice");
+      (* An interrupted earlier run can leave the probe role holding grants;
+         DROP ROLE then fails before the finally below is reached, and every
+         later run fails the same way. Clear its privileges first. *)
+      if q_count conn
+           "SELECT COUNT(*)::int FROM pg_roles WHERE rolname = 'pp_spaces_probe'"
+         > 0
+      then exec conn "DROP OWNED BY pp_spaces_probe";
       exec conn "DROP ROLE IF EXISTS pp_spaces_probe";
       exec conn
         "CREATE ROLE pp_spaces_probe NOLOGIN NOSUPERUSER NOBYPASSRLS \
