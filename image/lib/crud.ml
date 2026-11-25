@@ -2686,14 +2686,17 @@ let out_links (store : Store.t) ~(path : string) ?(limit : int = 1000) () :
    legacy body-string scan (datum bodies holding the needle as a literal
    value). The legacy half is DEPRECATED: logged once per process, kept
    only until all body-valued references become edges. Same signature as
-   the old backlinks: a list of paths. *)
+   the old backlinks: a list of paths. [viewer] (the prim passes the
+   caller) drops every hit whose row, or whose edge's source, that viewer
+   may not read (Tree_store.readable_by_sql; sharing-grants leak
+   surfaces). *)
 let backlinks_deprecation_logged = ref false
 
-let backlinks (store : Store.t) ~(needle : string) ?(limit : int = 200) ()
-    : value =
+let backlinks (store : Store.t) ~(needle : string) ?(limit : int = 200)
+    ?(viewer : string option) () : value =
   with_tree_tx store ~none:(fun () -> VList []) (fun conn ->
       let edge_paths =
-        Tree_store.edges_to conn ~needle ~limit ()
+        Tree_store.edges_to conn ~needle ~limit ?viewer ()
         |> List.map (fun (e : Tree_store.node) -> e.path)
       in
       let legacy_paths =
@@ -2704,7 +2707,7 @@ let backlinks (store : Store.t) ~(needle : string) ?(limit : int = 200) ()
             Printf.eprintf
               "[backlinks] DEPRECATED: legacy body-string backlinks are a scan; materialize references as edges ((link from to)).\n%!"
           end;
-          Tree_store.backlinks conn ~needle ~limit ()
+          Tree_store.backlinks conn ~needle ~limit ?viewer ()
         end
       in
       (* edges first, then legacy paths not already present (dedup) *)

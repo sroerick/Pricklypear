@@ -698,27 +698,6 @@ let validate_fields ~(declared : string list) (fields_json : string)
       | _ -> Error "fields must be a JSON object"
     with Yojson.Json_error msg -> Error ("invalid JSON: " ^ msg)
 
-(** Backlinks: datum nodes whose fields JSON has any value equal to [needle]
-    (typically a uuid id or a tree path). Uses jsonb_each_text over body.
-    Caps at [limit] (default 200). *)
-let backlinks (conn : Store_db.conn) ~(needle : string) ?(limit : int = 200)
-    () : string list =
-  let sql =
-    "SELECT n.path::text FROM tree_nodes n, " ^
-    "LATERAL jsonb_each_text(COALESCE(n.payload->'body', '{}'::jsonb)) e " ^
-    "WHERE n.kind = 'datum' AND e.value = $1::text " ^
-    "ORDER BY n.path::text ASC LIMIT $2" in
-  let rows =
-    Store_db.exec conn
-      ~params:[ Pgx.Value.of_string needle; Pgx.Value.of_int limit ]
-      sql
-  in
-  (List.filter_map
-       (function
-         | [ c ] -> Pgx.Value.to_string c
-         | _ -> None)
-       rows)
-
 (** Recompute tree_branches.head_hash for [branch_id] as the sha256 of the
     sorted concatenation of own-node hashes under b.<uuidhex>. Empty lens →
     empty string. Used after fork (empty) and after promote/merge batches. *)
@@ -2433,19 +2412,97 @@ let list_out_links (conn : Store_db.conn) ~(path : string)
     in
     List.filter_map node_of_row rows
 
+(** Readability of a node row [alias] for [viewer], role-independent: what
+    [tree/get] of that path would allow (branching.borg sharing-grants,
+    KNOWN LEAK SURFACES: backlinks/search/edges must not reveal that an
+    unreadable row exists).
+      - the datum floor the read wrappers apply (pp_node_visible OR
+        pp_vis_readable, both on pp.user), so it holds even on a
+        BYPASSRLS/superuser connection;
+      - the note gate (Crud.gate_note_vis) for a path in someone else's
+        garden (data.note.u.<label> or data.u.<enc>): body vis public ->
+        anyone, users -> signed-in, anything else (absent included) ->
+        space member or live read grant.
+    Parameters: [$viewer_param] the viewer's username, [$label_param] its
+    garden label ([path_label viewer]). *)
+let readable_by_sql ~(alias : string) ~(viewer_param : int)
+    ~(label_param : int) : string =
+  let a = alias and v = viewer_param and l = label_param in
+  let vis_ok =
+    Printf.sprintf
+      "(CASE btrim(COALESCE(%s.payload #>> '{body,vis}', 'private')) \
+         WHEN 'public' THEN true \
+         WHEN 'users' THEN $%d <> 'anonymous' \
+         ELSE tree_path_in_member_space(%s.path, $%d) \
+              OR tree_path_granted(%s.path, $%d) END)"
+      a v a v a v
+  in
+  Printf.sprintf
+    "((%s.kind <> 'datum' OR pp_node_visible(%s.path, %s.kind) \
+        OR pp_vis_readable(%s.path, %s.payload)) \
+      AND (CASE \
+        WHEN %s.path <@ 'data.note.u'::ltree AND nlevel(%s.path) > 3 \
+          THEN subpath(%s.path, 3, 1)::text = $%d OR %s \
+        WHEN %s.path <@ 'data.u'::ltree AND nlevel(%s.path) > 2 \
+          THEN subpath(%s.path, 2, 1)::text = tree_enc_label($%d) OR %s \
+        ELSE true END))"
+    a a a a a a a a l vis_ok a a a v vis_ok
+
+(** Backlinks: datum nodes whose fields JSON has any value equal to [needle]
+    (typically a uuid id or a tree path). Uses jsonb_each_text over body.
+    Caps at [limit] (default 200). With [viewer], only rows that viewer
+    may read ([readable_by_sql]); [None] is the kernel-internal, ungated
+    read. *)
+let backlinks (conn : Store_db.conn) ~(needle : string) ?(limit : int = 200)
+    ?(viewer : string option) () : string list =
+  let gate, extra =
+    match viewer with
+    | None -> ("", [])
+    | Some v ->
+        ( " AND " ^ readable_by_sql ~alias:"n" ~viewer_param:3 ~label_param:4,
+          [ Pgx.Value.of_string v; Pgx.Value.of_string (path_label v) ] )
+  in
+  let sql =
+    "SELECT n.path::text FROM tree_nodes n, " ^
+    "LATERAL jsonb_each_text(COALESCE(n.payload->'body', '{}'::jsonb)) e " ^
+    "WHERE n.kind = 'datum' AND e.value = $1::text" ^ gate ^ " " ^
+    "ORDER BY n.path::text ASC LIMIT $2" in
+  let rows =
+    Store_db.exec conn
+      ~params:([ Pgx.Value.of_string needle; Pgx.Value.of_int limit ] @ extra)
+      sql
+  in
+  (List.filter_map
+       (function
+         | [ c ] -> Pgx.Value.to_string c
+         | _ -> None)
+       rows)
+
 (** Edges pointing AT [needle] (to = needle exactly) — backed by the
     migration-026 partial expression index on
-    (payload->'body'->>'to') WHERE kind='link'. *)
+    (payload->'body'->>'to') WHERE kind='link'. With [viewer], only edges
+    whose SOURCE (the path above <source>.lnk.<id>) that viewer may read
+    ([readable_by_sql]): a link out of an unreadable row reveals nothing.
+    [None] is the kernel-internal, ungated read. *)
 let edges_to (conn : Store_db.conn) ~(needle : string)
-    ?(limit : int = 200) () : node list =
+    ?(limit : int = 200) ?(viewer : string option) () : node list =
+  let gate, extra =
+    match viewer with
+    | None -> ("", [])
+    | Some v ->
+        ( " AND EXISTS (SELECT 1 FROM tree_nodes s \
+             WHERE s.path = subpath(n.path, 0, nlevel(n.path) - 2) AND "
+          ^ readable_by_sql ~alias:"s" ~viewer_param:3 ~label_param:4 ^ ")",
+          [ Pgx.Value.of_string v; Pgx.Value.of_string (path_label v) ] )
+  in
   let sql =
     "SELECT " ^ select_cols ^ " FROM tree_nodes n "
-    ^ "WHERE n.kind = 'link' AND n.payload->'body'->>'to' = $1::text "
+    ^ "WHERE n.kind = 'link' AND n.payload->'body'->>'to' = $1::text" ^ gate ^ " "
     ^ "ORDER BY n.path::text ASC LIMIT $2"
   in
   let rows =
     Store_db.exec conn
-      ~params:[ Pgx.Value.of_string needle; Pgx.Value.of_int limit ]
+      ~params:([ Pgx.Value.of_string needle; Pgx.Value.of_int limit ] @ extra)
       sql
   in
   List.filter_map node_of_row rows

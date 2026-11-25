@@ -382,6 +382,22 @@ let test_children_html_stranger_prefix_denied () =
     | exception Interp_error (Prim_error (_, m, _)) ->
         Alcotest.(check bool) "children-html stranger prefix denied" true
           (starts_with ~prefix:"note prefix data.note.u.hollis is outside" m))
+(* sharing-grants verify line 4, search half: a stranger's garden prefix is
+   refused before any lookup, so search reveals nothing about what lives
+   there (hit or miss alike). *)
+let test_search_text_stranger_prefix_denied () =
+  with_eio (fun () ->
+      let t = make_session ~username:"tester" in
+      List.iter
+        (fun args ->
+          match call t "tree/search-text" args with
+          | v -> Alcotest.fail ("expected denial, got: " ^ pp v)
+          | exception Interp_error (Prim_error (_, m, _)) ->
+              Alcotest.(check bool) "search-text stranger prefix denied" true
+                (starts_with ~prefix:"note prefix data.note.u.hollis is outside" m))
+        [ [ VStr "data.note.u.hollis"; VStr "secret" ];
+          [ VStr "data.note.u.hollis"; VStr "secret"; VInt 5L ] ])
+
 let () =
   Alcotest.run "pricklypear-prim-gates"
     [
@@ -459,5 +475,8 @@ let () =
           ; ( "children-html-stranger-prefix-denied"
             , `Quick
             , test_children_html_stranger_prefix_denied )
+          ; ( "search-text-stranger-prefix-denied"
+            , `Quick
+            , test_search_text_stranger_prefix_denied )
         ] )
     ]
