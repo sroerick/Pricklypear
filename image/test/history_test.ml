@@ -1,7 +1,7 @@
 (** code-history tests (needs Postgres from scripts/dev.sh).
 
     Spec: branching.code-history
-    Skips cleanly when PP_DB is unreachable. Apply migrations via
+    Fails (UNVERIFIED) when PP_DB is unreachable. Apply migrations via
     scripts/dev.sh so code_history exists. *)
 
 module S = Pricklypear_image_lib.Store
@@ -20,8 +20,7 @@ let with_store f =
       S.connect store;
       match S.conn_of store with
       | None ->
-          Printf.printf
-            "SKIP: no postgres (set PP_DB_* / run scripts/dev.sh)\n%!"
+          Alcotest.fail "UNVERIFIED: no postgres (set PP_DB_* / run scripts/dev.sh)"
       | Some conn ->
           let has_table =
             try
@@ -30,9 +29,9 @@ let with_store f =
             with _ -> false
           in
           if not has_table then
-            Printf.printf
-              "SKIP: code_history missing (restart scripts/dev.sh to \
-               apply migration 012)\n%!"
+            Alcotest.fail
+              "UNVERIFIED: code_history missing (restart scripts/dev.sh to \
+               apply migration 012)"
           else f store)
 
 let uniq suffix =

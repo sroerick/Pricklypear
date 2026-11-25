@@ -9,11 +9,11 @@ cd "$PP_ROOT"
 eval $(opam env --switch=poohstack --set-switch)
 
 echo "== build =="
-dune build
+dune build --root .
 echo "build ok"
 
 echo "== unit tests =="
-dune runtest
+dune runtest --root .
 echo "runtest ok"
 
 echo "== dev stack =="

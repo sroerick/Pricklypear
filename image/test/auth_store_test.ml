@@ -4,7 +4,7 @@
     DB-backed tests for Auth_store.set_user_type — the store function
     behind POST /admin/users action=set_user_type and the admin-only
     (set-user-type username "agent"|"human") prim. Needs Postgres
-    (scripts/dev.sh); skips cleanly when unreachable.
+    (scripts/dev.sh); fails (UNVERIFIED) when unreachable.
 
     Covers:
       - human -> agent with parent: user_type + parent_user_id set
@@ -48,8 +48,7 @@ let with_store f =
       S.connect store;
       match S.conn_of store with
       | None ->
-          Printf.printf
-            "SKIP: no postgres (set PP_DB_* / run scripts/dev.sh)\n%!"
+          Alcotest.fail "UNVERIFIED: no postgres (set PP_DB_* / run scripts/dev.sh)"
       | Some _ ->
           cleanup_all store;
           f store)

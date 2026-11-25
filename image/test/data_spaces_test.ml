@@ -13,7 +13,7 @@
         disjunct applies for reads, and WITH CHECK rejects a non-member
         write into a space path
 
-    Needs scripts/dev.sh Postgres; skips cleanly when unreachable. *)
+    Needs scripts/dev.sh Postgres; fails (UNVERIFIED) when unreachable. *)
 
 module S = Pricklypear_image_lib.Store
 module TS = Pricklypear_image_lib.Tree_store
@@ -33,7 +33,7 @@ let with_store f =
       S.connect store;
       match S.conn_of store with
       | None ->
-          Printf.printf "SKIP: no postgres (set PP_DB_* / run scripts/dev.sh)\n%!"
+          Alcotest.fail "UNVERIFIED: no postgres (set PP_DB_* / run scripts/dev.sh)"
       | Some _ -> f store)
 
 let s = Pgx.Value.of_string
@@ -173,23 +173,31 @@ let test_visible_sql_mirror () =
 let test_rls_floor () =
   with_fixture (fun conn ~sp ~ty ->
       ignore (insert conn ~type_name:ty ~author:"alice");
+      (* An interrupted earlier run can leave the probe role holding grants;
+         DROP ROLE then fails before the finally below is reached, and every
+         later run fails the same way. Clear its privileges first. *)
+      if q_count conn
+           "SELECT COUNT(*)::int FROM pg_roles WHERE rolname = 'pp_spaces_probe'"
+         > 0
+      then exec conn "DROP OWNED BY pp_spaces_probe";
       exec conn "DROP ROLE IF EXISTS pp_spaces_probe";
       exec conn
         "CREATE ROLE pp_spaces_probe NOLOGIN NOSUPERUSER NOBYPASSRLS \
          NOINHERIT";
       exec conn "GRANT SELECT, INSERT ON tree_nodes TO pp_spaces_probe";
-        (* the RLS policy evaluates tree_path_in_member_space / tree_user_is_admin,
-           which read these tables as the probe role (029/030/033). *)
+        (* the RLS policy evaluates tree_path_in_member_space / tree_user_is_admin
+           / tree_path_granted, which read these tables as the probe role
+           (029/030/033/051). *)
         exec conn
-          "GRANT SELECT ON data_space_members, data_spaces, users \
+          "GRANT SELECT ON data_space_members, data_spaces, users, data_grants \
            TO pp_spaces_probe";
       Fun.protect
         ~finally:(fun () ->
           exec conn "RESET ROLE";
           exec conn "REVOKE SELECT, INSERT ON tree_nodes FROM pp_spaces_probe";
             exec conn
-              "REVOKE SELECT ON data_space_members, data_spaces, users \
-               FROM pp_spaces_probe";
+              "REVOKE SELECT ON data_space_members, data_spaces, users, \
+               data_grants FROM pp_spaces_probe";
           exec conn "DROP ROLE IF EXISTS pp_spaces_probe")
         (fun () ->
           exec conn "SET ROLE pp_spaces_probe";

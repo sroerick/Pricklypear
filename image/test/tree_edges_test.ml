@@ -8,7 +8,7 @@
     authorship, branch ownership, lens visibility. tree/delete and
     tree/move report incoming-edge counts (warn, not forbid).
 
-    Needs Postgres (scripts/dev.sh). Skips cleanly when unreachable.
+    Needs Postgres (scripts/dev.sh). Fails (UNVERIFIED) when unreachable.
 
     Acceptance (one-tree.tree-edges verify stanzas, minus the :ref
     materialization stanza — that half is deferred with the typed-
@@ -42,8 +42,7 @@ let with_store f =
       S.connect store;
       match S.conn_of store with
       | None ->
-          Printf.printf
-            "SKIP: no postgres (set PP_DB_* / run scripts/dev.sh)\n%!"
+          Alcotest.fail "UNVERIFIED: no postgres (set PP_DB_* / run scripts/dev.sh)"
       | Some _ -> f store)
 
 let uniq p = Printf.sprintf "te_%s_%d" p (Random.int 1_000_000)

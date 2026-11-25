@@ -9,7 +9,7 @@
     and the VALUE is never interpolated into validation JSON (a value with
     a double quote used to reject as "invalid JSON" before the write).
 
-    Needs Postgres (scripts/dev.sh). Skips cleanly when unreachable. *)
+    Needs Postgres (scripts/dev.sh). Fails (UNVERIFIED) when unreachable. *)
 
 module S = Pricklypear_image_lib.Store
 module C = Pricklypear_image_lib.Crud
@@ -29,8 +29,7 @@ let with_store f =
       S.connect store;
       match S.conn_of store with
       | None ->
-          Printf.printf
-            "SKIP: no postgres (set PP_DB_* / run scripts/dev.sh)\n%!"
+          Alcotest.fail "UNVERIFIED: no postgres (set PP_DB_* / run scripts/dev.sh)"
       | Some _ -> f store)
 
 let uniq p = Printf.sprintf "uf_%s_%d" p (Random.int 1_000_000)

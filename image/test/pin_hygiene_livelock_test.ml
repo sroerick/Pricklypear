@@ -36,7 +36,7 @@
        (that leg was burning minutes per package pre-2026-09-08; the
        live repro of THIS fix is captured in the plan log).
 
-   Skips cleanly when no Postgres is reachable (scripts/dev.sh). *)
+   Fails (UNVERIFIED) when no Postgres is reachable (scripts/dev.sh). *)
 
 module S = Pricklypear_image_lib.Store
 module Ses = Pricklypear_image_lib.Session
@@ -56,8 +56,7 @@ let with_store f =
       S.connect store;
       match S.conn_of store with
       | None ->
-          Printf.printf
-            "SKIP: no postgres (set PP_DB_* / run scripts/dev.sh)\n%!"
+          Alcotest.fail "UNVERIFIED: no postgres (set PP_DB_* / run scripts/dev.sh)"
       | Some _ -> f store)
 
 let uniq p =

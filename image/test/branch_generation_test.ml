@@ -1,6 +1,6 @@
 (** Branch generation counter tests (remote-eval.borg caching subsection).
 
-    Needs Postgres (scripts/dev.sh, migration 017). Skips cleanly when the
+    Needs Postgres (scripts/dev.sh, migration 017). Fails (UNVERIFIED) when the
     DB or the branch_generations table is unreachable.
 
     Acceptance (caching verify clauses):
@@ -27,8 +27,7 @@ let with_store f =
       S.connect store;
       match S.conn_of store with
       | None ->
-          Printf.printf
-            "SKIP: no postgres (set PP_DB_* / run scripts/dev.sh)\n%!"
+          Alcotest.fail "UNVERIFIED: no postgres (set PP_DB_* / run scripts/dev.sh)"
       | Some _ -> f store)
 
 (* The generation helper returns None when pre-017 / unreachable. *)

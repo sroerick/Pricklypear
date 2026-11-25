@@ -16,7 +16,7 @@
         head+1 (restore-by-write) for datum paths; the restore is itself a
         versioned append, so undo is lossless + redoable.
 
-    Needs Postgres (scripts/dev.sh). Skips cleanly when unreachable.
+    Needs Postgres (scripts/dev.sh). Fails (UNVERIFIED) when unreachable.
 *)
 
 module S = Pricklypear_image_lib.Store
@@ -38,10 +38,13 @@ let with_store f =
       S.connect store;
       match S.conn_of store with
       | None ->
-          Printf.printf
-            "SKIP: no postgres (set PP_DB_* / run scripts/dev.sh)\n%!"
+          Alcotest.fail "UNVERIFIED: no postgres (set PP_DB_* / run scripts/dev.sh)"
       | Some _ ->
-          S.with_branch store ~branch_id:main_id (fun () -> f store))
+      (* Rows are authored by "tester" in data.u.tester; read as that owner.
+         An unbound fiber reads as anonymous, which the floor rightly hides
+         private rows from (050). *)
+          Pricklypear_image_lib.Store_db.with_pp_user "tester" (fun () ->
+              S.with_branch store ~branch_id:main_id (fun () -> f store)))
 
 let uniq p = Printf.sprintf "rg_%s_%d" p (Random.int 1_000_000)
 

@@ -1,7 +1,7 @@
 (* Branch ops prims' store layer (branching-ast-ergonomics branch-ops
    status/pull rows): Store.status_report (the branch/status fold) and
    Store.pull_behind_pins (the branch/pull mutation).
-   Needs Postgres (scripts/dev.sh). Skips if unreachable.
+   Needs Postgres (scripts/dev.sh). Fails (UNVERIFIED) if unreachable.
 
    Verifies:
    - status_report agrees with Store.branch_status on a fixture holding
@@ -34,8 +34,7 @@ let with_store f =
       S.connect store;
       match S.conn_of store with
       | None ->
-          Printf.printf
-            "SKIP: no postgres (set PP_DB_* / run scripts/dev.sh)\n%!"
+          Alcotest.fail "UNVERIFIED: no postgres (set PP_DB_* / run scripts/dev.sh)"
       | Some _ -> f store)
 
 let expr_of_int n =

@@ -1,7 +1,7 @@
 (* file-bridge P2 (branching.file-bridge, spec commit 3f4d6d1, 2026-10-16):
    branch/ingest — one server call lands a projection file's def-op batch.
 
-   DB cases need Postgres via scripts/dev.sh and skip if unreachable.
+   DB cases need Postgres via scripts/dev.sh and fail if unreachable.
 
    Verifies:
    - a define lands as a new write with origin=file in branch/log;
@@ -37,8 +37,7 @@ let with_store f =
         S.connect store;
         match S.conn_of store with
         | None ->
-            Printf.printf
-              "SKIP: no postgres (set PP_DB_* / run scripts/dev.sh)\n%!"
+            Alcotest.fail "UNVERIFIED: no postgres (set PP_DB_* / run scripts/dev.sh)"
         | Some _ -> f store)
 
 let cleanup_branch store ~branch_id =

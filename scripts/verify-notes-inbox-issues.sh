@@ -7,8 +7,8 @@ cd "$ROOT"
 eval $(opam env --switch=poohstack --set-switch)
 
 echo "== lisp unit tests (incl. multi-arg seq) =="
-dune build lisp/
-dune runtest lisp/
+dune build --root . lisp/
+dune runtest --root . lisp/
 
 echo "== static presence checks =="
 grep -q 'seq.*_head :: bodies\|"_head :: bodies"' lisp/lib/eval.ml \

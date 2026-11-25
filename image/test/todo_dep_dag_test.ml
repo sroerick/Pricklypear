@@ -18,7 +18,7 @@
          only (blocked and in-flight cards excluded);
       7. kanban/card-html marks a blocked card with .kb-blocked.
 
-    Needs Postgres (scripts/dev.sh). Skips cleanly when unreachable. *)
+    Needs Postgres (scripts/dev.sh). Fails (UNVERIFIED) when unreachable. *)
 
 module S = Pricklypear_image_lib.Store
 module Session = Pricklypear_image_lib.Session
@@ -54,7 +54,7 @@ let with_store f =
       S.connect store;
       match S.conn_of store with
       | None ->
-          Printf.printf "SKIP: no postgres (set PP_DB_* / run scripts/dev.sh)\n%!"
+          Alcotest.fail "UNVERIFIED: no postgres (set PP_DB_* / run scripts/dev.sh)"
       | Some _ -> f store)
 
 (* Loading the product libs persists them onto the session's branch, so every

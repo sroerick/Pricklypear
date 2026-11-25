@@ -268,7 +268,11 @@ let node_of_row (row : Pgx.row) : node option =
 
 let cache_ttl_s = 30.0
 
-let cache_tbl : (string * string, float * int64 * node list) Hashtbl.t =
+(* Entry: (stored_at, family generation, grant generation, nodes). The
+   grant generation is the DB-side data_grants_generation counter (051):
+   grants change outside the image's write prims, so a data.* entry must
+   also match it or a revoke would be served until the TTL. *)
+let cache_tbl : (string * string, float * int64 * int64 * node list) Hashtbl.t =
   Hashtbl.create 16
 
 let cache_gen = ref 0L
@@ -900,14 +904,30 @@ let list_subtree (conn : Store_db.conn) ~(prefix : string)
     Freshness = the generation stamp plus TTL in the cache block above.
     Truncated reads (rows = limit) return fresh and stay uncached;
     complete snapshots are truncated to the caller's ask in memory. *)
+let grant_gen (conn : Store_db.conn) ~(prefix : string) : int64 =
+  (* Only datum paths are subject to grants; code paths (b.<branch>) skip
+     the read. No exception handler: inside a transaction a failed SELECT
+     aborts the tx, and hiding that would surface as a confusing later
+     error. The table ships with 051. *)
+  if not (prefix = "data" || String.starts_with ~prefix:"data." prefix) then 0L
+  else
+    match Store_db.exec conn "SELECT gen::text FROM data_grants_generation" with
+    | [ [ c ] ] ->
+        (match Pgx.Value.to_string c with
+         | Some s -> (try Int64.of_string s with _ -> 0L)
+         | None -> 0L)
+    | _ -> 0L
+
 let cached_list_subtree (conn : Store_db.conn) ~(prefix : string)
     ?(limit : int = 1000) () : node list =
   let key = (prefix, Store_db.current_pp_user ()) in
+  let grant_gen_now = grant_gen conn ~prefix in
   Eio.Mutex.lock cache_mu;
   let fam_gen_now = family_gen_locked prefix in
   let hit =
     match Hashtbl.find_opt cache_tbl key with
-    | Some (t, gen, nodes) when gen = fam_gen_now
+    | Some (t, gen, ggen, nodes) when gen = fam_gen_now
+        && ggen = grant_gen_now
         && Unix.gettimeofday () -. t < cache_ttl_s -> Some nodes
     | _ -> None
   in
@@ -928,7 +948,7 @@ let cached_list_subtree (conn : Store_db.conn) ~(prefix : string)
       if List.length nodes < limit then begin
         Eio.Mutex.lock cache_mu;
         Hashtbl.replace cache_tbl key
-            (Unix.gettimeofday (), fam_gen_now, nodes);
+            (Unix.gettimeofday (), fam_gen_now, grant_gen_now, nodes);
         Eio.Mutex.unlock cache_mu
       end;
       nodes
@@ -1090,9 +1110,9 @@ let garden_root ~user =
 (* note-vis-p1: which user's namespace does [path] live under, if any?
    Both per-user namespaces count: the note garden (data.note.u.<owner>,
    labels stored RAW via path_label) and the claims namespace
-   (data.u.<owner>, labels stored ENCODED via enc_label) — claims-visibility
-   makes the read floor honor the write-side flag in both, so an unflagged
-   town namespace (u.hollis, u.gregor, …) reads world-readable. Paths
+   (data.u.<owner>, labels stored ENCODED via enc_label) — the read floor
+   honors the write-side flag in both, and an unflagged row reads private
+   (050; notes.borg note-visibility). Paths
    outside those (fn/route/data.book paths) have no owner and stay outside
    the vis gate. *)
 let note_garden_owner (path : string) : string option =
@@ -1443,9 +1463,9 @@ let get_by_uuid (conn : Store_db.conn) ~(uuid : string) : node option =
 
     [viewer] turns on the per-note vis floor (note-vis-p1): rows OUTSIDE
     the caller's own note garden must carry body vis users (any
-    signed-in caller) or be public — the DEFAULT for an unflagged write
-    (claims-visibility, operator policy 11-12) — or be private with the
-    viewer granted a membership in the containing space. Rows inside the
+    signed-in caller) or public, or be private (the DEFAULT for an
+    unflagged write, notes.borg note-visibility) with the viewer granted
+    a membership in the containing space. Rows inside the
     caller's garden pass unconditionally — vis only ever widens.
     Internal callers pass None and see the store unfiltered.
 
@@ -1527,15 +1547,13 @@ let find_by_body_field (conn : Store_db.conn) ~(kind : string option)
       if not vis_on then ""
       else
         Printf.sprintf
-          (* claims-visibility: the DEFAULT is public (operator policy 11-12,
-             "everything should be public by default") — an unflagged write in
-             another identity's namespace (the town namespaces) reads, and
-             private is an opt-in that still honors a grant lookup through the
-             space membership predicate. Before this, the floor hardcoded
-             'private' as the default and so 403/404'd writes the write side
-             had every right to call public. *)
-          "AND (path <@ $%d::ltree OR COALESCE(payload #>> '{body,vis}','public') = 'public' OR (COALESCE(payload #>> '{body,vis}','public') = 'users' AND $%d <> 'anonymous') OR (COALESCE(payload #>> '{body,vis}','public') = 'private' AND tree_path_in_member_space(path, $%d))) "
-          floor_i viewer_i viewer_i
+          (* An absent vis is private (notes.borg note-visibility; owner
+             decision 2026-11-23). Public is an explicit flag; private honors
+             the space-membership grant; a live read grant (051) widens
+             any row. Mirrors Crud.note_vis_allows / path_granted and
+             pp_vis_readable. *)
+          "AND (path <@ $%d::ltree OR COALESCE(payload #>> '{body,vis}','private') = 'public' OR (COALESCE(payload #>> '{body,vis}','private') = 'users' AND $%d <> 'anonymous') OR (COALESCE(payload #>> '{body,vis}','private') NOT IN ('public','users') AND tree_path_in_member_space(path, $%d)) OR tree_path_granted(path, $%d)) "
+          floor_i viewer_i viewer_i viewer_i
     in
     let body_path = Printf.sprintf "{body,%s}" field in
     let sql =

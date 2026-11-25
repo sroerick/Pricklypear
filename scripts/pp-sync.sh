@@ -13,7 +13,7 @@ if [ -x "$BUILD" ]; then
 fi
 if command -v dune >/dev/null 2>&1; then
   cd "$ROOT" || exit 1
-  exec dune exec -- cli/bin/pp_sync.exe "$@"
+  exec dune exec --root . -- cli/bin/pp_sync.exe "$@"
 fi
-echo "pp-sync: build with: dune build cli/bin/pp_sync.exe" >&2
+echo "pp-sync: build with: dune build --root . cli/bin/pp_sync.exe" >&2
 exit 2

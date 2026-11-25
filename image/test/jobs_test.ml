@@ -2,7 +2,7 @@
 
     DB-backed regression tests for the dedicated `jobs` table
     (migrations/015_jobs.sql) and image/lib/jobs.ml. Needs Postgres
-    (scripts/dev.sh); skips cleanly/unreachable.
+    (scripts/dev.sh); fails when unreachable.
 
     Covers the job node-shapes + runner verify stanzas:
       - job node create / claim / status transitions with runner-owned
@@ -41,8 +41,7 @@ let with_store f =
       S.connect store;
       match S.conn_of store with
       | None ->
-          Printf.printf
-            "SKIP: no postgres (set PP_DB_* / run scripts/dev.sh)\n%!"
+          Alcotest.fail "UNVERIFIED: no postgres (set PP_DB_* / run scripts/dev.sh)"
       | Some _ -> f store)
 
 let uniq p = Printf.sprintf "j_%s_%d" p (Random.int 1_000_000)

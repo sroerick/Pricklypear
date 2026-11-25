@@ -12,7 +12,7 @@
         report-only (sync-conflicts v0: LWW keeps server, conflict reported,
         no silent loss).
 
-    Needs scripts/dev.sh Postgres; skips cleanly when unreachable.
+    Needs scripts/dev.sh Postgres; fails (UNVERIFIED) when unreachable.
 *)
 
 module S = Pricklypear_image_lib.Store
@@ -34,7 +34,7 @@ let with_store f =
       S.connect store;
       match S.conn_of store with
       | None ->
-          Printf.printf "SKIP: no postgres (set PP_DB_* / run scripts/dev.sh)\n%!"
+          Alcotest.fail "UNVERIFIED: no postgres (set PP_DB_* / run scripts/dev.sh)"
       | Some _ -> f store)
 
 let h n = Printf.sprintf "h%d" n

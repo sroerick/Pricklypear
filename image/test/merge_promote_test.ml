@@ -1,6 +1,6 @@
 (** merge conflict report + promote routes-with-handler
     Spec: branching.merge, branching.promote
-    Needs Postgres (scripts/dev.sh). Skips if unreachable. *)
+    Needs Postgres (scripts/dev.sh). Fails (UNVERIFIED) if unreachable. *)
 
 module S = Pricklypear_image_lib.Store
 
@@ -18,8 +18,7 @@ let with_store f =
       S.connect store;
       match S.conn_of store with
       | None ->
-          Printf.printf
-            "SKIP: no postgres (set PP_DB_* / run scripts/dev.sh)\n%!"
+          Alcotest.fail "UNVERIFIED: no postgres (set PP_DB_* / run scripts/dev.sh)"
       | Some _ -> f store)
 
 let expr_of_int n =

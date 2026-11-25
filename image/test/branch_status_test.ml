@@ -1,7 +1,7 @@
 (** Branch status (branching.branch-status): git-style
     clean/ahead-new/ahead/behind/diverged/synced classification over the
     tree-time substrate (tree_versions) keyed on base_gen.
-    Needs Postgres (scripts/dev.sh). Skips if unreachable.
+    Needs Postgres (scripts/dev.sh). Fails (UNVERIFIED) if unreachable.
 
     Verifies: fork records base_gen = parent head gen; empty fork reads
     clean; own new fn reads ahead-new; post-promote pin reads synced;
@@ -27,8 +27,7 @@ let with_store f =
       S.connect store;
       match S.conn_of store with
       | None ->
-          Printf.printf
-            "SKIP: no postgres (set PP_DB_* / run scripts/dev.sh)\n%!"
+          Alcotest.fail "UNVERIFIED: no postgres (set PP_DB_* / run scripts/dev.sh)"
       | Some _ -> f store)
 
 let expr_of_int n =

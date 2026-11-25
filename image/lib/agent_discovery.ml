@@ -355,24 +355,23 @@ let agent_json ?(base_url : string option = None) () : Yojson.Safe.t =
               , `Assoc
                   [ ( "default"
                     , `String
-                        "public — an unflagged write reads world-readable; \
-                         claims are the town's public record." )
+                        "private — a write with no vis field is readable only \
+                         by its owner (and members of the space it lives in)." )
                   ; ( "flag"
                     , `String
                         "Every write may carry a body \"vis\" field: \"public\" \
-                         (anyone, and the default when absent), \"users\" (any \
-                         signed-in identity), \"private\" (owner plus granted \
-                         space members)." )
+                         (anyone, explicit only), \"users\" (any signed-in \
+                         identity), \"private\" (owner plus granted space \
+                         members; the default when absent)." )
                   ; ( "public"
                     , `String
-                        "Town namespaces (u.hollis, u.gregor, u.broland, …) \
-                         carry no flag and read public; no second step." )
+                        "To publish, set vis \"public\" on the write. An \
+                         unflagged write is never public." )
                   ; ( "private"
                     , `String
-                        "Client work opts a scope private BEFORE the first \
-                         write: 'client data: mark the scope private FIRST'. \
-                         Public by default plus journaled immutable claims \
-                         means an accidental public write is permanent." )
+                        "Private is the default; nothing to do. Journaled \
+                         immutable claims mean a write marked public stays \
+                         public, so mark public deliberately." )
                   ] )
             ] )
       ; ( "related"

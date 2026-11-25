@@ -1,6 +1,6 @@
 (** Canonical todo-card writes reject malformed new data without freezing legacy rows.
 
-    DB-backed: skips cleanly without Postgres. Guard observes the REAL raised
+    DB-backed: fails without Postgres. Guard observes the REAL raised
     (error ...) before tree/upsert; a tag returned under ok:true would not test
     the same behavior for callers. *)
 
@@ -36,7 +36,7 @@ let with_store f =
       let store = S.make ~cfg ~branch_id:main_id () in
       S.connect store;
       match S.conn_of store with
-      | None -> Printf.printf "SKIP: no postgres (set PP_DB_* / run scripts/dev.sh)\n%!"
+      | None -> Alcotest.fail "UNVERIFIED: no postgres (set PP_DB_* / run scripts/dev.sh)"
       | Some _ -> f store)
 
 let scratch_branch store ~owner ~child_name =

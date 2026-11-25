@@ -1,6 +1,6 @@
 (* branch/push (branching.borg branch-ops push row): Call_graph.push_closure
    (pure) + Branch_push (the store oracle; DB cases need Postgres via
-   scripts/dev.sh and skip if unreachable).
+   scripts/dev.sh and fail if unreachable).
 
    Verifies (closure, pure):
    - target-visible / kernel / special-form refs are free (not holes);
@@ -107,7 +107,7 @@ let test_closure_requested_overlap () =
     (CG.push_closure ~requested:[ "helper"; "entry" ]
        ~src_defs:(src_fixture ()) ~tgt_visible:[ "shared" ] ~kernel:[])
 
-(* ---- store oracle (needs PG; skips if unreachable) ---- *)
+(* ---- store oracle (needs PG; fails if unreachable) ---- *)
 
 let with_store f =
   Eio_main.run @@ fun env ->
@@ -121,8 +121,7 @@ let with_store f =
         S.connect store;
         match S.conn_of store with
         | None ->
-            Printf.printf
-              "SKIP: no postgres (set PP_DB_* / run scripts/dev.sh)\n%!"
+            Alcotest.fail "UNVERIFIED: no postgres (set PP_DB_* / run scripts/dev.sh)"
         | Some _ -> f store)
 
 let cleanup_fn store ~branch_id ~name =

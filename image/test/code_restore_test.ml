@@ -10,7 +10,7 @@
     insert-only code node (nothing below head) has no state to restore.
 
     These tests exercise Store.code_restore directly. Needs Postgres
-    (scripts/dev.sh); skips cleanly when unreachable.
+    (scripts/dev.sh); fails (UNVERIFIED) when unreachable.
 *)
 
 module S = Pricklypear_image_lib.Store
@@ -30,8 +30,7 @@ let with_store f =
       S.connect store;
       match S.conn_of store with
       | None ->
-          Printf.printf
-            "SKIP: no postgres (set PP_DB_* / run scripts/dev.sh)\n%!"
+          Alcotest.fail "UNVERIFIED: no postgres (set PP_DB_* / run scripts/dev.sh)"
       | Some _ -> f store)
 
 let uniq p = Printf.sprintf "crr_%s_%d_%d" p (Unix.getpid ()) (Random.int 1_000_000_000)

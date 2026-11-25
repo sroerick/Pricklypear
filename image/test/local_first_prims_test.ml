@@ -1,7 +1,7 @@
 (** local-first prim tests (borge/local-first.borg lens-model +
     replication-units, campaign 8.1).
 
-    Needs Postgres (scripts/dev.sh). Skips cleanly when unreachable.
+    Needs Postgres (scripts/dev.sh). Fails (UNVERIFIED) when unreachable.
 
     - lens/fork names + creates a lens branch as a NAMED CHILD of the
       checked-out branch (the pinned <owner>/lens-<device>[-<date>]
@@ -31,8 +31,7 @@ let with_store f =
       S.connect store;
       match S.conn_of store with
       | None ->
-          Printf.printf
-            "SKIP: no postgres (set PP_DB_* / run scripts/dev.sh)\n%!"
+          Alcotest.fail "UNVERIFIED: no postgres (set PP_DB_* / run scripts/dev.sh)"
       | Some _ -> f store)
 
 (* ---- lens-model: lens/fork names + creates an empty-lens child ---- *)

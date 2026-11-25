@@ -146,6 +146,11 @@
      yojson pgx unix))
 
 (test
+ (name data_grants_test)
+ (modules data_grants_test)
+ (libraries pricklypear-image alcotest eio_main pgx))
+
+(test
  (name admin_rls_test)
  (modules admin_rls_test)
  (libraries pricklypear-image pricklypear-lisp alcotest eio_main yojson pgx unix))

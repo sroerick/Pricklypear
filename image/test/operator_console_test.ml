@@ -13,7 +13,7 @@
          linger in the operator's "on now");
       3. [Presence.forget] removes an identity (logout / revoke);
       4. [rollup_rows] returns per-actor sums from the forever-kept day
-         rollups and is DB-backed (skips cleanly with no PG).
+         rollups and is DB-backed (fails with no PG).
 
     No DB is needed for 1-3; 4 needs Postgres (scripts/dev.sh). *)
 
@@ -39,7 +39,7 @@ let with_store f =
       S.connect store;
       match S.conn_of store with
       | None ->
-          Printf.printf "SKIP: no postgres (set PP_DB_* / run scripts/dev.sh)\n%!"
+          Alcotest.fail "UNVERIFIED: no postgres (set PP_DB_* / run scripts/dev.sh)"
       | Some _ -> f store)
 
 let cleanup store ~actor =

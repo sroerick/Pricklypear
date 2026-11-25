@@ -11,7 +11,7 @@
     READ COMMITTED transaction whose set_config('pp.user', …, true) arms
     the floor (fiber-bound via Request_context / Store_db.with_pp_user).
 
-    Pinned here, against a real Postgres (scripts/dev.sh; skips when
+    Pinned here, against a real Postgres (scripts/dev.sh; fails when
     unreachable):
       - the floor: bob's tree/get of an alice datum is VNil; alice's is
         the node; an UNBOUND fiber (set_local_pp_user defaults to
@@ -53,7 +53,7 @@ let with_two_stores f =
       match S.conn_of a, S.conn_of b with
       | Some _, Some _ -> f a b
       | _ ->
-          Printf.printf "SKIP: no postgres (set PP_DB_* / run scripts/dev.sh)\n%!")
+          Alcotest.fail "UNVERIFIED: no postgres (set PP_DB_* / run scripts/dev.sh)")
 
 let probe_uuid tag =
   Printf.sprintf "0197a2b3-c0de-7000-8000-%012d"

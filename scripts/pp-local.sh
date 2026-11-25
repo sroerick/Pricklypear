@@ -75,9 +75,9 @@ elif command -v dune >/dev/null 2>&1; then
   if [ -n "${OPAM_SWITCH_PREFIX:-}" ] || command -v opam >/dev/null 2>&1; then
     eval "$(opam env --switch=poohstack --set-switch 2>/dev/null)" 2>/dev/null || true
   fi
-  PP_REMOTE_BIN="dune exec remote/bin/main.exe --"
+  PP_REMOTE_BIN="dune exec --root . remote/bin/main.exe --"
 else
-  echo "pp-local: no pp-remote found (build with: dune build remote/bin/main.exe)" >&2
+  echo "pp-local: no pp-remote found (build with: dune build --root . remote/bin/main.exe)" >&2
   exit 1
 fi
 

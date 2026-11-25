@@ -14,7 +14,7 @@ set -e
 ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
 BIN="$ROOT/_build/default/cli/bin/pp_eval.exe"
 if [ ! -x "$BIN" ]; then
-  echo "pp-eval-todo: build first: eval \$(opam env --switch=poohstack --set-switch) && dune build @all" >&2
+  echo "pp-eval-todo: build first: eval \$(opam env --switch=poohstack --set-switch) && dune build --root . @all" >&2
   exit 2
 fi
 exec env \
