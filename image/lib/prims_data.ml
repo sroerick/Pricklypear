@@ -315,10 +315,11 @@ let register (t : t) (tbl : Primitives.t) : unit =
     (fun args ->
       match args with
       | [ Pricklypear_lisp.Ast.VStr needle ] ->
-          Crud.backlinks t.store ~needle ()
+          Crud.backlinks t.store ~needle ~viewer:(actor ()) ()
       | [ Pricklypear_lisp.Ast.VStr needle;
           Pricklypear_lisp.Ast.VInt n ] ->
-          Crud.backlinks t.store ~needle ~limit:(Int64.to_int n) ()
+          Crud.backlinks t.store ~needle ~limit:(Int64.to_int n)
+            ~viewer:(actor ()) ()
       | _ ->
           (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("backlinks", "need id-or-path [, limit]", "bad-args")))));
 

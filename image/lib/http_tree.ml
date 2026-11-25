@@ -226,7 +226,10 @@ let detail_pane (session : Session.t) ~(focus : string) : Pure_html.node =
       | Some n ->
           let body_json = Yojson.Safe.to_string n.body in
           let out_links = T.list_out_links conn ~path:focus ~limit:50 () in
-          let backlinks = T.edges_to conn ~needle:focus ~limit:50 () in
+          let backlinks =
+            T.edges_to conn ~needle:focus ~limit:50
+              ~viewer:(Session.username session) ()
+          in
           let uname = Session.username session in
           let can_edit =
             uname <> "anonymous"

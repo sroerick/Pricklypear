@@ -28,8 +28,14 @@
         sticks;
       - a write grant must carry read.
 
-    Not covered here (later rollout steps / leak surfaces): backlinks and
-    search.
+    Leak surfaces (verify line 4): backlinks over an unreadable row return
+    nothing about it, for both halves of Crud.backlinks (edges whose source
+    is unreadable, and the legacy body-value scan), for datum rows and for
+    note-garden sources; a grant or vis public makes them appear. The
+    search half (tree/search-text confinement) is in prim_gates_test.
+
+    These run as the dev superuser, so the filter is shown to hold without
+    RLS too (Tree_store.readable_by_sql is role-independent).
 
     Needs scripts/dev.sh Postgres; fails (UNVERIFIED) when unreachable. *)
 
@@ -484,6 +490,124 @@ let test_write_needs_read () =
       in
       Alcotest.(check bool) "a write grant without read is refused" true refused)
 
+(* ---------------- leak surfaces: backlinks ---------------- *)
+
+let link conn ~source ~needle =
+  set_pp_user conn "";
+  let path =
+    Printf.sprintf "%s.lnk.l%06d" source (Random.int 1_000_000)
+  in
+  match
+    TS.upsert_link conn ~path
+      ~body_json:(Printf.sprintf "{\"to\":\"%s\",\"kind\":\"ref\"}" needle)
+      ~author:"alice"
+  with
+  | Ok p -> p
+  | Error e -> Alcotest.fail ("upsert_link: " ^ e)
+
+let edge_hits conn ~needle who =
+  set_pp_user conn who;
+  let n =
+    List.length (TS.edges_to conn ~needle ~viewer:who ())
+  in
+  set_pp_user conn "";
+  n
+
+let body_hits conn ~needle who =
+  set_pp_user conn who;
+  let n = List.length (TS.backlinks conn ~needle ~viewer:who ()) in
+  set_pp_user conn "";
+  n
+
+let cleanup_links conn ~needle =
+  set_pp_user conn "";
+  ignore
+    (Db.exec conn ~params:[ s needle ]
+       "DELETE FROM tree_nodes WHERE kind='link' \
+        AND payload->'body'->>'to' = $1")
+
+let test_backlinks_edges_datum () =
+  with_rows (fun conn ~ty ~row ~sib:_ ->
+      let needle = "data.shared.grtneedle." ^ ty in
+      Fun.protect ~finally:(fun () -> cleanup_links conn ~needle) (fun () ->
+          ignore (link conn ~source:row ~needle);
+          Alcotest.(check int) "alice sees the edge out of her row" 1
+            (edge_hits conn ~needle "alice");
+          Alcotest.(check int) "bob sees nothing about alice's private row" 0
+            (edge_hits conn ~needle "bob");
+          Alcotest.(check int) "anonymous sees nothing" 0
+            (edge_hits conn ~needle "anonymous");
+          Alcotest.(check int) "kernel read (no viewer) is ungated" 1
+            (List.length (TS.edges_to conn ~needle ()));
+          ignore (grant conn ~ty ~prefix:row ~grantee:"bob" ~rights:[ "read" ] ());
+          Alcotest.(check int) "a read grant on the source shows the edge" 1
+            (edge_hits conn ~needle "bob")))
+
+let test_backlinks_body_scan () =
+  with_rows (fun conn ~ty ~row:_ ~sib:_ ->
+      let needle = "grt-body-needle-" ^ ty in
+      set_pp_user conn "";
+      let id =
+        match
+          TS.insert_datum conn ~type_name:ty
+            ~fields_json:(Printf.sprintf "{\"ref\":\"%s\"}" needle)
+            ~author:"alice"
+        with
+        | Ok id -> id
+        | Error e -> Alcotest.fail e
+      in
+      let ref_row = path_of conn ~id in
+      Alcotest.(check int) "alice: legacy scan finds her row" 1
+        (body_hits conn ~needle "alice");
+      Alcotest.(check int) "bob: legacy scan reveals nothing" 0
+        (body_hits conn ~needle "bob");
+      ignore
+        (grant conn ~ty ~prefix:ref_row ~grantee:"bob" ~rights:[ "read" ] ());
+      Alcotest.(check int) "bob: granted row appears" 1
+        (body_hits conn ~needle "bob"))
+
+let test_backlinks_note_source () =
+  with_rows (fun conn ~ty ~row:_ ~sib:_ ->
+      let needle = "data.shared.grtneedle.n" ^ ty in
+      let note = Printf.sprintf "data.note.u.alice.%s" ty in
+      let put_note vis =
+        set_pp_user conn "";
+        let body =
+          Printf.sprintf "{\"slug\":\"%s\",\"title\":\"t\"%s}" ty
+            (match vis with
+             | None -> ""
+             | Some v -> Printf.sprintf ",\"vis\":\"%s\"" v)
+        in
+        match
+          TS.upsert_hier conn ~path:note ~kind:"note" ~type_name:"note"
+            ~body_json:body ~author:"alice" ~rank:None
+        with
+        | Ok _ -> ()
+        | Error e -> Alcotest.fail ("upsert_hier: " ^ e)
+      in
+      Fun.protect
+        ~finally:(fun () ->
+          cleanup_links conn ~needle;
+          set_pp_user conn "";
+          ignore
+            (Db.exec conn ~params:[ s note ]
+               "DELETE FROM tree_nodes WHERE path <@ $1::ltree"))
+        (fun () ->
+          put_note None;
+          ignore (link conn ~source:note ~needle);
+          Alcotest.(check int) "alice sees the edge out of her note" 1
+            (edge_hits conn ~needle "alice");
+          Alcotest.(check int) "bob: unflagged (private) note reveals nothing" 0
+            (edge_hits conn ~needle "bob");
+          put_note (Some "users");
+          Alcotest.(check int) "vis users: bob sees it" 1
+            (edge_hits conn ~needle "bob");
+          Alcotest.(check int) "vis users: anonymous does not" 0
+            (edge_hits conn ~needle "anonymous");
+          put_note (Some "public");
+          Alcotest.(check int) "vis public: anonymous sees it" 1
+            (edge_hits conn ~needle "anonymous")))
+
 let () =
   Random.self_init ();
   Alcotest.run "sharing-grants"
@@ -506,5 +630,13 @@ let () =
         ; Alcotest.test_case "default grant follows the relation" `Quick
             test_default_follows_relation
         ; Alcotest.test_case "write grant needs read" `Quick test_write_needs_read
+        ] )
+    ; ( "leak surfaces: backlinks"
+      , [ Alcotest.test_case "edges out of an unreadable datum" `Quick
+            test_backlinks_edges_datum
+        ; Alcotest.test_case "legacy body-value scan" `Quick
+            test_backlinks_body_scan
+        ; Alcotest.test_case "edges out of a note-garden source" `Quick
+            test_backlinks_note_source
         ] )
     ]
