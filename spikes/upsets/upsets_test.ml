@@ -207,6 +207,41 @@ let test_poison () =
   Alcotest.(check (list string) "fills <=T identical" (cut_o r1.Replay.rr_orders)
               (cut_o r2.Replay.rr_orders))
 
+(* ---- fill discipline: no fill prices at its own signal tick, and a
+   fill whose next print lands past the window end is UNREALISED —
+   reported as n_beyond_end, never folded into the pnl curve. ---- *)
+
+let test_fill_discipline () =
+  (* cut the window at +24h so A's velocity signal (fires at +24h) fills
+     off the +25h print, which never happened inside this run. *)
+  let snap = { (base_snapshot ()) with Types.s_to = t0 + (24 * hour) } in
+  let rule = test_rule () in
+  let d = tmpdir () in
+  let r = Replay.run ~snapshot:snap ~rule ~manifests_dir:d |> Result.get_ok in
+  let orders = r.Replay.rr_orders in
+  Alcotest.(check bool "orders exist" true (List.length orders > 0));
+  (* never price at the signal tick's own print *)
+  Alcotest.(check bool "fills come strictly after the signal tick" true
+              (List.for_all (fun (o : Fills.order) -> o.Fills.ord_fill_ts > o.Fills.ord_signal_ts) orders));
+  let beyond =
+    List.filter (fun (o : Fills.order) -> o.Fills.ord_fill_ts > snap.Types.s_to) orders
+  in
+  Alcotest.(check bool "some fill lands past window end" true (List.length beyond > 0));
+  Alcotest.(check int "n_beyond_end reported" (List.length beyond)
+              r.Replay.rr_metrics.Replay.mt_n_beyond_end);
+  Alcotest.(check int "n_filled counts in-window prints only"
+              (List.length orders - List.length beyond)
+              r.Replay.rr_metrics.Replay.mt_n_filled);
+  (* unrealised: no settled order may rest on a past-end fill *)
+  Alcotest.(check bool "settled pnl uses in-window fills only" true
+              (List.for_all
+                 (fun s -> s.Replay.st_order.Fills.ord_fill_ts <= snap.Types.s_to)
+                 r.Replay.rr_settled));
+  Alcotest.(check bool "beyond-end fills are flagged in the manifest" true
+              (Yojson.Basic.Util.member "n_beyond_end"
+                 (Yojson.Basic.Util.member "metrics" r.Replay.rr_manifest)
+               = `Int (List.length beyond)))
+
 (* ---- holdout-once (L-4/L-5) ---- *)
 
 let test_holdout_once () =
@@ -315,6 +350,7 @@ let () =
       ("fills", [ test_case "next-print + slippage + settle" `Quick test_fills ]);
       ("surface", [ test_case "baseline/z/concentration/cooc fixtures" `Quick test_surface ]);
       ("simulator", [ test_case "poison-the-future (L-2)" `Quick test_poison ]);
+      ("fill-discipline", [ test_case "next print + past-end unrealised" `Quick test_fill_discipline ]);
       ("discipline", [ test_case "holdout touched once" `Quick test_holdout_once ]);
       ("tax", [ test_case "base-rate tax table (L-1)" `Quick test_tax ]);
     ]

@@ -10,7 +10,8 @@ type settled = { st_order : Fills.order; st_won : bool; st_pnl : float }
 
 type metrics = {
   mt_n_signals : int;
-  mt_n_filled : int;
+  mt_n_filled : int; (* fills whose print landed INSIDE the window *)
+  mt_n_beyond_end : int; (* fills priced off a print past s_to: unrealised *)
   mt_n_unfilled : int;
   mt_n_open : int;
   mt_hit_rate : float;
@@ -300,6 +301,13 @@ let run ~(snapshot : Types.snapshot) ~(rule : Types.rule) ~(manifests_dir : stri
       let equity_sorted =
         List.sort (fun a b -> compare (fst a) (fst b)) !equity
       in
+      (* fill discipline: a print past the window end never happened inside
+         the run — such an order is unrealised and must not be priced into
+         the in-window fill statistics. *)
+      let within =
+        List.filter (fun o -> o.Fills.ord_fill_ts <= snapshot.Types.s_to) orders
+      in
+      let n_beyond_end = List.length orders - List.length within in
       let n_settled = List.length settled in
       let wins = List.length (List.filter (fun s -> s.st_won) settled) in
       let total_pnl = List.fold_left (fun a s -> a +. s.st_pnl) 0.0 settled in
@@ -378,18 +386,21 @@ let run ~(snapshot : Types.snapshot) ~(rule : Types.rule) ~(manifests_dir : stri
         |> List.sort (fun a b -> compare (fst a) (fst b))
         |> List.map snd
       in
+      (* fills priced off a print past the window end are unrealised:
+         reported, never folded into the settled pnl curve *)
       let metrics =
         {
           mt_n_signals = List.length signals;
-          mt_n_filled = List.length orders;
+          mt_n_filled = List.length within;
+          mt_n_beyond_end = n_beyond_end;
           mt_n_unfilled = !unfilled;
-          mt_n_open = List.length orders - n_settled;
+          mt_n_open = List.length within - n_settled;
           mt_hit_rate = (if n_settled = 0 then 0.0 else float_of_int wins /. float_of_int n_settled);
           mt_avg_entry =
-            (if List.length orders = 0 then 0.0
+            (if List.length within = 0 then 0.0
              else
-               List.fold_left (fun a o -> a +. o.Fills.ord_entry) 0.0 orders
-               /. float_of_int (List.length orders));
+               List.fold_left (fun a o -> a +. o.Fills.ord_entry) 0.0 within
+               /. float_of_int (List.length within));
           mt_expectancy = (if n_settled = 0 then 0.0 else total_pnl /. float_of_int n_settled);
           mt_total_pnl = total_pnl;
           mt_max_dd = max_dd;
@@ -423,6 +434,7 @@ let run ~(snapshot : Types.snapshot) ~(rule : Types.rule) ~(manifests_dir : stri
               `Assoc
                 [ ("n_signals", `Int metrics.mt_n_signals);
                   ("n_filled", `Int metrics.mt_n_filled);
+                  ("n_beyond_end", `Int metrics.mt_n_beyond_end);
                   ("n_unfilled", `Int metrics.mt_n_unfilled);
                   ("n_open", `Int metrics.mt_n_open);
                   ("hit_rate", `Float metrics.mt_hit_rate);

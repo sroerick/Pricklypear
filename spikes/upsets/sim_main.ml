@@ -75,6 +75,9 @@ let () =
             "signals    %d (filled %d, unfilled %d, open-at-end %d)\n"
             m.Replay.mt_n_signals m.Replay.mt_n_filled m.Replay.mt_n_unfilled
             m.Replay.mt_n_open;
+          Printf.printf
+            "unrealised %d (fill print past window end — reported, not in pnl)\n"
+            m.Replay.mt_n_beyond_end;
           Printf.printf "hit_rate   %.3f  avg_entry %.3f\n" m.Replay.mt_hit_rate
             m.Replay.mt_avg_entry;
           Printf.printf "pnl        %.2f  expectancy %.2f  max_dd %.2f\n"
