@@ -200,6 +200,90 @@ let test_costs () =
   Alcotest.(check (option int)) "spend per backend (camera)" (Some 0)
     (List.assoc_opt "camera" (spend_by_backend ts))
 
+(* 6. studio library: asset rows, typed cast/ref bindings, expand. *)
+let test_library () =
+  let lib =
+    asset_upsert empty_library ~project:"short-01" ~slug:"mara"
+      ~kind:"character" ~summary:"hero" ~bible:"grew up on the coast"
+      ~appearance:"weathered, 40s" ~negative:"no hat"
+      ~primary_hash:(h64 'a') ~primary_path:"assets/mara.png"
+      ~ref_hashes:[ h64 'b' ] ~voice_ref:"mara-voice" ()
+  in
+  let lib =
+    asset_upsert lib ~project:"" ~slug:"diner-ext" ~kind:"location"
+      ~appearance:"neon diner exterior" ~primary_hash:(h64 'c')
+      ~primary_path:"assets/diner-ext.png" ()
+  in
+  let lib =
+    asset_upsert lib ~project:"" ~slug:"theme-A" ~kind:"style"
+      ~appearance:"high-contrast neon" ~primary_hash:(h64 'e')
+      ~primary_path:"assets/theme-A.png" ~ref_hashes:[ h64 'a' ] ()
+  in
+  (match asset_get ~project:"short-01" lib "mara" with
+  | Some a ->
+      Alcotest.(check string) "asset-upsert keeps kind=character" "character"
+        a.asset_kind;
+      Alcotest.(check string) "asset-upsert keeps the appearance" "weathered, 40s"
+        a.asset_appearance;
+      Alcotest.(check (list string)) "asset-upsert keeps ref_hashes" [ h64 'b' ]
+        a.asset_ref_hashes;
+      Alcotest.(check string) "media_id is optional (UI thumbs only)" ""
+        a.asset_media_id;
+      Alcotest.(check string) "gen reads primary_hash on disk" (h64 'a')
+        (fst (asset_gen_pointer a))
+  | None -> Alcotest.fail "asset-get did not find the project asset");
+  Alcotest.(check bool) "default lookup falls back to studio-wide" true
+    (asset_get ~project:"short-01" lib "diner-ext" <> None);
+  Alcotest.(check int) "assets ?kind filters rows" 1
+    (List.length (assets ~project:"short-01" ~kind:"character" lib));
+  let lib = shot_cast lib ~shot:"mara-at-window" ~asset:"mara" ~role:"hero" () in
+  let lib =
+    shot_ref lib ~shot:"mara-at-window" ~asset:"diner-ext" ~purpose:"loc"
+      ~weight:"0.6" ()
+  in
+  let lib =
+    shot_ref lib ~shot:"mara-at-window" ~asset:"theme-A" ~purpose:"style" ()
+  in
+  Alcotest.(check (list string))
+    "which-shots-use-asset is a rows query over cast and ref" [ "mara-at-window" ]
+    (which_shots_use_asset lib "diner-ext");
+  let bundle =
+    expand ~prompt:"turns from the window" ~model:"wan-2.1" lib "mara-at-window"
+  in
+  Alcotest.(check bool) "expand carries the action prompt" true
+    (contains bundle.exp_json "turns from the window");
+  Alcotest.(check bool) "expand carries the cast appearance" true
+    (contains bundle.exp_json "weathered, 40s");
+  Alcotest.(check (list string)) "expand unions the ref hashes"
+    [ h64 'a'; h64 'c'; h64 'e' ] bundle.exp_ref_hashes;
+  Alcotest.(check string) "expand carries the cast voice_ref" "mara-voice"
+    bundle.exp_voice_ref;
+  let lib = shot_cast_clear lib "mara-at-window" in
+  Alcotest.(check (list string)) "shot-cast-clear drops the bindings" []
+    (which_shots_use_asset lib "mara")
+
+(* 7. promote-take mints an asset from a landed take's media_hash. *)
+let test_promote () =
+  let t =
+    land_take (take "mara-at-window") ~media_hash:(h64 'd')
+      ~media_path:"takes/mara-at-window-1.mp4"
+  in
+  let lib, id = promote_take empty_library t ~kind:"still" ~slug:"mara-sheet" () in
+  Alcotest.(check string) "promote-take returns the asset id" "mara-sheet" id;
+  (match asset_get lib "mara-sheet" with
+  | Some a ->
+      Alcotest.(check string) "promoted kind" "still" a.asset_kind;
+      Alcotest.(check string) "primary_hash is the take media hash" (h64 'd')
+        a.asset_primary_hash;
+      Alcotest.(check string) "primary_path is the take media path"
+        "takes/mara-at-window-1.mp4" a.asset_primary_path
+  | None -> Alcotest.fail "promote-take did not mint an asset");
+  Alcotest.(check bool) "a pending take cannot be promoted" true
+    (try
+       ignore (promote_take empty_library (take "s1") ~kind:"still" ~slug:"x" ());
+       false
+     with Invalid_argument _ -> true)
+
 let () =
   Alcotest.run "film_edit"
     [
@@ -211,5 +295,11 @@ let () =
           Alcotest.test_case "motion masters are pointers" `Quick
             test_motion_masters;
           Alcotest.test_case "cost ledger" `Quick test_costs;
+        ] );
+      ( "library",
+        [
+          Alcotest.test_case "asset rows + bindings + expand" `Quick
+            test_library;
+          Alcotest.test_case "promote-take mints an asset" `Quick test_promote;
         ] );
     ]
