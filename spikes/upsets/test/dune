@@ -1,0 +1,9 @@
+;; ingest vectors (card spec.pp.borge.upsets#upsets/ingest): the pollers live in
+;; ../lib.pp as Nopales package code, which dune cannot link, so the suite reads
+;; the package source (libs/filmstrip/test precedent) and replays the pure
+;; reduction rules the tick depends on over hand-computed fixtures.
+(test
+ (name ingest_test)
+ (modules ingest_test)
+ (libraries alcotest)
+ (deps ../lib.pp))
