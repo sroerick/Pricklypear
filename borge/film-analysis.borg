@@ -249,6 +249,14 @@
   (subsection ingestion
    (doc "laptop-side scdet/ffmpeg → Nopales emitter → pp_eval; machine branch stays pure, curation is a fork")
    (status planned)
+   (execution
+    (scope pp1)
+    (kind code)
+    (depends "spec.pp.borge.film_analysis#film-analysis/model"))
+   (details
+    (doc (|
+      ACCEPTANCE for this leaf: extend pp/libs/film and add an Alcotest-style suite under pp/libs/film/test (a dune test target) that pins it; run it with `dune runtest --root=pp libs/film`. The verify smokes below are the chapter's end-to-end check, run by the operator.
+      |)))
    (verify
     (smoke "scripts/film_ingest parses an scdet log into scene-create forms")
     (smoke "ingesting a short clip creates ordered scenes on an -auto branch")
@@ -257,6 +265,14 @@
   (subsection chiastic-analysis
    (doc "chiasm/pairs + chiasm/center two-pointer derivation; film/report with pairs, declared mismatches, orphan plants, tightness")
    (status planned)
+   (execution
+    (scope pp1)
+    (kind code)
+    (depends "spec.pp.borge.film_analysis#film-analysis/ingestion"))
+   (details
+    (doc (|
+      ACCEPTANCE for this leaf: extend pp/libs/film and add an Alcotest-style suite under pp/libs/film/test (a dune test target) that pins it; run it with `dune runtest --root=pp libs/film`. The verify smokes below are the chapter's end-to-end check, run by the operator.
+      |)))
    (verify
     (smoke "chiasm/pairs on a known list returns end-paired list")
     (smoke "chiasm/center returns singleton on odd ring, empty on even")
@@ -268,6 +284,14 @@
   (subsection cut-comparison
    (doc "cuts as branches; report-per-branch diff answers 'did the recut tighten the ring'")
    (status planned)
+   (execution
+    (scope pp1)
+    (kind code)
+    (depends "spec.pp.borge.film_analysis#film-analysis/chiastic-analysis"))
+   (details
+    (doc (|
+      ACCEPTANCE for this leaf: extend pp/libs/film and add an Alcotest-style suite under pp/libs/film/test (a dune test target) that pins it; run it with `dune runtest --root=pp libs/film`. The verify smokes below are the chapter's end-to-end check, run by the operator.
+      |)))
    (verify
     (smoke "two cut labels over one film produce independent reports")
     (smoke "tightness diff between cuts is computable via pp_eval")))
@@ -275,6 +299,14 @@
   (subsection ui
    (doc "routes /film, /film/<slug>; ring report page with per-pair table and rainbow-style arc diagram via render-html")
    (status planned)
+   (execution
+    (scope pp1)
+    (kind code)
+    (depends "spec.pp.borge.film_analysis#film-analysis/cut-comparison"))
+   (details
+    (doc (|
+      ACCEPTANCE for this leaf: extend pp/libs/film and add an Alcotest-style suite under pp/libs/film/test (a dune test target) that pins it; run it with `dune runtest --root=pp libs/film`. The verify smokes below are the chapter's end-to-end check, run by the operator.
+      |)))
    (verify
     (smoke "GET /film 200 after load-library")
     (smoke "GET /film/<slug> renders center, pairs table, tightness")
@@ -283,6 +315,14 @@
   (subsection agent-access
    (doc "pp_eval film/… as the API; reports are data trees an agent can diff")
    (status planned)
+   (execution
+    (scope pp1)
+    (kind code)
+    (depends "spec.pp.borge.film_analysis#film-analysis/ui"))
+   (details
+    (doc (|
+      ACCEPTANCE for this leaf: extend pp/libs/film and add an Alcotest-style suite under pp/libs/film/test (a dune test target) that pins it; run it with `dune runtest --root=pp libs/film`. The verify smokes below are the chapter's end-to-end check, run by the operator.
+      |)))
    (verify
     (smoke "pp_eval film/report returns the full report tree")
     (smoke "pp_eval scene/beats queries work per film and cut")))
