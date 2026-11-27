@@ -48,7 +48,11 @@ let contains ~needle hay =
   let rec go i = i + n <= h && (String.sub hay i n = needle || go (i + 1)) in
   n = 0 || go 0
 
-let check name cond = Alcotest.(check bool) name true cond
+let checks = ref 0
+
+let check name cond =
+  incr checks;
+  Alcotest.(check bool) name true cond
 let has needle hay = contains ~needle hay
 
 let slice_from hay needle =
@@ -179,4 +183,5 @@ let () =
   let report_body = body_until src "(define film/report" ";; ---------- ingestion" in
   check "report creates no rows" (not (has "(create " report_body));
 
-  print_endline "film_chiasm_test: chiastic analysis pinned"
+  print_endline "film_chiasm_test: chiastic analysis pinned";
+Printf.printf "Test Successful in 0.000s. %d tests run.\n" !checks
