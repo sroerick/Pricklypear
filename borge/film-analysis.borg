@@ -222,8 +222,24 @@
     |)))
 
   (subsection model
-   (doc "film/scene/motif/beat types; integer-frame timecodes; declared-vs-derived mirror split")
+   (doc (|
+     film/scene/motif/beat types; integer-frame timecodes;
+     declared-vs-derived mirror split.
+
+     ACCEPTANCE for this leaf: a new library pp/libs/film (lib.pp plus
+     its dune) defines film, scene, motif and beat types with the fields
+     this section names; frame timecodes are integers and fps lives on
+     film (seconds are render-only); scene-create stores cut/ord/tc_in
+     and dur as frame integers; mirror is a declaration and derivation
+     comes from ord. A unit suite in pp/libs/film/test pins the type
+     shapes (fields present, frame integers, mirror-vs-derived), run as
+     `dune runtest libs/film` from pp/. The live smokes below stay the
+     chapter's end-to-end verification, run by the operator.
+     |))
    (status planned)
+   (execution
+    (scope pp1)
+    (kind code))
    (verify
     (smoke "load-library defines film, scene, motif, beat types")
     (smoke "scene-create stores cut/ord/tc_in/dur as frame integers")
