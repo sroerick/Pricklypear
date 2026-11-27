@@ -2,6 +2,9 @@
  (doc "Pricklypear book chapter: film editing — studio library (characters/assets), Nopales-authored EDLs, Blender VSE as headless assembly backend, render caching, gen-API bridge as future edge")
  (status planned)
  (convention ocaml-dune)
+
+ (* agent note (|2026-11-27 LIBRARY IMPLEMENTED (factory card brg_4a40cb3d, branch factory/spec-pp-borge-film-edit-film-e-1127-brg_4a, tip 02b9f1c6, merged 78b633bd, pushed origin/main; independent factory code review PASS). CODE: pp/libs/film_edit/film_edit.ml gains the package API as pure row rewrites (asset_upsert with kind/appearance/negative/primary_hash/primary_path/ref_hashes/voice_ref/lora_ref/media_id, asset_get with project-then-studio fallback, assets ?project ?kind, shot_cast/shot_cast_clear, shot_ref, expand -> prompt+cast appearances+unioned ref hashes+voice_ref, promote_take), with no shot.refs JSON column; test/film_edit_test.ml asserts each verify smoke. MERGE GATES on the merged tree: build dune build --root=pp @all receipt verdict=unverified rc=0; test this leaf's own gate `dune build --root=pp @all && dune runtest --root=pp libs/film_edit --force` receipt verdict=pass, verified, 7/7 cases. sound -> edl-and-export -> render-cache -> blender-bridge -> prims-http-spawn -> gen-bridge -> ui -> agent-access stay declared behind this leaf.|) *)
+ (* agent note (|2026-11-27 MODEL IMPLEMENTED (factory card brg_d90cc24e, branch factory/spec-pp-borge-film-edit-film-e-1127-brg_d9, tip 76e7987c, merged 2d7b2c97, pushed origin/main; independent factory code review PASS). CODE: pp/libs/film_edit model types and printer (take backend/model/seed/cost/media_hash/input_snapshot; edl tc_in/dur/transition) and media_pointer_ok refusing bytes, absolute paths and URLs; pp/libs/film_edit/test 5 Alcotest cases green via `dune runtest --root=pp libs/film_edit` (receipt: Test Successful in 0.003s. 5 tests run.). MERGE GATES: build receipt unverified rc=0, test receipt pass verified. `library` and the rest of the chain stay planned behind this leaf.|) *)
  (section film-edit
 
   (doc "Programmatic video editing: the image holds the studio library (characters, locations, props, style locks) and the project graph (shots, cast bindings, takes, EDLs). Blender does assembly and render headlessly; media lives on disk under content hashes. Nopales state is authoritative; .blend files and renders are derived artifacts.")
@@ -443,7 +446,7 @@
 
   (subsection model
    (doc "asset/project/shot/shot-cast/shot-ref/take/edl-entry/render-job types; content-hash media refs; cost ledger and input_snapshot on takes")
-   (status planned)
+   (status implemented)
    (execution
     (scope pp1)
     (kind code))
@@ -459,7 +462,7 @@
 
   (subsection library
    (doc "Studio library: asset rows (character/location/prop/style/voice/…), shot-cast and shot-ref bindings, expand + promote-take; dual media pointer for UI thumbs only")
-   (status planned)
+   (status implemented)
    (execution
     (scope pp1)
     (kind code)

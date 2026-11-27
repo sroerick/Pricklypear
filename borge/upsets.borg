@@ -3,6 +3,9 @@
  (status planned)
  (* agent note (|2026-09 plan pass: chapter born from the detection-system discussion. Recon that shapes it (all verified live before spec'ing): (a) the image ALREADY ships the whole egress/schedule story — http-get/http-post behind gate_http (image/lib/prims_net.ml, admin/agent-only), durable jobs + cron schedules + step checkpoints (image/lib/jobs.ml, borge/jobs.borg), deftype rows in the one tree; so v1 needs NO new kernel code, only package code in libs/upsets. (b) A laptop spike (~/dev/upsets, Python) pulled 284 resolved Polymarket markets and found the premise holds in-sample: winning longshot tokens reprice to ~1.0 BEFORE the final hour (tradable window is 24-72h out), and correlated bucket-sweeps by recurring pseudonymous wallets (Clacton by-election; top-3 buy-side concentration 24-68% of volume) are visible in the public data-api trade prints. (c) poohstack switch: mirage-crypto-pk ships RSA (Kalshi signing is zero-new-deps); secp256k1 + keccak are NOT on the switch (Polymarket EIP-712 would need two small opam adds) — both live only in upsets.execution, paper-gated. The trading-strategy premise (informed flow precedes public info; follow the flow, never the upset) and the honesty constraints below were agreed in conversation before this chapter was written.|) *)
  (convention ocaml-dune)
+
+ (* agent note (|2026-11-27 ANALYTICS-BENCH IMPLEMENTED (factory card brg_faafe4bc, branch factory/spec-pp-borge-upsets-upsets-an-1127-brg_fa, tip 16af03d3, merged 7877fff9, pushed origin/main; independent factory code review PASS). CODE: pp/spikes/upsets/upsets_test.ml adds a hand-computed surface suite (Stats.trailing_baseline/z/price_delta, Flow.concentration_topk/wallet_window_aggregate, Cooc.cooccur, including the Clacton four-bucket cluster) wired into the test target. MERGE GATES on the merged tree: build dune build --root=pp @all receipt verdict=unverified rc=0; test this leaf's own gate `dune build --root=pp @all && dune runtest --root=pp spikes/upsets --force` receipt verdict=pass, verified (7 tests in the bench suite, ingest's 9 alongside). simulator -> control-surface stay declared behind this leaf.|) *)
+ (* agent note (|2026-11-27 INGEST IMPLEMENTED (factory card brg_5627ff3e, branch factory/spec-pp-borge-upsets-upsets-in-1127-brg_56, tip 809d8bf8, merged 549b7624, pushed origin/main; independent factory code review PASS). CODE: pp/spikes/upsets/lib.pp poll/poll-odds/poll-flow over http-get with caps and a shipped-off schedule table; fetch-json raises on non-ok so no partial rows; pp/spikes/upsets/test/ingest_test.ml 9 Alcotest cases green via `dune runtest --root=pp spikes/upsets` (receipt: Test Successful in 0.012s. 9 tests run.). MERGE GATES: build receipt unverified rc=0, test receipt pass verified. The three verify smokes remain the operator's end-to-end check.|) *)
  (section upsets
 
   (doc "Prediction-market informed-flow analytics as habitat software: ingest as Nopales schedules, domain state as typed tree rows, heavy analytics as a pure OCaml bench in spikes/upsets, decisions as Nopales rules over paper money, execution as a later spec-gated kernel change.")
@@ -154,7 +157,7 @@
 
   (subsection ingest
    (doc "Scheduled Nopales pollers over the existing http-get prim. Polymarket Gamma (market discovery), CLOB prices-history (hourly odds for watched markets), data-api trades (reduced to wallet-flow rows). No new kernel code.")
-   (status planned)
+   (status implemented)
    (execution
     (scope pp1)
     (kind code))
@@ -199,7 +202,7 @@
 
   (subsection analytics-bench
    (doc "Pure OCaml analytics library in spikes/upsets: statistics (drift velocity, volume z-scores vs a market's own trailing baseline), wallet co-occurrence across correlated markets, ladder-sweep detection, concentration metrics. No I/O, JSON in/out (yojson), alcotest all the way down. This is the OCaml tier of TWO-TIER COMPUTE and the seat of the research loop.")
-   (status planned)
+   (status implemented)
    (execution
     (scope pp1)
     (kind code)
