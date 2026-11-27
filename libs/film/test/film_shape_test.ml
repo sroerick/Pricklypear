@@ -178,6 +178,16 @@ let () =
   check_has "mirror declared field doc"
     src "mirror is the DECLARED mirror scene slug (empty until curated)";
 
+  (* T3b: the other two constructors store THIS section's fields as well --
+     motif-create (film/name/kind) and beat-create (scene/motif/role) -- so
+     every declared field has a writer, not just a shape pin. *)
+  check_has "motif-create stores film" src "\"film\" (as-str film-id)";
+  check_has "motif-create stores name" src "\"name\" (as-str name)";
+  check_has "motif-create stores kind" src "\"kind\" (as-str kind)";
+  check_has "beat-create stores scene" src "\"scene\" (as-str scene-id)";
+  check_has "beat-create stores motif" src "\"motif\" (as-str motif)";
+  check_has "beat-create stores role" src "\"role\" (as-str role)";
+
   (* T4: derivation comes from ord alone -- n-k+1, no row lookup. *)
   check_has "derived mirror is ord arithmetic" src "(- (+ n 1) k)";
   check_has "derived mirror answer documented"
