@@ -2,6 +2,8 @@
  (doc "Pricklypear book chapter: film analysis — shot/scene structure, chiastic (ring) analysis, cut comparison as branches")
  (status planned)
  (convention ocaml-dune)
+
+ (* agent note (|2026-11-27 MODEL IMPLEMENTED (factory card brg_6d11c038, branch factory/spec-pp-borge-film-analysis-fi-1127-brg_6d, tip ea2096d5, merged 4021dc21, pushed origin/main; independent factory code review PASS). CODE: new pp/libs/film (lib.pp declares film/scene/motif/beat, integer-frame timecodes, fps on film, derived-mirror-ord) with pp/libs/film/test/film_shape_test.ml; `dune runtest --root=pp libs/film` green in the review tree (model shapes pinned, 0 failures). MERGE GATES: build receipt unverified rc=0, test receipt pass verified. The chapter's live smokes remain the operator's end-to-end check; ingestion -> chiastic-analysis -> cut-comparison -> ui -> agent-access are declared on top of this leaf.|) *)
  (section film-analysis
 
   (doc "Films as queryable structure: scenes with frame-exact timecodes,
@@ -236,7 +238,7 @@
      `dune runtest libs/film` from pp/. The live smokes below stay the
      chapter's end-to-end verification, run by the operator.
      |))
-   (status planned)
+   (status implemented)
    (execution
     (scope pp1)
     (kind code))
