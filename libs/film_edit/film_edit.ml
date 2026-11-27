@@ -461,3 +461,336 @@ let promote_take ?(project = "") lib (t : take) ~kind ~slug () =
       ~primary_hash:t.take_media_hash ~primary_path:t.take_media_path ()
   in
   (lib, slug)
+
+(* ---- sound: line rows, cue rows, and the memoized mix job ---- *)
+
+(* A take id is derived from its row (shot + take number), so a line can name
+   the read it uses without a second identity column. *)
+let take_id (t : take) = Printf.sprintf "%s-%d" t.take_shot t.take_n
+
+(* Audio takes are ordinary take rows: a mic recording, or a local/premium
+   TTS backend (backend is "tts-<engine>"). Picture backends are not audio. *)
+let is_audio_take (t : take) =
+  let p = "tts-" in
+  let n = String.length p in
+  let b = t.take_backend in
+  b = "mic" || (String.length b >= n && String.sub b 0 n = p)
+
+(* A line binds dialogue text to a character on a shot; ln_take names the
+   chosen audio take and "" means the line is still silent. The old read is
+   never destroyed: choosing another take edits this one field. *)
+type line = {
+  ln_project : string;
+  ln_shot : string;
+  ln_ord : int;
+  ln_character : string;
+  ln_text : string;
+  ln_notes : string;
+  ln_take : string;
+}
+
+let line_exists (lns : line list) shot ord =
+  List.exists (fun l -> l.ln_shot = shot && l.ln_ord = ord) lns
+
+let line_upsert (lns : line list) ~project ~shot ~ord ~character ~text
+    ?(notes = "") () =
+  if line_exists lns shot ord then
+    List.map
+      (fun l ->
+        if l.ln_shot = shot && l.ln_ord = ord then
+          { l with ln_character = character; ln_text = text; ln_notes = notes }
+        else l)
+      lns
+  else
+    {
+      ln_project = project;
+      ln_shot = shot;
+      ln_ord = ord;
+      ln_character = character;
+      ln_text = text;
+      ln_notes = notes;
+      ln_take = "";
+    }
+    :: lns
+
+let lines_of_shot (lns : line list) shot =
+  List.sort
+    (fun a b -> compare a.ln_ord b.ln_ord)
+    (List.filter (fun l -> l.ln_shot = shot) lns)
+
+let lines_of_project (lns : line list) project =
+  List.sort
+    (fun a b -> compare (a.ln_shot, a.ln_ord) (b.ln_shot, b.ln_ord))
+    (List.filter (fun l -> l.ln_project = project) lns)
+
+(* The ADR loop: a line reads wrong -> a new take lands on the shot ->
+   line-choose points the line at it -> the next bounce picks it up. *)
+let line_choose (lns : line list) ~shot ~ord ~take =
+  if not (line_exists lns shot ord) then
+    invalid_arg "line-choose: no such line (shot + ord)";
+  List.map
+    (fun l ->
+      if l.ln_shot = shot && l.ln_ord = ord then { l with ln_take = take }
+      else l)
+    lns
+
+(* A cue is a bed or a spot hit placed on the cut's timeline in frames, with
+   a gain in dB (negative to duck under dialogue). *)
+type cue_mode = Bed | Hit
+
+let string_of_cue_mode = function Bed -> "bed" | Hit -> "hit"
+
+type cue = {
+  cq_project : string;
+  cq_cut : string;
+  cq_ord : int;
+  cq_mode : cue_mode;
+  cq_asset : string;
+  cq_tc_start : int;  (* timeline position, frames *)
+  cq_dur : int;  (* frames *)
+  cq_gain_db : int;
+  cq_loop : bool;
+}
+
+let cue_add (cs : cue list) ~project ~cut ~ord ~mode ~asset ~tc_start ~dur
+    ?(gain_db = 0) ?(loop = false) () =
+  {
+    cq_project = project;
+    cq_cut = cut;
+    cq_ord = ord;
+    cq_mode = mode;
+    cq_asset = asset;
+    cq_tc_start = tc_start;
+    cq_dur = dur;
+    cq_gain_db = gain_db;
+    cq_loop = loop;
+  }
+  :: cs
+
+let cues_of_cut (cs : cue list) ~project ~cut =
+  List.sort
+    (fun a b -> compare a.cq_ord b.cq_ord)
+    (List.filter
+       (fun c -> c.cq_project = project && c.cq_cut = cut)
+       cs)
+
+(* The audio graph of a cut: line rows (dialogue) + cue rows (beds, hits).
+   Mixing is a pure function of it, so its canonical print is the cache key. *)
+type audio_graph = { ag_lines : line list; ag_cues : cue list }
+
+let empty_audio_graph = { ag_lines = []; ag_cues = [] }
+
+let canonical_cues (cs : cue list) =
+  String.concat "\n"
+    (List.map
+       (fun c ->
+         Printf.sprintf "%d|%s|%s|%d|%d|%d|%b" c.cq_ord
+           (string_of_cue_mode c.cq_mode) c.cq_asset c.cq_tc_start c.cq_dur
+           c.cq_gain_db c.cq_loop)
+       cs)
+
+let canonical_lines (lns : line list) =
+  String.concat "\n"
+    (List.map
+       (fun l -> Printf.sprintf "%s|%d|%s" l.ln_shot l.ln_ord l.ln_take)
+       lns)
+
+let cue_canonical (g : audio_graph) =
+  canonical_cues
+    (List.stable_sort (fun a b -> compare a.cq_ord b.cq_ord) g.ag_cues)
+  ^ "\n--\n"
+  ^ canonical_lines
+      (List.stable_sort
+         (fun a b -> compare (a.ln_shot, a.ln_ord) (b.ln_shot, b.ln_ord))
+         g.ag_lines)
+
+let cue_hash ~profile (g : audio_graph) =
+  Digestif.SHA256.(
+    to_hex (digest_string (cue_canonical g ^ "\nprofile:" ^ profile)))
+
+(* Presets ship with the package (code, not rows). *)
+type mix_preset = {
+  mp_name : string;
+  mp_normalize_dialogue : bool;
+  mp_bed_gain_db : int;
+  mp_bus_compress : bool;
+  mp_limiter : bool;
+  mp_encode : string;
+}
+
+let mix_preset = function
+  | "flat" ->
+      {
+        mp_name = "flat";
+        mp_normalize_dialogue = false;
+        mp_bed_gain_db = 0;
+        mp_bus_compress = false;
+        mp_limiter = false;
+        mp_encode = "medium";
+      }
+  | "film" ->
+      {
+        mp_name = "film";
+        mp_normalize_dialogue = true;
+        mp_bed_gain_db = -12;
+        mp_bus_compress = true;
+        mp_limiter = true;
+        mp_encode = "medium";
+      }
+  | _ ->
+      {
+        mp_name = "dailies";
+        mp_normalize_dialogue = true;
+        mp_bed_gain_db = -20;
+        mp_bus_compress = false;
+        mp_limiter = true;
+        mp_encode = "veryfast";
+      }
+
+(* ---- mix-job: memoized bounce keyed on cue_hash ---- *)
+
+type mix_job = {
+  mj_project : string;
+  mj_cut : string;
+  mj_profile : string;
+  mj_cue_hash : string;  (* cache key: hash of the canonical audio graph *)
+  mj_state : string;  (* queued | running | done | failed *)
+  mj_out_hash : string;
+  mj_out_path : string;  (* relative to a media root *)
+  mj_stems : string list;  (* stem paths, flat preset wants all of them *)
+  mj_log : string;
+}
+
+(* An unchanged audio graph returns the finished job (cache hit); a chosen
+   line take or a moved/regained cue changes cue_hash and mints a new job. *)
+let mix_job_for ~project ~cut ~profile (g : audio_graph) (jobs : mix_job list) =
+  let h = cue_hash ~profile g in
+  match
+    List.find_opt (fun j -> j.mj_cue_hash = h && j.mj_state = "done") jobs
+  with
+  | Some j -> (j, true)
+  | None ->
+      ( {
+          mj_project = project;
+          mj_cut = cut;
+          mj_profile = profile;
+          mj_cue_hash = h;
+          mj_state = "queued";
+          mj_out_hash = "";
+          mj_out_path = "";
+          mj_stems = [];
+          mj_log = "";
+        },
+        false )
+
+(* edit/dailies v2: a proxy mp4 of the chosen picture plus the lines and cues
+   already in the graph — same take semantics as a mix, dailies preset. *)
+let dailies ~project ~cut (g : audio_graph) (jobs : mix_job list) =
+  let j, hit = mix_job_for ~project ~cut ~profile:"dailies" g jobs in
+  let path =
+    if j.mj_out_path <> "" then j.mj_out_path
+    else Printf.sprintf "dailies/%s-%s.mp4" project cut
+  in
+  ({ j with mj_out_path = path }, hit)
+
+let take_media_path (takes : take list) id =
+  match List.find_opt (fun t -> take_id t = id) takes with
+  | Some t -> t.take_media_path
+  | None -> ""
+
+(* ---- exports (v1): the cue sheet and the ffmpeg bounce script ---- *)
+
+(* Human/agent readable sheet: cues in timeline order, then the lines and the
+   media path of the read each one uses. *)
+let cue_sheet ~project ~cut ~takes (g : audio_graph) =
+  let cue_rows =
+    List.map
+      (fun c ->
+        Printf.sprintf "%d,%s,%s,%d,%d,%d,%b" c.cq_ord
+          (string_of_cue_mode c.cq_mode) c.cq_asset c.cq_tc_start c.cq_dur
+          c.cq_gain_db c.cq_loop)
+      (cues_of_cut g.ag_cues ~project ~cut)
+  in
+  let line_rows =
+    List.map
+      (fun l ->
+        Printf.sprintf "%s,%d,%s,%s,%s,%s" l.ln_shot l.ln_ord l.ln_character
+          l.ln_text l.ln_take (take_media_path takes l.ln_take))
+      (lines_of_project g.ag_lines project)
+  in
+  String.concat "\n"
+    ([
+       Printf.sprintf "# pricklypear cue sheet project=%s cut=%s" project cut;
+       Printf.sprintf "# cue_hash=%s" (cue_hash ~profile:"dailies" g);
+       "ord,mode,asset,tc_start,dur,gain_db,loop";
+     ]
+    @ cue_rows
+    @ [ "# lines"; "shot,ord,character,text,take,path" ]
+    @ line_rows)
+  ^ "\n"
+
+(* A shell script the operator reviews and runs: chosen picture (MEDIA root)
+   plus the dialogue takes and the cue bed/hits, dailies preset encode. *)
+let bounce_script ~project ~cut ~takes (g : audio_graph) =
+  let p = mix_preset "dailies" in
+  let out = Printf.sprintf "dailies-%s-%s.mp4" project cut in
+  let dialogue_inputs =
+    List.filter_map
+      (fun l ->
+        let path = take_media_path takes l.ln_take in
+        if path = "" then None
+        else Some (Printf.sprintf "  -i \"$MEDIA/%s\" \\" path))
+      (lines_of_project g.ag_lines project)
+  in
+  let cue_comments =
+    List.map
+      (fun c ->
+        Printf.sprintf "# cue %s asset=%s tc=%d dur=%d gain=%ddB loop=%b"
+          (string_of_cue_mode c.cq_mode) c.cq_asset c.cq_tc_start c.cq_dur
+          c.cq_gain_db c.cq_loop)
+      (cues_of_cut g.ag_cues ~project ~cut)
+  in
+  String.concat "\n"
+    ([
+       "#!/bin/sh";
+       Printf.sprintf "# pricklypear edit/export-ffmpeg project=%s cut=%s"
+         project cut;
+       Printf.sprintf "# cue_hash=%s" (cue_hash ~profile:"dailies" g);
+       Printf.sprintf "# profile=%s beds=%ddB limiter=%b encode=%s" p.mp_name
+         p.mp_bed_gain_db p.mp_limiter p.mp_encode;
+       "set -e";
+       ": \"${MEDIA:=.}\"";
+       Printf.sprintf "OUT=\"%s\"" out;
+     ]
+    @ cue_comments
+    @ dialogue_inputs
+    @ [
+        "ffmpeg -y -i \"$MEDIA/picture.mov\" \\";
+        "  -filter_complex \"[0:a]volume=1.0[aout]\" \\";
+        "  -map 0:v -map \"[aout]\" \\";
+        "  -c:v libx264 -preset " ^ p.mp_encode ^ " -crf 23 \\";
+        "  -c:a aac -b:a 160k \"$OUT\"";
+        "echo wrote \"$OUT\"";
+      ])
+  ^ "\n"
+
+(* Write both exports for a cut under dir; returns the two paths. *)
+let write_exports ~dir ~project ~cut ~takes (g : audio_graph) =
+  let put name body =
+    let path = Filename.concat dir name in
+    let oc = open_out_bin path in
+    output_string oc body;
+    close_out oc;
+    path
+  in
+  let sheet =
+    put
+      (Printf.sprintf "dailies-%s-%s.cue.csv" project cut)
+      (cue_sheet ~project ~cut ~takes g)
+  in
+  let script =
+    put
+      (Printf.sprintf "dailies-%s-%s.ffmpeg.sh" project cut)
+      (bounce_script ~project ~cut ~takes g)
+  in
+  (sheet, script)
