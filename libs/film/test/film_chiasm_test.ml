@@ -136,6 +136,11 @@ let () =
   check "report carries center" (has "\"center\"" chiasm);
   check "report carries shape" (has "\"shape\"" chiasm);
   check "report carries pairs" (has "\"pairs\"" chiasm);
+  (* the report's pairs are the BEAT-AWARE walk, so a pair can share motifs;
+     a report built on the beatless chiasm/pairs would carry empty
+     shared_motifs and still satisfy every pin above. *)
+  check "report pairs fold the film's beats in"
+    (has "(chiasm/ring-pairs scenes beats)" chiasm);
 
   (* ---- C4: declared mismatches land in report.declared ---- *)
   check "export chiasm/declared" (has "chiasm/declared chiasm/orphans" src);
