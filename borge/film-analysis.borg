@@ -3,6 +3,7 @@
  (status planned)
  (convention ocaml-dune)
 
+ (* agent note (|2026-11-27 INGESTION IMPLEMENTED (factory card brg_1fa69fd9, branch factory/spec-pp-borge-film-analysis-fi-1127-brg_1f, tip dcf48a51, merged dc60493f, pushed origin/main; independent factory code review PASS). CODE: pp/libs/film/lib.pp gains film/scdet-times, film/seconds->frames, film/scd/starts, film/scd/forms and film/ingest-scenes (pure scdet log -> ordered scene-create source with auto-t<N> cut label); pp/libs/film/test/dune + test/film_ingest_test.ml pin it as an Alcotest dune test. MERGE GATES on the merged tree: build dune build --root=pp @all receipt verdict=unverified rc=0 (a build is not a receipt-law gate), test dune build --root=pp @all && dune runtest --root=pp libs/film receipt verdict=pass, verified. The chapter's live smokes remain the operator's end-to-end check; chiastic-analysis -> cut-comparison -> ui -> agent-access stay declared behind this leaf.|) *)
  (* agent note (|2026-11-27 MODEL IMPLEMENTED (factory card brg_6d11c038, branch factory/spec-pp-borge-film-analysis-fi-1127-brg_6d, tip ea2096d5, merged 4021dc21, pushed origin/main; independent factory code review PASS). CODE: new pp/libs/film (lib.pp declares film/scene/motif/beat, integer-frame timecodes, fps on film, derived-mirror-ord) with pp/libs/film/test/film_shape_test.ml; `dune runtest --root=pp libs/film` green in the review tree (model shapes pinned, 0 failures). MERGE GATES: build receipt unverified rc=0, test receipt pass verified. The chapter's live smokes remain the operator's end-to-end check; ingestion -> chiastic-analysis -> cut-comparison -> ui -> agent-access are declared on top of this leaf.|) *)
  (section film-analysis
 
@@ -250,7 +251,7 @@
 
   (subsection ingestion
    (doc "laptop-side scdet/ffmpeg → Nopales emitter → pp_eval; machine branch stays pure, curation is a fork")
-   (status planned)
+   (status implemented)
    (execution
     (scope pp1)
     (kind code)
