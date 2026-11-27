@@ -1,0 +1,10 @@
+;; libs/film -- the film-analysis model (borge/film-analysis.borg
+;; subsection model). lib.pp is SEED SOURCE (Loader seeds libs/<pkg>/lib.pp
+;; at boot, so `(load-library "film")` installs the film/... bindings); it
+;; is not an OCaml module and has no compilation stanza. The runtest alias
+;; here keeps the directory's pin honest -- the type shapes themselves are
+;; pinned by the alcotest suite in test/ (`dune runtest libs/film`).
+(rule
+ (alias runtest)
+ (deps lib.pp test/dune test/film_shape_test.ml)
+ (action (echo "film lib.pp present\n")))
