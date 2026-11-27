@@ -6,5 +6,6 @@
 ;; pinned by the alcotest suite in test/ (`dune runtest libs/film`).
 (rule
  (alias runtest)
- (deps lib.pp test/dune test/film_shape_test.ml test/film_ingest_test.ml)
+ (deps lib.pp test/dune test/film_shape_test.ml test/film_ingest_test.ml
+       test/film_chiasm_test.ml)
  (action (echo "film lib.pp present\n")))

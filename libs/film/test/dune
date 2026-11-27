@@ -16,3 +16,13 @@
  (modules film_ingest_test)
  (libraries alcotest)
  (deps ../lib.pp))
+
+;; libs/film chiastic-analysis pins (borge/film-analysis.borg, subsection
+;; chiastic-analysis): film_chiasm_test reads lib.pp and asserts the
+;; two-pointer chiasm/pairs + chiasm/center derivation and the
+;; film/report tree (pairs, declared mismatches, orphans, tightness).
+(test
+ (name film_chiasm_test)
+ (modules film_chiasm_test)
+ (libraries alcotest)
+ (deps ../lib.pp))
