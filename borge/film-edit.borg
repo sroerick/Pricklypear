@@ -444,6 +444,13 @@
   (subsection model
    (doc "asset/project/shot/shot-cast/shot-ref/take/edl-entry/render-job types; content-hash media refs; cost ledger and input_snapshot on takes")
    (status planned)
+   (execution
+    (scope pp1)
+    (kind code))
+   (details
+    (doc (|
+      ACCEPTANCE for this leaf: implement the behaviour above in pp/libs/film_edit (its lib.pp and dune) with an Alcotest suite under pp/libs/film_edit/test that prints the standard `Test Successful in <t>. N tests run.` line (the gate's receipt parses that line); run it with `dune runtest --root=pp libs/film_edit`. The verify smokes below are the chapter's end-to-end check, run by the operator.
+      |)))
    (verify
     (smoke "load-library defines library + graph types with documented fields")
     (smoke "take rows carry backend/model/seed/cost/media_hash/input_snapshot")
@@ -453,6 +460,14 @@
   (subsection library
    (doc "Studio library: asset rows (character/location/prop/style/voice/…), shot-cast and shot-ref bindings, expand + promote-take; dual media pointer for UI thumbs only")
    (status planned)
+   (execution
+    (scope pp1)
+    (kind code)
+    (depends "spec.pp.borge.film_edit#film-edit/model"))
+   (details
+    (doc (|
+      ACCEPTANCE for this leaf: implement the behaviour above in pp/libs/film_edit (its lib.pp and dune) with an Alcotest suite under pp/libs/film_edit/test that prints the standard `Test Successful in <t>. N tests run.` line (the gate's receipt parses that line); run it with `dune runtest --root=pp libs/film_edit`. The verify smokes below are the chapter's end-to-end check, run by the operator.
+      |)))
    (verify
     (smoke "edit/asset-upsert creates kind=character with appearance and ref_hashes")
     (smoke "shot-cast and shot-ref bind assets to a shot; which-shots-use-asset is a rows query")
@@ -497,6 +512,14 @@
   (subsection sound
    (doc "Production audio as data: line rows (dialogue with chosen takes), cue rows (beds + spot hits on the timeline), mix-job bounce keyed on cue_hash; dailies proxy with sound — no Blender dependency")
    (status planned)
+   (execution
+    (scope pp1)
+    (kind code)
+    (depends "spec.pp.borge.film_edit#film-edit/library"))
+   (details
+    (doc (|
+      ACCEPTANCE for this leaf: implement the behaviour above in pp/libs/film_edit (its lib.pp and dune) with an Alcotest suite under pp/libs/film_edit/test that prints the standard `Test Successful in <t>. N tests run.` line (the gate's receipt parses that line); run it with `dune runtest --root=pp libs/film_edit`. The verify smokes below are the chapter's end-to-end check, run by the operator.
+      |)))
    (verify
     (smoke "line rows bind text to character and shot; line.take chooses an audio take")
     (smoke "audio takes are ordinary take rows (backend tts-* or mic) on the shot")
@@ -534,6 +557,14 @@
   (subsection edl-and-export
    (doc "canonical EDL print + edl_hash; export to MLT XML and Blender scene script on disk; re-import path for GUI edits")
    (status planned)
+   (execution
+    (scope pp1)
+    (kind code)
+    (depends "spec.pp.borge.film_edit#film-edit/sound"))
+   (details
+    (doc (|
+      ACCEPTANCE for this leaf: implement the behaviour above in pp/libs/film_edit (its lib.pp and dune) with an Alcotest suite under pp/libs/film_edit/test that prints the standard `Test Successful in <t>. N tests run.` line (the gate's receipt parses that line); run it with `dune runtest --root=pp libs/film_edit`. The verify smokes below are the chapter's end-to-end check, run by the operator.
+      |)))
    (verify
     (smoke "identical EDL rows produce identical edl_hash")
     (smoke "export writes a valid MLT XML file for a sample cut")
@@ -543,6 +574,14 @@
   (subsection render-cache
    (doc "render as memoized pure function of EDL; render-job rows; cache hit on unchanged hash")
    (status planned)
+   (execution
+    (scope pp1)
+    (kind code)
+    (depends "spec.pp.borge.film_edit#film-edit/edl-and-export"))
+   (details
+    (doc (|
+      ACCEPTANCE for this leaf: implement the behaviour above in pp/libs/film_edit (its lib.pp and dune) with an Alcotest suite under pp/libs/film_edit/test that prints the standard `Test Successful in <t>. N tests run.` line (the gate's receipt parses that line); run it with `dune runtest --root=pp libs/film_edit`. The verify smokes below are the chapter's end-to-end check, run by the operator.
+      |)))
    (verify
     (smoke "edit/render on unchanged cut returns cache hit, no job")
     (smoke "changing one edl-entry changes edl_hash and queues a job")
@@ -551,6 +590,14 @@
   (subsection blender-bridge
    (doc "OCaml bridge service + bpy socket addon; typed command set; live GUI as view, batch for renders; job queue")
    (status planned)
+   (execution
+    (scope pp1)
+    (kind code)
+    (depends "spec.pp.borge.film_edit#film-edit/render-cache"))
+   (details
+    (doc (|
+      ACCEPTANCE for this leaf: implement the behaviour above in pp/libs/film_edit (its lib.pp and dune) with an Alcotest suite under pp/libs/film_edit/test that prints the standard `Test Successful in <t>. N tests run.` line (the gate's receipt parses that line); run it with `dune runtest --root=pp libs/film_edit`. The verify smokes below are the chapter's end-to-end check, run by the operator.
+      |)))
    (verify
     (smoke "bridge addon loads in headless blender and answers status")
     (smoke "strip-add commands from the service build a VSE timeline")
@@ -560,6 +607,14 @@
   (subsection prims-http-spawn
    (doc "KERNEL SURFACE: http client prim, spawn subprocess prim, file stat/read-range — additive, general-purpose, gate v2 orchestration")
    (status planned)
+   (execution
+    (scope pp1)
+    (kind code)
+    (depends "spec.pp.borge.film_edit#film-edit/blender-bridge"))
+   (details
+    (doc (|
+      ACCEPTANCE for this leaf: implement the behaviour above in pp/libs/film_edit (its lib.pp and dune) with an Alcotest suite under pp/libs/film_edit/test that prints the standard `Test Successful in <t>. N tests run.` line (the gate's receipt parses that line); run it with `dune runtest --root=pp libs/film_edit`. The verify smokes below are the chapter's end-to-end check, run by the operator.
+      |)))
    (verify
     (smoke "(http-get url) returns status + body string")
     (smoke "(http-download url path) streams response to disk, returns hash")
@@ -585,6 +640,14 @@
   (subsection gen-bridge
    (doc "FUTURE EDGE: gen API submission (fal/Replicate/direct), job polling, take landing; expands library bindings into input_snapshot; local ComfyUI as later backend behind same interface")
    (status planned)
+   (execution
+    (scope pp1)
+    (kind code)
+    (depends "spec.pp.borge.film_edit#film-edit/prims-http-spawn"))
+   (details
+    (doc (|
+      ACCEPTANCE for this leaf: implement the behaviour above in pp/libs/film_edit (its lib.pp and dune) with an Alcotest suite under pp/libs/film_edit/test that prints the standard `Test Successful in <t>. N tests run.` line (the gate's receipt parses that line); run it with `dune runtest --root=pp libs/film_edit`. The verify smokes below are the chapter's end-to-end check, run by the operator.
+      |)))
    (verify
     (smoke "edit/gen-submit expands cast/refs, writes input_snapshot, creates pending takes")
     (smoke "poller lands done takes with media_hash + cost_cents")
@@ -612,6 +675,14 @@
   (subsection ui
    (doc "routes /studio, /studio/project?slug=<slug>, /studio/shot, /studio/export: cast/library panel, shot table with take picker, cut timeline view, render state, spend panel. NOTE (2026-10-02): the kernel function editor already owns /edit and /edit/<name>, so the package serves under /studio (BORGE-1785714837).")
    (status planned)
+   (execution
+    (scope pp1)
+    (kind code)
+    (depends "spec.pp.borge.film_edit#film-edit/gen-bridge"))
+   (details
+    (doc (|
+      ACCEPTANCE for this leaf: implement the behaviour above in pp/libs/film_edit (its lib.pp and dune) with an Alcotest suite under pp/libs/film_edit/test that prints the standard `Test Successful in <t>. N tests run.` line (the gate's receipt parses that line); run it with `dune runtest --root=pp libs/film_edit`. The verify smokes below are the chapter's end-to-end check, run by the operator.
+      |)))
    (verify
     (smoke "GET /studio 200 after load-library")
     (smoke "project page lists assets/cast and shots in ord with chosen takes")
@@ -622,6 +693,14 @@
   (subsection agent-access
    (doc "pp_eval edit/… as the API; agents drive library, cast, gen, and cut loops")
    (status planned)
+   (execution
+    (scope pp1)
+    (kind code)
+    (depends "spec.pp.borge.film_edit#film-edit/ui"))
+   (details
+    (doc (|
+      ACCEPTANCE for this leaf: implement the behaviour above in pp/libs/film_edit (its lib.pp and dune) with an Alcotest suite under pp/libs/film_edit/test that prints the standard `Test Successful in <t>. N tests run.` line (the gate's receipt parses that line); run it with `dune runtest --root=pp libs/film_edit`. The verify smokes below are the chapter's end-to-end check, run by the operator.
+      |)))
    (verify
     (smoke "pp_eval edit/asset-upsert, edit/shot-cast, edit/expand, edit/choose, edit/render work")
     (smoke "an agent can fork a cut branch, retarget cast, swap a take, and render")

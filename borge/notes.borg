@@ -623,6 +623,10 @@
   (subsection outline-actions
    (doc "Per-node outline action menu; the eval op turns nodes into a live Nopales surface")
    (status partial)
+   (execution
+    (scope pp1)
+    (kind code)
+    (depends "spec.pp.borge.notes#notes/note-visibility"))
    (* agent note (|2026-08-02 confirm still partial: notes/outline/apply-op + eval + POST /partials/notes-node-op shipped; notes/refile* exist but not on structural-editing.op-protocol; full structed wrap/splice/raise not all on outline menu.|) *)
    (implements
     libs/outline/lib.pp
@@ -1323,6 +1327,10 @@
   (subsection garden-import
    (doc "One-shot Obsidian/markdown vault import into the personal garden tree")
    (status partial)
+   (execution
+    (scope pp1)
+    (kind code)
+    (depends "spec.pp.borge.notes#notes/outline-actions"))
    (* agent note (|2026-08-02: scripts/import_obsidian_notes.py dry-run+apply, bible:[[…]]→sexp, garden/ folder prefix, collision slugify. Still missing pass-2 uuid note-link reindex after upsert (verify smoke).|) *)
    (verify
     (smoke "dry-run on vault root reports md/folder/link counts; zero writes")
@@ -1846,6 +1854,9 @@
  (section note-visibility
   (doc "Per-note vis (private | users | public, absent reads private) plus the read-only cross-garden route /notes/<user>/<slug>; the kernel prims enforce the floor, the lib stamps and renders")
   (status partial)
+   (execution
+    (scope pp1)
+    (kind code))
   (verify
    (build "dune build image")
    (smoke "owner reads own notes in own garden with vis absent (no migration)")
