@@ -1,0 +1,11 @@
+;; film_edit — borge/film-edit.borg subsection "model": the studio data rows
+;; as pure OCaml types (asset/project/shot/cast/ref/take/edl-entry/render-job),
+;; plus the canonical printers that make renders memoized (canonical EDL hash,
+;; expanded input_snapshot) and the closed cost queries over take rows.
+;; No DB, no image: the media boundary is enforced here by the pointer checks
+;; (content hash + path relative to a media root).
+(library
+ (name film_edit)
+ (wrapped false)
+ (modules film_edit)
+ (libraries yojson digestif))

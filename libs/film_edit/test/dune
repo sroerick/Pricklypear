@@ -1,0 +1,6 @@
+;; alcotest receipt for the model leaf: the gate parses the standard
+;; "Test Successful in <t>. N tests run." line.
+(test
+ (name film_edit_test)
+ (modules film_edit_test)
+ (libraries film_edit alcotest))
