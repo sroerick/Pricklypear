@@ -284,6 +284,172 @@ let test_promote () =
        false
      with Invalid_argument _ -> true)
 
+(* 8. sound: line rows, cue rows, exports and the memoized mix job. *)
+
+let audio_take ?(backend = "tts-piper") ?(n = 1) shot =
+  land_take
+    { (take ~backend ~n shot) with take_model = "piper-1" }
+    ~media_hash:(h64 'e')
+    ~media_path:("takes/" ^ shot ^ "-" ^ string_of_int n ^ ".wav")
+
+let read_file p =
+  let ic = open_in_bin p in
+  let n = in_channel_length ic in
+  let s = really_input_string ic n in
+  close_in ic;
+  s
+
+let test_sound () =
+  let tts = audio_take "mara-at-window" in
+  let mic = audio_take ~backend:"mic" ~n:2 "mara-at-window" in
+  Alcotest.(check bool) "a tts-* take is an audio take" true
+    (is_audio_take tts);
+  Alcotest.(check bool) "a mic take is an audio take" true (is_audio_take mic);
+  Alcotest.(check bool) "a picture take is not an audio take" false
+    (is_audio_take (take "mara-at-window"));
+  Alcotest.(check string) "a take id is derived from its row" "mara-at-window-2"
+    (take_id mic);
+  let g = empty_audio_graph in
+  let g =
+    {
+      g with
+      ag_lines =
+        line_upsert g.ag_lines ~project:"short-01" ~shot:"mara-at-window"
+          ~ord:1 ~character:"mara" ~text:"you came back" ();
+    }
+  in
+  let g =
+    {
+      g with
+      ag_lines =
+        line_upsert g.ag_lines ~project:"short-01" ~shot:"mara-at-window"
+          ~ord:2 ~character:"mara" ~text:"i never left" ~notes:"soft" ();
+    }
+  in
+  Alcotest.(check int) "line rows bind text to a shot" 2
+    (List.length (lines_of_shot g.ag_lines "mara-at-window"));
+  let l1 = List.hd (lines_of_shot g.ag_lines "mara-at-window") in
+  Alcotest.(check string) "a line keeps its character" "mara" l1.ln_character;
+  Alcotest.(check string) "a fresh line is silent (no chosen take)" "" l1.ln_take;
+  let rewritten =
+    line_upsert g.ag_lines ~project:"short-01" ~shot:"mara-at-window" ~ord:1
+      ~character:"mara" ~text:"you came back?" ()
+  in
+  Alcotest.(check int) "line-upsert on shot+ord rewrites, never duplicates" 2
+    (List.length rewritten);
+  let g =
+    {
+      g with
+      ag_lines =
+        line_choose g.ag_lines ~shot:"mara-at-window" ~ord:1
+          ~take:(take_id tts);
+    }
+  in
+  Alcotest.(check string) "line-choose picks the audio take" (take_id tts)
+    (List.hd (lines_of_shot g.ag_lines "mara-at-window")).ln_take;
+  Alcotest.(check bool) "choosing never destroys the other read" true
+    (List.exists (fun t -> take_id t = take_id mic) [ tts; mic ]);
+  let g =
+    {
+      g with
+      ag_cues =
+        cue_add g.ag_cues ~project:"short-01" ~cut:"cut-a" ~ord:1 ~mode:Bed
+          ~asset:"theme-A" ~tc_start:0 ~dur:240 ~gain_db:(-20) ~loop:true ();
+    }
+  in
+  let g =
+    {
+      g with
+      ag_cues =
+        cue_add g.ag_cues ~project:"short-01" ~cut:"cut-a" ~ord:2 ~mode:Hit
+          ~asset:"door-slam" ~tc_start:48 ~dur:6 ~gain_db:(-3) ();
+    }
+  in
+  let cs = cues_of_cut g.ag_cues ~project:"short-01" ~cut:"cut-a" in
+  Alcotest.(check int) "cue rows place beds and hits on the timeline" 2
+    (List.length cs);
+  let hit_cue = List.nth cs 1 in
+  Alcotest.(check int) "a cue carries gain_db" (-3) hit_cue.cq_gain_db;
+  Alcotest.(check string) "cue mode prints as the row mode" "hit"
+    (string_of_cue_mode hit_cue.cq_mode);
+  let job, fresh_hit =
+    mix_job_for ~project:"short-01" ~cut:"cut-a" ~profile:"dailies" g []
+  in
+  Alcotest.(check bool) "a fresh mix job is not a cache hit" false fresh_hit;
+  Alcotest.(check string) "a fresh mix job is queued" "queued" job.mj_state;
+  let done_job =
+    {
+      job with
+      mj_state = "done";
+      mj_out_hash = h64 'f';
+      mj_out_path = "mixes/short-01-cut-a.wav";
+      mj_stems = [ "mixes/dialogue.wav" ];
+    }
+  in
+  let _, same_hit =
+    mix_job_for ~project:"short-01" ~cut:"cut-a" ~profile:"dailies" g
+      [ done_job ]
+  in
+  Alcotest.(check bool) "unchanged audio graph returns a cache hit" true
+    same_hit;
+  let g_mic =
+    {
+      g with
+      ag_lines =
+        line_choose g.ag_lines ~shot:"mara-at-window" ~ord:1
+          ~take:(take_id mic);
+    }
+  in
+  Alcotest.(check bool) "changing a line take changes cue_hash" false
+    (cue_hash ~profile:"dailies" g = cue_hash ~profile:"dailies" g_mic);
+  let _, mic_hit =
+    mix_job_for ~project:"short-01" ~cut:"cut-a" ~profile:"dailies" g_mic
+      [ done_job ]
+  in
+  Alcotest.(check bool) "a changed line take misses the cache" false mic_hit;
+  let g_cue =
+    {
+      g with
+      ag_cues =
+        cue_add g.ag_cues ~project:"short-01" ~cut:"cut-a" ~ord:2 ~mode:Hit
+          ~asset:"door-slam" ~tc_start:96 ~dur:6 ~gain_db:(-3) ();
+    }
+  in
+  Alcotest.(check bool) "moving a cue changes cue_hash" false
+    (cue_hash ~profile:"dailies" g = cue_hash ~profile:"dailies" g_cue);
+  Alcotest.(check bool) "the profile is part of the cache key" false
+    (cue_hash ~profile:"dailies" g = cue_hash ~profile:"flat" g);
+  let dj, dailies_hit =
+    dailies ~project:"short-01" ~cut:"cut-a" g []
+  in
+  Alcotest.(check bool) "dailies v2 is a mix job on the dailies preset" false
+    dailies_hit;
+  Alcotest.(check string) "dailies bounces to a proxy mp4"
+    "dailies/short-01-cut-a.mp4" dj.mj_out_path;
+  let dir =
+    let d = Filename.concat (Filename.get_temp_dir_name ()) "film-edit-exports" in
+    (try Sys.mkdir d 0o755 with Sys_error _ -> ());
+    d
+  in
+  let sheet, script =
+    write_exports ~dir ~project:"short-01" ~cut:"cut-a" ~takes:[ tts; mic ] g
+  in
+  Alcotest.(check bool) "export writes the cue sheet on disk" true
+    (Sys.file_exists sheet);
+  Alcotest.(check bool) "export writes the ffmpeg bounce script on disk" true
+    (Sys.file_exists script);
+  let sheet_txt = read_file sheet in
+  Alcotest.(check bool) "the sheet carries the cue_hash" true
+    (contains sheet_txt ("# cue_hash=" ^ cue_hash ~profile:"dailies" g));
+  Alcotest.(check bool) "the sheet carries cue rows with gain_db" true
+    (contains sheet_txt "1,bed,theme-A,0,240,-20,true");
+  Alcotest.(check bool) "the sheet binds the chosen take's media path" true
+    (contains sheet_txt "takes/mara-at-window-1.wav");
+  let script_txt = read_file script in
+  Alcotest.(check bool) "the script is an ffmpeg bounce of the cut" true
+    (contains script_txt "ffmpeg"
+    && contains script_txt "dailies-short-01-cut-a.mp4")
+
 let () =
   Alcotest.run "film_edit"
     [
@@ -302,4 +468,5 @@ let () =
             test_library;
           Alcotest.test_case "promote-take mints an asset" `Quick test_promote;
         ] );
+      ("sound", [ Alcotest.test_case "lines, cues, exports, mix job" `Quick test_sound ]);
     ]
