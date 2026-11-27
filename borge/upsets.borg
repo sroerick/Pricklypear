@@ -155,6 +155,13 @@
   (subsection ingest
    (doc "Scheduled Nopales pollers over the existing http-get prim. Polymarket Gamma (market discovery), CLOB prices-history (hourly odds for watched markets), data-api trades (reduced to wallet-flow rows). No new kernel code.")
    (status planned)
+   (execution
+    (scope pp1)
+    (kind code))
+   (details
+    (doc (|
+      ACCEPTANCE for this leaf: implement the behaviour above in pp/spikes/upsets (its lib.pp and dune) with an Alcotest suite under pp/spikes/upsets/test that prints the standard `Test Successful in <t>. N tests run.` line (the gate's receipt parses that line); run it with `dune runtest --root=pp spikes/upsets`. The verify smokes below are the chapter's end-to-end check, run by the operator.
+      |)))
    (verify
     (smoke "(load-library \"upsets\") then (upsets/poll) once: pm-market rows appear in /data on the current branch")
     (smoke "(schedule \"upsets-poll\" \"*/5 * * * *\" \"upsets/poll\") then (jobs) shows the due run; a second poll call is idempotent (no duplicate rows)")
@@ -193,6 +200,14 @@
   (subsection analytics-bench
    (doc "Pure OCaml analytics library in spikes/upsets: statistics (drift velocity, volume z-scores vs a market's own trailing baseline), wallet co-occurrence across correlated markets, ladder-sweep detection, concentration metrics. No I/O, JSON in/out (yojson), alcotest all the way down. This is the OCaml tier of TWO-TIER COMPUTE and the seat of the research loop.")
    (status planned)
+   (execution
+    (scope pp1)
+    (kind code)
+    (depends "spec.pp.borge.upsets#upsets/ingest"))
+   (details
+    (doc (|
+      ACCEPTANCE for this leaf: implement the behaviour above in pp/spikes/upsets (its lib.pp and dune) with an Alcotest suite under pp/spikes/upsets/test that prints the standard `Test Successful in <t>. N tests run.` line (the gate's receipt parses that line); run it with `dune runtest --root=pp spikes/upsets`. The verify smokes below are the chapter's end-to-end check, run by the operator.
+      |)))
    (verify
     (build "dune build @all — spikes/upsets compiles on poohstack")
     (test "dune runtest (spikes/upsets alcotest): baseline/z-score windows, co-occurrence window aggregation, concentration = top-k share, ladder-sweep = correlated-market clustering reproduce hand-computed fixtures incl. the Clacton co-occurrence episode (Flipadelphia-family across 4 buckets)"))
@@ -230,6 +245,14 @@
   (subsection simulator
    (doc "Event-replay backtester over historical snapshots with enforced point-in-time discipline. Rule evaluation at time T sees only data with ts <= T; fills resolve at the next actual print (never the signal tick's price); every run emits a sim-manifest row. The guard that keeps it honest is the poison-the-future regression test (L-2).")
    (status planned)
+   (execution
+    (scope pp1)
+    (kind code)
+    (depends "spec.pp.borge.upsets#upsets/analytics-bench"))
+   (details
+    (doc (|
+      ACCEPTANCE for this leaf: implement the behaviour above in pp/spikes/upsets (its lib.pp and dune) with an Alcotest suite under pp/spikes/upsets/test that prints the standard `Test Successful in <t>. N tests run.` line (the gate's receipt parses that line); run it with `dune runtest --root=pp spikes/upsets`. The verify smokes below are the chapter's end-to-end check, run by the operator.
+      |)))
    (verify
     (test "poison-the-future: replay snapshot S with all post-T rows corrupted (flipped resolutions, moved prints) — the signal log and paper fills with ts <= T are BYTE-IDENTICAL to the clean run")
     (test "fill discipline: no fill may price at its own signal tick; fills use the next print on that token after T, plus the slippage model's depth haircut; fills beyond window end are unrealised and reported as such")
@@ -292,6 +315,14 @@
   (subsection control-surface
    (doc "The habitat faces: signal board, market drill-down with odds sparkline, wallet co-occurrence view, and the paper-trading ledger that settles against resolutions (jobs-scheduled). Signal alerts ride the existing ntfy package (borge/notify.borg) once a rule graduates to live.")
    (status planned)
+   (execution
+    (scope pp1)
+    (kind code)
+    (depends "spec.pp.borge.upsets#upsets/simulator"))
+   (details
+    (doc (|
+      ACCEPTANCE for this leaf: implement the behaviour above in pp/spikes/upsets (its lib.pp and dune) with an Alcotest suite under pp/spikes/upsets/test that prints the standard `Test Successful in <t>. N tests run.` line (the gate's receipt parses that line); run it with `dune runtest --root=pp spikes/upsets`. The verify smokes below are the chapter's end-to-end check, run by the operator.
+      |)))
    (verify
     (smoke "/upsets renders the signal board (agent FE verify tier: wget structure check, then smoke_notes-style CDP shot per docs/agent-ui-harness.md) on the operator branch, private route")
     (smoke "paper-order lifecycle: signal -> (upsets/take signal-id size) -> order row -> market resolves -> settle job writes pnl + manifest-linked result; /upsets/positions shows PnL curve")

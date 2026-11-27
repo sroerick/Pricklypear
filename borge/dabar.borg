@@ -239,6 +239,13 @@
   (subsection search-fts
    (doc "Postgres full-text search over verse text (not semantic)")
    (status partial)
+   (execution
+    (scope pp1)
+    (kind code))
+   (details
+    (doc (|
+      ACCEPTANCE for this leaf: implement the behaviour above in pp/libs/dabar (its lib.pp and dune) with an Alcotest suite under pp/libs/dabar/test that prints the standard `Test Successful in <t>. N tests run.` line (the gate's receipt parses that line); run it with `dune runtest --root=pp libs/dabar`. The verify smokes below are the chapter's end-to-end check, run by the operator.
+      |)))
    (* agent note (|2026-08-02 confirm partial: bible/search = find-text ILIKE on bible-verse text (live "love" → 40 hits + UI form). True tsvector/rank FTS + index still optional WP.|) *)
    (verify
     (smoke "bible/search love returns ranked hits"))
@@ -255,6 +262,14 @@
   (subsection daily-scripture
    (doc "Verse-of-the-day, pushed to yourself: a deterministic picker, a deliver fn that lands the verse in your daily note and pings ntfy, fired by a jobs schedule. The product answer to 'at the very least I want to push daily scripture to myself.'")
    (status planned)
+   (execution
+    (scope pp1)
+    (kind code)
+    (depends "spec.pp.borge.dabar#dabar/search-fts"))
+   (details
+    (doc (|
+      ACCEPTANCE for this leaf: implement the behaviour above in pp/libs/dabar (its lib.pp and dune) with an Alcotest suite under pp/libs/dabar/test that prints the standard `Test Successful in <t>. N tests run.` line (the gate's receipt parses that line); run it with `dune runtest --root=pp libs/dabar`. The verify smokes below are the chapter's end-to-end check, run by the operator.
+      |)))
    (* agent note (|2026-12 plan pass: daily-scripture campaign. Substrate is ALL shipped — jobs/schedules (borge/jobs.borg), bible/random-row+verse+chapter-counts, calendar's daily-YYYY-MM-DD note convention, notes/doc upserts. New work pinned: this subsection's two Nopales fns, image.outbound-http's http-post, notify.ntfy-delivery's ntfy/send.|) *)
    (verify
     (build "dune build image")
