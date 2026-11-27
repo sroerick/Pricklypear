@@ -65,6 +65,10 @@ let clusters (flows : Types.flow list) ~(min_usd : float) :
       if List.length ms >= 2 then (root, ms) :: acc else acc)
     comps []
 
+(* surface name from the chapter: co-occurrence clusters over a window;
+   callers pre-filter flows to the window (Flow.window) before calling. *)
+let cooccur = clusters
+
 (* LADDER-SWEEP: wallets buying >= min_markets DISTINCT markets within
    the trailing window with combined usd >= min_usd. If markets carry
    explicit cluster tags, all swept markets must share one tag. *)

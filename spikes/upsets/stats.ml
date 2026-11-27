@@ -28,4 +28,31 @@ let zscore (values : float array) (x : float) : float =
   let s = stdev values ~mean:m in
   if s < 1e-9 then 0.0 else (x -. m) /. s
 
+(* surface name from the chapter: z = standardized distance from baseline *)
+let z = zscore
+
+(* trailing baseline: values with ts in (t - w, t) — strictly BEFORE t,
+   so the point under test never contaminates its own baseline. *)
+let trailing_baseline (pts : (int * float) array) (t : int) (w : int) : float array =
+  let lo_bound = t - w in
+  let acc = ref [] in
+  Array.iter
+    (fun (ts, v) -> if ts > lo_bound && ts < t then acc := v :: !acc)
+    pts;
+  Array.of_list (List.rev !acc)
+
+(* current price (last point at or before t) minus its trailing baseline
+   mean: the raw move the velocity detector measures. None when there is
+   no baseline or no point yet — never fabricate a zero. *)
+let price_delta (pts : (int * float) array) (t : int) (w : int) : float option =
+  let base = trailing_baseline pts t w in
+  if Array.length base = 0 then None
+  else
+    let now =
+      Array.fold_left
+        (fun acc (ts, v) -> if ts <= t then Some v else acc)
+        None pts
+    in
+    match now with Some p -> Some (p -. mean base) | None -> None
+
 let clamp lo hi x = max lo (min hi x)
