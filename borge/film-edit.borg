@@ -2,6 +2,8 @@
  (doc "Pricklypear book chapter: film editing — studio library (characters/assets), Nopales-authored EDLs, Blender VSE as headless assembly backend, render caching, gen-API bridge as future edge")
  (status planned)
  (convention ocaml-dune)
+
+ (* agent note (|2026-11-27 MODEL IMPLEMENTED (factory card brg_d90cc24e, branch factory/spec-pp-borge-film-edit-film-e-1127-brg_d9, tip 76e7987c, merged 2d7b2c97, pushed origin/main; independent factory code review PASS). CODE: pp/libs/film_edit model types and printer (take backend/model/seed/cost/media_hash/input_snapshot; edl tc_in/dur/transition) and media_pointer_ok refusing bytes, absolute paths and URLs; pp/libs/film_edit/test 5 Alcotest cases green via `dune runtest --root=pp libs/film_edit` (receipt: Test Successful in 0.003s. 5 tests run.). MERGE GATES: build receipt unverified rc=0, test receipt pass verified. `library` and the rest of the chain stay planned behind this leaf.|) *)
  (section film-edit
 
   (doc "Programmatic video editing: the image holds the studio library (characters, locations, props, style locks) and the project graph (shots, cast bindings, takes, EDLs). Blender does assembly and render headlessly; media lives on disk under content hashes. Nopales state is authoritative; .blend files and renders are derived artifacts.")
@@ -443,7 +445,7 @@
 
   (subsection model
    (doc "asset/project/shot/shot-cast/shot-ref/take/edl-entry/render-job types; content-hash media refs; cost ledger and input_snapshot on takes")
-   (status planned)
+   (status implemented)
    (execution
     (scope pp1)
     (kind code))
