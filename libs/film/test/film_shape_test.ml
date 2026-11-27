@@ -126,6 +126,24 @@ let () =
     [ "film"; "cut"; "ord"; "slug"; "summary"; "tc_in"; "dur"; "mirror" ];
   check_fields src "motif" [ "film"; "name"; "kind" ];
   check_fields src "beat" [ "scene"; "motif"; "role"; "tc" ];
+  (* T1b: each deftype rides an IDEMPOTENT value define -- the seed lint
+     only allows define/route/deftype/... at top level, and a re-seed must
+     leave an existing declaration alone instead of re-declaring it. *)
+  List.iter
+    (fun name ->
+      check_has ("guard " ^ name) src
+        (Printf.sprintf "(if (null? (type-fields (quote %s)))" name);
+      check_has ("guard fallback " ^ name) src
+        (Printf.sprintf "\"%s ok\"" name))
+    [ "film"; "scene"; "motif"; "beat" ];
+  (* T1c: the header names the DIRECTORY package -- load-library strips the
+     (package NAME (export ...)) header by name, so a mismatch silently
+     drops the film/... bindings this leaf exists to provide. *)
+  check_has "package header" src "(package film";
+  check_has "exports film/create" src "film/create";
+  check_has "exports scene-create" src "scene-create";
+  check_has "exports motif-create" src "motif-create";
+  check_has "exports beat-create" src "beat-create";
   (* fps lives on the film row alone; no type stores a rate or a second. *)
   List.iter
     (fun name ->
