@@ -256,3 +256,208 @@ let render_job_for ~project ~cut rows =
     rj_out_path = "";
     rj_log = "";
   }
+
+(* ---- studio library: asset rows + shot bindings, pure over rows ---- *)
+
+(* The library is a set of rows, not a second schema: asset rows carry the
+   stable identity (project + slug), shot-cast/shot-ref carry the bindings.
+   Every operation below is a pure rewrite of those lists. *)
+type library = {
+  lib_assets : asset list;  (* most recently upserted first *)
+  lib_cast : shot_cast list;
+  lib_refs : shot_ref list;
+}
+
+let empty_library = { lib_assets = []; lib_cast = []; lib_refs = [] }
+
+(* the asset id handed around by edit/shot-cast and edit/promote-take *)
+let asset_id (a : asset) = a.asset_slug
+
+let same_asset project slug (a : asset) =
+  a.asset_project = project && a.asset_slug = slug
+
+(* extra content hashes are not a media pointer of their own: they are
+   hashes of files on the same media root, so checked the same way. *)
+let asset_upsert lib ~project ~slug ~kind ?(summary = "") ?(bible = "")
+    ?(appearance = "") ?(negative = "") ?(primary_hash = "")
+    ?(primary_path = "") ?(ref_hashes = []) ?(voice_ref = "")
+    ?(lora_ref = "") ?(media_id = "") () =
+  if slug = "" then
+    invalid_arg "asset-upsert: slug is the asset id (edit/asset-get slug)";
+  if kind = "" then invalid_arg "asset-upsert: kind is required";
+  if primary_hash <> "" || primary_path <> "" then
+    if not (media_pointer_ok ~hash:primary_hash ~path:primary_path) then
+      invalid_arg
+        "asset-upsert: primary is a content hash + relative path — no bytes, \
+         no absolute paths";
+  if not (List.for_all is_content_hash ref_hashes) then
+    invalid_arg "asset-upsert: ref_hashes are content hashes";
+  let a =
+    {
+      asset_project = project;
+      asset_slug = slug;
+      asset_kind = kind;
+      asset_summary = summary;
+      asset_bible = bible;
+      asset_appearance = appearance;
+      asset_negative = negative;
+      asset_primary_hash = primary_hash;
+      asset_primary_path = primary_path;
+      asset_ref_hashes = ref_hashes;
+      asset_voice_ref = voice_ref;
+      asset_lora_ref = lora_ref;
+      asset_media_id = media_id;
+    }
+  in
+  {
+    lib with
+    lib_assets =
+      a :: List.filter (fun b -> not (same_asset project slug b)) lib.lib_assets;
+  }
+
+(* Default lookup: the caller's project row first, then the studio-wide ("")
+   pack on this branch (a personal garden pack available to every project). *)
+let asset_get ?(project = "") lib slug =
+  match List.find_opt (same_asset project slug) lib.lib_assets with
+  | Some a -> Some a
+  | None ->
+      if project = "" then None
+      else List.find_opt (same_asset "" slug) lib.lib_assets
+
+let assets ?project ?kind lib =
+  List.filter
+    (fun a ->
+      (match project with None -> true | Some p -> a.asset_project = p)
+      && match kind with None -> true | Some k -> a.asset_kind = k)
+    lib.lib_assets
+
+(* media_id is a UI-thumbnail pointer only; generation always reads the
+   primary content hash + path from the media root. *)
+let asset_gen_pointer (a : asset) = (a.asset_primary_hash, a.asset_primary_path)
+let asset_thumb_media_id (a : asset) = a.asset_media_id
+
+(* ---- shot bindings: typed rows, never a shot.refs JSON column ---- *)
+
+let shot_cast lib ~shot ~asset ?(role = "featured") ?(wardrobe = "") () =
+  let row =
+    { sc_shot = shot; sc_asset = asset; sc_wardrobe = wardrobe; sc_role = role }
+  in
+  {
+    lib with
+    lib_cast =
+      row
+      :: List.filter
+           (fun r -> not (r.sc_shot = shot && r.sc_asset = asset))
+           lib.lib_cast;
+  }
+
+let shot_cast_clear lib shot =
+  { lib with lib_cast = List.filter (fun r -> r.sc_shot <> shot) lib.lib_cast }
+
+let shot_ref lib ~shot ~asset ?(purpose = "other") ?(weight = "") () =
+  let row =
+    { sr_shot = shot; sr_asset = asset; sr_purpose = purpose; sr_weight = weight }
+  in
+  {
+    lib with
+    lib_refs =
+      row
+      :: List.filter
+           (fun r -> not (r.sr_shot = shot && r.sr_asset = asset))
+           lib.lib_refs;
+  }
+
+let shot_ref_clear lib shot =
+  { lib with lib_refs = List.filter (fun r -> r.sr_shot <> shot) lib.lib_refs }
+
+(* "which shots must be re-generated if this asset changes" is a query over
+   the binding rows, not a stored back-reference. *)
+let which_shots_use_asset lib slug =
+  let from_cast =
+    List.filter_map
+      (fun r ->
+        if r.sc_asset = slug || r.sc_wardrobe = slug then Some r.sc_shot
+        else None)
+      lib.lib_cast
+  in
+  let from_refs =
+    List.filter_map
+      (fun r -> if r.sr_asset = slug then Some r.sr_shot else None)
+      lib.lib_refs
+  in
+  List.sort_uniq compare (from_cast @ from_refs)
+
+(* ---- expand: the shot's own action prompt + bound appearances/hashes ---- *)
+
+type expanded = {
+  exp_shot : string;
+  exp_prompt : string;  (* action/dialogue only; appearance comes from cast *)
+  exp_cast : (asset * string) list;  (* asset (appearance + wardrobe folded) * role *)
+  exp_ref_hashes : string list;  (* union of the ref assets' hashes, sorted *)
+  exp_voice_ref : string;
+  exp_json : string;  (* canonical bundle: exactly what a take snapshots *)
+}
+
+let resolve_asset lib slug = List.find_opt (fun a -> a.asset_slug = slug) lib.lib_assets
+
+(* a wardrobe row is an override fragment on the character's appearance,
+   never a restatement of it in shot.prompt *)
+let cast_appearance lib (r : shot_cast) =
+  let part id =
+    match resolve_asset lib id with Some a -> a.asset_appearance | None -> ""
+  in
+  match (part r.sc_asset, part r.sc_wardrobe) with
+  | "", w -> w
+  | a, "" -> a
+  | a, w -> a ^ ", " ^ w
+
+let expand ?(prompt = "") ?(model = "") lib shot =
+  let cast_rows =
+    List.sort (fun a b -> compare a.sc_asset b.sc_asset)
+      (List.filter (fun r -> r.sc_shot = shot) lib.lib_cast)
+  in
+  let cast =
+    List.filter_map
+      (fun r ->
+        match resolve_asset lib r.sc_asset with
+        | None -> None
+        | Some a ->
+            Some ({ a with asset_appearance = cast_appearance lib r }, r.sc_role))
+      cast_rows
+  in
+  let refs =
+    List.filter_map
+      (fun r ->
+        if r.sr_shot = shot then resolve_asset lib r.sr_asset else None)
+      lib.lib_refs
+  in
+  let voice_ref =
+    List.fold_left
+      (fun acc (a, _) -> if acc = "" then a.asset_voice_ref else acc)
+      "" cast
+  in
+  {
+    exp_shot = shot;
+    exp_prompt = prompt;
+    exp_cast = cast;
+    exp_ref_hashes = union_ref_hashes refs;
+    exp_voice_ref = voice_ref;
+    exp_json = input_snapshot ~prompt ~model ~cast ~refs ~voice_ref;
+  }
+
+(* ---- promote-take: a landed take's media becomes a library asset ---- *)
+
+(* A character sheet, a plate, a voice sample: the take already holds the
+   content hash + relative path, so promoting mints an asset that points at
+   the same file. Only a landed take has media to point at. *)
+let promote_take ?(project = "") lib (t : take) ~kind ~slug () =
+  if t.take_state <> Done then
+    invalid_arg "promote-take: only a landed take has a media hash";
+  if not (media_pointer_ok ~hash:t.take_media_hash ~path:t.take_media_path) then
+    invalid_arg "promote-take: take media is not a content hash + relative path";
+  let lib =
+    asset_upsert lib ~project ~slug ~kind
+      ~summary:(Printf.sprintf "from take %s-%d" t.take_shot t.take_n)
+      ~primary_hash:t.take_media_hash ~primary_path:t.take_media_path ()
+  in
+  (lib, slug)
