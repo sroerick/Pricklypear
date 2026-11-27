@@ -7,3 +7,12 @@
  (name film_shape_test)
  (modules film_shape_test)
  (deps ../lib.pp))
+
+;; libs/film ingestion pins (borge/film-analysis.borg subsection
+;; ingestion): film_ingest_test reads lib.pp and asserts the scdet log →
+;; ordered scene-create emitter the laptop-side path needs.
+(test
+ (name film_ingest_test)
+ (modules film_ingest_test)
+ (libraries alcotest)
+ (deps ../lib.pp))

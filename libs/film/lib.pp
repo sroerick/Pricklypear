@@ -33,7 +33,12 @@
     beat-create
     scene/declared-mirror
     scene/derived-mirror-ord
-    scene/mirror-mismatch?))
+    scene/mirror-mismatch?
+    film/scdet-times
+    film/scdet-frames
+    film/seconds->frames
+    film/auto-cut
+    film/ingest-scenes))
 
 ;; ---------- declared types ----------
 
@@ -218,3 +223,167 @@ deliberately broken ring -- broken symmetry is itself a finding."
       (string-eq
         (as-str declared)
         (as-str derived)))))
+
+;; ---------- ingestion: scdet log → ordered scene-create forms ----------
+;;
+;; LAPTOP-SIDE BOUNDARY (borge/film-analysis.borg, subsection ingestion):
+;; scene boundaries come from the media file ON THE LAPTOP, never from the
+;; image. An ffmpeg/scdet run there produces a LOG; film/scdet-times pulls
+;; the boundary seconds out of it, film/seconds->frames converts ONCE at
+;; the film's fps, and film/ingest-scenes emits (scene-create ...) Nopales
+;; source in ord order. The emitter hands pp_eval already-structured rows,
+;; so the image never parses media.
+;;
+;; A RE-INGEST IS A NEW CUT LABEL. These functions are PURE: they create
+;; no rows and write no branch, they only emit source. Running the
+;; detector at a new threshold takes a new CUT label (e.g. auto-t12 ->
+;; auto-t18) and the previous -auto branch is untouched; curation stays a
+;; fork, ground truth stays pure, and two cuts diff cleanly.
+;;
+;; Detector limits are accepted, not hidden: scdet finds CUTS, not
+;; narrative scenes (dissolves, fades and match cuts slip or merge), and
+;; adjacent detections are merged by hand during curation.
+
+;; The marker ffmpeg's scdet filter writes per detected cut.
+(define film/scd/time-marker
+  "lavfi.scd.time:")
+
+(define film/scd/marker-pos
+  (lambda (line)
+    (string-find-pos line film/scd/time-marker 0 15))
+  "Index of the scdet time marker in one log line, or -1.")
+
+(define film/scdet-times
+  (lambda (log)
+    "Boundary timestamps of an scdet/ffmpeg log, in LOG ORDER, as the
+detector's SECOND strings: every line carrying a lavfi.scd.time: marker,
+trimmed to the number that follows it. This is the ONLY place a second
+count exists -- rows are handed frames by film/seconds->frames."
+    (list/filter
+      (lambda (s) (not (string-eq s "")))
+      (list/map
+        (lambda (line)
+          (let ((pos (film/scd/marker-pos line)))
+            (if
+              (< pos 0)
+              ""
+              (string-trim
+                (car
+                  (string-split
+                    (substring
+                      line
+                      (+ pos 15)
+                      (- (string-length line) (+ pos 15)))
+                    ","))))))
+        (string-split (as-str log) "\n")))))
+
+(define film/seconds->frames
+  (lambda (fps secs)
+    "A detector SECOND count at the film's fps as an INTEGER frame count,
+rounded once. The conversion lives here so a float never reaches a row:
+tc_in and dur stay frame integers and seconds stay render-only."
+    (round (* (parse-float (as-str fps)) (parse-float (as-str secs))))))
+
+(define film/scd/dedupe
+  (lambda (xs acc)
+    "Ascending boundary frames with equal NEIGHBOURS collapsed (a detector
+that fires on two adjacent frames is one boundary) -- order preserved,
+nothing sorted away, so a non-monotonic log stays visible."
+    (cond
+      ((null? xs) (reverse acc))
+      ((null? acc) (film/scd/dedupe (cdr xs) (cons (car xs) acc)))
+      ((= (car xs) (car acc)) (film/scd/dedupe (cdr xs) acc))
+      (else (film/scd/dedupe (cdr xs) (cons (car xs) acc))))))
+
+(define film/scdet-frames
+  (lambda (fps log)
+    "Boundary FRAME counts of an scdet log at the film's fps: seconds
+converted once, ascending, equal neighbours collapsed."
+    (film/scd/dedupe
+      (list/map
+        (lambda (s) (film/seconds->frames fps s))
+        (film/scdet-times log))
+      (list))))
+
+(define film/scd/starts
+  (lambda (frames)
+    "The tc_in of every scene: frame 0 first (scene 1 begins at the head of
+the film) followed by each detected boundary that is not already 0."
+    (if
+      (null? frames)
+      (list)
+      (if (= (car frames) 0) frames (cons 0 frames)))))
+
+(define film/scd/dur
+  (lambda (starts)
+    "dur of the scene starting at (car starts): the gap to the NEXT
+boundary. The trailer scene answers 0 -- the log names no trailing
+boundary, so its length stays open until curation supplies one."
+    (if
+      (null? (cdr starts))
+      0
+      (- (car (cdr starts)) (car starts)))))
+
+(define film/scd/q
+  (lambda (s)
+    "A Nopales string literal for s: quoted, backslash first then quote, so
+an emitted form survives a slug or a title with punctuation."
+    (string-append
+      "\""
+      (string-replace (string-replace (as-str s) "\\" "\\\\") "\"" "\\\"")
+      "\"")))
+
+(define film/scd/form
+  (lambda (film-id cut ord tc dur)
+    "ONE (scene-create ...) source form: ord is the 1-based position in the
+cut, the slug is CUT-sORD so a machine slug names its own cut, and mirror
+is the EMPTY DECLARATION -- the ring is curated on a fork, never here."
+    (string-append
+      "(scene-create "
+      (film/scd/q film-id)
+      " "
+      (film/scd/q cut)
+      " "
+      (as-str ord)
+      " "
+      (film/scd/q (string-append (as-str cut) "-s" (as-str ord)))
+      " "
+      (film/scd/q "")
+      " "
+      (film/frames tc)
+      " "
+      (film/frames dur)
+      " "
+      (film/scd/q "")
+      ")")))
+
+(define film/scd/forms
+  (lambda (film-id cut starts ord)
+    "Ord-ordered (scene-create ...) source, one form per start."
+    (if
+      (null? starts)
+      (list)
+      (cons
+        (film/scd/form film-id cut ord (car starts) (film/scd/dur starts))
+        (film/scd/forms film-id cut (cdr starts) (+ ord 1))))))
+
+(define film/auto-cut
+  (lambda (threshold)
+    "The machine cut label a detector threshold lands on: auto-t<N>. A
+re-ingest at a NEW threshold therefore takes a NEW label (auto-t12 ->
+auto-t18) and the previous -auto branch is untouched -- re-runs are
+diffable, curation stays a fork."
+    (string-append "auto-t" (as-str (parse-int (as-str threshold))))))
+
+(define film/ingest-scenes
+  (lambda (film-id cut fps log)
+    "Ingest an scdet log into ORDERED (scene-create ...) Nopales source:
+the emitter a laptop pipes to pp_eval. CUT is the machine cut label the
+rows land on (e.g. auto-t12); a re-ingest at a new threshold takes a NEW
+label, so the previous -auto branch is untouched. PURE: nothing is
+created and no branch is written here."
+    (film/scd/forms
+      film-id
+      cut
+      (film/scd/starts (film/scdet-frames fps log))
+      1)))
