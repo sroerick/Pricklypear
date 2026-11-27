@@ -243,6 +243,68 @@ let test_tax () =
   in
   Alcotest.(check bool "winner-heavy corpus flagged" true suspicious)
 
+(* ---- chapter surface over hand-computed fixtures: the names the
+   requirement pins (Stats.trailing_baseline/z/price_delta,
+   Flow.concentration_topk/wallet_window_aggregate, Cooc.cooccur).
+   Clacton episode: a Flipadelphia-family wallet across 4 buckets in one
+   window is ONE cluster of 4 markets (a bystander market stays out). ---- *)
+
+let test_surface () =
+  (* baseline is strictly before t; z is standardized distance from it *)
+  let pts = [| (0, 1.0); (5, 2.0); (10, 3.0); (20, 4.0) |] in
+  let base = Stats.trailing_baseline pts 10 15 in
+  Alcotest.(check int "baseline window (t-w, t)" 2 (Array.length base));
+  let z = Stats.z base 3.0 in
+  Alcotest.(check bool "z=2.12132" true (Float.abs (z -. 2.12132) < 1e-4));
+  (match Stats.price_delta pts 10 15 with
+   | Some d -> Alcotest.(check bool "price delta = 1.5" true (Float.abs (d -. 1.5) < 1e-9))
+   | None -> Alcotest.fail "price_delta returned None");
+  Alcotest.(check (option (float 1e-9)) "no baseline, no delta" None
+              (Stats.price_delta pts 0 15));
+  (* concentration = top-k share of usd *)
+  let flows =
+    [ flow "B" "W1" Types.Yes 1000.0 t0;
+      flow "C" "W2" Types.Yes 600.0 t0;
+      flow "D" "W3" Types.Yes 400.0 t0 ]
+  in
+  Alcotest.(check bool "top-2 share = 0.8" true
+              (Float.abs (Flow.concentration_topk flows 2 -. 0.8) < 1e-12));
+  Alcotest.(check bool "top-0 share = 0.0" true
+              (Float.abs (Flow.concentration_topk flows 0 -. 0.0) < 1e-12));
+  (* window aggregation: only fully-formed rows inside (t-w, t] *)
+  let agg_flows =
+    [ flow "B" "W1" Types.Yes 100.0 t0;
+      flow "C" "W1" Types.Yes 200.0 (t0 + 100);
+      flow "B" "W2" Types.Yes 50.0 (t0 + 200) ]
+  in
+  let agg = Flow.wallet_window_aggregate agg_flows (t0 + 150) 1000 in
+  (match Hashtbl.find_opt agg "W1" with
+   | Some w ->
+       Alcotest.(check bool "window usd = 300" true
+                   (Float.abs (w.Flow.wa_usd -. 300.0) < 1e-9));
+       Alcotest.(check (list string) "window markets" [ "B"; "C" ]
+                   (List.sort compare w.Flow.wa_markets))
+   | None -> Alcotest.fail "W1 missing from window aggregate");
+  Alcotest.(check bool "future row excluded" true (not (Hashtbl.mem agg "W2")));
+  (* Clacton co-occurrence episode *)
+  let clacton =
+    [ flow "c1" "flipadelphia" Types.Yes 500.0 t0;
+      flow "c2" "flipadelphia" Types.Yes 500.0 t0;
+      flow "c3" "flipadelphia" Types.Yes 500.0 t0;
+      flow "c4" "flipadelphia" Types.Yes 500.0 t0;
+      flow "solo" "bystander" Types.Yes 500.0 t0 ]
+  in
+  let cls = Cooc.cooccur clacton ~min_usd:100.0 in
+  Alcotest.(check int "one co-occurrence cluster" 1 (List.length cls));
+  let _, members = List.hd cls in
+  Alcotest.(check (list string) "clacton buckets" [ "c1"; "c2"; "c3"; "c4" ]
+              (List.sort compare members));
+  let wallets =
+    Cooc.ladder_wallets clacton ~window_s:3600 ~min_markets:4 ~min_usd:1000.0
+      (t0 + 60)
+  in
+  Alcotest.(check int "one ladder wallet" 1 (List.length wallets))
+
 let () =
   Random.self_init ();
   let open Alcotest in
@@ -251,6 +313,7 @@ let () =
       ("stats", [ test_case "mean/stdev/trailing" `Quick test_stats ]);
       ("cooc", [ test_case "clusters + ladder wallets" `Quick test_cooc ]);
       ("fills", [ test_case "next-print + slippage + settle" `Quick test_fills ]);
+      ("surface", [ test_case "baseline/z/concentration/cooc fixtures" `Quick test_surface ]);
       ("simulator", [ test_case "poison-the-future (L-2)" `Quick test_poison ]);
       ("discipline", [ test_case "holdout touched once" `Quick test_holdout_once ]);
       ("tax", [ test_case "base-rate tax table (L-1)" `Quick test_tax ]);

@@ -47,3 +47,12 @@ let topk_share (flows : Types.flow list) (k : int) : float =
   else
     let top = Misc.take k usds in
     List.fold_left ( +. ) 0.0 top /. total
+
+(* surface names from the chapter: concentration = top-k share *)
+let concentration_topk = topk_share
+
+(* wallet aggregate over the trailing window ending at t (as-of law:
+   only flows whose f_last_ts is fully formed and inside (t - w, t]) *)
+let wallet_window_aggregate (flows : Types.flow list) (t : int) (w : int) :
+    (string, wagg) Hashtbl.t =
+  by_wallet (window flows t w)
