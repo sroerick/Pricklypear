@@ -1,0 +1,9 @@
+;; libs/film model pins (borge/film-analysis.borg subsection model):
+;; film_shape_test reads lib.pp (the seed source) and asserts the four
+;; shapes the leaf names -- fields present, integer frames, mirror as a
+;; declaration vs ord derivation, fps on film alone. `dune runtest
+;; libs/film` from pp/ runs both this suite and the parent alias rule.
+(test
+ (name film_shape_test)
+ (modules film_shape_test)
+ (deps ../lib.pp))
