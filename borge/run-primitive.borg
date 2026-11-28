@@ -238,7 +238,7 @@
    only when a second lease consumer appears. Card-feed comments remain the
    human-visible evidence (the EVIDENCE: contract, pp-flow.sh:417-433); the
    row is the machine-readable superset.")
-  (status planned))
+  (status implemented))
 
  (section identity
   (doc "ONE IDENTITY PER RUNNER, never roerick's. Phase 2: a revocable
