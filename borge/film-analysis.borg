@@ -1,8 +1,9 @@
 (project pricklypear-film-analysis
  (doc "Pricklypear book chapter: film analysis — shot/scene structure, chiastic (ring) analysis, cut comparison as branches")
- (status planned)
+ (status implemented)
  (convention ocaml-dune)
 
+ (* agent note (|2026-11-28 AGENT-ACCESS IMPLEMENTED, CLOSING THE FILM-ANALYSIS CHAPTER (factory card brg_e1df98b2, branch factory/spec-pp-borge-film-analysis-fi-1127-brg_e1, tip cd8b6eb1, merged 4368f451, pushed origin/main; independent factory code review PASS). CODE: lib.pp gains scene/beats, scene/briefs, film/cut-beats and film/agent-report (per-scene and per-cut data trees an agent can diff), plus a dune test target pp/libs/film/test/film_agent_access_test.ml pinning A1-A5 (film/report full tree, scene/beats keyed on chiasm/scene-slug, film/cut-beats over film/cut-scenes, film/agent-report folding film/cut-report, purity). MERGE GATES: build receipt verdict=unverified rc=0; test `dune build --root=pp @all && dune runtest --root=pp libs/film --force` receipt verdict=pass, verified (23 tests). CHAPTER STATUS: this project and its section move planned -> implemented because all six declared leaves (model, ingestion, chiastic-analysis, cut-comparison, ui, agent-access) are merged and closed out. They are NOT marked verified: the chapter verify block's smokes (load-library film, create/ingest/report over a branch, GET /film and /film/<slug>, pp_eval film/... for agents) and the leaves' own operator smokes are still the operator's end-to-end check and have not been run by the factory.|) *)
  (* agent note (|2026-11-28 UI IMPLEMENTED (factory card brg_187424b1, branch factory/spec-pp-borge-film-analysis-fi-1127-brg_18, tip 6e6d6d57, merged 178e87b8, pushed origin/main; independent factory code review PASS). CODE: lib.pp declares (route "/film" "film/page" "private") with the index and prefix detail page (404 on unknown slug; table/diagram/center/tightness renderers), and pp/image/lib/http.ml dispatches film-detail GET Prefix_nonempty "/film/" to film/film-page, so /film/<slug> is reachable after load-library; film_ui_test pins it (26 tests) and is wired into the dune test target. The first implement pass left the card in CODE after its own test gate returned rc=1; the retry fixed the tests and the branch was kept. MERGE GATES: build receipt verdict=unverified rc=0; test `dune build --root=pp @all && dune runtest --root=pp libs/film --force` receipt verdict=pass, verified. agent-access stays declared behind this leaf.|) *)
  (* agent note (|2026-11-28 CUT-COMPARISON MERGED (factory card brg_e83e17a0, branch factory/spec-pp-borge-film-analysis-fi-1127-brg_e8, tip 9943f4f9, merged c092e855, pushed origin/main; independent factory code review PASS). CODE: lib.pp gains film/cut-label, cut-scenes, cuts, cut-report, tightness-diff and cut-comparison (report per cut and the after-before delta), pinned by film_cut_test and wired into the runtest deps. The implement commit (9943f4f9) also flipped this subsection's status to implemented inside the section -- the implement lane doing close-out work again; the close-out accepts the flip against the review PASS and the verified receipts. MERGE GATES: build receipt verdict=unverified rc=0; test `dune build --root=pp @all && dune runtest --root=pp libs/film --force` receipt verdict=pass, verified. ui -> agent-access stay declared behind this leaf.|) *)
  (* agent note (|2026-11-28 CHIASTIC-ANALYSIS MERGED, closing the note above: tip 1a4e7fb6, merged d9212587, pushed origin/main, independent factory code review PASS. The counts in the note above (41/17/39) come from a harness fix carried on the same branch (979bdd34): the three film suites printed ASSERT lines but no standard summary, so the gate's receipt read unverified and the implement pass refused to advance; each suite now counts its checks and prints `Test Successful in <t>. N tests run.`, and a live mint then printed verdict=pass. The implement pass also flipped this subsection's status to implemented on the branch (1a4e7fb6), which is the implement lane doing close-out work it should leave to the operator; the close-out accepts the flip against the review PASS and the verified gate receipts rather than reverting it.|) *)
@@ -15,7 +16,7 @@
         motifs and beats, chiastic analysis over scene rings, and
         alternate cuts as branches. Analysis is data on the image;
         media files never are.")
-  (status planned)
+  (status implemented)
   (verify
    (build "dune build image")
    (smoke "(load-library \"film\") installs film/… bindings and routes")
@@ -321,7 +322,7 @@
 
   (subsection agent-access
    (doc "pp_eval film/… as the API; reports are data trees an agent can diff")
-   (status planned)
+   (status implemented)
    (execution
     (scope pp1)
     (kind code)
