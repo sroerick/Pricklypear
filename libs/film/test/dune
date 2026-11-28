@@ -46,3 +46,15 @@
  (modules film_ui_test)
  (libraries alcotest)
  (deps ../lib.pp))
+
+;; libs/film agent-access pins (borge/film-analysis.borg, subsection
+;; agent-access): film_agent_access_test reads lib.pp and asserts the
+;; pp_eval surface an agent diffs -- film/report as the FULL tree,
+;; scene/beats per scene, film/cut-beats per film and cut, and
+;; film/agent-report folding both into one dict.
+(test
+ (name film_agent_access_test)
+ (modules film_agent_access_test)
+ (libraries alcotest)
+ (deps ../lib.pp))
+

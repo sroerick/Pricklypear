@@ -53,7 +53,11 @@
     film/auto-cut
     film/ingest-scenes
     film/page
-    film/film-page))
+    film/film-page
+    scene/beats
+    scene/briefs
+    film/cut-beats
+    film/agent-report))
 
 ;; ---------- declared types ----------
 
@@ -1250,3 +1254,60 @@ this branch's rows and creates none."
 ;; kernel table (rt "film-detail", pp/image/lib/http.ml) exactly like the
 ;; book chapter pages -- the pp route table only matches whole paths.
 (route "/film" "film/page" "private"))
+
+;; ---------- agent-access: pp_eval film/… as the API ----------
+;;
+;; AGENT ACCESS IS THE SAME DERIVATION (borge/film-analysis.borg,
+;; subsection agent-access): an agent asks pp_eval for a report and diffs
+;; two answers -- there is no second, private view. film/report stays the
+;; FULL tree (center, shape, pairs, declared, orphans, tightness),
+;; scene/beats answers ONE scene's beats, film/cut-beats answers a whole
+;; cut scene by scene, and film/agent-report folds the two into ONE dict
+;; an agent reads or diffs across cuts. PURE: no rows are created and no
+;; branch is written -- an agent that wants to curate still calls the
+;; constructors.
+
+(define scene/beats
+  (lambda (scene beats)
+    "The beats that sit in ONE scene row, in film order: the per-scene
+half of the agent's query, keyed on the scene's CURATED slug (an
+uncurated scene shares no beat). PURE: it reads the rows it is handed."
+    (chiasm/beats-of-scene beats (chiasm/scene-slug scene))))
+
+(define scene/briefs
+  (lambda (beats)
+    "A beat list as report briefs (scene, motif, frame): the same shape a
+report row carries, so a beat query diffs against a report cleanly."
+    (list/map chiasm/beat-brief beats)))
+
+(define film/cut-beats
+  (lambda (scenes beats cut)
+    "ONE cut of ONE film as scene briefs carrying their beats: every scene
+row of the cut (film/cut-scenes) paired with scene/beats over the film's
+beats, in the cut's ord order -- so \\\"scene/beats queries work per film
+and cut\\\" is one pp_eval call. Creates no rows."
+    (list/map
+      (lambda (s)
+        (dict-set* "{}"
+          (list
+            "scene"
+            (chiasm/phrase s)
+            "beats"
+            (scene/briefs (scene/beats s beats)))))
+      (film/cut-scenes scenes cut))))
+
+(define film/agent-report
+  (lambda (scenes beats cut)
+    "The agent-facing report tree for ONE film and ONE cut: the full
+film/report tree under report, every scene of that cut with its beats
+under scenes, and the cut label itself -- ONE dict an agent reads through
+pp_eval and DIFFS against another cut's answer. PURE: it reads the rows it
+is handed and creates none, writes no branch."
+    (dict-set* "{}"
+      (list
+        "cut"
+        (as-str cut)
+        "report"
+        (film/cut-report scenes beats cut)
+        "scenes"
+        (film/cut-beats scenes beats cut)))))
