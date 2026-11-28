@@ -288,7 +288,7 @@
 
   (subsection cut-comparison
    (doc "cuts as branches; report-per-branch diff answers 'did the recut tighten the ring'")
-   (status planned)
+   (status implemented)
    (execution
     (scope pp1)
     (kind code)

@@ -41,6 +41,12 @@
     chiasm/declared
     chiasm/orphans
     film/report
+    film/cut-label
+    film/cut-scenes
+    film/cuts
+    film/cut-report
+    film/tightness-diff
+    film/cut-comparison
     film/scdet-times
     film/scdet-frames
     film/seconds->frames
@@ -593,6 +599,98 @@ it reads the rows it is handed and creates none."
             (chiasm/orphans beats (list))
             "tightness"
             (as-str (chiasm/tightness pairs))))))))
+
+;; ---------- cut comparison: cuts are branches, reports diff ----------
+;;
+;; CUTS ARE BRANCHES (borge/film-analysis.borg, subsection cut-comparison).
+;; Every scene row already carries its cut label, so ONE film's rows span
+;; several cuts; a report per label answers "did the recut tighten the
+;; ring" as a diff of two independent reports. PURE: no rows are created
+;; and no branch is written here.
+
+(define film/cut-label
+  (lambda (scene)
+    "The CUT label a scene row landed on (auto-t12, curated, ...): the one
+field the per-cut functions read to tell two cuts of one film apart."
+    (as-str (dict-get scene "cut"))))
+
+(define film/cut-in?
+  (lambda (cut labels)
+    "True when CUT already sits in LABELS: the first-seen dedupe behind
+film/cuts (no sort, so the walk's order is the report's order)."
+    (not
+      (null?
+        (list/filter
+          (lambda (l) (string-eq l cut))
+          labels)))))
+
+(define film/cut-labels-walk
+  (lambda (scenes acc)
+    "Walk a film's scene rows collecting each cut label ONCE, first-seen."
+    (cond
+      ((null? scenes) (reverse acc))
+      ((film/cut-in? (film/cut-label (car scenes)) acc)
+        (film/cut-labels-walk (cdr scenes) acc))
+      (else
+        (film/cut-labels-walk
+          (cdr scenes)
+          (cons (film/cut-label (car scenes)) acc))))))
+
+(define film/cuts
+  (lambda (scenes)
+    "The DISTINCT cut labels over a film's scene rows, first-seen order --
+one entry per branch the film holds, so a caller can report every cut
+without asking the tree which branches exist."
+    (film/cut-labels-walk scenes (list))))
+
+(define film/cut-scenes
+  (lambda (scenes cut)
+    "ONE cut's scene rows in ord order: the rows a per-cut report is built
+from, so two labels over one film never share a row."
+    (list/filter
+      (lambda (s) (string-eq (film/cut-label s) cut))
+      scenes)))
+
+(define film/cut-report
+  (lambda (scenes beats cut)
+    "film/report over ONE cut label's rows and the film's beats: two cut
+labels over one film produce independent reports, so a recut is a DIFF
+and never a mutation of the previous -auto branch."
+    (film/report (film/cut-scenes scenes cut) beats)))
+
+(define film/tightness-diff
+  (lambda (before after)
+    "The ring's tightness movement between two cut reports: after - before
+in frames. NEGATIVE means the recut tightened the ring -- the leaf's
+question answered as one integer an agent can read."
+    (-
+      (parse-int (as-str (dict-get after "tightness")))
+      (parse-int (as-str (dict-get before "tightness"))))))
+
+(define film/cut-comparison
+  (lambda (scenes beats before after)
+    "Two cut labels compared over one film: each label's own report, both
+tightnesses and the after - before delta, so \"did the recut tighten the
+ring\" is a dict an agent reads or pp_eval diffs. PURE: it creates no
+rows and writes no branch."
+    (let ((b (film/cut-report scenes beats before)))
+      (let ((a (film/cut-report scenes beats after)))
+        (dict-set* "{}"
+          (list
+            "before"
+            (as-str before)
+            "after"
+            (as-str after)
+            "before_report"
+            b
+            "after_report"
+            a
+            "before_tightness"
+            (as-str (dict-get b "tightness"))
+            "after_tightness"
+            (as-str (dict-get a "tightness"))
+            "tightness_delta"
+            (as-str (film/tightness-diff b a))))))))
 
 ;; ---------- ingestion: scdet log → ordered scene-create forms ----------
 ;;
