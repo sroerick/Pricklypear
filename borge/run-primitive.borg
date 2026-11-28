@@ -180,7 +180,7 @@
       step-level rule (pp-flow-autolith.sh:130-152): transient provider
       statuses (402/408/409/425/429/5xx) and crash-with-no-result retry;
       deterministic classes fail ONCE.")
-  (status planned))
+  (status implemented))
 
  (section supervisor-tick
   (doc "WHAT THE SUPERVISOR DOES EACH TICK (the glochid app contract;
@@ -209,7 +209,7 @@
    supervisor; the adapter (model pinning, envelope, retries, evidence
    archive) stays the sidecar's body until the native runner replaces it
    (phase 3).")
-  (status planned))
+  (status implemented))
 
  (section budget-accounting
   (doc "Budgets live on the run row (max_total_tokens, max_provider_requests,
@@ -224,7 +224,7 @@
    has NO token kinds and is unbuilt; if P1 lands, run-scoped kinds become
    a rollup target, not the enforcement source (D4 Q4). Enforcement is the
    supervisor's pre-dispatch check - no executor self-polices.")
-  (status planned))
+  (status implemented))
 
  (section evidence
   (doc "Evidence entries on the run row carry a CLAIM KIND (observed |
