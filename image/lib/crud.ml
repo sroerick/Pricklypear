@@ -2294,7 +2294,7 @@ let render_children_html (conn : Store_db.conn) ~(prefix : string)
          | Some slug ->
              Buffer.add_string buf "<a href=\"/notes?slug=";
              Buffer.add_string buf (Prims_pure.html_escape_str slug);
-             Buffer.add_string buf "\" onclick=\"event.stopPropagation()\">";
+             Buffer.add_string buf "\" data-pp-stop=\"1\">";
              Buffer.add_string buf (Prims_pure.html_escape_str label);
              Buffer.add_string buf "</a>"
          | None -> Buffer.add_string buf (Prims_pure.html_escape_str label));

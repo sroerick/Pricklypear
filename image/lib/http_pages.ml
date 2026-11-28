@@ -327,7 +327,7 @@ let repl_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
     "out.textContent='...';" ^
     "try{" ^
     "const r=await fetch('/api/eval',{method:'POST'," ^
-    "headers:{'content-type':'application/json'}," ^
+    "headers:{'content-type':'application/json','x-pp-csrf':'1'}," ^
     "body:JSON.stringify({expr})});" ^
     "const j=await r.json();" ^
     "out.textContent=j.ok?j.value:('error: '+j.error);" ^

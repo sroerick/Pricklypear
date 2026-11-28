@@ -204,21 +204,86 @@ let hsts_max_age () : int =
   | Some v -> (match int_of_string_opt (String.trim v) with Some n -> max 0 n | None -> 15552000)
   | None -> 15552000
 
-(** Security headers appended to every response. Deliberately NOT a full
-    CSP: the chrome relies on inline <style>/<script> (htmx + outline
-    client script), so we only pin frame-ancestors 'none'.
+(** CSP nonce for one HTML document: 16 random bytes, base64.
+
+    security.origin-authenticated-verbs: the policy is a full
+    default-src 'self' CSP, not frame-ancestors alone. The chrome (htmx,
+    the outline toggles, page-local scripts) is inline, so inline tags
+    carry a per-response nonce and script-src/style-src admit exactly
+    it. *)
+let new_nonce () : string =
+  Base64.encode_string (Mirage_crypto_rng.generate 16)
+
+let csp_policy ?(nonce : string option) () : string =
+  let src kind =
+    match nonce with
+    | Some n -> Printf.sprintf "%s 'self' 'nonce-%s'" kind n
+    | None -> Printf.sprintf "%s 'self'" kind
+  in
+  String.concat "; "
+    [ "default-src 'self'"; src "script-src"; src "style-src"
+    ; "img-src 'self' data:"; "connect-src 'self'"
+    ; "form-action 'self'"; "base-uri 'none'"
+    ; "object-src 'none'"; "frame-ancestors 'none'" ]
+
+(** Add [nonce="..."] to every inline <script>/<style> tag in a rendered
+    document. External script tags (src) need no nonce and a tag that
+    already carries one is left alone. Pure, so the policy is testable
+    without a server. *)
+let inject_nonce ~(nonce : string) (html : string) : string =
+  let n = String.length html in
+  let lower = String.lowercase_ascii html in
+  let starts i p =
+    let l = String.length p in
+    i + l <= n && String.sub lower i l = p
+  in
+  let has i j needle =
+    let l = String.length needle in
+    let rec go k = k + l <= j && (String.sub lower k l = needle || go (k + 1)) in
+    go i
+  in
+  let buf = Buffer.create (n + 64) in
+  let rec loop i =
+    if i >= n then ()
+    else if starts i "<script" || starts i "<style" then begin
+      match String.index_from_opt html i '>' with
+      | None -> Buffer.add_substring buf html i (n - i)
+      | Some j ->
+          let is_script = starts i "<script" in
+          if (is_script && has i j "src=") || has i j "nonce=" then begin
+            Buffer.add_substring buf html i (j - i + 1);
+            loop (j + 1)
+          end
+          else begin
+            let tl = if is_script then 7 else 6 in
+            Buffer.add_substring buf html i tl;
+            Buffer.add_string buf (Printf.sprintf " nonce=\"%s\"" nonce);
+            Buffer.add_substring buf html (i + tl) (j + 1 - (i + tl));
+            loop (j + 1)
+          end
+    end
+    else begin
+      Buffer.add_char buf html.[i];
+      loop (i + 1)
+    end
+  in
+  loop 0;
+  Buffer.contents buf
+
+(** Security headers appended to every response. The CSP is a full
+    default-src 'self' policy (see [csp_policy]); responses that are not
+    HTML documents carry no nonce and admit no inline code at all.
 
     HSTS is emitted unconditionally when enabled: browsers IGNORE
     Strict-Transport-Security received over plain HTTP (RFC 6797), so a
     dev server on http is unaffected while a TLS edge gets the header on
     its very first https response. Disable with PP_HSTS_MAX_AGE=0. *)
-let security_headers () : (string * string) list =
+let security_headers ?(nonce : string option) () : (string * string) list =
   let base =
     [ ("x-content-type-options", "nosniff")
     ; ("x-frame-options", "DENY")
     ; ("referrer-policy", "strict-origin-when-cross-origin")
-    ; ("content-security-policy", "frame-ancestors 'none'")
-    ]
+    ; ("content-security-policy", csp_policy ?nonce ()) ]
   in
   if hsts_max_age () > 0 then
     ("strict-transport-security",
@@ -272,21 +337,35 @@ let html_response (reqd : Httpun.Reqd.t) ?(status = `OK)
          native <details name=...> accordion attribute (menu/render),
          so no menu JS here. Remaining script: outline summaries only
          toggle collapse via the .ol-fold handle. *)
+      (* Inline chrome script: click delegation for outline summaries and
+         [data-pp-stop] links (a nonce admits it under the CSP), the
+         kernel-header injection htmx needs on API endpoints, and the
+         form reset that used to be an hx-on attribute (htmx compiles
+         hx-on with eval, which the CSP forbids). *)
       HTML.script [] "%s"
         ("document.addEventListener('click',function(e){" ^
-         "var sum=e.target&&e.target.closest?e.target.closest('summary.ol-sum'):null;" ^
-         "if(sum&&!(e.target.closest&&e.target.closest('.ol-fold'))){e.preventDefault();}" ^
+         "var t=e.target;" ^
+         "if(t&&t.closest&&t.closest('[data-pp-stop]')){e.stopPropagation();return;}" ^
+         "var sum=t&&t.closest?t.closest('summary.ol-sum'):null;" ^
+         "if(sum&&!(t.closest&&t.closest('.ol-fold'))){e.preventDefault();}" ^
+         "});" ^
+         "document.addEventListener('htmx:configRequest',function(e){" ^
+         "e.detail.headers['x-pp-csrf']='1';});" ^
+         "document.addEventListener('htmx:afterRequest',function(e){" ^
+         "var f=e.target;" ^
+         "if(f&&f.matches&&f.matches('form[data-pp-reset-on-success]')&&e.detail.successful){f.reset();}" ^
          "});");
     ];
     HTML.body [] [body];
   ] in
-  let s = Pure_html.to_string html_doc in
+  let nonce = new_nonce () in
+  let s = inject_nonce ~nonce (Pure_html.to_string html_doc) in
   let headers =
     Httpun.Headers.of_list
       ([("content-type", "text/html; charset=utf-8");
         ("content-length", string_of_int (String.length s))]
        @ Timing.timing_header ()
-       @ security_headers ())
+       @ security_headers ~nonce ())
   in
   let resp = Httpun.Response.create ~headers status in
   safe_respond_with_string reqd resp s
@@ -649,6 +728,33 @@ let same_origin_ok (headers : (string * string) list) : bool =
           | Some h -> String.equal (String.lowercase_ascii h) req_host
           | None -> false)
 
+(** security.origin-authenticated-verbs: kernel API endpoints — the
+    effect channel — require an explicit custom header on top of the
+    same-origin check, so a state-changing request that rides the
+    session cookie cannot be produced by a cross-site form or a bare
+    top-level navigation. A browser cannot set this header cross-origin
+    without a preflight; same-origin chrome sets it globally. *)
+let csrf_header_name = "x-pp-csrf"
+
+let mutating_method (meth : string) : bool =
+  match String.uppercase_ascii meth with
+  | "POST" | "PUT" | "PATCH" | "DELETE" -> true
+  | _ -> false
+
+let is_kernel_endpoint (path : string) : bool =
+  let p = String.lowercase_ascii path in
+  let prefix s =
+    String.length p >= String.length s
+    && String.sub p 0 (String.length s) = s
+  in
+  prefix "/api/"
+
+let csrf_violation ~(meth : string) ~(path : string)
+    ~(headers : (string * string) list) ~(session_cookie : bool) : bool =
+  mutating_method meth && session_cookie && is_kernel_endpoint path
+  && (match List.assoc_opt csrf_header_name headers with
+      | Some v -> String.trim v = ""
+      | None -> true)
 let b64_decode_opt (s : string) : string option =
   match Base64.decode ~pad:true s with
   | Ok raw -> Some raw

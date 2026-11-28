@@ -345,16 +345,38 @@ let launch (env : route_env) (page_fn : Session.t -> unit) : unit =
                            Bearer/Basic API clients carry no session cookie;
                            anonymous POSTs (signup, guestbook) carry no
                            privilege and stay open. *)
+                        let session_cookie =
+                          match cookie_value headers cookie_name with
+                          | Some _ -> true
+                          | None -> false
+                        in
                         let origin_violation =
-                          mutating
-                          && (match cookie_value headers cookie_name with
-                             | Some _ -> true
-                             | None -> false)
+                          mutating && session_cookie
                           && not (same_origin_ok headers)
+                        in
+                        (* security.origin-authenticated-verbs: the kernel
+                           API surface additionally requires an explicit
+                           custom header on cookie-borne mutations. A
+                           browser cannot set it cross-origin without a
+                           preflight, so a cross-site page cannot drive
+                           the effect channel even when it looks
+                           same-origin. *)
+                        let csrf_bad =
+                          Http_core.csrf_violation
+                            ~meth:
+                              (match env.meth with
+                               | `POST -> "POST"
+                               | `PUT -> "PUT"
+                               | `DELETE -> "DELETE"
+                               | _ -> "GET")
+                            ~path ~headers ~session_cookie
+                        in
+                        let request_violation =
+                          origin_violation || csrf_bad
                         in
                         let uname_gate = Session.username session in
                         let page_fn =
-                          if origin_violation then fun _s ->
+                          if request_violation then fun _s ->
                             ignore
                               (Ops_log.info ~component:"http"
                                  ~context:
@@ -934,7 +956,7 @@ let rooms_body ~(session : Session.t) ~(room : string) ~(err : string) : string 
     ; rooms_log_html ~session ~room
     ; {|</div>|}
     ; Printf.sprintf
-        {|<form method="post" action="/rooms/say?room=%s" hx-post="/rooms/say?room=%s" hx-target="#rooms-log" hx-swap="innerHTML" hx-on::after-request="if(event.detail.successful){this.reset()}">|}
+          {|<form method="post" action="/rooms/say?room=%s" hx-post="/rooms/say?room=%s" hx-target="#rooms-log" hx-swap="innerHTML" data-pp-reset-on-success="1">|}
         q q
     ; {|<textarea id="rooms-body-input" name="body" rows="2" required="required" maxlength="4000" placeholder="Say it in the room..."></textarea>|}
     ; {|<button type="submit">Send</button></form>|}

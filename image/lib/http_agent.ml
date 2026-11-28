@@ -763,7 +763,7 @@ let agent_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
     "const body={seed,prompt,tools,stream:false};" ^
     "if(sid)body.session_id=sid;" ^
     "const r=await fetch('/api/agent',{method:'POST'," ^
-    "headers:{'content-type':'application/json'}," ^
+    "headers:{'content-type':'application/json','x-pp-csrf':'1'}," ^
     "body:JSON.stringify(body)});" ^
     "const j=await r.json();" ^
     "if(j.session_id)setSid(j.session_id);" ^
@@ -850,7 +850,7 @@ let agent_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
         "wout.textContent='…'; wbtn.disabled=true;" ^
         "try{" ^
         "const r=await fetch('/api/ai/propose',{method:'POST'," ^
-        "headers:{'content-type':'application/json'}," ^
+        "headers:{'content-type':'application/json','x-pp-csrf':'1'}," ^
         "body:JSON.stringify({name,spec})});" ^
         "const j=await r.json();" ^
         "wout.textContent=j.result||j.error||JSON.stringify(j);" ^

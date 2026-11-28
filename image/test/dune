@@ -486,3 +486,8 @@
  (name seed_order_test)
  (modules seed_order_test)
  (libraries pricklypear-image pricklypear-lisp alcotest unix))
+
+(test
+ (name http_origin_csrf_test)
+ (modules http_origin_csrf_test)
+ (libraries pricklypear-image alcotest))
