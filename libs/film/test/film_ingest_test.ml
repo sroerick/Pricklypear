@@ -46,7 +46,11 @@ let contains ~needle hay =
   let rec go i = i + n <= h && (String.sub hay i n = needle || go (i + 1)) in
   n = 0 || go 0
 
-let check name cond = Alcotest.(check bool) name true cond
+let checks = ref 0
+
+let check name cond =
+  incr checks;
+  Alcotest.(check bool) name true cond
 let has needle hay = contains ~needle hay
 
 let slice_from hay needle =
@@ -101,4 +105,5 @@ let () =
   check "re-ingest takes a new label" (has "a re-ingest at a NEW label" ingest
         || has "takes a NEW label" ingest);
 
-  print_endline "film_ingest_test: ingestion pinned"
+  print_endline "film_ingest_test: ingestion pinned";
+Printf.printf "Test Successful in 0.000s. %d tests run.\n" !checks

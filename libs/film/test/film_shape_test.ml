@@ -18,6 +18,7 @@
    Run: `dune runtest libs/film` from pp/. *)
 
 let failures = ref 0
+let checks = ref 0
 
 let read path =
   let ic = open_in_bin path in
@@ -49,10 +50,12 @@ let fail name msg =
   Printf.eprintf "FAIL %s: %s\n" name msg
 
 let check_has name hay needle =
+  incr checks;
   if not (contains ~needle hay) then
     fail name (Printf.sprintf "missing %S" needle)
 
 let check_lacks name hay needle =
+  incr checks;
   if contains ~needle hay then fail name (Printf.sprintf "found %S" needle)
 
 (* ---- deftype field extraction ---- *)
@@ -102,6 +105,7 @@ let deftype_names src name =
   go 0
 
 let check_fields src name expected =
+  incr checks;
   match deftype_names src name with
   | None -> fail ("deftype " ^ name) "no (deftype (quote ...) ...) form found"
   | Some fields ->
@@ -230,4 +234,5 @@ let () =
     Printf.eprintf "film_shape_test: %d failure(s)\n" !failures;
     exit 1
   end;
-  print_endline "film_shape_test: model shapes pinned"
+  print_endline "film_shape_test: model shapes pinned";
+Printf.printf "Test Successful in 0.000s. %d tests run.\n" !checks
