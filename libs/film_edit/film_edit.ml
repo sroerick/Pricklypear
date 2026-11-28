@@ -1157,3 +1157,291 @@ let write_cut_exports ~dir ~project ~cut ?(fps = 24)
       (blender_script ~project ~cut ~fps ~takes rows)
   in
   (mlt, script)
+
+(* ---- blender-bridge: typed command set, live view, one render at a time ----
+
+   The OCaml service owns the rows and drives Blender over a loopback
+   socket. The addon (bridge_addon) answers typed JSON commands, one per
+   line: the live scene's status, strip-add to build the VSE timeline from
+   the cut, render to write a playable file. A GUI session is the view; a
+   batch session runs the same commands headless. Renders go through
+   bridge_queue: one job at a time, so a second render waits for the first. *)
+
+type bridge_strip = {
+  bs_name : string;
+  bs_path : string;  (* relative to a media root *)
+  bs_channel : int;
+  bs_frame_start : int;  (* timeline position, frames *)
+  bs_offset : int;  (* source in-point, frames *)
+  bs_dur : int;
+}
+
+type bridge_render_req = {
+  br_out : string;  (* output relative to a media root *)
+  br_format : string;  (* FFMPEG | PNG | … *)
+}
+
+type bridge_command =
+  | Status
+  | Ping
+  | Strip_add of bridge_strip
+  | Render of bridge_render_req
+  | Quit
+
+let bridge_command_to_json (c : bridge_command) =
+  match c with
+  | Status -> `Assoc [ ("cmd", `String "status") ]
+  | Ping -> `Assoc [ ("cmd", `String "ping") ]
+  | Quit -> `Assoc [ ("cmd", `String "quit") ]
+  | Strip_add s ->
+      `Assoc
+        [
+          ("cmd", `String "strip-add");
+          ("name", `String s.bs_name);
+          ("path", `String s.bs_path);
+          ("channel", `Int s.bs_channel);
+          ("frame_start", `Int s.bs_frame_start);
+          ("offset", `Int s.bs_offset);
+          ("dur", `Int s.bs_dur);
+        ]
+  | Render r ->
+      `Assoc
+        [
+          ("cmd", `String "render");
+          ("out", `String r.br_out);
+          ("format", `String r.br_format);
+        ]
+
+(* One command is one line: the canonical print, so the same command always
+   puts the same bytes on the socket. *)
+let bridge_command_line (c : bridge_command) =
+  canonical_json (bridge_command_to_json c)
+
+let bridge_parse (line : string) : (bridge_command, string) result =
+  match Yojson.Safe.from_string line with
+  | exception Yojson.Json_error m -> Error ("bridge: not JSON: " ^ m)
+  | `Assoc kvs ->
+      let str k =
+        match List.assoc_opt k kvs with Some (`String s) -> Some s | _ -> None
+      in
+      let int k =
+        match List.assoc_opt k kvs with Some (`Int n) -> Some n | _ -> None
+      in
+      (match str "cmd" with
+      | Some "status" -> Ok Status
+      | Some "ping" -> Ok Ping
+      | Some "quit" -> Ok Quit
+      | Some "strip-add" -> (
+          match
+            ( str "name",
+              str "path",
+              int "channel",
+              int "frame_start",
+              int "offset",
+              int "dur" )
+          with
+          | Some bs_name, Some path, Some channel, Some frame_start, Some offset,
+            Some dur ->
+              if not (is_relative_media_path path) then
+                Error "strip-add: path must be relative to a media root"
+              else
+                Ok
+                  (Strip_add
+                     {
+                       bs_name;
+                       bs_path = path;
+                       bs_channel = channel;
+                       bs_frame_start = frame_start;
+                       bs_offset = offset;
+                       bs_dur = dur;
+                     })
+          | _ ->
+              Error "strip-add: name/path/channel/frame_start/offset/dur required"
+          )
+      | Some "render" -> (
+          match (str "out", str "format") with
+          | Some out, Some format ->
+              if not (is_relative_media_path out) then
+                Error "render: out must be relative to a media root"
+              else Ok (Render { br_out = out; br_format = format })
+          | _ -> Error "render: out/format are required")
+      | Some other -> Error ("bridge: unknown command " ^ other)
+      | None -> Error "bridge: missing cmd")
+  | _ -> Error "bridge: a command is a JSON object"
+
+(* The addon's answer: ok/state plus a human message (blender version, strip
+   count, written file, or the failure). *)
+type bridge_reply = { rp_ok : bool; rp_state : string; rp_message : string }
+
+let bridge_parse_reply (line : string) : (bridge_reply, string) result =
+  match Yojson.Safe.from_string line with
+  | exception Yojson.Json_error m -> Error ("bridge: not JSON: " ^ m)
+  | `Assoc kvs ->
+      let str k d =
+        match List.assoc_opt k kvs with Some (`String s) -> s | _ -> d
+      in
+      let ok = match List.assoc_opt "ok" kvs with Some (`Bool b) -> b | _ -> false in
+      Ok { rp_ok = ok; rp_state = str "state" "error"; rp_message = str "message" "" }
+  | _ -> Error "bridge: a reply is a JSON object"
+
+(* The service's half of strip-add: one command per EDL row, in ord order,
+   exactly as the batch Blender script builds the timeline. *)
+let bridge_strip_commands ~(takes : take list) (rows : edl_entry list) =
+  let rows = List.stable_sort (fun a b -> compare a.edl_ord b.edl_ord) rows in
+  let _, cmds =
+    List.fold_left
+      (fun (frame, acc) e ->
+        let dur = max 1 e.edl_dur in
+        let path =
+          match take_media_path takes e.edl_take with
+          | "" -> "missing.mp4"
+          | p -> p
+        in
+        ( frame + dur,
+          Strip_add
+            {
+              bs_name = Printf.sprintf "t%d" e.edl_ord;
+              bs_path = path;
+              bs_channel = 1;
+              bs_frame_start = frame;
+              bs_offset = e.edl_tc_in;
+              bs_dur = dur;
+            }
+          :: acc ))
+      (1, []) rows
+  in
+  List.rev cmds
+
+let bridge_render_command ?(format = "FFMPEG") ~out () =
+  Render { br_out = out; br_format = format }
+
+(* A batch render of a cut: build the VSE timeline, then render it. *)
+let bridge_cut_commands ~out ?format ~(takes : take list)
+    (rows : edl_entry list) =
+  bridge_strip_commands ~takes rows
+  @ [ bridge_render_command ?format ~out () ]
+
+(* The addon itself: a bpy socket server that executes the typed commands.
+   It serves one command at a time (single-threaded accept loop), which is
+   why the queue below only ever has one running job. *)
+let bridge_addon ?(host = "127.0.0.1") ?(port = 8765) () =
+  String.concat "\n"
+    [
+      "# pricklypear blender-bridge addon: a bpy socket server.";
+      "#";
+      "# The OCaml service owns the rows and sends typed JSON commands, one";
+      "# per line, on the loopback socket. A live GUI session is the view of";
+      "# the cut; a batch session runs the same commands headless. Commands";
+      "# are served one at a time, so a second render waits for the first.";
+      "#";
+      "#   blender -b -P this_addon.py     (batch)";
+      "#   blender + Text Editor > Run Script (live GUI)";
+      "import json";
+      "import socket";
+      "";
+      "import bpy";
+      "";
+      Printf.sprintf "HOST = \"%s\"" host;
+      Printf.sprintf "PORT = %d" port;
+      "";
+      "def reply(ok, state, message=\"\"):";
+      "    return json.dumps({\"ok\": ok, \"state\": state, \"message\": message})";
+      "";
+      "";
+      "def sequences():";
+      "    scene = bpy.context.scene";
+      "    return scene.sequence_editor or scene.sequence_editor_create()";
+      "";
+      "";
+      "def handle(cmd):";
+      "    name = cmd.get(\"cmd\", \"\")";
+      "    if name == \"status\":";
+      "        return reply(True, \"idle\", bpy.app.version_string)";
+      "    if name == \"ping\":";
+      "        return reply(True, \"idle\", \"pong\")";
+      "    if name == \"strip-add\":";
+      "        se = sequences()";
+      "        strip = se.sequences.new_movie(";
+      "            name=cmd[\"name\"],";
+      "            filepath=cmd[\"path\"],";
+      "            channel=cmd[\"channel\"],";
+      "            frame_start=cmd[\"frame_start\"],";
+      "        )";
+      "        strip.frame_offset_start = cmd.get(\"offset\", 0)";
+      "        strip.frame_final_duration = cmd[\"dur\"]";
+      "        return reply(True, \"idle\", str(len(se.sequences_all)))";
+      "    if name == \"render\":";
+      "        scene = bpy.context.scene";
+      "        scene.render.filepath = cmd[\"out\"]";
+      "        scene.render.image_settings.file_format = cmd.get(\"format\", \"FFMPEG\")";
+      "        bpy.ops.render.render(animation=True)";
+      "        return reply(True, \"done\", cmd[\"out\"])";
+      "    if name == \"quit\":";
+      "        return reply(True, \"quit\", \"\")";
+      "    return reply(False, \"error\", \"unknown command: \" + name)";
+      "";
+      "";
+      "def serve(conn):";
+      "    stream = conn.makefile(\"rw\")";
+      "    while True:";
+      "        line = stream.readline()";
+      "        if not line:";
+      "            break";
+      "        try:";
+      "            out = handle(json.loads(line))";
+      "        except Exception as exc:";
+      "            out = reply(False, \"error\", str(exc))";
+      "        stream.write(out + \"\\n\")";
+      "        stream.flush()";
+      "        if json.loads(out).get(\"state\") == \"quit\":";
+      "            break";
+      "";
+      "";
+      "def main():";
+      "    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)";
+      "    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)";
+      "    server.bind((HOST, PORT))";
+      "    server.listen(1)";
+      "    print(\"pricklypear blender-bridge on \" + HOST + \":\" + str(PORT))";
+      "    while True:";
+      "        conn, _ = server.accept()";
+      "        with conn:";
+      "            serve(conn)";
+      "";
+      "";
+      "main()";
+    ]
+  ^ "\n"
+
+(* ---- the render queue: one job at a time, one socket, one Blender ---- *)
+
+type bridge_job = {
+  bj_id : string;
+  bj_command : bridge_command;
+  bj_state : string;  (* waiting | running | done | failed *)
+}
+
+let bridge_job id command = { bj_id = id; bj_command = command; bj_state = "waiting" }
+
+type bridge_queue = {
+  bq_running : bridge_job option;
+  bq_waiting : bridge_job list;  (* FIFO: the oldest waiting job starts next *)
+}
+
+let empty_bridge_queue = { bq_running = None; bq_waiting = [] }
+
+let bridge_busy (q : bridge_queue) = q.bq_running <> None
+let bridge_running_id (q : bridge_queue) = Option.map (fun j -> j.bj_id) q.bq_running
+let bridge_waiting_ids (q : bridge_queue) = List.map (fun j -> j.bj_id) q.bq_waiting
+
+(* A second render never starts while one is running: it waits. *)
+let bridge_submit (q : bridge_queue) (j : bridge_job) =
+  match q.bq_running with
+  | None -> { q with bq_running = Some { j with bj_state = "running" } }
+  | Some _ -> { q with bq_waiting = q.bq_waiting @ [ j ] }
+
+let bridge_finish (q : bridge_queue) =
+  match q.bq_waiting with
+  | [] -> { bq_running = None; bq_waiting = [] }
+  | j :: rest ->
+      { bq_running = Some { j with bj_state = "running" }; bq_waiting = rest }
