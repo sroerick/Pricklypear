@@ -51,7 +51,9 @@
     film/scdet-frames
     film/seconds->frames
     film/auto-cut
-    film/ingest-scenes))
+    film/ingest-scenes
+    film/page
+    film/film-page))
 
 ;; ---------- declared types ----------
 
@@ -855,3 +857,396 @@ created and no branch is written here."
       cut
       (film/scd/starts (film/scdet-frames fps log))
       1)))
+
+;; ---------- ui: /film and /film/<slug> (borge/film-analysis.borg, ----
+;; subsection ui) -- the ring report page and its arc diagram.
+;;
+;; The page READS what the derivation wrote: film/report over ONE cut's
+;; rows, a per-pair table and a rainbow-style arc diagram (one node per
+;; scene in ord order, one coloured arc per positional mirror pair).
+;; Frames stay integers here too -- the report's tightness is a frame
+;; count and nothing on the page divides by fps. PURE: the pages create
+;; no rows and write no branch.
+
+(define film/ui/slug-of
+  (lambda (row)
+    "A (id . fields) row's slug as a string."
+    (as-str (dict-get (cdr row) "slug"))))
+
+(define film/ui/films
+  (lambda ()
+    "Every film row on this branch, up to 500, in branch order."
+    (rows (quote film) 500)))
+
+(define film/ui/rows-of
+  (lambda (type limit)
+    "The field dicts of every row of TYPE, up to LIMIT, in branch order."
+    (list/map
+      (lambda (r) (cdr r))
+      (rows type limit))))
+
+(define film/ui/by-slug
+  (lambda (slug)
+    "The film row with this slug, or '() when the branch holds none."
+    (let
+      ((hit
+        (list/filter
+          (lambda (r) (string-eq (film/ui/slug-of r) (as-str slug)))
+          (film/ui/films))))
+      (if (null? hit) (list) (cdr (car hit))))))
+
+(define film/ui/scenes
+  (lambda (slug)
+    "Every scene row of one film -- all cuts -- in branch order."
+    (list/filter
+      (lambda (s) (string-eq (as-str (dict-get s "film")) (as-str slug)))
+      (film/ui/rows-of (quote scene) 2000))))
+
+(define film/ui/slug-in?
+  (lambda (slug slugs)
+    "True when SLUG sits in SLUGS (string compare on both sides)."
+    (not
+      (null?
+        (list/filter (lambda (s) (string-eq (as-str s) slug)) slugs)))))
+
+(define film/ui/beats
+  (lambda (scenes)
+    "The beat rows sitting in these scenes: beat.scene carries the scene
+SLUG, so a film's beats are the ones whose scene is in the film's rows."
+    (let
+      ((slugs (list/map (lambda (s) (as-str (dict-get s "slug"))) scenes)))
+      (list/filter
+        (lambda (b) (film/ui/slug-in? (as-str (dict-get b "scene")) slugs))
+        (film/ui/rows-of (quote beat) 2000)))))
+
+(define film/ui/cut
+  (lambda (scenes)
+    "The cut the report page shows: ?cut=<label> when it names a cut of
+this film, else the FIRST label film/cuts names (empty when the film has
+no scene row yet)."
+    (let ((labels (film/cuts scenes)))
+      (let ((want (request-param "cut")))
+        (if
+          (and
+            (not (null? want))
+            (film/ui/slug-in? (as-str want) labels))
+          (as-str want)
+          (if (null? labels) "" (as-str (car labels))))))))
+
+(define film/ui/path-suffix
+  (lambda (prefix path)
+    "Text after PREFIX, or the empty string when PATH lacks it -- the slug
+half of /film/<slug>."
+    (let ((p (as-str path)) (pre (as-str prefix)))
+      (if
+        (string-starts-with? p pre)
+        (substring
+          p
+          (string-length pre)
+          (- (string-length p) (string-length pre)))
+        ""))))
+
+(define film/ui/td
+  (lambda (body)
+    "One table cell with HTML-escaped text."
+    (html/tag "td" "" (html/text (as-str body)))))
+
+(define film/ui/pair-row
+  (lambda (pair)
+    "One mirror pair as a table row: left, right, dur delta in frames and
+the motifs the pair shares."
+    (html/tag
+      "tr"
+      ""
+      (html/join
+        (list
+          (film/ui/td (dict-get pair "left"))
+          (film/ui/td (dict-get pair "right"))
+          (film/ui/td (dict-get pair "dur_delta"))
+          (film/ui/td (dict-get pair "shared_motifs")))))))
+
+(define film/ui/pairs-table
+  (lambda (pairs)
+    "The per-pair table of ONE cut's report: an empty-state line when the
+ring has no pair (a single scene, or none)."
+    (if
+      (null? pairs)
+      (html/p*
+        (html/attr "class" "muted")
+        (html/text "This cut has no mirror pair yet."))
+      (html/tag
+        "table"
+        (html/attr "class" "film-pairs")
+        (html/join
+          (list
+            (html/tag
+              "thead"
+              ""
+              (html/tag
+                "tr"
+                ""
+                (html/join
+                  (list
+                    (html/tag "th" "" (html/text "Left"))
+                    (html/tag "th" "" (html/text "Right"))
+                    (html/tag "th" "" (html/text "dur Δ (frames)"))
+                    (html/tag "th" "" (html/text "shared motifs"))))))
+            (html/tag
+              "tbody"
+              ""
+              (html/join (list/map film/ui/pair-row pairs)))))))))
+
+(define film/ui/hue
+  (lambda (i)
+    "A hue for the i-th arc, 0..300, so the arcs read as one rainbow."
+    (if (< i 6) (* i 50) (film/ui/hue (- i 6)))))
+
+(define film/ui/arcs
+  (lambda (pairs i acc)
+    "One SVG arc per mirror pair, outermost first: an upward bow between
+the two scenes' ord positions, its stroke stepping through the rainbow."
+    (if
+      (null? pairs)
+      (html/join (reverse acc))
+      (let
+        ((l (parse-int (as-str (dict-get (car pairs) "left_ord"))))
+          (r (parse-int (as-str (dict-get (car pairs) "right_ord")))))
+        (let
+          ((x1 (+ 60 (* (- l 1) 60)))
+            (x2 (+ 60 (* (- r 1) 60))))
+          (let ((mid (+ x1 (* (- r l) 30))))
+            (film/ui/arcs
+              (cdr pairs)
+              (+ i 1)
+              (cons
+                (html/void
+                  "path"
+                  (html/attrs
+                    (list
+                      (html/attr "class" "film-arc")
+                      (html/attr
+                        "d"
+                        (string-append
+                          "M "
+                          (as-str x1)
+                          " 120 Q "
+                          (as-str mid)
+                          " 10 "
+                          (as-str x2)
+                          " 120"))
+                      (html/attr "fill" "none")
+                      (html/attr
+                        "stroke"
+                        (string-append
+                          "hsl(" (as-str (film/ui/hue i)) ",70%,55%)"))
+                      (html/attr "stroke-width" "2"))))
+                acc))))))))
+
+(define film/ui/nodes
+  (lambda (scenes acc)
+    "One SVG node per scene in ord order, with its ord printed under it."
+    (if
+      (null? scenes)
+      (html/join (reverse acc))
+      (let ((ord (parse-int (as-str (dict-get (car scenes) "ord")))))
+        (let ((x (+ 60 (* (- ord 1) 60))))
+          (film/ui/nodes
+            (cdr scenes)
+            (cons
+              (html/join
+                (list
+                  (html/void
+                    "circle"
+                    (html/attrs
+                      (list
+                        (html/attr "cx" (as-str x))
+                        (html/attr "cy" "120")
+                        (html/attr "r" "6")
+                        (html/attr "fill" "#333"))))
+                  (html/tag
+                    "text"
+                    (html/attrs
+                      (list
+                        (html/attr "x" (as-str x))
+                        (html/attr "y" "142")
+                        (html/attr "text-anchor" "middle")
+                        (html/attr "font-size" "11")))
+                    (html/text (as-str ord)))))
+              acc)))))))
+
+(define film/ui/diagram
+  (lambda (scenes pairs)
+    "The rainbow-style arc diagram: the cut's scenes on one line in ord
+order and one coloured arc per POSITIONAL mirror pair (so only derived
+pairs are drawn) -- render-html of an SVG."
+    (let
+      ((n (chiasm/length scenes))
+        (arcs (film/ui/arcs pairs 0 (list))))
+      (let ((w (+ 120 (* 60 n))))
+        (render-html
+          (html/tag
+            "svg"
+            (html/attrs
+              (list
+                (html/attr "class" "film-diagram")
+                (html/attr
+                  "viewBox" (string-append "0 0 " (as-str w) " 160"))
+                (html/attr "width" (as-str w))
+                (html/attr "height" "160")))
+            (html/join
+              (list arcs (film/ui/nodes scenes (list))))))))))
+
+(define film/ui/center-label
+  (lambda (shape center)
+    "The report's center as text: the center scene's slug on an odd ring,
+the string seam on an even one."
+    (if
+      (string-eq (as-str shape) "even")
+      "seam"
+      (let ((s (dict-get center "slug")))
+        (if (null? s) "" (as-str s))))))
+
+(define film/ui/cut-links
+  (lambda (slug labels current)
+    "One link per cut label of the film, the active cut as plain text, so
+two cuts of one film are comparable from the same page."
+    (html/join
+      (list/map
+        (lambda (l)
+          (let ((s (as-str l)))
+            (html/join
+              (list
+                (if
+                  (string-eq s (as-str current))
+                  (html/strong (html/text s))
+                  (html/a
+                    (string-append
+                      "/film/" (as-str slug) "?cut=" (as-str s))
+                    (html/text s)))
+                " "))))
+        labels))))
+
+(define film/ui/style
+  (lambda ()
+    "Small style block for the film pages (pairs table + diagram)."
+    (html/tag
+      "style"
+      ""
+      (html/join
+        (list
+          ".film-pairs{width:100%;border-collapse:collapse}"
+          ".film-pairs td,.film-pairs th{padding:.35rem .5rem;text-align:left;border-bottom:1px solid var(--border,#ddd)}"
+          ".film-diagram{max-width:100%;overflow:visible}")))))
+
+(define film/page
+  (lambda ()
+    "GET /film -- the film index: one link per film row on this branch.
+PURE: it reads rows and creates none."
+    (let ((films (film/ui/films)))
+      (html/page
+        (list
+          (film/ui/style)
+          (html/h1 "Film")
+          (html/p*
+            (html/attr "class" "muted")
+            (html/text
+              "Ring reports per film: center, positional mirror pairs, tightness in frames and the arc diagram. The page only reads; curate with film/… through pp_eval."))
+          (if
+            (null? films)
+            (html/p*
+              (html/attr "class" "muted")
+              (html/text
+                "No film rows yet — (film/create …), then scenes with (scene-create …) or (film/ingest-scenes …)."))
+            (html/ul
+              ""
+              (html/join
+                (list/map
+                  (lambda (r)
+                    (let ((slug (film/ui/slug-of r)))
+                      (html/li
+                        ""
+                        (html/join
+                          (list
+                            (html/a
+                              (string-append "/film/" slug)
+                              (html/text slug))
+                            " "
+                            (html/text
+                              (as-str (dict-get (cdr r) "title"))))))))
+                  films)))))))))
+
+(define film/film-page
+  (lambda ()
+    "GET /film/<slug> -- the ring report page for ONE film: center, shape,
+per-pair table, tightness and a rainbow-style arc diagram. The cut comes
+from ?cut= (default: the first cut the film's rows name). PURE: it reads
+this branch's rows and creates none."
+    (let ((slug (film/ui/path-suffix "/film/" (request-path))))
+      (if
+        (string-eq slug "")
+        (film/page)
+        (let ((f (film/ui/by-slug slug)))
+          (if
+            (null? f)
+            (status-response
+              404
+              (string-append
+                "<h1>not found</h1><p>No film "
+                (html-escape slug)
+                " on this branch.</p><p><a href=\"/film\">back to /film</a></p>"))
+            (let ((scenes (film/ui/scenes slug)))
+              (let ((cut (film/ui/cut scenes)))
+                (let ((rows (film/cut-scenes scenes cut)))
+                  (let
+                    ((report (film/report rows (film/ui/beats scenes))))
+                    (html/page
+                      (list
+                        (film/ui/style)
+                        (html/p*
+                          (html/attr "class" "muted")
+                          (html/join
+                            (list
+                              (html/a "/film" "film")
+                              " · "
+                              (html/text slug))))
+                        (html/h1
+                          (html/text
+                            (let ((t (dict-get f "title")))
+                              (if (null? t) slug (as-str t)))))
+                        (html/p*
+                          (html/attr "class" "muted")
+                          (html/join
+                            (list
+                              "cuts: "
+                              (film/ui/cut-links slug (film/cuts scenes) cut))))
+                        (html/p*
+                          (html/attr "class" "muted")
+                          (html/text
+                            (string-append
+                              "cut "
+                              cut
+                              " · shape "
+                              (as-str (dict-get report "shape"))
+                              " · center "
+                              (film/ui/center-label
+                                (dict-get report "shape")
+                                (dict-get report "center"))
+                              " · tightness "
+                              (as-str (dict-get report "tightness"))
+                              " frames")))
+                        (html/h2 "Mirror pairs")
+                        (film/ui/pairs-table (dict-get report "pairs"))
+                        (html/h2 "Arc diagram")
+                        (html/p*
+                          (html/attr "class" "muted")
+                          (html/text
+                            "Scene positions in ord order; one arc per positional mirror pair (scene k with n-k+1)."))
+                        (film/ui/diagram rows (dict-get report "pairs"))))))))))))))
+
+;; ---------------------------------------------------------------------------
+;; Routes (vault-declared; ride the lib body via the MIRROR boot seed)
+;; ---------------------------------------------------------------------------
+;; /film is a whole-path route; /film/<slug> is a PREFIX, so it rides the
+;; kernel table (rt "film-detail", pp/image/lib/http.ml) exactly like the
+;; book chapter pages -- the pp route table only matches whole paths.
+(route "/film" "film/page" "private"))
