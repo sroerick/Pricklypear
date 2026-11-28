@@ -794,3 +794,343 @@ let write_exports ~dir ~project ~cut ~takes (g : audio_graph) =
       (bounce_script ~project ~cut ~takes g)
   in
   (sheet, script)
+
+(* ---- edl-and-export (v1): MLT XML + Blender VSE script, both on disk ----
+
+   The EDL rows ARE the cut; every export is a derived artifact. Each row
+   prints as one MLT producer carrying the row's own fields as
+   pricklypear:* properties, so a GUI edit that comes back through
+   reimport_mlt rebuilds the same edl_entry rows — and therefore the same
+   edl_hash — unless a trim, a take or a transition really moved. *)
+
+let find_sub hay needle =
+  let nh = String.length hay and nn = String.length needle in
+  let rec go i =
+    if i + nn > nh then None
+    else if String.sub hay i nn = needle then Some i
+    else go (i + 1)
+  in
+  if nn = 0 then Some 0 else go 0
+
+(* The exports are XML: project slugs, take ids and transitions go through
+   the escaper, and come back through its inverse on re-import. *)
+let xml_escape s =
+  let b = Buffer.create (String.length s) in
+  String.iter
+    (fun c ->
+      match c with
+      | '&' -> Buffer.add_string b "&amp;"
+      | '<' -> Buffer.add_string b "&lt;"
+      | '>' -> Buffer.add_string b "&gt;"
+      | '"' -> Buffer.add_string b "&quot;"
+      | '\'' -> Buffer.add_string b "&apos;"
+      | c -> Buffer.add_char b c)
+    s;
+  Buffer.contents b
+
+let xml_unescape s =
+  let b = Buffer.create (String.length s) in
+  let n = String.length s in
+  let rec go i =
+    if i >= n then ()
+    else if s.[i] <> '&' then (
+      Buffer.add_char b s.[i];
+      go (i + 1))
+    else
+      match find_sub (String.sub s i (n - i)) ";" with
+      | Some j -> (
+          let ent = String.sub s (i + 1) (j - 1) in
+          let decoded =
+            match ent with
+            | "amp" -> Some '&'
+            | "lt" -> Some '<'
+            | "gt" -> Some '>'
+            | "quot" -> Some '"'
+            | "apos" -> Some '\''
+            | _ -> None
+          in
+          match decoded with
+          | Some c ->
+              Buffer.add_char b c;
+              go (i + j + 1)
+          | None ->
+              Buffer.add_char b '&';
+              go (i + 1))
+      | None ->
+          Buffer.add_char b '&';
+          go (i + 1)
+  in
+  go 0;
+  Buffer.contents b
+
+let xml_attr line name =
+  match find_sub line (name ^ "=\"") with
+  | None -> None
+  | Some i -> (
+      let start = i + String.length name + 2 in
+      match String.index_from_opt line start '"' with
+      | None -> None
+      | Some j -> Some (String.sub line start (j - start)))
+
+let xml_int_attr line name =
+  match xml_attr line name with
+  | None -> 0
+  | Some v -> ( match int_of_string_opt v with Some n -> n | None -> 0)
+
+(* An MLT producer is one EDL row: resource (content-hash media path),
+   source in-point, duration and the row's own binding fields. *)
+let mlt_xml ~project ~cut ?(fps = 24) ?(resolution = "1920x1080")
+    ~(takes : take list) (rows : edl_entry list) =
+  let rows = List.stable_sort (fun a b -> compare a.edl_ord b.edl_ord) rows in
+  let width, height =
+    match String.index_opt resolution 'x' with
+    | Some i -> (
+        let w = String.sub resolution 0 i in
+        let h = String.sub resolution (i + 1) (String.length resolution - i - 1) in
+        match (int_of_string_opt w, int_of_string_opt h) with
+        | Some w, Some h when w > 0 && h > 0 -> (w, h)
+        | _ -> (1920, 1080))
+    | None -> (1920, 1080)
+  in
+  let row_dur e = max 1 e.edl_dur in
+  (* a producer's `out` is inclusive: in + dur - 1 *)
+  let out_of e = e.edl_tc_in + row_dur e - 1 in
+  let producers =
+    List.mapi
+      (fun i e ->
+        let path =
+          match take_media_path takes e.edl_take with
+          | "" -> "missing.mp4"
+          | p -> p
+        in
+        String.concat "\n"
+          [
+            Printf.sprintf "  <producer id=\"producer%d\" in=\"%d\" out=\"%d\">"
+              i e.edl_tc_in (out_of e);
+            Printf.sprintf "    <property name=\"resource\">%s</property>"
+              (xml_escape path);
+            "    <property name=\"mlt_service\">avformat-novalidate</property>";
+            Printf.sprintf
+              "    <property name=\"pricklypear:project\">%s</property>"
+              (xml_escape e.edl_project);
+            Printf.sprintf "    <property name=\"pricklypear:cut\">%s</property>"
+              (xml_escape e.edl_cut);
+            Printf.sprintf
+              "    <property name=\"pricklypear:ord\">%d</property>" e.edl_ord;
+            Printf.sprintf
+              "    <property name=\"pricklypear:take\">%s</property>"
+              (xml_escape e.edl_take);
+            Printf.sprintf
+              "    <property name=\"pricklypear:dur\">%d</property>"
+              (row_dur e);
+            Printf.sprintf
+              "    <property name=\"pricklypear:transition\">%s</property>"
+              (xml_escape e.edl_transition);
+            Printf.sprintf
+              "    <property name=\"pricklypear:audio\">%s</property>"
+              (xml_escape e.edl_audio);
+            "  </producer>";
+          ])
+      rows
+  in
+  let entries =
+    List.concat
+      (List.mapi
+         (fun i e ->
+           let entry =
+             Printf.sprintf "    <entry producer=\"producer%d\" in=\"%d\" out=\"%d\"/>"
+               i e.edl_tc_in (out_of e)
+           in
+           if e.edl_transition = "cut" then [ entry ]
+           else
+             [
+               entry;
+               Printf.sprintf "    <!-- transition %s -->"
+                 (xml_escape e.edl_transition);
+             ])
+         rows)
+  in
+  let total = List.fold_left (fun acc e -> acc + row_dur e) 0 rows in
+  String.concat "\n"
+    ([
+       "<?xml version=\"1.0\" standalone=\"no\"?>";
+       Printf.sprintf
+         "<mlt LC_NUMERIC=\"C\" version=\"7.0.0\" title=\"pricklypear %s %s\" \
+          producer=\"tractor0\">"
+         (xml_escape project) (xml_escape cut);
+       Printf.sprintf
+         "  <profile description=\"pricklypear %s\" width=\"%d\" height=\"%d\" \
+          progressive=\"1\" sample_aspect_num=\"1\" sample_aspect_den=\"1\" \
+          display_aspect_num=\"%d\" display_aspect_den=\"%d\" \
+          frame_rate_num=\"%d\" frame_rate_den=\"1\" colorspace=\"709\"/>"
+         (xml_escape resolution) width height width height fps;
+     ]
+    @ producers
+    @ [ "  <playlist id=\"playlist0\">" ]
+    @ entries
+    @ [
+        "  </playlist>";
+        Printf.sprintf "  <tractor id=\"tractor0\" in=\"0\" out=\"%d\">"
+          (max 0 (total - 1));
+        "    <track producer=\"playlist0\"/>";
+        "  </tractor>";
+        "</mlt>";
+        "";
+      ])
+
+(* The re-import path: a GUI edit (trim, reorder, retake) lands in the MLT
+   file, and the rows it carries are read back into edl_entry rows. *)
+type mlt_row_builder = {
+  mutable mb_project : string;
+  mutable mb_cut : string;
+  mutable mb_ord : int;
+  mutable mb_take : string;
+  mutable mb_tc_in : int;
+  mutable mb_dur : int;
+  mutable mb_transition : string;
+  mutable mb_audio : string;
+}
+
+let xml_property line =
+  match find_sub line "name=\"" with
+  | None -> None
+  | Some i -> (
+      let start = i + 6 in
+      match find_sub (String.sub line start (String.length line - start)) "\">" with
+      | None -> None
+      | Some j -> (
+          let name = String.sub line start j in
+          let vstart = start + j + 2 in
+          let rest = String.sub line vstart (String.length line - vstart) in
+          let vlen =
+            match find_sub rest "</property>" with
+            | Some k -> k
+            | None -> String.length rest
+          in
+          Some (name, xml_unescape (String.sub rest 0 vlen))))
+
+let reimport_mlt (xml : string) : edl_entry list =
+  let rows = ref [] in
+  let cur = ref None in
+  let sub_eq t n p = String.length t >= n && String.sub t 0 n = p in
+  List.iter
+    (fun line ->
+      let t = String.trim line in
+      if sub_eq t 10 "<producer " then
+        cur :=
+          Some
+            {
+              mb_project = "";
+              mb_cut = "";
+              mb_ord = 0;
+              mb_take = "";
+              mb_tc_in = xml_int_attr t "in";
+              mb_dur = 0;
+              mb_transition = "";
+              mb_audio = "";
+            }
+      else
+        match !cur with
+        | None -> ()
+        | Some b ->
+            if t = "</producer>" then (
+              if b.mb_take <> "" then
+                rows :=
+                  {
+                    edl_project = b.mb_project;
+                    edl_cut = b.mb_cut;
+                    edl_ord = b.mb_ord;
+                    edl_take = b.mb_take;
+                    edl_tc_in = b.mb_tc_in;
+                    edl_dur = b.mb_dur;
+                    edl_transition =
+                      (if b.mb_transition = "" then "cut" else b.mb_transition);
+                    edl_audio = b.mb_audio;
+                  }
+                  :: !rows;
+              cur := None)
+            else if sub_eq t 10 "<property " then
+              match xml_property t with
+              | None -> ()
+              | Some (name, v) -> (
+                  match name with
+                  | "pricklypear:project" -> b.mb_project <- v
+                  | "pricklypear:cut" -> b.mb_cut <- v
+                  | "pricklypear:take" -> b.mb_take <- v
+                  | "pricklypear:transition" -> b.mb_transition <- v
+                  | "pricklypear:audio" -> b.mb_audio <- v
+                  | "pricklypear:ord" -> (
+                      match int_of_string_opt v with
+                      | Some n -> b.mb_ord <- n
+                      | None -> ())
+                  | "pricklypear:dur" -> (
+                      match int_of_string_opt v with
+                      | Some n -> b.mb_dur <- n
+                      | None -> ())
+                  | _ -> ()))
+    (String.split_on_char '\n' xml);
+  List.stable_sort (fun a b -> compare a.edl_ord b.edl_ord) (List.rev !rows)
+
+(* The Blender VSE build script for the same cut: one strip per row, in ord
+   order, offset into the source by tc_in and held for dur frames. *)
+let blender_script ~project ~cut ?(fps = 24) ~(takes : take list)
+    (rows : edl_entry list) =
+  let rows = List.stable_sort (fun a b -> compare a.edl_ord b.edl_ord) rows in
+  let strip e =
+    let path =
+      match take_media_path takes e.edl_take with
+      | "" -> "/missing.mp4"
+      | p -> p
+    in
+    let dur = max 1 e.edl_dur in
+    String.concat "\n"
+      [
+        Printf.sprintf
+          "se.sequences.new_movie(name='t%d', filepath='%s', channel=1, \
+           frame_start=frame)"
+          e.edl_ord path;
+        Printf.sprintf "strip = se.sequences_all['t%d']" e.edl_ord;
+        Printf.sprintf "strip.frame_offset_start = %d" e.edl_tc_in;
+        Printf.sprintf "strip.frame_final_duration = %d" dur;
+        Printf.sprintf "# transition: %s" e.edl_transition;
+        Printf.sprintf "frame += %d" dur;
+      ]
+  in
+  String.concat "\n"
+    ([
+       "# pricklypear edit/export-blender (edl-and-export)";
+       Printf.sprintf "# project=%s cut=%s" project cut;
+       Printf.sprintf "# edl_hash=%s" (edl_hash rows);
+       "# Load in Blender Text Editor and Run Script, or:";
+       "#   blender -b -P this_script.py";
+       "import bpy";
+       "scene = bpy.context.scene";
+       Printf.sprintf "scene.render.fps = %d" fps;
+       "scene.sequence_editor_clear()";
+       "se = scene.sequence_editor_create()";
+       "frame = 1";
+     ]
+    @ List.map strip rows
+    @ [ "print('pricklypear EDL loaded')"; "" ])
+
+(* Write both cut exports under dir; returns the two paths. *)
+let write_cut_exports ~dir ~project ~cut ?(fps = 24)
+    ?(resolution = "1920x1080") ~(takes : take list) (rows : edl_entry list) =
+  let put name body =
+    let path = Filename.concat dir name in
+    let oc = open_out_bin path in
+    output_string oc body;
+    close_out oc;
+    path
+  in
+  let mlt =
+    put
+      (Printf.sprintf "%s-%s.mlt" project cut)
+      (mlt_xml ~project ~cut ~fps ~resolution ~takes rows)
+  in
+  let script =
+    put
+      (Printf.sprintf "%s-%s.blender.py" project cut)
+      (blender_script ~project ~cut ~fps ~takes rows)
+  in
+  (mlt, script)
