@@ -517,6 +517,48 @@ let test_edl_export () =
   Alcotest.(check bool) "the MLT file on disk re-imports to the same cut" true
     (edl_hash (reimport_mlt (read_file mlt_path)) = edl_hash rows)
 
+(* 10. render-cache: render is a memoized pure function of the EDL rows —
+   unchanged cut is a hit and queues nothing; one changed edl-entry mints a
+   new job; a done job records out_hash/out_path. *)
+let test_render_cache () =
+  let e1 = edl ~ord:1 "take-a-1" in
+  let e2 = edl ~ord:2 ~dur:36 ~transition:"dissolve:12" "take-b-1" in
+  let rows = [ e1; e2 ] in
+  let job, hit = render ~project:"short-01" ~cut:"cut-a" rows [] in
+  Alcotest.(check bool) "a first render is not a cache hit" false hit;
+  Alcotest.(check string) "a first render is queued" "queued" job.rj_state;
+  Alcotest.(check string) "the job carries the cut's edl_hash" (edl_hash rows)
+    job.rj_edl_hash;
+  let done_job =
+    render_job_done job ~out_hash:(h64 'f')
+      ~out_path:"renders/short-01-cut-a.mp4"
+  in
+  Alcotest.(check string) "done records out_hash" (h64 'f')
+    done_job.rj_out_hash;
+  Alcotest.(check string) "done records out_path"
+    "renders/short-01-cut-a.mp4" done_job.rj_out_path;
+  let cached, same_hit =
+    render ~project:"short-01" ~cut:"cut-a" rows [ done_job ]
+  in
+  Alcotest.(check bool) "an unchanged cut is a cache hit (no job)" true
+    same_hit;
+  Alcotest.(check string) "the cache hit returns the finished row" "done"
+    cached.rj_state;
+  Alcotest.(check string) "the cached row names the rendered file"
+    "renders/short-01-cut-a.mp4" cached.rj_out_path;
+  let changed = [ e1; { e2 with edl_dur = 37 } ] in
+  Alcotest.(check bool) "one changed edl-entry changes edl_hash" false
+    (edl_hash rows = edl_hash changed);
+  let _, miss = render ~project:"short-01" ~cut:"cut-a" changed [ done_job ] in
+  Alcotest.(check bool) "a changed cut misses the cache (queues a job)" false
+    miss;
+  Alcotest.(check bool) "render-done refuses an absolute out path" true
+    (try
+       ignore
+         (render_job_done job ~out_hash:(h64 'f') ~out_path:"/srv/x.mp4");
+       false
+     with Invalid_argument _ -> true)
+
 let () =
   Alcotest.run "film_edit"
     [
@@ -540,5 +582,10 @@ let () =
         [
           Alcotest.test_case "canonical EDL + MLT XML + Blender script" `Quick
             test_edl_export;
+        ] );
+      ( "render-cache",
+        [
+          Alcotest.test_case "memoized render of the EDL" `Quick
+            test_render_cache;
         ] );
     ]
