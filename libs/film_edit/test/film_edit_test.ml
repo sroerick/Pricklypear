@@ -559,6 +559,68 @@ let test_render_cache () =
        false
      with Invalid_argument _ -> true)
 
+(* 11. blender-bridge: typed command set, one line per command, strip-add
+   from the EDL rows, a render command that writes a playable file, and a
+   queue that runs one render at a time (the second waits). *)
+let test_bridge () =
+  let media_take shot =
+    land_take (take shot) ~media_hash:(h64 'b')
+      ~media_path:("takes/" ^ shot ^ ".mp4")
+  in
+  let takes = [ media_take "take-a"; media_take "take-b" ] in
+  let rows = [ edl ~ord:1 "take-a-1"; edl ~ord:2 ~dur:36 "take-b-1" ] in
+  let status = bridge_command_line Status in
+  Alcotest.(check string) "a command prints as one canonical JSON line" status
+    (bridge_command_line Status);
+  Alcotest.(check bool) "the status command round-trips" true
+    (match bridge_parse status with Ok Status -> true | _ -> false);
+  let cmds = bridge_strip_commands ~takes rows in
+  Alcotest.(check int) "strip-add is one command per EDL row" 2
+    (List.length cmds);
+  Alcotest.(check bool) "strip-add names the take's media path" true
+    (List.exists
+       (fun c ->
+         contains (bridge_command_line c) "takes/take-b.mp4")
+       cmds);
+  Alcotest.(check bool) "the timeline is offset by the previous durations" true
+    (match List.rev cmds with
+    | Strip_add s :: _ -> s.bs_frame_start = 25 && s.bs_dur = 36
+    | _ -> false);
+  Alcotest.(check bool) "strip-add survives the socket as typed JSON" true
+    (match bridge_parse (bridge_command_line (List.hd cmds)) with
+    | Ok (Strip_add s) -> s.bs_name = "t1" && s.bs_offset = 0
+    | _ -> false);
+  Alcotest.(check bool) "strip-add refuses an absolute media path" true
+    (match
+       bridge_parse
+         "{\"cmd\":\"strip-add\",\"name\":\"t1\",\"path\":\"/srv/x.mp4\",\
+          \"channel\":1,\"frame_start\":1,\"offset\":0,\"dur\":24}"
+     with
+    | Error _ -> true
+    | Ok _ -> false);
+  let batch = bridge_cut_commands ~out:"renders/cut-a.mp4" ~takes rows in
+  Alcotest.(check bool) "a batch run builds the timeline then renders" true
+    (match List.rev batch with
+    | Render r :: _ -> r.br_out = "renders/cut-a.mp4" && r.br_format = "FFMPEG"
+    | _ -> false);
+  let addon = bridge_addon ~port:8765 () in
+  Alcotest.(check bool) "the addon is a bpy socket server" true
+    (contains addon "import bpy" && contains addon "strip-add"
+    && contains addon "bpy.ops.render.render(animation=True)");
+  let r = bridge_render_command ~out:"renders/cut-b.mp4" () in
+  let q = bridge_submit empty_bridge_queue (bridge_job "r1" r) in
+  Alcotest.(check bool) "the first render runs" true (bridge_busy q);
+  let q = bridge_submit q (bridge_job "r2" r) in
+  Alcotest.(check (list string)) "the second render waits" [ "r2" ]
+    (bridge_waiting_ids q);
+  Alcotest.(check (option string)) "the second render did not replace the first"
+    (Some "r1") (bridge_running_id q);
+  let q = bridge_finish q in
+  Alcotest.(check (option string)) "finishing starts the waiting render"
+    (Some "r2") (bridge_running_id q);
+  Alcotest.(check (list string)) "the queue is drained" []
+    (bridge_waiting_ids q)
+
 let () =
   Alcotest.run "film_edit"
     [
@@ -587,5 +649,10 @@ let () =
         [
           Alcotest.test_case "memoized render of the EDL" `Quick
             test_render_cache;
+        ] );
+      ( "blender-bridge",
+        [
+          Alcotest.test_case "typed commands + one-at-a-time queue" `Quick
+            test_bridge;
         ] );
     ]
