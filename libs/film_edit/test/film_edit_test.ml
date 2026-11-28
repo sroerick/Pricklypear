@@ -621,6 +621,121 @@ let test_bridge () =
   Alcotest.(check (list string)) "the queue is drained" []
     (bridge_waiting_ids q)
 
+(* 12. prims-http-spawn: an http client whose body can stay on disk, an
+   argv-shaped spawn (a non-zero exit is a value), and file stat /
+   read-range over a media tree. *)
+
+let arg_after flag argv =
+  let rec go = function
+    | a :: b :: _ when a = flag -> Some b
+    | _ :: rest -> go rest
+    | [] -> None
+  in
+  go argv
+
+(* A fake transport: the prims hand curl an argv naming the header and body
+   files, so the double writes those and reports the status on stdout. *)
+let fake_curl ~status ~body ~headers argv =
+  let out = match arg_after "-o" argv with Some p -> p | None -> "/dev/null" in
+  let hdrs = match arg_after "-D" argv with Some p -> p | None -> "/dev/null" in
+  let oc = open_out_bin out in
+  output_string oc body;
+  close_out oc;
+  let oc = open_out_bin hdrs in
+  output_string oc headers;
+  close_out oc;
+  Ok { pr_code = 0; pr_out = string_of_int status; pr_err = "" }
+
+let test_kernel () =
+  let ok_headers = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n" in
+  let run = fake_curl ~status:200 ~body:"{\"ok\":true}" ~headers:ok_headers in
+  (match http_get ~run "https://example.test/x" with
+  | Ok r ->
+      Alcotest.(check int) "http-get returns the status" 200 r.hr_status;
+      Alcotest.(check string) "http-get returns the body string"
+        "{\"ok\":true}" r.hr_body;
+      Alcotest.(check (option string)) "http-get returns the headers"
+        (Some "application/json")
+        (List.assoc_opt "Content-Type" r.hr_headers)
+  | Error e -> Alcotest.failf "http-get: %s" e);
+  Alcotest.(check bool) "http-get refuses a non-http url" true
+    (match http_get ~run "ftp://example.test/x" with
+    | Error _ -> true
+    | Ok _ -> false);
+  Alcotest.(check bool) "http-get refuses a url carrying credentials" true
+    (match http_get ~run "https://user:pass@example.test/x" with
+    | Error _ -> true
+    | Ok _ -> false);
+  (* a 200KB body is never a VStr in the way: it streams to disk and only
+     its content hash comes back. *)
+  let clip = String.make 200_000 'x' in
+  let target = Filename.temp_file "pp_clip_" ".mp4" in
+  (match
+     http_download
+       ~run:(fake_curl ~status:200 ~body:clip ~headers:ok_headers)
+       ~url:"https://example.test/clip.mp4" ~path:target ()
+   with
+  | Ok hash ->
+      Alcotest.(check string) "http-download hashes what landed"
+        Digestif.SHA256.(to_hex (digest_string clip))
+        hash;
+      Alcotest.(check int) "http-download streamed the whole body"
+        (String.length clip)
+        (String.length (read_whole_file target))
+  | Error e -> Alcotest.failf "http-download: %s" e);
+  Sys.remove target;
+  (match
+     http_download
+       ~run:(fake_curl ~status:404 ~body:"nope" ~headers:ok_headers)
+       ~url:"https://example.test/missing" ~path:target ()
+   with
+  | Error _ ->
+      Alcotest.(check bool) "a non-2xx response lands nothing" false
+        (Sys.file_exists target)
+  | Ok _ -> Alcotest.fail "http-download accepted a 404");
+  (match spawn [ "/bin/echo"; "hi" ] with
+  | Ok p ->
+      Alcotest.(check int) "spawn reports the exit code" 0 p.pr_code;
+      Alcotest.(check string) "spawn captures stdout" "hi\n" p.pr_out
+  | Error e -> Alcotest.failf "spawn: %s" e);
+  (match spawn [ "/bin/sh"; "-c"; "exit 3" ] with
+  | Ok p ->
+      Alcotest.(check int) "a non-zero exit is a value, not a crash" 3
+        p.pr_code
+  | Error e -> Alcotest.failf "spawn: %s" e);
+  Alcotest.(check bool) "spawn refuses an empty argv" true
+    (match spawn [] with Error _ -> true | Ok _ -> false);
+  Alcotest.(check bool) "spawn reports a missing program" true
+    (match spawn [ "/nonexistent-pp-spawn-test" ] with
+    | Error _ -> true
+    | Ok _ -> false);
+  let path = Filename.temp_file "pp_range_" ".bin" in
+  let oc = open_out_bin path in
+  output_string oc "hello world";
+  close_out oc;
+  (match file_stat path with
+  | Ok st ->
+      Alcotest.(check int) "file-stat reports the size" 11 st.fs_size;
+      Alcotest.(check string) "file-stat reports the kind" "file" st.fs_kind
+  | Error e -> Alcotest.failf "file-stat: %s" e);
+  (match read_range ~path ~off:6 ~len:100 with
+  | Ok s ->
+      Alcotest.(check string) "read-range clips at EOF rather than failing"
+        "world" s
+  | Error e -> Alcotest.failf "read-range: %s" e);
+  (match read_range ~path ~off:100 ~len:5 with
+  | Ok s -> Alcotest.(check string) "a window past EOF is empty" "" s
+  | Error e -> Alcotest.failf "read-range: %s" e);
+  Alcotest.(check bool) "read-range refuses a negative offset" true
+    (match read_range ~path ~off:(-1) ~len:1 with
+    | Error _ -> true
+    | Ok _ -> false);
+  Sys.remove path;
+  Alcotest.(check bool) "file-stat on a missing path is an error" true
+    (match file_stat (path ^ ".gone") with
+    | Error _ -> true
+    | Ok _ -> false)
+
 let () =
   Alcotest.run "film_edit"
     [
@@ -654,5 +769,10 @@ let () =
         [
           Alcotest.test_case "typed commands + one-at-a-time queue" `Quick
             test_bridge;
+        ] );
+      ( "prims-http-spawn",
+        [
+          Alcotest.test_case "http client, argv spawn, file stat/read-range"
+            `Quick test_kernel;
         ] );
     ]

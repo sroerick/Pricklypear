@@ -8,4 +8,4 @@
  (name film_edit)
  (wrapped false)
  (modules film_edit)
- (libraries yojson digestif))
+ (libraries yojson digestif unix))
