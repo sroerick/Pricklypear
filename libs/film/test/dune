@@ -26,3 +26,13 @@
  (modules film_chiasm_test)
  (libraries alcotest)
  (deps ../lib.pp))
+
+;; libs/film cut-comparison pins (borge/film-analysis.borg, subsection
+;; cut-comparison): film_cut_test reads lib.pp and asserts one report per
+;; cut label, the distinct label walk, and the after - before tightness
+;; diff a recut is judged by.
+(test
+ (name film_cut_test)
+ (modules film_cut_test)
+ (libraries alcotest)
+ (deps ../lib.pp))
