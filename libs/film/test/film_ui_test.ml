@@ -87,7 +87,9 @@ let () =
   let exports = body_until src "(export " "(define " in
   let index = body_until src "(define film/page" "(define film/film-page" in
   let detail = slice_from src "(define film/film-page" in
-  let table = body_until src "(define film/ui/pairs-table" "(define film/ui/hue" in
+  (* pair-row is its own definition just above the table it fills, so the
+     slice starts there: the two together are "the per-pair table". *)
+  let table = body_until src "(define film/ui/pair-row" "(define film/ui/hue" in
   let arcs = body_until src "(define film/ui/arcs" "(define film/ui/nodes" in
   let diagram = body_until src "(define film/ui/diagram" "(define film/ui/center-label" in
 
