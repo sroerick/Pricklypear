@@ -450,6 +450,73 @@ let test_sound () =
     (contains script_txt "ffmpeg"
     && contains script_txt "dailies-short-01-cut-a.mp4")
 
+(* 9. edl-and-export: identical rows hash identically, the MLT XML and the
+   Blender VSE script land on disk, and re-importing GUI edits rebuilds the
+   same rows. *)
+let test_edl_export () =
+  let media_take shot =
+    land_take (take shot) ~media_hash:(h64 'b')
+      ~media_path:("takes/" ^ shot ^ ".mp4")
+  in
+  let takes = [ media_take "take-a"; media_take "take-b" ] in
+  let e1 = edl ~ord:1 "take-a-1" in
+  let e2 = edl ~ord:2 ~dur:36 ~transition:"dissolve:12" "take-b-1" in
+  let e3 =
+    { (edl ~ord:3 ~dur:12 "take-a-1") with edl_tc_in = 6; edl_audio = "line-1" }
+  in
+  let rows = [ e1; e2; e3 ] in
+  Alcotest.(check string) "identical EDL rows produce identical edl_hash"
+    (edl_hash rows) (edl_hash [ e3; e2; e1 ]);
+  let xml =
+    mlt_xml ~project:"short-01" ~cut:"cut-a" ~fps:24 ~resolution:"1920x1080"
+      ~takes rows
+  in
+  Alcotest.(check string) "the MLT export is a pure function of the rows" xml
+    (mlt_xml ~project:"short-01" ~cut:"cut-a" ~fps:24
+       ~resolution:"1920x1080" ~takes [ e3; e2; e1 ]);
+  Alcotest.(check bool) "the MLT export is an XML document" true
+    (contains xml "<?xml version=\"1.0\"" && contains xml "<mlt "
+    && contains xml "</mlt>");
+  Alcotest.(check bool) "each EDL row becomes an MLT producer" true
+    (contains xml "<producer id=\"producer2\""
+    && contains xml "takes/take-b.mp4"
+    && contains xml "<property name=\"pricklypear:take\">take-b-1</property>");
+  Alcotest.(check bool) "the playlist places rows in ord order" true
+    (contains xml "<entry producer=\"producer1\" in=\"0\" out=\"35\"/>");
+  Alcotest.(check bool) "the row audio binding survives into the MLT" true
+    (contains xml "<property name=\"pricklypear:audio\">line-1</property>");
+  let back = reimport_mlt xml in
+  Alcotest.(check int) "re-import rebuilds every row" 3 (List.length back);
+  Alcotest.(check string) "re-import round-trips the edl_hash" (edl_hash rows)
+    (edl_hash back);
+  Alcotest.(check string) "re-import keeps the transition" "dissolve:12"
+    (List.nth back 1).edl_transition;
+  let script =
+    blender_script ~project:"short-01" ~cut:"cut-a" ~fps:24 ~takes rows
+  in
+  Alcotest.(check bool) "the Blender script builds a VSE scene" true
+    (contains script "import bpy"
+    && contains script "scene.sequence_editor_create()"
+    && contains script "takes/take-a.mp4");
+  Alcotest.(check bool) "the Blender script carries the edl_hash" true
+    (contains script ("# edl_hash=" ^ edl_hash rows));
+  let dir =
+    let d =
+      Filename.concat (Filename.get_temp_dir_name ()) "film-edit-cut-exports"
+    in
+    (try Sys.mkdir d 0o755 with Sys_error _ -> ());
+    d
+  in
+  let mlt_path, py_path =
+    write_cut_exports ~dir ~project:"short-01" ~cut:"cut-a" ~takes rows
+  in
+  Alcotest.(check bool) "export writes the MLT XML on disk" true
+    (Sys.file_exists mlt_path);
+  Alcotest.(check bool) "export writes the Blender scene script on disk" true
+    (Sys.file_exists py_path);
+  Alcotest.(check bool) "the MLT file on disk re-imports to the same cut" true
+    (edl_hash (reimport_mlt (read_file mlt_path)) = edl_hash rows)
+
 let () =
   Alcotest.run "film_edit"
     [
@@ -469,4 +536,9 @@ let () =
           Alcotest.test_case "promote-take mints an asset" `Quick test_promote;
         ] );
       ("sound", [ Alcotest.test_case "lines, cues, exports, mix job" `Quick test_sound ]);
+      ( "edl-and-export",
+        [
+          Alcotest.test_case "canonical EDL + MLT XML + Blender script" `Quick
+            test_edl_export;
+        ] );
     ]
