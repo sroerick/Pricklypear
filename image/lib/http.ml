@@ -1127,6 +1127,35 @@ let routes : route list =
            course/<suffix>, kind course) assembled into an ordered reading
            list over the seeded chapter rows — compose, never copy. *)
         launch_book_handler env "book/course-page");
+    rt "film-detail" [ `GET ] (Prefix_nonempty "/film/")
+      (fun env ->
+        (* film-analysis#film-analysis/ui: /film/<slug> is a PREFIX, so it
+           rides this table (the book chapter precedent) and the pp route
+           table keeps /film as its whole-path route. request-path carries
+           the full path so film/film-page can extract the slug. *)
+        launch env (fun session ->
+            let request : Session.request =
+              { method_ = `GET
+              ; path = env.path
+              ; params = parse_query env.target
+              ; body = ""
+              ; headers = env.headers
+              }
+            in
+            match Session.call_handler session ~request "film/film-page" with
+            | Session.Handler_ok value ->
+                respond_handler_value ~session ~reqd:env.reqd ~path:env.path
+                  ~fragment:false value
+            | Session.Handler_unbound ->
+                text_response env.reqd ~status:`Not_found
+                  ~content_type:"text/plain"
+                  "film/film-page unbound — (load-library \"film\")"
+            | Session.Handler_error msg ->
+                text_response env.reqd ~status:`Internal_server_error
+                  ~content_type:"text/plain" msg
+            | Session.Handler_client_error msg ->
+                text_response env.reqd ~status:`Bad_request
+                  ~content_type:"text/plain" msg));
     rt "book-eval-example" [ `POST ] (Exact "/book/eval-example")
       (fun env -> launch env (fun session -> post_book_eval_example env session));
     rt "book-verify" [ `GET ] (Exact "/book/verify")

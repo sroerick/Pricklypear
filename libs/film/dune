@@ -7,5 +7,5 @@
 (rule
  (alias runtest)
  (deps lib.pp test/dune test/film_shape_test.ml test/film_ingest_test.ml
-       test/film_chiasm_test.ml test/film_cut_test.ml)
+       test/film_chiasm_test.ml test/film_cut_test.ml test/film_ui_test.ml)
  (action (echo "film lib.pp present\n")))

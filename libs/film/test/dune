@@ -36,3 +36,13 @@
  (modules film_cut_test)
  (libraries alcotest)
  (deps ../lib.pp))
+
+;; libs/film ui pins (borge/film-analysis.borg, subsection ui): film_ui_test
+;; reads lib.pp and asserts the /film index + /film/<slug> ring report page
+;; (center, pairs table, tightness) and the rainbow-style arc diagram the
+;; report's POSITIONAL pairs draw.
+(test
+ (name film_ui_test)
+ (modules film_ui_test)
+ (libraries alcotest)
+ (deps ../lib.pp))
