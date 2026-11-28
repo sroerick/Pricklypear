@@ -3,4 +3,4 @@
 (test
  (name film_edit_test)
  (modules film_edit_test)
- (libraries film_edit alcotest))
+ (libraries film_edit alcotest digestif unix))

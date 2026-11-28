@@ -1445,3 +1445,284 @@ let bridge_finish (q : bridge_queue) =
   | [] -> { bq_running = None; bq_waiting = [] }
   | j :: rest ->
       { bq_running = Some { j with bj_state = "running" }; bq_waiting = rest }
+
+(* ---- kernel surface: http client, spawn, file stat/read-range ----
+
+   borge/film-edit.borg "prims-http-spawn": the additive, general-purpose
+   prims a render pipeline needs — an http client that STREAMS a download
+   to disk (a 50MB clip must never become one string), an argv-shaped
+   subprocess runner (Blender, ffmpeg and melt are argv-shaped; a non-zero
+   exit is a value, not a crash), and file stat / read-range so a caller
+   can walk a media tree without slurping it. Curl is the http engine, the
+   same curl-backed shape the image's http-get has; [~run] injects the
+   runner so the pure behaviour is testable without a socket. Mediation
+   stays where the pinned note puts it: admin-only until the
+   lisp-interpreter capability enforcement lands. *)
+
+type proc_result = { pr_code : int; pr_out : string; pr_err : string }
+
+let read_whole_file path =
+  let ic = open_in_bin path in
+  Fun.protect
+    ~finally:(fun () -> close_in_noerr ic)
+    (fun () ->
+      let n = in_channel_length ic in
+      really_input_string ic n)
+
+(* Subprocess: argv array, never a shell line. stdout/stderr are captured
+   to private temp files (no pipe deadlock on a chatty child); [timeout_s]
+   bounds the wait, and an expired child is SIGTERM'd then SIGKILL'd with
+   the signaled code reported as 128 + signal. *)
+let spawn ?(timeout_s = 60.) (argv : string list) : (proc_result, string) result
+    =
+  match argv with
+  | [] -> Error "spawn: empty argv"
+  | prog :: _ ->
+      let out_path = Filename.temp_file "pp_spawn_" ".out" in
+      let err_path = Filename.temp_file "pp_spawn_" ".err" in
+      let cleanup () =
+        (try Sys.remove out_path with Sys_error _ -> ());
+        try Sys.remove err_path with Sys_error _ -> ()
+      in
+      Fun.protect ~finally:cleanup (fun () ->
+          let fd_out =
+            Unix.openfile out_path [ Unix.O_WRONLY; Unix.O_TRUNC ] 0o600
+          in
+          let fd_err =
+            Unix.openfile err_path [ Unix.O_WRONLY; Unix.O_TRUNC ] 0o600
+          in
+          let fd_in = Unix.openfile "/dev/null" [ Unix.O_RDONLY ] 0o600 in
+          let close_fds () =
+            List.iter
+              (fun fd -> try Unix.close fd with Unix.Unix_error _ -> ())
+              [ fd_in; fd_out; fd_err ]
+          in
+          match
+            try
+              Ok
+                (Unix.create_process prog (Array.of_list argv) fd_in fd_out
+                   fd_err)
+            with Unix.Unix_error (e, _, _) ->
+              Error (Printf.sprintf "spawn: %s: %s" prog (Unix.error_message e))
+          with
+          | Error _ as err ->
+              close_fds ();
+              err
+          | Ok pid -> (
+              close_fds ();
+              let deadline = Unix.gettimeofday () +. timeout_s in
+              let rec wait () =
+                match Unix.waitpid [ Unix.WNOHANG ] pid with
+                | 0, _ when Unix.gettimeofday () >= deadline ->
+                    (try Unix.kill pid Sys.sigterm with Unix.Unix_error _ -> ());
+                    Unix.sleepf 0.05;
+                    (match Unix.waitpid [ Unix.WNOHANG ] pid with
+                    | 0, _ ->
+                        (try Unix.kill pid Sys.sigkill
+                         with Unix.Unix_error _ -> ());
+                        snd (Unix.waitpid [] pid)
+                    | _, st -> st)
+                | 0, _ ->
+                    Unix.sleepf 0.01;
+                    wait ()
+                | _, st -> st
+              in
+              let code =
+                match wait () with
+                | Unix.WEXITED c -> c
+                | Unix.WSIGNALED s -> 128 + s
+                | Unix.WSTOPPED s -> 128 + s
+              in
+              Ok
+                {
+                  pr_code = code;
+                  pr_out = read_whole_file out_path;
+                  pr_err = read_whole_file err_path;
+                }))
+
+(* ---- file stat / read-range: walk a media tree without slurping it ---- *)
+
+type file_stat = { fs_size : int; fs_kind : string; fs_mtime : float }
+
+let file_stat path : (file_stat, string) result =
+  try
+    let st = Unix.stat path in
+    let kind =
+      match st.Unix.st_kind with
+      | Unix.S_REG -> "file"
+      | Unix.S_DIR -> "dir"
+      | Unix.S_CHR -> "char"
+      | Unix.S_BLK -> "block"
+      | Unix.S_LNK -> "link"
+      | Unix.S_FIFO -> "fifo"
+      | Unix.S_SOCK -> "socket"
+    in
+    Ok
+      { fs_size = st.Unix.st_size; fs_kind = kind; fs_mtime = st.Unix.st_mtime }
+  with Unix.Unix_error (e, _, _) ->
+    Error ("file-stat: " ^ Unix.error_message e)
+
+(* [read-range] reads one window of a file. A window past EOF CLIPS rather
+   than fails (that is the point of a range read over a growing media
+   file); a negative offset or length is a caller bug and is refused. *)
+let read_range ~path ~off ~len : (string, string) result =
+  if off < 0 then Error "read-range: negative offset"
+  else if len < 0 then Error "read-range: negative length"
+  else
+    match file_stat path with
+    | Error e -> Error e
+    | Ok st ->
+        if st.fs_kind <> "file" then Error "read-range: not a regular file"
+        else
+          let len = min len (st.fs_size - off) in
+          if len <= 0 then Ok ""
+          else (
+            try
+              let ic = open_in_bin path in
+              Fun.protect
+                ~finally:(fun () -> close_in_noerr ic)
+                (fun () ->
+                  seek_in ic off;
+                  Ok (really_input_string ic len))
+            with Sys_error e -> Error ("read-range: " ^ e))
+
+(* ---- http: status + body, and a streaming download that hashes ---- *)
+
+let sha256_file path =
+  let ic = open_in_bin path in
+  Fun.protect
+    ~finally:(fun () -> close_in_noerr ic)
+    (fun () ->
+      let buf = Bytes.create 65536 in
+      let rec loop ctx =
+        let n = input ic buf 0 (Bytes.length buf) in
+        if n = 0 then Digestif.SHA256.(to_hex (get ctx))
+        else loop Digestif.SHA256.(feed_bytes ctx ~off:0 ~len:n buf)
+      in
+      loop Digestif.SHA256.empty)
+
+(* http(s) only, and never the userinfo form (user:pass@host) — a URL that
+   carries credentials is refused at the prim. *)
+let is_http_url u =
+  let starts p =
+    String.length u >= String.length p && String.sub u 0 (String.length p) = p
+  in
+  let bad_ws = function ' ' | '\n' | '\r' | '\t' -> true | _ -> false in
+  let authority =
+    match String.index_opt u ':' with
+    | Some i when i + 3 <= String.length u ->
+        let rest = String.sub u (i + 3) (String.length u - i - 3) in
+        (match String.index_opt rest '/' with
+        | Some j -> String.sub rest 0 j
+        | None -> rest)
+    | _ -> ""
+  in
+  (starts "https://" || starts "http://")
+  && not (String.exists bad_ws u)
+  && not (String.contains authority '@')
+
+type http_result = { hr_status : int; hr_body : string; hr_headers : (string * string) list }
+
+type http_runner = string list -> (proc_result, string) result
+
+(* curl, argv-shaped, writing headers to [hdrs] and the body to [out]
+   (never to stdout: the body of a clip is not a string) with the status
+   code on stdout. *)
+let curl_argv ~timeout_s ~url ~hdrs ~out =
+  [
+    "curl";
+    "-sS";
+    "-L";
+    "--max-redirs";
+    "5";
+    "--max-time";
+    string_of_int (max 1 (int_of_float timeout_s));
+    "-D";
+    hdrs;
+    "-o";
+    out;
+    "-w";
+    "%{http_code}";
+    "--";
+    url;
+  ]
+
+let parse_header_block block =
+  String.split_on_char '\n' block
+  |> List.filter_map (fun line ->
+         let line = String.trim line in
+         if line = ""
+            || (String.length line >= 5 && String.sub line 0 5 = "HTTP/")
+         then None
+         else
+           match String.index_opt line ':' with
+           | None -> None
+           | Some i ->
+               Some
+                 ( String.sub line 0 i,
+                   String.trim
+                     (String.sub line (i + 1) (String.length line - i - 1)) ))
+
+let http_get ?(run : http_runner = spawn) ?(timeout_s = 30.) url :
+    (http_result, string) result =
+  if not (is_http_url url) then Error "http-get: need an http(s) url"
+  else
+    let hdrs = Filename.temp_file "pp_http_" ".hdr" in
+    let body = Filename.temp_file "pp_http_" ".body" in
+    let cleanup () =
+      (try Sys.remove hdrs with Sys_error _ -> ());
+      try Sys.remove body with Sys_error _ -> ()
+    in
+    Fun.protect ~finally:cleanup (fun () ->
+        match run (curl_argv ~timeout_s ~url ~hdrs ~out:body) with
+        | Error e -> Error ("http-get: " ^ e)
+        | Ok p when p.pr_code <> 0 ->
+            Error
+              (Printf.sprintf "http-get: curl exit %d: %s" p.pr_code
+                 (String.trim p.pr_err))
+        | Ok p -> (
+            match int_of_string_opt (String.trim p.pr_out) with
+            | None -> Error "http-get: no status code from the transport"
+            | Some status ->
+                Ok
+                  {
+                    hr_status = status;
+                    hr_body = read_whole_file body;
+                    hr_headers = parse_header_block (read_whole_file hdrs);
+                  }))
+
+(* A download lands on disk: curl streams the bytes to a private temp file
+   beside the target, the content hash is computed by reading that file in
+   64KB chunks, and only then is it renamed into place. A non-2xx response
+   never lands (an HTML error page is not a clip). *)
+let http_download ?(run : http_runner = spawn) ?(timeout_s = 300.) ~url ~path
+    () : (string, string) result =
+  if not (is_http_url url) then Error "http-download: need an http(s) url"
+  else if path = "" then Error "http-download: empty path"
+  else
+    let hdrs = Filename.temp_file "pp_dl_" ".hdr" in
+    let staged = Filename.temp_file "pp_dl_" ".part" in
+    let cleanup () =
+      (try Sys.remove hdrs with Sys_error _ -> ());
+      try Sys.remove staged with Sys_error _ -> ()
+    in
+    Fun.protect ~finally:cleanup (fun () ->
+        match run (curl_argv ~timeout_s ~url ~hdrs ~out:staged) with
+        | Error e -> Error ("http-download: " ^ e)
+        | Ok p when p.pr_code <> 0 ->
+            Error
+              (Printf.sprintf "http-download: curl exit %d: %s" p.pr_code
+                 (String.trim p.pr_err))
+        | Ok p -> (
+            match int_of_string_opt (String.trim p.pr_out) with
+            | None -> Error "http-download: no status code from the transport"
+            | Some status when status < 200 || status >= 300 ->
+                Error
+                  (Printf.sprintf "http-download: status %d, nothing landed"
+                     status)
+            | Some _ -> (
+                try
+                  let hash = sha256_file staged in
+                  Sys.rename staged path;
+                  Ok hash
+                with Sys_error e -> Error ("http-download: " ^ e))))
