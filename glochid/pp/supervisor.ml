@@ -371,6 +371,26 @@ let terminal_card_state (s : string) : bool =
 let terminal_run_state (s : string) : bool =
   List.mem s [ "succeeded"; "failed"; "timed_out"; "canceled"; "dead" ]
 
+(* resume-semantics 2/6 + POLICY-2: the attempt budget belongs to the
+   FAILURE CLASS, not to the runner. Transient classes get the declared
+   transient budget; deterministic classes attempt EXACTLY ONCE, so a
+   retry can never burn a lease repeatedly on the same guaranteed
+   failure. *)
+let max_attempts_for (cfg : t) ~(transient : bool) : int =
+  if transient then cfg.attempts_transient else cfg.attempts_deterministic
+
+(* lifecycle + resume-semantics: the ONE failure ladder (run wall exceeded
+   -> timed_out, a transient failure with attempts left -> re-dispatch THE
+   SAME step, otherwise dead). Extracted from harvest_failure so the
+   transition rule is provable without a habitat session. *)
+type failure_action = Timed_out | Retry | Dead
+
+let failure_action (cfg : t) ~(wall_exceeded : bool) ~(transient : bool)
+    ~(attempts : int) : failure_action =
+  if wall_exceeded then Timed_out
+  else if transient && attempts < max_attempts_for cfg ~transient then Retry
+  else Dead
+
 type verdict = {
   v_dest : string;
   v_evid : string;
@@ -492,23 +512,31 @@ let norm_status (s : string) : string = String.lowercase_ascii (norm_colon s)
 (* sidecar step per gate run)                                          *)
 (* ------------------------------------------------------------------ *)
 
-let steps_doc (cfg : t) ~(state : string) ~(attempts : int) ~(error : string) :
-    string =
+(* run-row F1 (FINALIZED): idempotency is a per-step DECLARATION FIELD,
+   not a convention. Provider steps default idempotent (a fresh LLM turn
+   is naturally retryable); prim/hand steps default NOT idempotent and
+   must be checkpoint-first or explicitly declared. *)
+let default_idempotent (kind : string) : bool =
+  match kind with "provider" | "native" -> true | _ -> false
+
+let steps_doc (cfg : t) ~(transient : bool) ~(state : string)
+    ~(attempts : int) ~(error : string) : string =
   (* The step name records WHICH runner produced it, so a row read months
      later says honestly whether it came from the phase-2 sidecar or the
      phase-3 native runner. run-primitive.borg budget-accounting requires
      provider-structured usage on the row; the native runner supplies real
      counts, the sidecar supplies the adapter's parse. *)
+  let name = if cfg.runner_kind = "native" then "native" else "sidecar" in
+  let kind = if cfg.runner_kind = "native" then "native" else "provider" in
   let step =
     `Assoc
-      [ ("name", `String (if cfg.runner_kind = "native" then "native" else "sidecar"));
-        ("kind", `String (if cfg.runner_kind = "native" then "native" else "provider"));
+      [ ("name", `String name);
+        ("kind", `String kind);
         ("state", `String state);
         ("attempts", `Int attempts);
-        ("max_attempts", `Int cfg.attempts_transient);
+        ("max_attempts", `Int (max_attempts_for cfg ~transient));
         ("wall_budget_s", `Int cfg.step_wall_s);
-        ("idempotent", `Bool true);
-        (* a fresh LLM turn is naturally retryable (the idempotency rule) *)
+        ("idempotent", `Bool (default_idempotent kind));
         ("usage",
          `Assoc
            [ ("requests", `Int 0); ("input_tokens", `Int 0);
@@ -520,11 +548,17 @@ let steps_doc (cfg : t) ~(state : string) ~(attempts : int) ~(error : string) :
   Yojson.Safe.to_string (`List [ step ])
 
 let steps_initial (cfg : t) : string =
-  steps_doc cfg ~state:"pending" ~attempts:0 ~error:""
+  steps_doc cfg ~transient:true ~state:"pending" ~attempts:0 ~error:""
 
 let steps_rebuild (cfg : t) ~(state : string) ~(attempts : int)
     ~(error : string) : string =
-  steps_doc cfg ~state ~attempts ~error
+  steps_doc cfg ~transient:true ~state ~attempts ~error
+
+(* The class-aware rebuild: a deterministic failure records max_attempts 1,
+   a transient one the declared transient budget (resume-semantics 2/6). *)
+let steps_rebuild_class (cfg : t) ~(transient : bool) ~(state : string)
+    ~(attempts : int) ~(error : string) : string =
+  steps_doc cfg ~transient ~state ~attempts ~error
 
 (* ------------------------------------------------------------------ *)
 (* Remote expr builders (the workstreams run-rows prim set)            *)
@@ -601,6 +635,96 @@ let run_step_expr (cfg : t) (run_id : string) ~(state : string)
     ~(attempts : int) ~(error : string) : string =
   Printf.sprintf "(workstreams/run-step-set %s %s)" (q run_id)
     (q (steps_rebuild cfg ~state ~attempts ~error))
+
+let run_step_expr_class (cfg : t) (run_id : string) ~(transient : bool)
+    ~(state : string) ~(attempts : int) ~(error : string) : string =
+  Printf.sprintf "(workstreams/run-step-set %s %s)" (q run_id)
+    (q (steps_rebuild_class cfg ~transient ~state ~attempts ~error))
+
+(* evidence (run-primitive.borg evidence): an entry is {kind, ref, note}
+   and THE KIND IS REQUIRED - an entry without one is refused, so a
+   judge-sweep can dispatch a probe on it. Phase 2 convention, enforced at
+   this write boundary; the tier-2 claim verb is the later, substrate-level
+   enforcement. The five legal kinds are board card f526bace's. *)
+let evidence_kinds =
+  [ "observed"; "computed"; "cited"; "interpreted"; "asserted" ]
+
+let evidence_entry ~(kind : string) ~(ref : string) ~(note : string) :
+    (string, string) result =
+  if not (List.mem kind evidence_kinds) then
+    Error
+      (Printf.sprintf "evidence kind %S is not one of %s" kind
+         (String.concat "|" evidence_kinds))
+  else
+    Ok
+      (Yojson.Safe.to_string
+         (`Assoc
+           [ ("kind", `String kind); ("ref", `String ref);
+             ("note", `String note) ]))
+
+(* The list form written to the row: evidence_json is the machine-readable
+   superset of the card-feed comment. *)
+let evidence_entries (entries : (string * string * string) list) :
+    (string, string) result =
+  let rec go acc = function
+    | [] -> Ok (Yojson.Safe.to_string (`List (List.rev acc)))
+    | (kind, ref, note) :: tl -> (
+        match evidence_entry ~kind ~ref ~note with
+        | Ok e -> go (Yojson.Safe.from_string e :: acc) tl
+        | Error _ as err -> err)
+  in
+  go [] entries
+
+let run_evidence_expr (run_id : string) (json : string) : string =
+  run_patch_expr run_id [ ("evidence_json", json) ]
+
+(* supervisor-tick 5 / POLICY-4: dispatch slots left under the concurrency
+   cap (default 2 until the overnight soak passes). *)
+let free_slots (cfg : t) ~(live : int) : int =
+  max 0 (cfg.concurrency - live)
+
+(* supervisor-tick 6 / PHASE 2 PUBLISH: ONE stderr count line; no new
+   surface until the standup v2 reader exists. *)
+let counts_line ~(queued : int) ~(claimed : int) ~(running : int)
+    ~(succeeded : int) ~(failed : int) ~(timed_out : int) ~(canceled : int)
+    ~(dead : int) ~(parked : int) ~(live : int) : string =
+  Printf.sprintf
+    "runs: queued=%d claimed=%d running=%d succeeded=%d failed=%d timed_out=%d canceled=%d dead=%d parked=%d live-sidecars=%d"
+    queued claimed running succeeded failed timed_out canceled dead parked live
+
+(* run-row: run-claim is a guarded set (only a still-queued row flips), so a
+   claim is ADMITTED only when the row that comes back is the one we asked
+   to claim. Anything else - still queued, already running, gone - is a
+   lost CAS, and the supervisor must not dispatch on it. *)
+let claim_admitted (j : Yojson.Safe.t) : bool =
+  jstr (jmember "state" j) = "claimed"
+
+(* supervisor-tick 4/5: only a QUEUED row is ever dispatched. A parked row
+   stays open (it blocks a re-queue) but never auto-retries (lifecycle). *)
+let dispatchable_state (s : string) : bool = s = "queued"
+
+(* resume-semantics 3 / run-row reap rule: an EXPIRED claim on a
+   claimed/running row is taken over; a live claim (deadline still in the
+   future) is never stolen. ISO 8601 strings sort lexicographically. *)
+let claim_expired ~(state : string) ~(deadline : string) ~(now : string) :
+    bool =
+  (state = "claimed" || state = "running")
+  && deadline <> "" && deadline < now
+
+(* POLICY-6: the queue ORDER belongs to todo/item/queue; the supervisor
+   mirrors the same key - priority rank (P0..P3, else 4), then position,
+   then id - and never invents an order. *)
+let queue_key (c : Yojson.Safe.t) : int * int * string =
+  let prio_rank s =
+    match s with "P0" -> 0 | "P1" -> 1 | "P2" -> 2 | "P3" -> 3 | _ -> 4
+  in
+  let pr = jstr (jmember "priority" c) in
+  let pos =
+    match int_of_string_opt (jstr (jmember "position" c)) with
+    | Some i -> i
+    | None -> 0
+  in
+  (prio_rank pr, pos, jstr (jmember "id" c))
 
 (* ONE scan of the shared run space (workstreams/run-all: the proven
    all-shared depth, filtered to the run type), projected to the fields the
@@ -776,6 +900,12 @@ type ctx = {
 }
 
 type child = { c_run : string; c_card : string; c_started : float }
+(* evidence: ONE entry per attempt. The executor's PPFLOW-EVIDENCE line is
+   the runner's own claim, so its structural kind is "asserted"; ref is the
+   driver log that carries the line. *)
+let verdict_evidence (ctx : ctx) (v : verdict) : (string, string) result =
+  evidence_entries
+    [ ("asserted", Filename.concat ctx.x_dir "driver.log", v.v_evid) ]
 
 type st = {
   cfg : t;
@@ -811,13 +941,24 @@ let mark_ghost (st : st) (card : string) : unit =
   end
 (* USAGE IS A SELF-REPORT (ratified): the gate is ADVISORY until
    provider-structured usage lands. The row's own caps win when set; 0 =
-   unlimited. *)
-let budget_exceeded (st : st) (r : row) : bool =
-  let tok = if r.r_budget_tok > 0 then r.r_budget_tok else st.cfg.max_tokens in
-  let req =
-    if r.r_budget_req > 0 then r.r_budget_req else st.cfg.max_requests
-  in
+   unlimited (budget-accounting). *)
+let effective_caps (cfg : t) (r : row) : int * int =
+  let tok = if r.r_budget_tok > 0 then r.r_budget_tok else cfg.max_tokens in
+  let req = if r.r_budget_req > 0 then r.r_budget_req else cfg.max_requests in
+  (tok, req)
+
+let budget_exceeded (cfg : t) (r : row) : bool =
+  let tok, req = effective_caps cfg r in
   (tok > 0 && r.r_usage_in >= tok) || (req > 0 && r.r_usage_req >= req)
+
+(* lifecycle: parking posts a card comment, so a stop is VISIBLE (never
+   silent) and a parked run never auto-retries. The caps named are the
+   effective ones (row first, then the supervisor default). *)
+let park_comment (cfg : t) (r : row) : string =
+  let tok, req = effective_caps cfg r in
+  Printf.sprintf
+    "pp-flow(supervisor): run %s PARKED pre-dispatch — advisory budget exhausted (usage: requests=%d, input_tokens=%d; caps: %d/%d; usage is a self-report until provider-structured usage lands)"
+    r.r_id r.r_usage_req r.r_usage_in tok req
 
 (* ------------------------------------------------------------------ *)
 (* Write-back: the ONE batched card write (pp-flow's discipline)       *)
@@ -938,45 +1079,45 @@ let harvest_failure (st : st) ~(child : child) ~(ctx : ctx) ~(rc : int)
     | Some b -> b
     | None -> transient_failure ~status ~category ~message
   in
-  ignore (eval_ok st
-            (run_step_expr cfg run_id ~state:"failed" ~attempts
-               ~error:(category ^ " " ^ message)));
-  if ctx.x_wall_exceeded then begin
     ignore (eval_ok st
-              (card_comment_expr ctx.x_card
-                 (Printf.sprintf
-                    "pp-flow(supervisor): run %s TIMED OUT at the run wall (%ds); card NOT advanced. Log: %s"
-                    run_id cfg.run_wall_s ctx.x_dir)));
-    ignore (eval_ok st
-              (run_finish_expr run_id "timed_out" "run-wall"
-                 (Printf.sprintf "run wall %ds exceeded" cfg.run_wall_s)));
-    Hashtbl.remove st.ctxs run_id
-  end
-  else if transient && attempts < cfg.attempts_transient then begin
-    (* POLICY-2: re-dispatch THE SAME step (never the whole run) after
-       the 2^n capped backoff; the row stays live. *)
-    Hashtbl.replace st.retry_at run_id
-      (Unix.gettimeofday () +. float_of_int (backoff_s attempts));
-    log "run %s attempt %d/%d failed transiently (%s %s); retry in %ds"
-      run_id attempts cfg.attempts_transient category message
-      (backoff_s attempts)
-  end
-  else begin
-    (* deterministic classes fail ONCE; transient attempts exhausted ->
-       dead. Terminal runs never auto-retry. *)
-    let driver = read_file (Filename.concat ctx.x_dir "driver.log") in
-    ignore (eval_ok st
-              (card_comment_expr ctx.x_card
-                 (Printf.sprintf
-                    "pp-flow(supervisor): run %s FAILED (rc=%d, %s %s) after %d attempt(s); card NOT advanced. Log: %s. Tail: %s"
-                    run_id rc category message attempts ctx.x_dir
-                    (log_tail driver 300))));
-    ignore (eval_ok st
-              (run_finish_expr run_id "dead" category
-                 (Printf.sprintf "rc=%d %s" rc message)));
-    log "run %s: dead (%s) after %d attempt(s)" run_id category attempts;
-    Hashtbl.remove st.ctxs run_id
-  end
+              (run_step_expr_class cfg run_id ~transient ~state:"failed"
+                 ~attempts ~error:(category ^ " " ^ message)));
+    match
+      failure_action cfg ~wall_exceeded:ctx.x_wall_exceeded ~transient ~attempts
+    with
+    | Timed_out ->
+        ignore (eval_ok st
+                  (card_comment_expr ctx.x_card
+                     (Printf.sprintf
+                        "pp-flow(supervisor): run %s TIMED OUT at the run wall (%ds); card NOT advanced. Log: %s"
+                        run_id cfg.run_wall_s ctx.x_dir)));
+        ignore (eval_ok st
+                  (run_finish_expr run_id "timed_out" "run-wall"
+                     (Printf.sprintf "run wall %ds exceeded" cfg.run_wall_s)));
+        Hashtbl.remove st.ctxs run_id
+    | Retry ->
+        (* POLICY-2: re-dispatch THE SAME step (never the whole run) after
+           the 2^n capped backoff; the row stays live. *)
+        Hashtbl.replace st.retry_at run_id
+          (Unix.gettimeofday () +. float_of_int (backoff_s attempts));
+        log "run %s attempt %d/%d failed transiently (%s %s); retry in %ds"
+          run_id attempts (max_attempts_for cfg ~transient) category message
+          (backoff_s attempts)
+    | Dead ->
+        (* deterministic classes fail ONCE; transient attempts exhausted ->
+           dead. Terminal runs never auto-retry. *)
+        let driver = read_file (Filename.concat ctx.x_dir "driver.log") in
+        ignore (eval_ok st
+                  (card_comment_expr ctx.x_card
+                     (Printf.sprintf
+                        "pp-flow(supervisor): run %s FAILED (rc=%d, %s %s) after %d attempt(s); card NOT advanced. Log: %s. Tail: %s"
+                        run_id rc category message attempts ctx.x_dir
+                        (log_tail driver 300))));
+        ignore (eval_ok st
+                  (run_finish_expr run_id "dead" category
+                     (Printf.sprintf "rc=%d %s" rc message)));
+        log "run %s: dead (%s) after %d attempt(s)" run_id category attempts;
+        Hashtbl.remove st.ctxs run_id
 
 (* ------------------------------------------------------------------ *)
 (* Sidecar spawn (ONE pp-flow --run --supervised child per attempt)    *)
@@ -1005,9 +1146,9 @@ let harvest_success (st : st) ~(ctx : ctx) ~(run_id : string)
       log "run %s: write-back ok, card %s -> %s%s" run_id ctx.x_card newstate
         (if noverdict then " (NO VERDICT: conservative advance)" else "")
   | Error eclass ->
-      ignore (eval_ok st
-                (run_step_expr cfg run_id ~state:"failed" ~attempts
-                   ~error:eclass));
+        ignore (eval_ok st
+                  (run_step_expr_class cfg run_id ~transient:false
+                     ~state:"failed" ~attempts ~error:eclass));
       (match eclass with
        | "card-terminal" ->
            ignore (eval_ok st
@@ -1044,6 +1185,12 @@ let harvest (st : st) ~(child : child) ~(ctx : ctx) ~(rc : int) : unit =
   ignore (eval_ok st
             (run_result_expr run_id v
                "no PPFLOW-STATUS line (sidecar setup failure)"));
+  (match
+     evidence_entries
+       [ ("asserted", Filename.concat ctx.x_dir "driver.log", v.v_evid) ]
+   with
+   | Ok json -> ignore (eval_ok st (run_evidence_expr run_id json))
+   | Error e -> log "run %s: evidence refused (%s)" run_id e);
   let attempts = ctx.x_attempts + 1 in
   ctx.x_attempts <- attempts;
   if rc = 0 then harvest_success st ~ctx ~run_id ~v ~attempts
@@ -1170,23 +1317,25 @@ let harvest_native (st : st) ~(child : child) ~(ctx : ctx) ~(rc : int) : unit =
             || res.Native_run.r_error_class = "timeout")
           ()
 
-let spawn_native (st : st) ~(run_id : string) ~(ctx : ctx) : unit =
-  let cfg = st.cfg in
-  let driver_log = Filename.concat ctx.x_dir "driver.log" in
-  let result_json = native_result_path ctx in
-  (* Empty native_bin = re-exec this same executable. That is the honest
-     default: the supervisor IS the glochid binary, and the native runner
-     is its --run-brief entry. *)
+(* The native child contract: ONE executor turn, ONE structured result file.
+   Empty native_bin = re-exec this same executable (the supervisor IS the
+   glochid binary, and the native runner is its --run-brief entry). *)
+let native_command (cfg : t) ~(brief : string) ~(result_json : string)
+    ~(driver_log : string) : string =
   let bin =
     if cfg.native_bin <> "" then cfg.native_bin
     else (try Sys.executable_name with _ -> "glochid")
   in
-  let cmd =
-    Printf.sprintf
-      "cd %s && exec %s --run-brief %s --result-json %s >%s 2>&1"
-      (sh_quote cfg.cwd) (sh_quote bin) (sh_quote ctx.x_brief)
-      (sh_quote result_json) (sh_quote driver_log)
-  in
+  Printf.sprintf "cd %s && exec %s --run-brief %s --result-json %s >%s 2>&1"
+    (sh_quote cfg.cwd) (sh_quote bin) (sh_quote brief)
+    (sh_quote result_json) (sh_quote driver_log)
+
+let spawn_native (st : st) ~(run_id : string) ~(ctx : ctx) : unit =
+  let cfg = st.cfg in
+  let driver_log = Filename.concat ctx.x_dir "driver.log" in
+  let result_json = native_result_path ctx in
+  (* The child command is the runner contract (native_command). *)
+  let cmd = native_command cfg ~brief:ctx.x_brief ~result_json ~driver_log in
   let child =
     { c_run = run_id; c_card = ctx.x_card; c_started = Unix.gettimeofday () }
   in
@@ -1200,28 +1349,38 @@ let spawn_native (st : st) ~(run_id : string) ~(ctx : ctx) : unit =
          log "native harvest run %s failed: %s" run_id (Printexc.to_string e));
       Hashtbl.remove st.live run_id)
 
-let spawn_run_sidecar (st : st) ~(run_id : string) ~(ctx : ctx) : unit =
-  let cfg = st.cfg in
-  let driver_log = Filename.concat ctx.x_dir "driver.log" in
-  (* `exec VAR=value cmd` is NOT valid POSIX sh: the shell reads the
-     assignment word as the COMMAND NAME and dies with
-     "/bin/sh: PP_FLOW_PI=...: not found" before pp-flow ever runs (observed
-     live on gregor 2026-10-25: every dispatch died sidecar-failure with an
-     empty PPFLOW-STATUS, and the only trace was one line in driver.log).
-     `exec env VAR=value cmd` is the portable form; the assignment also has
-     to sit BEFORE exec, not after it. Empty runner = pp-flow's own default
-     (``pi -p``), which must exist on the box or the run fails loudly. *)
+(* The sidecar child contract: ONE pp-flow --supervised child per attempt.
+   --supervised is load-bearing: the executor never touches the board, so
+   every card write flows through the supervisor.
+   `exec VAR=value cmd` is NOT valid POSIX sh: the shell reads the
+   assignment word as the COMMAND NAME and dies with
+   "/bin/sh: PP_FLOW_PI=...: not found" before pp-flow ever runs (observed
+   live on gregor 2026-10-25: every dispatch died sidecar-failure with an
+   empty PPFLOW-STATUS, and the only trace was one line in driver.log).
+   `exec env VAR=value cmd` is the portable form; the assignment also has
+   to sit BEFORE exec, not after it. Empty runner = pp-flow's own default
+   (``pi -p``), which must exist on the box or the run fails loudly. *)
+let sidecar_command (cfg : t) ~(brief : string) ~(card : string)
+    ~(claimed_state : string) ~(columns : string) ~(log_dir : string)
+    ~(driver_log : string) : string =
   let runner =
     if cfg.runner = "" then ""
     else Printf.sprintf "env PP_FLOW_PI=%s " (sh_quote cfg.runner)
   in
+  Printf.sprintf
+    "cd %s && exec %s sh %s --run %s --supervised --brief-file %s --claimed-state %s --columns %s --log-dir %s >%s 2>&1"
+    (sh_quote cfg.cwd) runner (sh_quote cfg.flow_script) (sh_quote card)
+    (sh_quote brief) (sh_quote claimed_state) (sh_quote columns)
+    (sh_quote log_dir) (sh_quote driver_log)
+
+let spawn_run_sidecar (st : st) ~(run_id : string) ~(ctx : ctx) : unit =
+  let cfg = st.cfg in
+  let driver_log = Filename.concat ctx.x_dir "driver.log" in
+  (* The child command is the runner contract (sidecar_command). *)
   let cmd =
-    Printf.sprintf
-      "cd %s && exec %s sh %s --run %s --supervised --brief-file %s --claimed-state %s --columns %s --log-dir %s >%s 2>&1"
-      (sh_quote cfg.cwd) runner (sh_quote cfg.flow_script)
-      (sh_quote ctx.x_card) (sh_quote ctx.x_brief)
-      (sh_quote ctx.x_claimed_state) (sh_quote ctx.x_cols)
-      (sh_quote ctx.x_dir) (sh_quote driver_log)
+    sidecar_command cfg ~brief:ctx.x_brief ~card:ctx.x_card
+      ~claimed_state:ctx.x_claimed_state ~columns:ctx.x_cols
+      ~log_dir:ctx.x_dir ~driver_log
   in
   let child =
     { c_run = run_id; c_card = ctx.x_card; c_started = Unix.gettimeofday () }
@@ -1264,14 +1423,10 @@ let create_run (st : st) (card : Yojson.Safe.t) : unit =
 
 let park_run (st : st) (r : row) : unit =
   match eval_ok st (run_claim_expr st.cfg r.r_id) with
-  | Some j when jstr (jmember "state" j) = "claimed" ->
+  | Some j when claim_admitted j ->
       ignore (eval_ok st (unassign_expr r.r_card));
-      ignore (eval_ok st
-                (card_comment_expr r.r_card
-                   (Printf.sprintf
-                      "pp-flow(supervisor): run %s PARKED pre-dispatch — advisory budget exhausted (usage: requests=%d, input_tokens=%d; caps: %d/%d; usage is a self-report until provider-structured usage lands)"
-                      r.r_id r.r_usage_req r.r_usage_in st.cfg.max_tokens
-                      st.cfg.max_requests)));
+        ignore (eval_ok st
+                  (card_comment_expr r.r_card (park_comment st.cfg r)));
       ignore (eval_ok st
                 (run_finish_expr r.r_id "parked" "budget"
                    "advisory budget exhausted pre-dispatch"));
@@ -1281,7 +1436,7 @@ let park_run (st : st) (r : row) : unit =
 let dispatch_queued (st : st) (r : row) : unit =
   let run_id = r.r_id in
   match eval_ok st (run_claim_expr st.cfg run_id) with
-  | Some j when jstr (jmember "state" j) = "claimed" -> (
+  | Some j when claim_admitted j -> (
       match claim_facts st ~card:r.r_card with
       | None ->
           ignore (eval_ok st
@@ -1419,13 +1574,11 @@ let tick (st : st) : unit =
       (* 2. REAP expired claims -> takeover (never live ones). *)
       List.iter
         (fun r ->
-          if
-            (r.r_state = "claimed" || r.r_state = "running")
-            && r.r_deadline <> ""
-            && r.r_deadline < iso_now ()
-            (* lexicographic, the run-expired? semantics *)
-            && not (Hashtbl.mem st.live r.r_id)
-          then take_over st r)
+            if
+              claim_expired ~state:r.r_state ~deadline:r.r_deadline
+                ~now:(iso_now ())
+              && not (Hashtbl.mem st.live r.r_id)
+            then take_over st r)
         rows;
       (* 3. FILL THE QUEUE: eligible cards minus cards with open runs. *)
       (match eval_json st.sess (queue_eligible_expr st.cfg) with
@@ -1437,23 +1590,10 @@ let tick (st : st) : unit =
                if not (terminal_run_state r.r_state) then
                  Hashtbl.replace open_cards r.r_card ())
              rows;
-           (* POLICY-6: create runs in the canonical work order - priority
-              rank (P0..P3, else 4), then position, then id - mirroring
-              todo/item/prio-le? exactly. The PP-side prio-sorted moved out
-              of the scan expression for eval budget (part 2d not yet
-              seeded); the supervisor mirrors, never invents, the order. *)
-           let prio_rank (s : string) : int =
-             match s with "P0" -> 0 | "P1" -> 1 | "P2" -> 2 | "P3" -> 3 | _ -> 4
-           in
-           let card_key (c : Yojson.Safe.t) : int * int * string =
-             let pr = jstr (jmember "priority" c) in
-             let pos =
-               match int_of_string_opt (jstr (jmember "position" c)) with
-               | Some i -> i
-               | None -> 0
-             in
-             (prio_rank pr, pos, jstr (jmember "id" c))
-           in
+             (* POLICY-6: the queue ORDER belongs to todo/item/queue; the
+                supervisor mirrors the same key (queue_key) and never
+                invents an order. The PP-side prio-sorted moved out of the
+                scan expression for eval budget (part 2d not yet seeded). *)
              List.iter
                (fun c ->
                  let id = jstr (jmember "id" c) in
@@ -1465,7 +1605,7 @@ let tick (st : st) : unit =
                       card as open so a second copy does not queue again *)
                    Hashtbl.replace open_cards id ()
                  end)
-               (List.sort (fun a b -> compare (card_key a) (card_key b)) cards)
+                 (List.sort (fun a b -> compare (queue_key a) (queue_key b)) cards)
        | Ok _ -> ());
       (* 4. DISPATCH: due retries first, then queued rows by creation order
             (todo/item/queue owns the ORDER; creation order mirrors it —
@@ -1482,15 +1622,15 @@ let tick (st : st) : unit =
           match Hashtbl.find_opt st.ctxs run_id with
           | Some ctx when not (Hashtbl.mem st.live run_id) ->
               (match List.find_opt (fun r -> r.r_id = run_id) rows with
-               | Some r when budget_exceeded st r -> park_run st r
+               | Some r when budget_exceeded st.cfg r -> park_run st r
                | _ -> spawn_run st ~run_id ~ctx)
           | _ -> ())
         due;
-      let cap = st.cfg.concurrency - Hashtbl.length st.live in
+      let cap = free_slots st.cfg ~live:(Hashtbl.length st.live) in
       if cap > 0 then begin
         let queued =
           rows
-          |> List.filter (fun r -> r.r_state = "queued")
+          |> List.filter (fun r -> dispatchable_state r.r_state)
           |> List.sort (fun a b -> compare a.r_created b.r_created)
         in
         let rec go n = function
@@ -1498,7 +1638,7 @@ let tick (st : st) : unit =
           | [] -> ()
           | r :: tl ->
               if Hashtbl.mem st.live r.r_id then go n tl
-              else if budget_exceeded st r then begin
+              else if budget_exceeded st.cfg r then begin
                 park_run st r;
                 go n tl
               end
@@ -1532,14 +1672,13 @@ let tick (st : st) : unit =
               | Some states -> List.length (List.filter (fun t -> t = s) states)
               | None -> 0)
         in
-      let summary =
-        Printf.sprintf
-          "runs: queued=%d claimed=%d running=%d succeeded=%d failed=%d timed_out=%d canceled=%d dead=%d parked=%d live-sidecars=%d"
-          (count "queued") (count "claimed") (count "running")
-          (count "succeeded") (count "failed") (count "timed_out")
-          (count "canceled") (count "dead") (count "parked")
-          (Hashtbl.length st.live)
-      in
+        let summary =
+          counts_line ~queued:(count "queued") ~claimed:(count "claimed")
+            ~running:(count "running") ~succeeded:(count "succeeded")
+            ~failed:(count "failed") ~timed_out:(count "timed_out")
+            ~canceled:(count "canceled") ~dead:(count "dead")
+            ~parked:(count "parked") ~live:(Hashtbl.length st.live)
+        in
       if summary <> st.last_summary then begin
         st.last_summary <- summary;
         log "%s" summary

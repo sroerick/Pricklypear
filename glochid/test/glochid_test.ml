@@ -2318,6 +2318,375 @@ let test_supervisor_pure () =
   Alcotest.(check bool) "steps attempts" true
     (Supervisor.contains_sub "\"attempts\":2" steps)
 
+
+(* ---- run-primitive.borg claims (phase 2 supervisor) ------------------
+   Each case names the chapter section it proves. Everything here is PURE:
+   no habitat session, no database. The database-backed verify items are not
+   claimed by these tests. *)
+
+let rp_json s = Yojson.Safe.from_string s
+let rp_member k j = Yojson.Safe.Util.member k j
+
+let rp_first_step cfg =
+  Yojson.Safe.from_string (Supervisor.steps_initial cfg)
+  |> Yojson.Safe.Util.to_list
+  |> function [] -> Alcotest.fail "no step" | x :: _ -> x
+
+let rp_row ?(tok = 0) ?(req = 0) ?(usage_in = 0) ?(usage_req = 0) () :
+    Supervisor.row =
+  { Supervisor.r_id = "run-1"; r_card = "card-1"; r_list = "list-1";
+    r_from = "TODO"; r_state = "queued"; r_sup = "sup"; r_deadline = "";
+    r_budget_tok = tok; r_budget_req = req; r_usage_req = usage_req;
+    r_usage_in = usage_in; r_steps = "[]";
+    r_created = "2026-01-01T00:00:00Z"; r_started = "" }
+
+let rp_verdict ?(dest = "CODE") ?(evid = "e") ?(status = ":SUCCEEDED")
+    ?(category = "") ?(trace = "tr") ?(message = "") ?(requests = 3)
+    ?(input = 1200) ?(cached = 800) ?(output = 310) ?(wall = 95) () :
+    Supervisor.verdict =
+  { Supervisor.v_dest = dest; v_evid = evid; v_status = status;
+    v_category = category; v_trace = trace; v_message = message;
+    v_requests = requests; v_input = input; v_cached = cached;
+    v_output = output; v_wall = wall }
+
+(* project: one run = one attempt to advance one card one gate, executed by a
+   supervised sidecar outside the PP runtime process. *)
+let test_rp_project () =
+  let cfg = Supervisor.config () in
+  Alcotest.(check int) "one run = one step" 1
+    (List.length
+       (Yojson.Safe.from_string (Supervisor.steps_initial cfg)
+       |> Yojson.Safe.Util.to_list));
+  let cmd =
+    Supervisor.sidecar_command cfg ~brief:"/d/brief.md" ~card:"card-1"
+      ~claimed_state:"TODO" ~columns:"TODO,CODE" ~log_dir:"/d"
+      ~driver_log:"/d/driver.log"
+  in
+  Alcotest.(check bool) "supervised child" true
+    (Supervisor.contains_sub "--supervised" cmd);
+  Alcotest.(check bool) "pp-flow child" true
+    (Supervisor.contains_sub "pp-flow.sh" cmd);
+  Alcotest.(check bool) "executor never writes the board" false
+    (Supervisor.contains_sub "todo/" cmd);
+  Alcotest.(check bool) "row lives in the shared run space" true
+    (Supervisor.contains_sub "workstreams/run-new"
+       (Supervisor.run_new_expr cfg ~card:"c" ~list_id:"l"
+          ~from_state:"TODO"))
+
+(* run-row: the FIELDS contract, the CAS admission, the TTL shape, and the
+   idempotency declaration field. *)
+let test_rp_row () =
+  let cfg = Supervisor.config () in
+  let admitted s = Supervisor.claim_admitted (rp_json s) in
+  Alcotest.(check bool) "claimed admitted" true
+    (admitted {|{"state":"claimed"}|});
+  Alcotest.(check bool) "queued rejected" false
+    (admitted {|{"state":"queued"}|});
+  Alcotest.(check bool) "running rejected" false
+    (admitted {|{"state":"running"}|});
+  Alcotest.(check bool) "empty rejected" false (admitted {|{}|});
+  let e = Supervisor.run_claim_expr cfg "run-1" in
+  Alcotest.(check bool) "the CAS prim" true
+    (Supervisor.contains_sub "workstreams/run-claim" e);
+  Alcotest.(check bool) "claim owner" true
+    (Supervisor.contains_sub cfg.Supervisor.supervisor_id e);
+  Alcotest.(check bool) "claim instance" true
+    (Supervisor.contains_sub cfg.Supervisor.instance_id e);
+  Alcotest.(check bool) "runner identity on the claim" true
+    (Supervisor.contains_sub cfg.Supervisor.identity e);
+  Alcotest.(check int) "ttl = wall + 2 ticks + 60" 3720
+    (Supervisor.ttl_s
+       { cfg with Supervisor.step_wall_s = 3600; Supervisor.tick_s = 30 });
+  Alcotest.(check int) "ttl floor 600" 600
+    (Supervisor.ttl_s
+       { cfg with Supervisor.step_wall_s = 60; Supervisor.tick_s = 5 });
+  let step = rp_first_step cfg in
+  let f k = rp_member k step in
+  Alcotest.(check string) "step name" "sidecar"
+    (f "name" |> Yojson.Safe.Util.to_string);
+  Alcotest.(check string) "step kind" "provider"
+    (f "kind" |> Yojson.Safe.Util.to_string);
+  Alcotest.(check string) "pending" "pending"
+    (f "state" |> Yojson.Safe.Util.to_string);
+  Alcotest.(check int) "attempts" 0 (f "attempts" |> Yojson.Safe.Util.to_int);
+  Alcotest.(check int) "max attempts" 2
+    (f "max_attempts" |> Yojson.Safe.Util.to_int);
+  Alcotest.(check int) "wall budget" 3600
+    (f "wall_budget_s" |> Yojson.Safe.Util.to_int);
+  Alcotest.(check bool) "idempotent declared" true
+    (f "idempotent" |> Yojson.Safe.Util.to_bool);
+  Alcotest.(check int) "usage block" 5
+    (List.length (f "usage" |> Yojson.Safe.Util.to_assoc));
+  Alcotest.(check string) "evidence ref" ""
+    (f "evidence_ref" |> Yojson.Safe.Util.to_string);
+  Alcotest.(check string) "error" "" (f "error" |> Yojson.Safe.Util.to_string);
+  Alcotest.(check bool) "provider idempotent" true
+    (Supervisor.default_idempotent "provider");
+  Alcotest.(check bool) "native idempotent" true
+    (Supervisor.default_idempotent "native");
+  Alcotest.(check bool) "prim not idempotent" false
+    (Supervisor.default_idempotent "prim");
+  Alcotest.(check bool) "hand not idempotent" false
+    (Supervisor.default_idempotent "hand");
+  Alcotest.(check int) "transient budget" 2
+    (Supervisor.max_attempts_for cfg ~transient:true);
+  Alcotest.(check int) "deterministic budget" 1
+    (Supervisor.max_attempts_for cfg ~transient:false);
+  let det =
+    Yojson.Safe.from_string
+      (Supervisor.steps_rebuild_class cfg ~transient:false ~state:"failed"
+         ~attempts:1 ~error:"HTTP 401")
+  in
+  Alcotest.(check int) "deterministic failure records one attempt" 1
+    (List.hd (Yojson.Safe.Util.to_list det)
+    |> fun j -> rp_member "max_attempts" j
+    |> Yojson.Safe.Util.to_int)
+
+(* lifecycle: the failure ladder, the ONE batched write-back eval, and the
+   parked/human-gate rules. *)
+let test_rp_lifecycle () =
+  let cfg = Supervisor.config () in
+  let act = Supervisor.failure_action cfg in
+  Alcotest.(check bool) "transient retry" true
+    (act ~wall_exceeded:false ~transient:true ~attempts:1 = Supervisor.Retry);
+  Alcotest.(check bool) "transient exhausted" true
+    (act ~wall_exceeded:false ~transient:true ~attempts:2 = Supervisor.Dead);
+  Alcotest.(check bool) "deterministic once" true
+    (act ~wall_exceeded:false ~transient:false ~attempts:1 = Supervisor.Dead);
+  Alcotest.(check bool) "run wall timed out" true
+    (act ~wall_exceeded:true ~transient:true ~attempts:1
+    = Supervisor.Timed_out);
+  let adv = Supervisor.advance_expr "card-1" "msg" in
+  Alcotest.(check bool) "advance: transition" true
+    (Supervisor.contains_sub "todo/cycle" adv);
+  Alcotest.(check bool) "advance: evidence comment" true
+    (Supervisor.contains_sub "todo/comment/add" adv);
+  Alcotest.(check bool) "advance: lease release" true
+    (Supervisor.contains_sub "todo/item/unassign" adv);
+  let dst = Supervisor.dest_expr "card-1" "msg" "CODE" in
+  Alcotest.(check bool) "dest: named transition" true
+    (Supervisor.contains_sub "todo/set-state" dst);
+  Alcotest.(check bool) "dest: evidence comment" true
+    (Supervisor.contains_sub "todo/comment/add" dst);
+  Alcotest.(check bool) "dest: lease release" true
+    (Supervisor.contains_sub "todo/item/unassign" dst);
+  Alcotest.(check bool) "queued dispatchable" true
+    (Supervisor.dispatchable_state "queued");
+  Alcotest.(check bool) "parked never auto-retries" false
+    (Supervisor.dispatchable_state "parked");
+  Alcotest.(check bool) "dead never auto-retries" false
+    (Supervisor.dispatchable_state "dead");
+  Alcotest.(check bool) "human gate column is not a runnable step" false
+    (Supervisor.contains_sub "HUMAN-REVIEW" cfg.Supervisor.states)
+
+(* resume-semantics: transient vs deterministic, the two-level timeout, the
+   reap rule (expired taken over, live never stolen). *)
+let test_rp_resume () =
+  let cfg = Supervisor.config () in
+  let tf = Supervisor.transient_failure in
+    let prov code =
+      tf ~status:"failed" ~category:":PROVIDER-FAILURE"
+        ~message:(Printf.sprintf "HTTP %d: provider" code)
+    in
+  List.iter
+    (fun code ->
+      Alcotest.(check bool) (Printf.sprintf "%d retries" code) true
+        (prov code))
+    [ 402; 408; 409; 425; 429; 500; 503 ];
+  List.iter
+    (fun code ->
+      Alcotest.(check bool) (Printf.sprintf "%d fails once" code) false
+        (prov code))
+    [ 400; 401; 403; 404; 422 ];
+  Alcotest.(check bool) "crash with no result retries" true
+    (tf ~status:"crashed" ~category:"" ~message:"");
+  Alcotest.(check bool) "adapter timeout is per-attempt" true
+    (tf ~status:":TIMED-OUT" ~category:"" ~message:"");
+  Alcotest.(check bool) "invalid output fails once" false
+    (tf ~status:":INVALID-OUTPUT" ~category:"" ~message:"");
+  Alcotest.(check bool) "expired claim is reaped" true
+    (Supervisor.claim_expired ~state:"claimed"
+       ~deadline:"2026-01-01T00:00:00Z" ~now:"2026-01-02T00:00:00Z");
+  Alcotest.(check bool) "live claim is never stolen" false
+    (Supervisor.claim_expired ~state:"running"
+       ~deadline:"2026-01-03T00:00:00Z" ~now:"2026-01-02T00:00:00Z");
+  Alcotest.(check bool) "queued row is not reaped" false
+    (Supervisor.claim_expired ~state:"queued"
+       ~deadline:"2026-01-01T00:00:00Z" ~now:"2026-01-02T00:00:00Z");
+  Alcotest.(check bool) "no deadline is never reaped" false
+    (Supervisor.claim_expired ~state:"claimed" ~deadline:""
+       ~now:"2026-01-02T00:00:00Z");
+  Alcotest.(check bool) "run wall beats a retryable class" true
+    (Supervisor.failure_action cfg ~wall_exceeded:true ~transient:true
+       ~attempts:1
+    = Supervisor.Timed_out)
+
+(* supervisor-tick: eligibility filter, the mirrored queue order, the
+   concurrency cap, and the phase-2 publish line. *)
+let test_rp_tick () =
+  let cfg = Supervisor.config () in
+  let q = Supervisor.queue_eligible_expr cfg in
+  Alcotest.(check bool) "no live card lease" true
+    (Supervisor.contains_sub "(string-eq (todo/item/assignee b) \"\")" q);
+  Alcotest.(check bool) "actionable states" true
+    (Supervisor.contains_sub "(in? (todo/item/state b) states)" q);
+  Alcotest.(check bool) "excluded kinds" true
+    (Supervisor.contains_sub
+       "(not (in? (as-str (dict-get b \"kind\")) excl))" q);
+  Alcotest.(check bool) "list scope" true
+    (Supervisor.contains_sub "want-list" q);
+  let card pr pos id =
+    rp_json
+      (Printf.sprintf {|{"id":"%s","priority":"%s","position":"%s"}|} id pr
+         pos)
+  in
+  let keys =
+    List.map Supervisor.queue_key
+      [ card "P3" "0" "a"; card "" "1" "b"; card "P0" "9" "c";
+        card "P1" "2" "d"; card "P1" "1" "e" ]
+  in
+  Alcotest.(check (list (triple int int string)))
+    "mirrors todo/item/queue: rank, position, id"
+    [ (0, 9, "c"); (1, 1, "e"); (1, 2, "d"); (3, 0, "a"); (4, 1, "b") ]
+    (List.sort compare keys);
+  Alcotest.(check int) "concurrency cap 2" 2
+    (Supervisor.free_slots cfg ~live:0);
+  Alcotest.(check int) "cap spent" 0 (Supervisor.free_slots cfg ~live:2);
+  Alcotest.(check int) "cap never negative" 0
+    (Supervisor.free_slots cfg ~live:7);
+  Alcotest.(check int) "one run per free slot" 1
+    (Supervisor.free_slots cfg ~live:1);
+  Alcotest.(check string) "publish is one stderr count line"
+    "runs: queued=1 claimed=0 running=0 succeeded=0 failed=0 timed_out=0 canceled=0 dead=0 parked=0 live-sidecars=0"
+    (Supervisor.counts_line ~queued:1 ~claimed:0 ~running:0 ~succeeded:0
+       ~failed:0 ~timed_out:0 ~canceled:0 ~dead:0 ~parked:0 ~live:0)
+
+(* budget-accounting: the advisory pre-dispatch gate (row caps win, 0 =
+   unlimited), the visible park comment, and the usage pass-through. *)
+let test_rp_budget () =
+  let cfg = Supervisor.config () in
+  let unlimited =
+    { cfg with Supervisor.max_tokens = 0; Supervisor.max_requests = 0 }
+  in
+  Alcotest.(check bool) "under cap" false
+    (Supervisor.budget_exceeded unlimited
+       (rp_row ~usage_in:10 ~usage_req:1 ()));
+  Alcotest.(check bool) "token cap" true
+    (Supervisor.budget_exceeded
+       { unlimited with Supervisor.max_tokens = 100 }
+       (rp_row ~usage_in:100 ()));
+  Alcotest.(check bool) "request cap" true
+    (Supervisor.budget_exceeded
+       { unlimited with Supervisor.max_requests = 5 }
+       (rp_row ~usage_req:5 ()));
+  Alcotest.(check bool) "row cap wins" true
+    (Supervisor.budget_exceeded
+       { unlimited with Supervisor.max_tokens = 1000 }
+       (rp_row ~tok:50 ~usage_in:50 ()));
+  Alcotest.(check bool) "zero means unlimited" false
+    (Supervisor.budget_exceeded unlimited
+       (rp_row ~usage_in:999999 ~usage_req:999999 ()));
+  Alcotest.(check (pair int int)) "effective caps" (1000, 7)
+    (Supervisor.effective_caps
+       { unlimited with Supervisor.max_tokens = 1000 }
+       (rp_row ~req:7 ()));
+  let msg =
+    Supervisor.park_comment
+      { unlimited with Supervisor.max_tokens = 1000 }
+      (rp_row ~req:7 ~usage_in:400 ~usage_req:7 ())
+  in
+  Alcotest.(check bool) "park is named" true
+    (Supervisor.contains_sub "PARKED" msg);
+  Alcotest.(check bool) "park names budget" true
+    (Supervisor.contains_sub "budget" msg);
+  Alcotest.(check bool) "park names the effective caps" true
+    (Supervisor.contains_sub "1000/7" msg);
+  Alcotest.(check bool) "park says usage is a self-report" true
+    (Supervisor.contains_sub "self-report" msg);
+  let v = rp_verdict () in
+  Alcotest.(check bool) "usage pass-through" true
+    (Supervisor.contains_sub "3 1200 800 310 95"
+       (Supervisor.run_usage_expr "run-1" v));
+  Alcotest.(check bool) "result fields on the row" true
+    (Supervisor.contains_sub "tr" (Supervisor.run_result_expr "run-1" v "x"))
+
+(* evidence: every entry carries a REQUIRED claim kind; the harvested verdict
+   evidence is the runner's own claim, so it is stored as "asserted". *)
+let test_rp_evidence () =
+  List.iter
+    (fun k ->
+      match Supervisor.evidence_entry ~kind:k ~ref:"ref" ~note:"note" with
+      | Ok j ->
+          Alcotest.(check string) (k ^ " kind") k
+            (rp_member "kind" (rp_json j) |> Yojson.Safe.Util.to_string)
+      | Error e -> Alcotest.fail e)
+    Supervisor.evidence_kinds;
+  (match Supervisor.evidence_entry ~kind:"guessed" ~ref:"r" ~note:"n" with
+   | Error _ -> ()
+   | Ok _ -> Alcotest.fail "an entry with an illegal kind was stored");
+  (match Supervisor.evidence_entry ~kind:"" ~ref:"r" ~note:"n" with
+   | Error _ -> ()
+   | Ok _ -> Alcotest.fail "a kindless evidence entry was stored");
+  (match
+     Supervisor.evidence_entries
+       [ ("observed", "r1", "n1"); ("asserted", "r2", "n2") ]
+   with
+   | Ok j ->
+       Alcotest.(check int) "entry list" 2
+         (List.length (Yojson.Safe.Util.to_list (rp_json j)))
+   | Error e -> Alcotest.fail e);
+  let ctx =
+    { Supervisor.x_run = "run-1"; x_card = "card-1";
+      x_claimed_state = "TODO"; x_cols = "TODO,CODE"; x_brief = "/b";
+      x_dir = "/d"; x_attempts = 1; x_wall_exceeded = false }
+  in
+  (match Supervisor.verdict_evidence ctx (rp_verdict ~evid:"built + tested" ()) with
+   | Ok j ->
+       Alcotest.(check bool) "harvested evidence is asserted" true
+         (Supervisor.contains_sub "\"kind\":\"asserted\"" j)
+   | Error e -> Alcotest.fail e);
+  let w = Supervisor.run_evidence_expr "run-1" "[]" in
+  Alcotest.(check bool) "row write goes through run-patch" true
+    (Supervisor.contains_sub "workstreams/run-patch" w);
+  Alcotest.(check bool) "evidence_json field" true
+    (Supervisor.contains_sub "evidence_json" w)
+
+(* identity: the row is attributed to the RUNNER's own identity, never the
+   operator's. The bearer minting / allowlist half of the claim is not
+   implemented here and is returned as a question, so the section stays
+   planned. *)
+let test_rp_identity () =
+  Unix.putenv "PP_USER" "roerick";
+  Unix.putenv "PP_USERNAME" "roerick";
+  let cfg = Supervisor.config () in
+  Alcotest.(check string) "runner identity is its own" "pp-supervisor"
+    cfg.Supervisor.identity;
+  let e = Supervisor.run_claim_expr cfg "run-1" in
+  Alcotest.(check bool) "claim records the runner identity" true
+    (Supervisor.contains_sub cfg.Supervisor.identity e);
+  Alcotest.(check bool) "never the operator" false
+    (Supervisor.contains_sub "roerick" e)
+
+(* policy-register: the wired values of the SET and PROPOSED decisions. The
+   OPEN items (POLICY-1 numbers, POLICY-5, POLICY-6, Q7) are returned as
+   questions; the section stays planned. *)
+let test_rp_policy () =
+  let cfg = Supervisor.config () in
+  Alcotest.(check int) "POLICY-1 step wall" 3600 cfg.Supervisor.step_wall_s;
+  Alcotest.(check int) "POLICY-1 run wall" 14400 cfg.Supervisor.run_wall_s;
+  Alcotest.(check int) "tick default" 30 cfg.Supervisor.tick_s;
+  Alcotest.(check int) "POLICY-4 concurrency" 2 cfg.Supervisor.concurrency;
+  Alcotest.(check int) "POLICY-2 transient attempts" 2
+    cfg.Supervisor.attempts_transient;
+  Alcotest.(check int) "POLICY-2 deterministic attempts" 1
+    cfg.Supervisor.attempts_deterministic;
+  Alcotest.(check int) "POLICY-2 backoff shape" 8 (Supervisor.backoff_s 3);
+  Alcotest.(check int) "POLICY-2 backoff cap" 60 (Supervisor.backoff_s 6);
+  Alcotest.(check bool) "POLICY-3 review column" true
+    (Supervisor.noverdict_column "LOGIC-REVIEW");
+  Alcotest.(check bool) "POLICY-3 non-review column" false
+    (Supervisor.noverdict_column "CODE")
+
 let () =
   Eio_main.run @@ fun env ->
   let rt = Runtime.make () in
@@ -2635,5 +3004,17 @@ let () =
                 |> (function [] -> `Null | x :: _ -> x)
                 |> Yojson.Safe.Util.member "name"
                 |> Yojson.Safe.Util.to_string))
+        ] );
+      ( "run-primitive-claims",
+        [ Alcotest.test_case "project" `Quick test_rp_project;
+          Alcotest.test_case "run-row" `Quick test_rp_row;
+          Alcotest.test_case "lifecycle" `Quick test_rp_lifecycle;
+          Alcotest.test_case "resume-semantics" `Quick test_rp_resume;
+          Alcotest.test_case "supervisor-tick" `Quick test_rp_tick;
+          Alcotest.test_case "budget-accounting" `Quick test_rp_budget;
+          Alcotest.test_case "evidence" `Quick test_rp_evidence;
+          Alcotest.test_case "identity-row-attribution" `Quick
+            test_rp_identity;
+          Alcotest.test_case "policy-register-defaults" `Quick test_rp_policy
         ] );
     ]

@@ -18,7 +18,7 @@
    and evidence; PP rows are the queue; the LLM loop NEVER runs inside the
    PP runtime process (the absolute rule, jobs.borg:246-253 + gregor review
    point 5, including the phase-3 native runner).")
- (status planned)
+ (status implemented)
 
  (* agent note (|PROVENANCE + RATIFICATION (2026-10-16): drafted from the
      orchestration recon (D1 findings, D2 draft) and gregor's review.
@@ -112,7 +112,7 @@
 
    Transitions are owner-confined like jobs (jobs.borg:107-108): only the
    holding supervisor writes state; everyone else reads.")
-  (status planned))
+  (status implemented))
 
  (section lifecycle
   (doc "RUN: queued -> claimed (supervisor takes the lease) -> running
@@ -134,7 +134,7 @@
        = one process; workstreams.borg:330-333).
      - A one-way door (prod flips, DNS, deletes) is never a runnable step:
        the run stages it, the run parks, the human gate is a real column.")
-  (status planned))
+  (status implemented))
 
  (section resume-semantics
   (doc "THE FAILURE PATHS - gregor's review leads here; each names the
