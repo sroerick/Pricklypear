@@ -257,6 +257,29 @@ let render_job_for ~project ~cut rows =
     rj_log = "";
   }
 
+(* A render is a memoized pure function of the EDL rows: an unchanged cut
+   (same canonical print, so the same edl_hash) returns the finished job and
+   queues nothing; changing one row changes the hash and mints a new job. *)
+let render ~project ~cut rows (jobs : render_job list) =
+  let h = edl_hash rows in
+  match
+    List.find_opt (fun j -> j.rj_edl_hash = h && j.rj_state = "done") jobs
+  with
+  | Some j -> (j, true)
+  | None -> (render_job_for ~project ~cut rows, false)
+
+(* A finished render records its output as a media pointer (content hash +
+   path relative to a media root), so the cache-hit row names the file. *)
+let render_job_done (j : render_job) ~out_hash ~out_path =
+  if not (media_pointer_ok ~hash:out_hash ~path:out_path) then
+    invalid_arg
+      "render-done: an output is a content hash + relative path — no bytes, \
+       no absolute paths";
+  { j with rj_state = "done"; rj_out_hash = out_hash; rj_out_path = out_path }
+
+let render_job_failed (j : render_job) ~log =
+  { j with rj_state = "failed"; rj_log = log }
+
 (* ---- studio library: asset rows + shot bindings, pure over rows ---- *)
 
 (* The library is a set of rows, not a second schema: asset rows carry the
