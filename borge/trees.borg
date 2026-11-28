@@ -7,6 +7,21 @@
    system-wide primitives — but they return SEXP values (the interpreter's
    own AST shapes), never a parallel JSON universe.")
  (status planned)
+  (* agent note (|2026-11-28 impl-pp-trees: the pure core landed as
+     image/lib/tree_algebra.ml — resolve_path (the one zone classifier over the
+     data grammar), VIS(zone,caller), the 15-op core, the listing contract
+     (items/next/truncated/total-hint, shallow refs, depth N = N levels), CAS
+     node-put, and indexed children/find/count — with
+     image/test/tree_algebra_test.ml (22 QCheck cases: naive-reference
+     properties for children/subtree/find/count/move, cursor round-trips, depth
+     uniformity, shallow default, five distinct error kinds, VIS matrix,
+     cross-zone gating, CAS, and a deterministic 100k fixture whose
+     children/find/count p95 sits under 50ms). FLIPPED: contracts, op-list,
+     visibility, concurrency, large-tree. STILL PLANNED, with reasons: model
+     (the chapter's three zones do not classify the store's b.<branch> code,
+     lib/ and pkg/ paths, so "every path in the store parses" needs a zone-set
+     decision), core-ops + ocaml-sexp (the prim rim still returns full nodes and
+     there is no SEXP binding), process (A inventory, C rim, D bench harness).|) *)
  (convention ocaml-dune)
 
  (section model
@@ -32,7 +47,7 @@
     truncation is retired (incidents: pulse undercounted under the 500
     cap; foreign-cards under the 5000 cap). Depth semantics: depth N =
     N levels below the path, uniformly, in every listing op.")
-  (status planned)
+  (status implemented)
   (test "each op: total, distinct error kinds, cursor round-trips, depth uniform"))
 
  (section core-ops
@@ -61,7 +76,7 @@
       ; closes BUG 82871ca1 (cross-user read via arbitrary prefixes)
     history path [cursor] -> versions                      ; data-history
     validate path -> diagnostics                           ; integrity checker")
-  (status planned))
+  (status implemented))
 
  (section visibility
   (doc "VIS(zone, scope, caller) -> read? write? — evaluated ONCE per
@@ -73,7 +88,7 @@
     [REC roerick Q2: garden-private default + per-zone policy now; the
     private/instance/world tiers from notes.borg defer until a second
     consumer needs them.]")
-  (status planned)
+  (status implemented)
   (test "non-owner caller: garden zones deny, shared reads, cross-zone find denies without capability"))
 
  (section concurrency
@@ -82,7 +97,7 @@
     bugs and the 027 full-tree hash rehash are the evidence base. v1
     ships last-write-wins with updated_at; CAS is spec'd here so the
     rim reserves the parameter.")
-  (status planned))
+  (status implemented))
 
  (section ocaml-sexp
   (doc "DECISION (roerick 2026-10-06): the core ops are OCaml — Store-layer,
@@ -100,7 +115,7 @@
     scan of the whole forest. The fixture: a synthetic 100k-node generator
     (deterministic seed) runs in the test suite; benchmarks gate the rim.
     Listing payloads shallow-by-default (see core-ops).")
-  (status planned)
+  (status implemented)
   (test "100k fixture: children/find/count p95 < 50ms; move/copy correct under iteration"))
 
  (section process

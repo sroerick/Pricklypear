@@ -60,6 +60,11 @@
  (libraries pricklypear-image qcheck qcheck-core.runner))
 
 (test
+ (name tree_algebra_test)
+ (modules tree_algebra_test)
+ (libraries pricklypear-image qcheck qcheck-core.runner))
+
+(test
  (name packages_test)
  (modules packages_test)
  (libraries pricklypear-image alcotest))
